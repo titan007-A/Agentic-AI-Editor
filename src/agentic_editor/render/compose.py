@@ -82,7 +82,11 @@ def render(
         band = video_band(edl.crop_mode, source, frame)
         placed = []
         for block in preset.text_blocks:
-            gap = preset.framing.text_gap_above if block.anchor == "top" else preset.framing.text_gap_below
+            gap = (
+                preset.framing.text_gap_above
+                if block.anchor == "top"
+                else preset.framing.text_gap_below
+            )
             placed.append(text.place(block, text.font_file(settings.fonts_dir, block.font),
                                      frame, band, gap))  # fmt: skip
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
@@ -149,7 +153,9 @@ def add_bookends(main: Path, preset: Preset, dest: Path, backends: Backends) -> 
             f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={preset.fps}[v{i}]"
         )
-        parts.append(f"[{i}:a]aformat=sample_rates={audio.SAMPLE_RATE}:channel_layouts=stereo[a{i}]")
+        parts.append(
+            f"[{i}:a]aformat=sample_rates={audio.SAMPLE_RATE}:channel_layouts=stereo[a{i}]"
+        )
         labels.append(f"[v{i}][a{i}]")
     parts.append(f"{''.join(labels)}concat=n={len(pieces)}:v=1:a=1[v][a]")
     ffmpeg.run([

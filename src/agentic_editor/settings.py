@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     ollama_url: str = "http://127.0.0.1:11434"
     llm_model: str = "qwen3.5:9b"
     vision_model: str = "qwen3.5:4b"
-    llm_context: int = 8192
 
     max_concurrent_jobs: int = Field(default=1, ge=1)
 

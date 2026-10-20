@@ -61,7 +61,14 @@ def render_soundtrack(
 ) -> Path:
     inputs = []
     for clip in edl.clips:
-        inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(timeline_audio)]
+        inputs += [
+            "-ss",
+            f"{clip.start:.3f}",
+            "-t",
+            f"{clip.duration:.3f}",
+            "-i",
+            str(timeline_audio),
+        ]
     music_input = None
     if music is not None:
         music_input = len(edl.clips)

@@ -137,6 +137,8 @@ def draw_banner(
             radius=pad, fill=box,
         )  # fmt: skip
     for i, line in enumerate(lines):
-        canvas.text(((width - font.getlength(line)) / 2, top + i * step), line, font=font, fill=color)
+        canvas.text(
+            ((width - font.getlength(line)) / 2, top + i * step), line, font=font, fill=color
+        )
     image.save(dest)
     return dest

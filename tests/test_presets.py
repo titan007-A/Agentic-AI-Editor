@@ -29,7 +29,7 @@ def test_resolution_must_match_aspect_ratio():
 
 
 def test_min_duration_cannot_exceed_max():
-    with pytest.raises(ValidationError, match="shorter|longer"):
+    with pytest.raises(ValidationError, match=r"shorter|longer"):
         Preset.model_validate(minimal(min_duration=40, max_duration=30))
 
 
@@ -50,8 +50,12 @@ def test_name_must_match_file_name(tmp_path):
 
 
 def test_save_round_trips(tmp_path):
-    preset = Preset.model_validate(minimal(text_blocks=[
-        {"text": "Línea uno\nline two", "size": 40, "anchor": "top", "offset": 300}
-    ]))
+    preset = Preset.model_validate(
+        minimal(
+            text_blocks=[
+                {"text": "Línea uno\nline two", "size": 40, "anchor": "top", "offset": 300}
+            ]
+        )
+    )
     save_preset(preset, tmp_path)
     assert load_presets(tmp_path)["test"] == preset

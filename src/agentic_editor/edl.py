@@ -75,11 +75,17 @@ def problems(edl: EDL, preset: Preset, source_duration: float, tolerance: float 
         found.append(f"{len(edl.clips)} clips, the preset allows at most {preset.clip_count}")
     for i, clip in enumerate(edl.clips):
         if clip.end > source_duration + tolerance:
-            found.append(f"clip {i} ends at {clip.end:.2f}s, after the source ({source_duration:.2f}s)")
+            found.append(
+                f"clip {i} ends at {clip.end:.2f}s, after the source ({source_duration:.2f}s)"
+            )
         if i and clip.start < edl.clips[i - 1].end:
             found.append(f"clip {i} starts before clip {i - 1} ends; clips must be in order")
     if edl.duration < preset.min_duration - tolerance:
-        found.append(f"total {edl.duration:.1f}s is shorter than the {preset.min_duration:g}s minimum")
+        found.append(
+            f"total {edl.duration:.1f}s is shorter than the {preset.min_duration:g}s minimum"
+        )
     if edl.duration > preset.max_duration + tolerance:
-        found.append(f"total {edl.duration:.1f}s is longer than the {preset.max_duration:g}s maximum")
+        found.append(
+            f"total {edl.duration:.1f}s is longer than the {preset.max_duration:g}s maximum"
+        )
     return found

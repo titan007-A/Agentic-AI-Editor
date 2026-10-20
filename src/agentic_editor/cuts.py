@@ -1,6 +1,8 @@
 """Deterministic cut cleanup: the planner picks rough times, this puts them on word
 boundaries so no cut lands mid-word."""
 
+import itertools
+
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.transcript import Word
 
@@ -57,7 +59,7 @@ def split_on_pauses(clip: Clip, words: list[Word], max_pause: float) -> list[Cli
     inside = [w for w in words if clip.start <= w.start and w.end <= clip.end]
     pieces = []
     start = clip.start
-    for prev, nxt in zip(inside, inside[1:], strict=False):
+    for prev, nxt in itertools.pairwise(inside):
         if nxt.start - prev.end > max_pause:
             pieces.append(clip.model_copy(update={"start": start, "end": prev.end + TAIL}))
             start = nxt.start - LEAD

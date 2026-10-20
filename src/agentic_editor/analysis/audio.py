@@ -9,7 +9,9 @@ _SILENCE_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SILENCE_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
 
 
-def detect_silences(path: Path, threshold_db: float, min_duration: float) -> list[tuple[float, float]]:
+def detect_silences(
+    path: Path, threshold_db: float, min_duration: float
+) -> list[tuple[float, float]]:
     result = ffmpeg.run([
         "-i", str(path), "-vn",
         "-af", f"silencedetect=noise={threshold_db}dB:d={min_duration}",

@@ -39,7 +39,9 @@ def model_file(models_dir: Path) -> Path:
     return path
 
 
-def detect(video: Path, start: float, end: float, models_dir: Path, fps: float = 5.0) -> list[Sample]:
+def detect(
+    video: Path, start: float, end: float, models_dir: Path, fps: float = 5.0
+) -> list[Sample]:
     """Faces found in frames sampled `fps` times a second between start and end."""
     import cv2
     import mediapipe as mp

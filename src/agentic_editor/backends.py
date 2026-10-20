@@ -42,10 +42,7 @@ class Backends:
         return _ENCODER_NAMES[(self.encoder, self.video_codec)]
 
     def describe(self) -> str:
-        return (
-            f"system={self.system} transcription={self.transcriber} "
-            f"encoder={self.encoder_name}"
-        )
+        return f"system={self.system} transcription={self.transcriber} encoder={self.encoder_name}"
 
 
 def is_apple_silicon() -> bool:

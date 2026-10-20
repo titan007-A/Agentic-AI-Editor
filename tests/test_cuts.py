@@ -12,10 +12,11 @@ WORDS = words_from("so@1.0-1.3 here@1.4-1.8 is@1.9-2.0 the@2.1-2.2 thing@2.3-2.8
 
 
 def test_start_inside_word_moves_back_to_its_onset():
-    assert snap_start(1.6, WORDS) == 1.4 - 0.12
+    assert snap_start(1.1, WORDS) == 1.0 - 0.12
 
 
 def test_start_lead_in_never_reaches_previous_word():
+    assert snap_start(1.6, WORDS) == (1.3 + 1.4) / 2
     assert snap_start(1.85, WORDS) == (1.8 + 1.9) / 2
 
 
@@ -49,4 +50,4 @@ def test_split_on_pauses_removes_long_gap():
 def test_clean_edl_snaps_every_clip():
     edl = EDL(clips=[Clip(start=1.6, end=2.5)])
     cleaned = clean_edl(edl, WORDS, silences=[], max_pause=None)
-    assert (cleaned.clips[0].start, cleaned.clips[0].end) == (1.28, 3.1)
+    assert (cleaned.clips[0].start, cleaned.clips[0].end) == (1.35, 3.1)

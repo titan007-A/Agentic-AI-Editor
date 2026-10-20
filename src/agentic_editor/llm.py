@@ -16,10 +16,9 @@ class LLMError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, base_url: str, model: str, context: int = 8192, timeout: float = 600):
+    def __init__(self, base_url: str, model: str, timeout: float = 600):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.context = context
         self.http = httpx.Client(timeout=timeout)
         self.last_tokens_per_second: float | None = None
 
@@ -52,7 +51,6 @@ class OllamaClient:
             # Planning needs short, structured answers; the hidden reasoning pass only
             # costs time and VRAM on the small models.
             "reasoning_effort": "none",
-            "options": {"num_ctx": self.context},
         }
         started = time.monotonic()
         response = self.http.post(f"{self.base_url}/v1/chat/completions", json=body)
@@ -83,5 +81,7 @@ def _with_images(message: dict, images: list[Path]) -> dict:
     parts = [{"type": "text", "text": message["content"]}]
     for path in images:
         encoded = base64.b64encode(path.read_bytes()).decode()
-        parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}})
+        parts.append(
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
+        )
     return {**message, "content": parts}

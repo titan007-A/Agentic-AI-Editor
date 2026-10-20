@@ -19,7 +19,7 @@ from agentic_editor.transcript import Transcript
 T = TypeVar("T")
 
 
-def in_child_process(fn: Callable[..., T], *args) -> T:
+def in_child_process[T](fn: Callable[..., T], *args) -> T:
     """Run fn in a fresh process so any GPU memory it grabs is freed when it exits."""
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as pool:
@@ -48,9 +48,7 @@ class ModelRouter:
         )  # fmt: skip
 
     def planner(self) -> OllamaClient:
-        return OllamaClient(self.settings.ollama_url, self.settings.llm_model,
-                            self.settings.llm_context)  # fmt: skip
+        return OllamaClient(self.settings.ollama_url, self.settings.llm_model)
 
     def vision(self) -> OllamaClient:
-        return OllamaClient(self.settings.ollama_url, self.settings.vision_model,
-                            self.settings.llm_context)  # fmt: skip
+        return OllamaClient(self.settings.ollama_url, self.settings.vision_model)

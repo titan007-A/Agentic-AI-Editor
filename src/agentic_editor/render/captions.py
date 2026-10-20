@@ -24,11 +24,7 @@ def group_lines(words: list[Word], per_line: int) -> list[list[Word]]:
     lines: list[list[Word]] = []
     for word in words:
         current = lines[-1] if lines else None
-        if (
-            current
-            and len(current) < per_line
-            and word.start - current[-1].end < LINE_BREAK_PAUSE
-        ):
+        if current and len(current) < per_line and word.start - current[-1].end < LINE_BREAK_PAUSE:
             current.append(word)
         else:
             lines.append([word])
@@ -67,7 +63,8 @@ def build_ass(
         f"Style: Caption,{font_family},{style.size},{base},{base},"
         f"{ass_color(style.outline_color)},{ass_color('#000000', 0x80)},0,0,0,0,100,100,0,0,"
         f"1,{style.outline:g},0,{_ALIGNMENT[position]},60,60,{margin},1\n\n"
-        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
 
     events = []
