@@ -131,6 +131,7 @@ def produce(
     progress: Progress,
 ) -> tuple[EDL, int, list[review.Issue]]:
     """Render, review, fix and re-render up to MAX_FIXES times."""
+    work_dir.mkdir(parents=True, exist_ok=True)
     detections: dict[tuple[float, float], list[faces.Sample]] = {}
     target = preset
     renders = 1
