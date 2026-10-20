@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import secrets
+import signal
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -122,7 +123,13 @@ def create_app(
             consumer = jobs.huey.create_consumer(
                 workers=settings.max_concurrent_jobs, worker_type="thread", periodic=False
             )
+            # Consumer.start() installs its own SIGINT/SIGTERM/SIGHUP handlers, which would
+            # stop uvicorn from ever seeing a shutdown request. Put uvicorn's back.
+            handled = [signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)]
+            saved = {sig: signal.getsignal(sig) for sig in handled if sig is not None}
             consumer.start()
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
             log.info("job worker started with %d slot(s)", settings.max_concurrent_jobs)
         yield
         if consumer is not None:
