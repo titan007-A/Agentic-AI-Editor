@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 
-from agentic_editor import pipeline
+from agentic_editor import logs, pipeline
 from agentic_editor.backends import detect
 from agentic_editor.presets import load_presets
 from agentic_editor.settings import get_settings
@@ -51,11 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
 
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    logs.setup(logging.DEBUG if args.verbose else logging.INFO)
     return args.handler(args)
 
 

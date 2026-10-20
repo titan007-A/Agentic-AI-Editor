@@ -4,25 +4,29 @@ Swap models through .env (WHISPER_MODEL, LLM_MODEL, VISION_MODEL, SEPARATION_MOD
 pipeline code only talks to this interface.
 """
 
+import logging
 import multiprocessing
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import TypeVar
 
+from agentic_editor import logs
 from agentic_editor.analysis import separation, transcribe
 from agentic_editor.backends import Backends
 from agentic_editor.llm import OllamaClient
 from agentic_editor.settings import Settings
 from agentic_editor.transcript import Transcript
 
-T = TypeVar("T")
-
 
 def in_child_process[T](fn: Callable[..., T], *args) -> T:
     """Run fn in a fresh process so any GPU memory it grabs is freed when it exits."""
     ctx = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as pool:
+    with ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=ctx,
+        initializer=logs.setup,
+        initargs=(logging.getLogger().level,),
+    ) as pool:
         return pool.submit(fn, *args).result()
 
 
