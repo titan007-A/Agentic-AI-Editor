@@ -46,6 +46,42 @@ def _presets(args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from agentic_editor.api import create_app
+    from agentic_editor.backends import get_backends
+
+    settings = get_settings()
+    if not settings.password_hash:
+        print("PASSWORD_HASH is not set. Run `aiedit hash-password` and put the result in .env.")
+        return 2
+    if not settings.secret_key:
+        print("SECRET_KEY is not set; logins will not survive a restart.")
+    get_backends()
+    uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_config=None)
+    return 0
+
+
+def _hash_password(args: argparse.Namespace) -> int:
+    import getpass
+    import secrets
+
+    from agentic_editor.auth import hash_password
+
+    password = getpass.getpass("New password: ")
+    if len(password) < 8:
+        print("use at least 8 characters")
+        return 2
+    if getpass.getpass("Again: ") != password:
+        print("the passwords don't match")
+        return 2
+    print("Add these lines to .env:")
+    print(f"PASSWORD_HASH='{hash_password(password)}'")
+    print(f"SECRET_KEY='{secrets.token_hex(32)}'")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aiedit", description="Local agentic video editor")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -61,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
         handler=_backends
     )
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
+    commands.add_parser("serve", help="run the web app and job worker").set_defaults(
+        handler=_serve
+    )
+    commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
+        handler=_hash_password
+    )
 
     args = parser.parse_args(argv)
     logs.setup(logging.DEBUG if args.verbose else logging.INFO)
