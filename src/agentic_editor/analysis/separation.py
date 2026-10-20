@@ -46,8 +46,16 @@ def run_separator(audio: Path, out_dir: Path, model: str, model_dir: Path) -> St
         output_dir=str(out_dir),
         model_file_dir=str(model_dir),
         output_format="WAV",
-        enable_denoise=True,
-        mdx_params={"hop_length": 1024, "segment_size": 256, "overlap": 0.75, "batch_size": 1},
+        # Denoise runs each chunk twice, once phase-inverted, and averages: the model's own
+        # artifacts don't correlate between the passes and mostly cancel. High overlap
+        # hides the seams between chunks. Both cost time, neither changes what is removed.
+        mdx_params={
+            "hop_length": 1024,
+            "segment_size": 256,
+            "overlap": 0.75,
+            "batch_size": 1,
+            "enable_denoise": True,
+        },
     )
     separator.load_model(model_filename=model)
     outputs = [out_dir / Path(name).name for name in separator.separate(str(audio))]

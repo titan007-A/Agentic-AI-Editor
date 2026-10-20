@@ -25,6 +25,7 @@ ml = [
     "mlx-whisper>=0.4.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "scenedetect>=0.6.6",
     "torch>=2.8",
+    "torchvision>=0.23",
 ]
 
 [project.scripts]
@@ -45,6 +46,7 @@ packages = ["src/agentic_editor"]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
