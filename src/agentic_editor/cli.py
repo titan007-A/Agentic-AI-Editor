@@ -18,11 +18,13 @@ def _run(args: argparse.Namespace) -> int:
     backends = detect(settings)
     presets = [available[n] for n in args.preset]
     for source in args.source:
-        for output in pipeline.run(source, presets, settings, backends, args.notes):
+        for output in pipeline.run(source, presets, settings, backends, args.notes).outputs:
             clips = ", ".join(f"{c.start:.2f}-{c.end:.2f}" for c in output.edl.clips)
             print(f"{output.preset}: {output.path}")
-            print(f"  {output.edl.duration:.1f}s from {clips}, planned by {output.planner}, "
-                  f"{output.renders} render(s)")  # fmt: skip
+            print(
+                f"  {output.edl.duration:.1f}s from {clips}, planned by {output.planner}, "
+                f"{output.renders} render(s)"
+            )
             if output.edl.title:
                 print(f"  title: {output.edl.title}")
             for issue in output.issues:
@@ -37,8 +39,10 @@ def _backends(args: argparse.Namespace) -> int:
 
 def _presets(args: argparse.Namespace) -> int:
     for name, preset in load_presets(get_settings().presets_dir).items():
-        print(f"{name:24} {preset.resolution:>10}  {preset.min_duration:g}-{preset.max_duration:g}s"
-              f"  {preset.label}")  # fmt: skip
+        print(
+            f"{name:24} {preset.resolution:>10}  {preset.min_duration:g}-{preset.max_duration:g}s"
+            f"  {preset.label}"
+        )
     return 0
 
 

@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 Progress = Callable[[str, str], None]
 MAX_FIXES = 2
+UPLOAD_PREFIX = "upload:"
 
 
 @dataclass
@@ -44,6 +45,12 @@ class Output:
     issues: list[str] = field(default_factory=list)
 
 
+@dataclass
+class Result:
+    title: str
+    outputs: list[Output]
+
+
 def is_url(value: str) -> bool:
     return value.startswith(("http://", "https://"))
 
@@ -51,6 +58,8 @@ def is_url(value: str) -> bool:
 def resolve_source(value: str, settings: Settings) -> download.Source:
     if is_url(value):
         return download.fetch(value, settings.media_dir / "sources")
+    if value.startswith(UPLOAD_PREFIX):
+        return download.local(settings.media_dir / "uploads" / value.removeprefix(UPLOAD_PREFIX))
     return download.local(Path(value).expanduser())
 
 
@@ -141,9 +150,15 @@ def produce(
         progress("review", f"checking {preset.name}")
         captions = work_dir / "captions.ass" if target.captions.enabled else None
         issues = review.review(
-            dest, edl, preset, analysis.duration, captions,
-            compose.timeline_words(edl, analysis), vision, work_dir,
-        )  # fmt: skip
+            dest,
+            edl,
+            preset,
+            analysis.duration,
+            captions,
+            compose.timeline_words(edl, analysis),
+            vision,
+            work_dir,
+        )
         if not issues or renders > MAX_FIXES:
             return edl, renders, issues
         edl, target, changed = fix(issues, edl, target, analysis, preset.audio.loudness_lufs)
@@ -160,9 +175,10 @@ def run(
     backends: Backends,
     notes: str | None = None,
     progress: Progress = lambda stage, message: log.info("%s: %s", stage, message),
-) -> list[Output]:
+) -> Result:
     progress("download", f"fetching {source_ref}")
     source = resolve_source(source_ref, settings)
+    progress("analyze", f"analyzing {source.title}")
     work_dir = settings.cache_dir / file_hash(source.path)
     out_dir = settings.media_dir / "outputs" / work_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -194,19 +210,38 @@ def run(
             dest = out_dir / f"{preset.name}.mp4"
             render_dir = work_dir / "render" / preset.name
             progress("render", f"rendering {preset.name}")
-            edl, renders, issues = produce(edl, preset, analysis, source.path, dest, render_dir,
-                                           settings, backends, reviewer, progress)  # fmt: skip
+            edl, renders, issues = produce(
+                edl,
+                preset,
+                analysis,
+                source.path,
+                dest,
+                render_dir,
+                settings,
+                backends,
+                reviewer,
+                progress,
+            )
             thumbnail = None
             if reviewer is not None:
                 thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
             (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
-            outputs.append(Output(preset.name, dest, edl, planner, thumbnail, renders,
-                                  [f"{i.kind}: {i.detail}" for i in issues]))  # fmt: skip
+            outputs.append(
+                Output(
+                    preset.name,
+                    dest,
+                    edl,
+                    planner,
+                    thumbnail,
+                    renders,
+                    [f"{i.kind}: {i.detail}" for i in issues],
+                )
+            )
             progress("done", f"{preset.name} -> {dest}")
 
     meta = {"title": source.title, "url": source.url, "notes": notes}
     (out_dir / "source.json").write_text(json.dumps(meta))
-    return outputs
+    return Result(source.title, outputs)
 
 
 def _reachable(client: OllamaClient) -> bool:

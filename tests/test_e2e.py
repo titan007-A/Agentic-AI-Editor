@@ -23,10 +23,13 @@ pytestmark = pytest.mark.e2e
 def test_pipeline_renders_a_video_that_follows_the_preset(preset_name):
     settings = get_settings()
     preset = load_presets(settings.presets_dir)[preset_name]
-    outputs = pipeline.run(os.environ.get("E2E_SOURCE", SAMPLE), [preset], settings,
-                           detect(settings))  # fmt: skip
+    result = pipeline.run(
+        os.environ.get("E2E_SOURCE", SAMPLE), [preset], settings, detect(settings)
+    )
+    output = result.outputs[0]
 
-    info = ffmpeg.probe(outputs[0].path)
+    info = ffmpeg.probe(output.path)
     assert (info.width, info.height) == preset.size
     assert preset.min_duration - 0.5 <= info.duration <= preset.max_duration + 0.5
-    assert abs(integrated_loudness(outputs[0].path) - preset.audio.loudness_lufs) <= 1.0
+    assert abs(integrated_loudness(output.path) - preset.audio.loudness_lufs) <= 1.0
+    assert output.issues == []
