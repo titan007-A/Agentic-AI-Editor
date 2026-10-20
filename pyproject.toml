@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = [
+    # audio-separator imports audioread but doesn't declare it; librosa used to bring it in.
+    "audioread>=3.0",
     "audio-separator[gpu]>=0.39; sys_platform == 'linux'",
     "audio-separator[cpu]>=0.39; sys_platform == 'darwin'",
     "faster-whisper>=1.2",
