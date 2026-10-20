@@ -97,9 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         handler=_backends
     )
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
-    commands.add_parser("serve", help="run the web app and job worker").set_defaults(
-        handler=_serve
-    )
+    commands.add_parser("serve", help="run the web app and job worker").set_defaults(handler=_serve)
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
         handler=_hash_password
     )
