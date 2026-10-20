@@ -63,6 +63,10 @@ markers = ["e2e: runs the real pipeline on a sample video (needs models, GPU opt
 addopts = "-m 'not e2e'"
 
 [tool.uv]
-# mediapipe ships opencv-contrib-python, which provides the same cv2 module that
-# scenedetect asks for; installing both makes them overwrite each other.
-override-dependencies = ["opencv-python; sys_platform == 'never'"]
+# Packages that install the same module and overwrite each other: mediapipe's
+# opencv-contrib-python already provides the cv2 scenedetect asks for, and on Linux
+# onnxruntime-gpu already provides the onnxruntime faster-whisper asks for.
+override-dependencies = [
+    "opencv-python; sys_platform == 'never'",
+    "onnxruntime; sys_platform != 'linux'",
+]
