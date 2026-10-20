@@ -33,7 +33,14 @@ def test_top_block_shrinks_no_further_than_allowed():
     top = block(anchor="top", offset=300, size=60, max_shrink=0.9)
     placed = place(top, path, FRAME, video_band=(120, 1700), gap=0)
     assert placed.size == 54
-    assert placed.top + ink_extent(placed.lines, placed.font, placed.size, 1.0)[0] < EDGE_MARGIN
+    assert round(ink_top(placed)) == EDGE_MARGIN
+
+
+def test_block_that_cannot_clear_the_video_stays_inside_the_frame():
+    path = font_file(FONTS, "OpenSans-ExtraBold")
+    placed = place(block(max_shrink=0.5), path, FRAME, video_band=(100, 1820), gap=100)
+    ink_bottom = placed.top + ink_extent(placed.lines, placed.font, placed.size, 1.0)[1]
+    assert round(ink_bottom) == 1920 - EDGE_MARGIN
 
 
 def test_long_lines_shrink_to_fit_width():

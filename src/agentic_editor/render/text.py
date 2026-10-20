@@ -98,6 +98,11 @@ def place(
     while not fits and size > floor:
         size -= 1
         top, fits = position(size)
+    if not fits:
+        # No room beside the video even at the smallest allowed size: overlapping the
+        # picture is better than running off the frame.
+        ink_top, ink_bottom = ink_extent(lines, path, size, block.line_spacing)
+        top = min(max(top, EDGE_MARGIN - ink_top), height - EDGE_MARGIN - ink_bottom)
     return Placed(lines, path, size, top, block.color,
                   line_height(path, size, block.line_spacing))  # fmt: skip
 
