@@ -34,7 +34,24 @@ class Settings(BaseSettings):
 
     max_concurrent_jobs: int = Field(default=1, ge=1)
 
-    @field_validator("media_dir", "cache_dir", "models_dir", "presets_dir", "fonts_dir")
+    host: str = "0.0.0.0"
+    port: int = 8000
+    password_hash: str = ""
+    secret_key: str = ""
+    database: Path = Path("media/app.db")
+    queue_database: Path = Path("media/queue.db")
+    web_dir: Path = Path("web/out")
+
+    @field_validator(
+        "media_dir",
+        "cache_dir",
+        "models_dir",
+        "presets_dir",
+        "fonts_dir",
+        "database",
+        "queue_database",
+        "web_dir",
+    )
     @classmethod
     def _relative_to_repo(cls, path: Path) -> Path:
         path = path.expanduser()
