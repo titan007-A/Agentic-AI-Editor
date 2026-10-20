@@ -148,15 +148,22 @@ def test_preset_edits_are_validated_before_saving(env):
     assert "max_duration: 45" in (env.settings.presets_dir / "square-1x1.yaml").read_text()
 
 
-def test_identical_uploads_share_one_file(env):
+def test_uploads_are_stored_by_content_hash_under_their_own_name(env):
     def upload(name, data):
         return env.client.post("/api/uploads", files={"file": (name, data)})
 
     first = upload("clip.mp4", b"same bytes").json()
     second = upload("other.mp4", b"same bytes").json()
-    assert first["source"] == second["source"]
-    assert len(list((env.settings.media_dir / "uploads").iterdir())) == 1
+    assert first["source"] != second["source"]
+    assert first["source"].split("/")[0] == second["source"].split("/")[0]
+    assert first["source"].endswith("/clip.mp4")
     assert upload("notes.txt", b"x").status_code == 400
+
+
+def test_upload_references_cannot_escape_the_upload_folder(env):
+    for ref in ["upload:../../etc/passwd", "upload:0123456789abcdef0123/../x.mp4"]:
+        body = {"sources": [ref], "presets": ["square-1x1"]}
+        assert env.client.post("/api/jobs", json=body).status_code == 422
 
 
 def test_rendered_video_downloads_with_a_readable_name(env):

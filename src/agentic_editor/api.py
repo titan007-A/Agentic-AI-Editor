@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 NOTICE_KEY = "usage_notice_accepted"
+UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
 
 
 class LoginRequest(BaseModel):
@@ -260,8 +261,11 @@ def create_app(
             while chunk := await file.read(4 * 1024 * 1024):
                 digest.update(chunk)
                 out.write(chunk)
-        name = f"{digest.hexdigest()[:20]}{suffix}"
-        # The same file uploaded twice keeps one copy, and its analysis cache.
+        # The folder is the content hash, so re-uploading a file overwrites it in place;
+        # the original name is kept because it becomes the job title.
+        stem = re.sub(r"[^\w-]+", "-", Path(file.filename or "").stem).strip("-") or "video"
+        name = f"{digest.hexdigest()[:20]}/{stem[:80]}{suffix}"
+        (uploads / name).parent.mkdir(exist_ok=True)
         partial.replace(uploads / name)
         return {"source": f"{UPLOAD_PREFIX}{name}", "name": file.filename}
 
@@ -273,7 +277,7 @@ def create_app(
         created = []
         for source in dict.fromkeys(s.strip() for s in body.sources if s.strip()):
             if source.startswith(UPLOAD_PREFIX):
-                if not re.fullmatch(r"[0-9a-f]{20}\.[a-z0-9]+", source.removeprefix(UPLOAD_PREFIX)):
+                if not UPLOAD_REF.fullmatch(source.removeprefix(UPLOAD_PREFIX)):
                     raise HTTPException(422, "bad upload reference")
             elif not source.startswith(("http://", "https://")):
                 raise HTTPException(422, f"not a link or upload: {source}")
