@@ -17,6 +17,7 @@ from agentic_editor.settings import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
+Accelerator = Literal["cuda", "mps", "cpu"]
 Transcriber = Literal["faster-whisper", "mlx", "cpu"]
 Encoder = Literal["nvenc", "videotoolbox", "x264"]
 
@@ -32,7 +33,7 @@ _ENCODER_NAMES = {
 
 @dataclass(frozen=True)
 class Backends:
-    system: str
+    accelerator: Accelerator
     transcriber: Transcriber
     encoder: Encoder
     video_codec: str
@@ -42,7 +43,10 @@ class Backends:
         return _ENCODER_NAMES[(self.encoder, self.video_codec)]
 
     def describe(self) -> str:
-        return f"system={self.system} transcription={self.transcriber} encoder={self.encoder_name}"
+        return (
+            f"platform={sys.platform} accelerator={self.accelerator} "
+            f"transcription={self.transcriber} encoder={self.encoder_name}"
+        )
 
 
 def is_apple_silicon() -> bool:
@@ -112,13 +116,8 @@ def detect(settings: Settings) -> Backends:
         if not encoder_works(_ENCODER_NAMES[(encoder, codec)], settings.ffmpeg_bin):
             raise RuntimeError(f"ENCODER={encoder} was forced but a test encode with it failed")
 
-    if apple:
-        system = "macos-apple-silicon"
-    elif cuda:
-        system = f"{sys.platform}-cuda"
-    else:
-        system = f"{sys.platform}-cpu"
-    backends = Backends(system, transcriber, encoder, codec)
+    accelerator = "cuda" if cuda else "mps" if apple else "cpu"
+    backends = Backends(accelerator, transcriber, encoder, codec)
     log.info("backends: %s", backends.describe())
     return backends
 

@@ -37,7 +37,9 @@ class VocalTrack:
     instrument_free: bool
 
 
-def run_separator(audio: Path, out_dir: Path, model: str, model_dir: Path) -> Stems:
+def run_separator(
+    audio: Path, out_dir: Path, model: str, model_dir: Path, require_gpu: bool
+) -> Stems:
     """Run audio-separator on one file. Meant to run in a child process."""
     from audio_separator.separator import Separator
 
@@ -58,11 +60,29 @@ def run_separator(audio: Path, out_dir: Path, model: str, model_dir: Path) -> St
         },
     )
     separator.load_model(model_filename=model)
+    if require_gpu:
+        _check_provider(model_dir / model, separator.onnx_execution_provider)
     outputs = [out_dir / Path(name).name for name in separator.separate(str(audio))]
     vocals = next(p for p in outputs if "(Vocals)" in p.name)
     instrumental = next(p for p in outputs if p != vocals)
     log.info("separated %s in %.1fs", audio.name, time.monotonic() - started)
     return Stems(vocals=vocals, instrumental=instrumental)
+
+
+def _check_provider(model_path: Path, providers: list[str] | None) -> None:
+    """audio-separator only logs a warning when ONNX Runtime can't load its GPU provider
+    and then runs on the CPU, many times slower. Fail instead."""
+    import onnxruntime
+
+    wanted = (providers or ["CPUExecutionProvider"])[0]
+    if wanted == "CPUExecutionProvider":
+        raise SeparationFailed("audio-separator found no GPU and would run on the CPU")
+    session = onnxruntime.InferenceSession(str(model_path), providers=providers)
+    if wanted not in session.get_providers():
+        raise SeparationFailed(
+            f"ONNX Runtime could not start {wanted}; check that its CUDA libraries match"
+        )
+    log.info("vocal separation running on %s", wanted)
 
 
 def is_instrument_free(source: np.ndarray, instrumental: np.ndarray) -> bool:

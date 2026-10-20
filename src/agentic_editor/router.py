@@ -45,6 +45,7 @@ class ModelRouter:
         return in_child_process(
             separation.run_separator,
             audio, out_dir, self.settings.separation_model, self.settings.models_dir / "separation",
+            self.backends.accelerator != "cpu",
         )  # fmt: skip
 
     def planner(self) -> OllamaClient:
