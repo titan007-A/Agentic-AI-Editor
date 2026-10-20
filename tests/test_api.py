@@ -148,6 +148,10 @@ def test_preset_edits_are_validated_before_saving(env):
     assert "max_duration: 45" in (env.settings.presets_dir / "square-1x1.yaml").read_text()
 
 
+def test_lists_the_bundled_fonts(env):
+    assert "OpenSans-ExtraBold" in env.client.get("/api/fonts").json()
+
+
 def test_uploads_are_stored_by_content_hash_under_their_own_name(env):
     def upload(name, data):
         return env.client.post("/api/uploads", files={"file": (name, data)})
