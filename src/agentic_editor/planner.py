@@ -66,8 +66,7 @@ class CandidateList(BaseModel):
 
 
 class Emphasis(BaseModel):
-    line: int
-    word: str
+    words: list[str]
 
 
 class Pick(BaseModel):
@@ -79,7 +78,6 @@ class FinalPlan(BaseModel):
     picks: list[Pick] = Field(min_length=1)
     hook: str
     title: str
-    emphasis: list[Emphasis] = []
     caption_position: str | None = None
 
 
@@ -255,17 +253,6 @@ def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], pres
     chosen.sort(key=lambda clip: clip.start)
     chosen = fit_duration(chosen, lines, preset)
 
-    zooms = []
-    if preset.zoom_punch_ins:
-        for item in plan.emphasis[:4]:
-            if not 0 <= item.line < len(lines):
-                continue
-            target = item.word.strip(".,!?").lower()
-            word = next((w for w in lines[item.line].words
-                         if w.text.strip(".,!?").lower() == target), None)  # fmt: skip
-            if word:
-                zooms.append(Zoom(time=word.start, scale=1.15, duration=0.8))
-
     position = (
         plan.caption_position if plan.caption_position in ("top", "middle", "bottom") else None
     )
@@ -274,7 +261,6 @@ def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], pres
         hook=plan.hook.strip(),
         title=plan.title.strip(),
         caption_overrides=CaptionOverrides(position=position),
-        zooms=zooms,
         crop_mode=preset.framing.mode,
     )
 
@@ -294,8 +280,7 @@ def finalize(
         f"a combined length of {preset.min_duration:g}-{preset.max_duration:g} seconds. "
         "Favour the strongest hook for the first clip. Also write: hook, a short on-screen "
         "line of at most 8 words that makes people keep watching; title, at most 60 "
-        "characters; emphasis, up to 3 single words (line number and the exact word) that "
-        "deserve a zoom; caption_position, one of top, middle, bottom or null."
+        "characters; caption_position, one of top, middle, bottom or null."
     )
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     schema = FinalPlan.model_json_schema()
@@ -329,4 +314,35 @@ def plan_with_llm(
     if not candidates:
         raise LLMError("the model proposed no usable segments")
     candidates.sort(key=lambda c: c.hook + c.completeness + c.peak, reverse=True)
-    return finalize(llm, candidates[:12], lines, preset, analysis, notes)
+    edl = finalize(llm, candidates[:12], lines, preset, analysis, notes)
+    if preset.zoom_punch_ins:
+        edl = edl.model_copy(update={"zooms": pick_emphasis(llm, edl, analysis)})
+    return edl
+
+
+def _normalize(word: str) -> str:
+    return word.strip(".,!?;:\"'").lower()
+
+
+def pick_emphasis(llm: OllamaClient, edl: EDL, analysis: Analysis, limit: int = 3) -> list[Zoom]:
+    """Ask for the words worth a punch-in, then find them in the chosen clips."""
+    words = [w for clip in edl.clips for w in analysis.transcript.between(clip.start, clip.end)]
+    if not words:
+        return []
+    text = " ".join(w.text for w in words)
+    reply = llm.chat_json(
+        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": (
+            f"Transcript of a finished short video:\n{text}\n\n"
+            f"Pick up to {limit} single words from it that carry the most emphasis and "
+            "deserve a quick zoom. Copy each word exactly as it appears."
+        )}],
+        Emphasis.model_json_schema(),
+    )  # fmt: skip
+    zooms, used = [], set()
+    for target in Emphasis.model_validate(reply).words[:limit]:
+        match = next((w for w in words if _normalize(w.text) == _normalize(target)
+                      and w.start not in used), None)  # fmt: skip
+        if match:
+            used.add(match.start)
+            zooms.append(Zoom(time=match.start, scale=1.15, duration=0.8))
+    return sorted(zooms, key=lambda z: z.time)

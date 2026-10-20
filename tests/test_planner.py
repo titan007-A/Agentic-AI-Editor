@@ -49,12 +49,11 @@ def candidates(*spans):
     ]}  # fmt: skip
 
 
-def final(*picks, hook="Nobody saw this coming", emphasis=()):
+def final(*picks, hook="Nobody saw this coming"):
     return {
         "picks": [{"candidate": p, "reason": "best"} for p in picks],
         "hook": hook,
         "title": "The room went silent",
-        "emphasis": [{"line": line, "word": word} for line, word in emphasis],
         "caption_position": "middle",
     }
 
@@ -72,7 +71,7 @@ def test_chunks_respect_length():
 
 
 def test_plans_from_candidates_and_maps_lines_to_times(make_analysis):
-    llm = FakeLLM(candidates((1, 3)), final(0, emphasis=[(2, "silent")]))
+    llm = FakeLLM(candidates((1, 3)), final(0), {"words": ["Silent!", "unicorn"]})
     edl = plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
     clip = edl.clips[0]
     assert (clip.start, clip.end) == (
@@ -92,10 +91,10 @@ def test_out_of_range_candidates_are_dropped(make_analysis):
 
 def test_rule_violations_are_fed_back_and_retried(make_analysis):
     preset = PRESET.model_copy(update={"clip_count": 1, "max_duration": 30})
-    llm = FakeLLM(candidates((1, 1), (3, 3)), final(0, 1), final(0))
+    llm = FakeLLM(candidates((1, 1), (3, 3)), final(0, 1), final(0), {"words": []})
     edl = plan_with_llm(llm, make_analysis(transcript(), 20.0), preset)
     assert len(edl.clips) == 1
-    feedback = llm.prompts[-1][-1]["content"]
+    feedback = llm.prompts[2][-1]["content"]
     assert "2 clips, the preset allows at most 1" in feedback
 
 
