@@ -2,9 +2,12 @@
 released as soon as it returns."""
 
 import logging
+import sys
 import time
 from pathlib import Path
 
+from agentic_editor import ffmpeg
+from agentic_editor.backends import preload_cuda_libraries
 from agentic_editor.transcript import Transcript, Word
 
 log = logging.getLogger(__name__)
@@ -15,14 +18,18 @@ def with_faster_whisper(
 ) -> Transcript:
     from faster_whisper import WhisperModel
 
+    if device == "cuda" and sys.platform == "linux":
+        preload_cuda_libraries()
     compute_type = "float16" if device == "cuda" else "int8"
     started = time.monotonic()
     whisper = WhisperModel(
         model, device=device, compute_type=compute_type, download_root=str(download_root)
     )
     loaded = time.monotonic()
+    # Decoding with our ffmpeg instead of faster-whisper's PyAV path keeps one decoder for
+    # the whole pipeline and avoids PyAV API changes.
     segments, info = whisper.transcribe(
-        str(audio),
+        ffmpeg.read_audio(audio, 16000),
         language=language,
         word_timestamps=True,
         vad_filter=True,

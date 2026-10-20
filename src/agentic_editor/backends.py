@@ -11,6 +11,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from agentic_editor.settings import Settings, get_settings
@@ -62,6 +63,26 @@ def cuda_device_count() -> int:
         return ctranslate2.get_cuda_device_count()
     except RuntimeError:
         return 0
+
+
+def preload_cuda_libraries() -> None:
+    """Load cuBLAS and cuDNN from the nvidia-* wheels so CTranslate2 can find them.
+
+    CTranslate2 opens these by name. Inside torch they are already loaded, but a fresh
+    process that only runs whisper has nothing on the loader path."""
+    import ctypes
+
+    for package, names in (
+        ("nvidia.cublas", ("libcublasLt.so.12", "libcublas.so.12")),
+        ("nvidia.cudnn", ("libcudnn.so.9",)),
+    ):
+        spec = importlib.util.find_spec(package)
+        if spec is None or not spec.submodule_search_locations:
+            continue
+        lib_dir = Path(next(iter(spec.submodule_search_locations))) / "lib"
+        for name in names:
+            if (lib_dir / name).exists():
+                ctypes.CDLL(str(lib_dir / name), mode=ctypes.RTLD_GLOBAL)
 
 
 def encoder_works(encoder_name: str, ffmpeg_bin: str) -> bool:
