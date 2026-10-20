@@ -111,8 +111,15 @@ def build_graph(
     width, height = frame
     parts = []
     for i, _ in enumerate(edl.clips):
-        chain = frame_chain(edl.crop_mode, source, frame, preset.framing.background, f"c{i}",
-                            layers.crop_commands.get(i), layers.black_bars)  # fmt: skip
+        chain = frame_chain(
+            edl.crop_mode,
+            source,
+            frame,
+            preset.framing.background,
+            f"c{i}",
+            layers.crop_commands.get(i),
+            layers.black_bars,
+        )
         chain += ["setsar=1", f"fps={preset.fps}"]
         parts.append(f"[{i}:v]{','.join(chain)}[v{i}]")
     joined = "".join(f"[v{i}]" for i in range(len(edl.clips)))

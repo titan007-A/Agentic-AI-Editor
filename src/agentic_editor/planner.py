@@ -248,8 +248,14 @@ def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], pres
             raise ValueError(f"C{pick.candidate} is not one of the candidates")
         c = candidates[pick.candidate]
         score = (c.hook + c.completeness + c.peak) / 30
-        chosen.append(Clip(start=lines[c.start_line].start, end=lines[c.end_line].end,
-                           reason=pick.reason, score=round(score, 2)))  # fmt: skip
+        chosen.append(
+            Clip(
+                start=lines[c.start_line].start,
+                end=lines[c.end_line].end,
+                reason=pick.reason,
+                score=round(score, 2),
+            )
+        )
     chosen.sort(key=lambda clip: clip.start)
     chosen = fit_duration(chosen, lines, preset)
 
@@ -296,9 +302,13 @@ def finalize(
         log.info("plan attempt %d rejected: %s", attempt + 1, "; ".join(found))
         messages += [
             {"role": "assistant", "content": json.dumps(reply)},
-            {"role": "user", "content": "That plan breaks these rules:\n- " + "\n- ".join(found)
-             + "\nFix it and answer again with the complete JSON."},
-        ]  # fmt: skip
+            {
+                "role": "user",
+                "content": "That plan breaks these rules:\n- "
+                + "\n- ".join(found)
+                + "\nFix it and answer again with the complete JSON.",
+            },
+        ]
     raise LLMError(f"no valid plan after {MAX_RETRIES} retries: {'; '.join(found)}")
 
 
@@ -331,17 +341,25 @@ def pick_emphasis(llm: OllamaClient, edl: EDL, analysis: Analysis, limit: int = 
         return []
     text = " ".join(w.text for w in words)
     reply = llm.chat_json(
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": (
-            f"Transcript of a finished short video:\n{text}\n\n"
-            f"Pick up to {limit} single words from it that carry the most emphasis and "
-            "deserve a quick zoom. Copy each word exactly as it appears."
-        )}],
+        [
+            {"role": "system", "content": SYSTEM},
+            {
+                "role": "user",
+                "content": (
+                    f"Transcript of a finished short video:\n{text}\n\n"
+                    f"Pick up to {limit} single words from it that carry the most emphasis and "
+                    "deserve a quick zoom. Copy each word exactly as it appears."
+                ),
+            },
+        ],
         Emphasis.model_json_schema(),
-    )  # fmt: skip
+    )
     zooms, used = [], set()
     for target in Emphasis.model_validate(reply).words[:limit]:
-        match = next((w for w in words if _normalize(w.text) == _normalize(target)
-                      and w.start not in used), None)  # fmt: skip
+        match = next(
+            (w for w in words if _normalize(w.text) == _normalize(target) and w.start not in used),
+            None,
+        )
         if match:
             used.add(match.start)
             zooms.append(Zoom(time=match.start, scale=1.15, duration=0.8))

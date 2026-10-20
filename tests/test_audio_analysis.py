@@ -15,8 +15,10 @@ SILENCE_LOG = """
 
 def test_parse_silencedetect_pairs_and_clamps():
     assert parse_silencedetect(SILENCE_LOG, duration=10.0) == [
-        (1.25, 2.5), (0.0, 0.4), (9.1, 10.0),
-    ]  # fmt: skip
+        (1.25, 2.5),
+        (0.0, 0.4),
+        (9.1, 10.0),
+    ]
 
 
 def test_energy_curve_measures_each_window():

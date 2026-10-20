@@ -90,6 +90,8 @@ def update_ytdlp() -> str:
     subprocess.run(cmd, check=True, capture_output=True)
     result = subprocess.run(
         [sys.executable, "-c", "import yt_dlp.version; print(yt_dlp.version.__version__)"],
-        check=True, capture_output=True, text=True,
-    )  # fmt: skip
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return result.stdout.strip()

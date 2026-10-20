@@ -153,8 +153,24 @@ def encoder_args(backends: Backends, bitrate_mbps: float = 12.0) -> list[str]:
     rate, peak, buf = f"{bitrate_mbps:g}M", f"{bitrate_mbps * 1.5:g}M", f"{bitrate_mbps * 2:g}M"
     name = backends.encoder_name
     if backends.encoder == "nvenc":
-        args = ["-c:v", name, "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "19",
-                "-b:v", rate, "-maxrate", peak, "-bufsize", buf]  # fmt: skip
+        args = [
+            "-c:v",
+            name,
+            "-preset",
+            "p5",
+            "-tune",
+            "hq",
+            "-rc",
+            "vbr",
+            "-cq",
+            "19",
+            "-b:v",
+            rate,
+            "-maxrate",
+            peak,
+            "-bufsize",
+            buf,
+        ]
     elif backends.encoder == "videotoolbox":
         args = ["-c:v", name, "-b:v", rate, "-maxrate", peak, "-bufsize", buf, "-allow_sw", "0"]
     else:

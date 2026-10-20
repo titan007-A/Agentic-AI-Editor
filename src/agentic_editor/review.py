@@ -77,8 +77,12 @@ def caption_times(ass: str) -> list[tuple[float, float]]:
     for line in ass.splitlines():
         if m := _DIALOGUE.match(line):
             v = [int(x) for x in m.groups()]
-            times.append((v[0] * 3600 + v[1] * 60 + v[2] + v[3] / 100,
-                          v[4] * 3600 + v[5] * 60 + v[6] + v[7] / 100))  # fmt: skip
+            times.append(
+                (
+                    v[0] * 3600 + v[1] * 60 + v[2] + v[3] / 100,
+                    v[4] * 3600 + v[5] * 60 + v[6] + v[7] / 100,
+                )
+            )
     return times
 
 
@@ -91,8 +95,12 @@ def check_captions(ass: str, words: list[Word], duration: float) -> list[Issue]:
         return [Issue("captions", "captions are enabled but none were written")]
     issues = []
     if abs(times[0][0] - words[0].start) > CAPTION_TOLERANCE:
-        issues.append(Issue("captions", f"first caption at {times[0][0]:.2f}s, first word at "
-                                        f"{words[0].start:.2f}s"))  # fmt: skip
+        issues.append(
+            Issue(
+                "captions",
+                f"first caption at {times[0][0]:.2f}s, first word at {words[0].start:.2f}s",
+            )
+        )
     if any(end > duration + CAPTION_TOLERANCE for _, end in times):
         issues.append(Issue("captions", "captions run past the end of the video"))
     if any(b[0] < a[0] for a, b in itertools.pairwise(times)):
@@ -115,15 +123,20 @@ def sample_frames(video: Path, duration: float, dest: Path, count: int = 4) -> l
 def check_faces(vision: OllamaClient, frames: list[Path]) -> list[Issue]:
     """Ask the vision model whether the person on screen is properly framed."""
     reply = vision.chat_json(
-        [{"role": "user", "content": (
-            f"These are {len(frames)} frames from a vertical video, in order. For each frame "
-            "say whether a human face is visible and whether a visible face is cut off by "
-            "the edge of the frame."
-        )}],
+        [
+            {
+                "role": "user",
+                "content": (
+                    f"These are {len(frames)} frames from a vertical video, in order. For each "
+                    "frame say whether a human face is visible and whether a visible face is cut "
+                    "off by the edge of the frame."
+                ),
+            }
+        ],
         FrameChecks.model_json_schema(),
         images=frames,
         temperature=0.0,
-    )  # fmt: skip
+    )
     checks = FrameChecks.model_validate(reply).frames
     cut = [i for i, c in enumerate(checks) if c.face_visible and c.face_cut_off]
     if cut:
@@ -159,15 +172,20 @@ def pick_thumbnail(vision: OllamaClient, video: Path, duration: float, work_dir:
     """Let the vision model choose the most eye-catching of a few sampled frames."""
     frames = sample_frames(video, duration, work_dir / "thumbs", count=6)
     reply = vision.chat_json(
-        [{"role": "user", "content": (
-            f"These are {len(frames)} frames from a short video, numbered from 0. Pick the "
-            "one that would make the best thumbnail: sharp, well lit, a clear face or "
-            "subject, an expressive moment."
-        )}],
+        [
+            {
+                "role": "user",
+                "content": (
+                    f"These are {len(frames)} frames from a short video, numbered from 0. Pick the "
+                    "one that would make the best thumbnail: sharp, well lit, a clear face or "
+                    "subject, an expressive moment."
+                ),
+            }
+        ],
         ThumbnailPick.model_json_schema(),
         images=frames,
         temperature=0.0,
-    )  # fmt: skip
+    )
     index = min(max(ThumbnailPick.model_validate(reply).frame, 0), len(frames) - 1)
     dest = video.with_suffix(".jpg")
     t = duration * (index + 0.5) / len(frames)

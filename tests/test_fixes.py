@@ -10,8 +10,9 @@ WORDS = words_from("a@0-0.5 b@1-1.5 c@3-3.5 d@5-5.5 e@7-7.5 f@9-9.5")
 
 def test_loudness_target_is_moved_by_the_measured_error(make_analysis):
     issue = Issue("loudness", "too quiet", measured=-15.5)
-    _, preset, changed = fix([issue], EDL(clips=[Clip(start=0, end=5)]), PRESET,
-                             make_analysis(WORDS, 10), -14.0)  # fmt: skip
+    _, preset, changed = fix(
+        [issue], EDL(clips=[Clip(start=0, end=5)]), PRESET, make_analysis(WORDS, 10), -14.0
+    )
     assert changed and preset.audio.loudness_lufs == -12.5
 
 

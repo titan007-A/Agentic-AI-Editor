@@ -21,8 +21,10 @@ def test_ass_time_format():
 def test_lines_break_on_word_count_and_pauses():
     lines = group_lines(WORDS, per_line=3)
     assert [[w.text for w in line] for line in lines] == [
-        ["one", "two", "three"], ["four"], ["five"],
-    ]  # fmt: skip
+        ["one", "two", "three"],
+        ["four"],
+        ["five"],
+    ]
 
 
 def test_highlight_emits_one_event_per_word_with_current_word_colored():
@@ -41,8 +43,7 @@ def test_karaoke_uses_one_event_per_line():
 
 
 def test_overrides_change_position_and_grouping():
-    ass = build_ass(WORDS, CaptionStyle(), (1080, 1920), "Anton", position="top",
-                    words_per_line=1)  # fmt: skip
+    ass = build_ass(WORDS, CaptionStyle(), (1080, 1920), "Anton", position="top", words_per_line=1)
     style_line = next(line for line in ass.splitlines() if line.startswith("Style:"))
     assert style_line.split(",")[18] == "8"
     assert len(dialogue(ass)) == len(WORDS)

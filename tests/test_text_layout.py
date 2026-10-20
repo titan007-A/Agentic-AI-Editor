@@ -7,8 +7,12 @@ FRAME = (1080, 1920)
 
 
 def block(**overrides) -> TextBlock:
-    values = {"text": "Follow us for more\niconic raw vocals", "size": 60, "anchor": "bottom",
-              "offset": 470}  # fmt: skip
+    values = {
+        "text": "Follow us for more\niconic raw vocals",
+        "size": 60,
+        "anchor": "bottom",
+        "offset": 470,
+    }
     return TextBlock(**{**values, **overrides})
 
 

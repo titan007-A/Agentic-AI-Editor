@@ -38,10 +38,14 @@ def timeline_words(edl: EDL, analysis: Analysis):
     offset = 0.0
     for clip in edl.clips:
         for word in analysis.transcript.between(clip.start, clip.end):
-            words.append(word.model_copy(update={
-                "start": offset + max(word.start, clip.start) - clip.start,
-                "end": offset + min(word.end, clip.end) - clip.start,
-            }))  # fmt: skip
+            words.append(
+                word.model_copy(
+                    update={
+                        "start": offset + max(word.start, clip.start) - clip.start,
+                        "end": offset + min(word.end, clip.end) - clip.start,
+                    }
+                )
+            )
         offset += clip.duration
     return words
 
@@ -87,23 +91,38 @@ def render(
                 if block.anchor == "top"
                 else preset.framing.text_gap_below
             )
-            placed.append(text.place(block, text.font_file(settings.fonts_dir, block.font),
-                                     frame, band, gap))  # fmt: skip
+            placed.append(
+                text.place(block, text.font_file(settings.fonts_dir, block.font), frame, band, gap)
+            )
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
 
     title = preset.title_overlay
     if title.enabled and edl.title:
-        png = text.draw_banner(edl.title, text.font_file(settings.fonts_dir, title.font),
-                               title.size, title.color, title.box_color, frame, title.offset,
-                               work_dir / "title.png")  # fmt: skip
+        png = text.draw_banner(
+            edl.title,
+            text.font_file(settings.fonts_dir, title.font),
+            title.size,
+            title.color,
+            title.box_color,
+            frame,
+            title.offset,
+            work_dir / "title.png",
+        )
         layers.title_overlay = add_input(png)
         layers.title_duration = title.duration
 
     if preset.hook.enabled and preset.hook.overlay and edl.hook:
         top = title.offset + (round(title.size * 1.6) if layers.title_overlay is not None else 0)
-        png = text.draw_banner(edl.hook, text.font_file(settings.fonts_dir, title.font),
-                               round(title.size * 0.8), title.color, title.box_color, frame,
-                               top, work_dir / "hook.png")  # fmt: skip
+        png = text.draw_banner(
+            edl.hook,
+            text.font_file(settings.fonts_dir, title.font),
+            round(title.size * 0.8),
+            title.color,
+            title.box_color,
+            frame,
+            top,
+            work_dir / "hook.png",
+        )
         layers.hook_overlay = add_input(png)
         layers.hook_duration = min(3.0, edl.duration)
 
@@ -112,10 +131,14 @@ def render(
         overrides = edl.caption_overrides
         family = text.font_family(text.font_file(settings.fonts_dir, style.font))
         ass = captions.build_ass(
-            timeline_words(edl, analysis), style, frame, family,
-            position=overrides.position, words_per_line=overrides.words_per_line,
+            timeline_words(edl, analysis),
+            style,
+            frame,
+            family,
+            position=overrides.position,
+            words_per_line=overrides.words_per_line,
             highlight_color=overrides.highlight_color,
-        )  # fmt: skip
+        )
         layers.captions = work_dir / "captions.ass"
         layers.captions.write_text(ass, encoding="utf-8")
         layers.fonts_dir = settings.fonts_dir
@@ -137,8 +160,9 @@ def render(
 
     if main != dest:
         add_bookends(main, preset, dest, backends)
-    log.info("rendered %s with %s in %.1fs", dest.name, backends.encoder_name,
-             time.monotonic() - started)  # fmt: skip
+    log.info(
+        "rendered %s with %s in %.1fs", dest.name, backends.encoder_name, time.monotonic() - started
+    )
     return dest
 
 

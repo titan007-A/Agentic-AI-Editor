@@ -7,8 +7,14 @@ PRESET = Preset(name="t", label="t", min_duration=20, max_duration=60)
 
 
 def info(**overrides):
-    values = {"duration": 30.0, "width": 1080, "height": 1920, "fps": 30.0,
-              "has_audio": True, "has_video": True}  # fmt: skip
+    values = {
+        "duration": 30.0,
+        "width": 1080,
+        "height": 1920,
+        "fps": 30.0,
+        "has_audio": True,
+        "has_video": True,
+    }
     return MediaInfo(**{**values, **overrides})
 
 
@@ -55,8 +61,12 @@ class FakeVision:
 
 
 def test_cut_off_face_is_a_framing_issue():
-    vision = FakeVision([{"face_visible": True, "face_cut_off": False},
-                         {"face_visible": True, "face_cut_off": True}])  # fmt: skip
+    vision = FakeVision(
+        [
+            {"face_visible": True, "face_cut_off": False},
+            {"face_visible": True, "face_cut_off": True},
+        ]
+    )
     issues = check_faces(vision, ["a.jpg", "b.jpg"])
     assert issues[0].kind == "framing" and "[1]" in issues[0].detail
 
