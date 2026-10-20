@@ -23,7 +23,7 @@ def make_analysis():
             width=1920,
             height=1080,
             fps=30.0,
-            audio_source="original",
+            audio_source=extra.pop("audio_source", "original"),
             audio_path="audio.wav",
             transcript=Transcript(language="en", words=words),
             scenes=[],
