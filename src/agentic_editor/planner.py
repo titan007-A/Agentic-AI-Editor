@@ -148,7 +148,14 @@ def chunk_lines(lines: list[Line], seconds: float = CHUNK_SECONDS) -> list[list[
     return chunks
 
 
-def _brief(preset: Preset, analysis: Analysis, notes: str | None) -> str:
+def _editor_notes(notes: str | None) -> str:
+    # Last in the prompt, where small models weigh instructions most.
+    if not notes:
+        return ""
+    return f"\n\nThe editor asked for this version: {notes}\nThis overrides the defaults above."
+
+
+def _brief(preset: Preset, analysis: Analysis) -> str:
     parts = [
         f"Format: {preset.label} for {preset.platform}.",
         f"The finished video is {preset.min_duration:g}-{preset.max_duration:g} seconds long "
@@ -158,8 +165,6 @@ def _brief(preset: Preset, analysis: Analysis, notes: str | None) -> str:
         parts.append("The transcript is sung lyrics from the isolated lead vocal of a song.")
     if preset.style_notes:
         parts.append(f"Style notes: {preset.style_notes}")
-    if notes:
-        parts.append(f"Notes from the editor for this version: {notes}")
     return "\n".join(parts)
 
 
@@ -174,13 +179,14 @@ def propose(
 ) -> list[Candidate]:
     low, high = _clip_range(preset)
     prompt = (
-        f"{_brief(preset, analysis, notes)}\n\n"
+        f"{_brief(preset, analysis)}\n\n"
         "Transcript lines (line number, start-end seconds, loudness, text):\n"
         + describe_lines(chunk)
         + f"\n\n{QUALITIES}\n"
         f"Propose up to 3 candidate segments from these lines. A segment is the run of "
         f"lines from start_line to end_line inclusive and should last {low:g}-{high:g} "
         f"seconds. Score hook, completeness and peak from 0 to 10 and give a one-line reason."
+        + _editor_notes(notes)
     )
     reply = llm.chat_json(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
@@ -280,13 +286,13 @@ def finalize(
     notes: str | None,
 ) -> EDL:
     prompt = (
-        f"{_brief(preset, analysis, notes)}\n\n"
+        f"{_brief(preset, analysis)}\n\n"
         f"Candidate segments:\n{_describe_candidates(candidates, lines)}\n\n"
         f"Pick the candidates to use, at most {preset.clip_count}, that do not overlap, with "
         f"a combined length of {preset.min_duration:g}-{preset.max_duration:g} seconds. "
         "Favour the strongest hook for the first clip. Also write: hook, a short on-screen "
         "line of at most 8 words that makes people keep watching; title, at most 60 "
-        "characters; caption_position, one of top, middle, bottom or null."
+        "characters; caption_position, one of top, middle, bottom or null." + _editor_notes(notes)
     )
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     schema = FinalPlan.model_json_schema()
