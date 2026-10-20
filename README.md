@@ -65,6 +65,23 @@ uv run aiedit run ~/Videos/talk.mp4 -p shorts-9x16
 Outputs go to `media/outputs/<source-hash>/<preset>.mp4`, next to the EDL that produced
 them. Analysis results are cached per source file in `cache/`.
 
+## Web app
+
+```
+uv run aiedit hash-password      # prints PASSWORD_HASH and SECRET_KEY lines for .env
+uv run aiedit serve
+```
+
+`serve` runs the API, the job worker and the built frontend in one process on
+`HOST:PORT` (default `0.0.0.0:8000`), so any device on the network can reach it. Jobs
+are queued in SQLite through Huey and run one at a time unless `MAX_CONCURRENT_JOBS`
+is raised. Each pasted link becomes its own job; progress streams to the browser over
+server-sent events.
+
+Downloads are keyed by the site's video id and uploads by content hash, and all
+analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
+file, so the same video is never downloaded, separated or transcribed twice.
+
 ## Configuration
 
 All settings come from `.env`; see `.env.example`. Any backend can be forced:
