@@ -219,6 +219,10 @@ def create_app(
         version = await asyncio.to_thread(update_ytdlp)
         return {"yt_dlp": version, "note": "restart the server to load the new version"}
 
+    @app.get("/api/fonts")
+    def fonts(_: User) -> list[str]:
+        return sorted(p.stem for p in settings.fonts_dir.glob("*.[ot]tf"))
+
     @app.get("/api/presets")
     def list_presets(_: User) -> list[dict]:
         return [p.model_dump(mode="json") for p in presets().values()]
