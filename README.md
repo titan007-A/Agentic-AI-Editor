@@ -103,6 +103,15 @@ TRANSCRIBE_BACKEND=faster-whisper   # or mlx, cpu
 ENCODER=nvenc                       # or videotoolbox, x264
 ```
 
+By default the final encode uses libx264 (`slower`, CRF 16) even when a GPU encoder is
+present: measured with VMAF against lossless renders it kept the same quality as the
+NVENC settings it replaced in 30-57% less space. Forcing `ENCODER=nvenc` or
+`videotoolbox` is several times faster for larger files.
+
+Vocals are isolated with the MelBand Roformer vocal model (`SEPARATION_MODEL`); on the
+MUSDB18 test excerpts it scored 11.9 dB median vocal SDR against 8.5 dB for the older
+UVR-MDX-NET-Voc_FT, in less time.
+
 ## Development
 
 ```
