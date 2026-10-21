@@ -4,7 +4,8 @@ graph can be unit tested without running ffmpeg."""
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agentic_editor.edl import EDL, CropMode
+from agentic_editor.analysis.watermarks import Watermark
+from agentic_editor.edl import EDL, Clip, CropMode
 from agentic_editor.ffmpeg import escape_filter_path
 from agentic_editor.presets import Preset
 
@@ -23,6 +24,35 @@ class Layers:
     fonts_dir: Path | None = None
     crop_commands: dict[int, Path] = field(default_factory=dict)
     black_bars: tuple[int, int, int, int] | None = None
+    watermarks: list[Watermark] = field(default_factory=list)
+
+
+def blur_chain(
+    clip: Clip, index: int, marks: list[Watermark], strength: float
+) -> tuple[list[str], str]:
+    """Graph parts that blur each watermark while it is on screen during this clip, in
+    source pixels and before any cropping. Returns the parts and the label they end on."""
+    parts: list[str] = []
+    current = f"{index}:v"
+    for k, mark in enumerate(marks):
+        visible = mark.visible(clip.start, clip.end)
+        if not visible:
+            continue
+        # Inputs are seeked to the clip start, so their timestamps start at zero.
+        enable = "+".join(
+            f"between(t,{a - clip.start:.3f},{b - clip.start:.3f})" for a, b in visible
+        )
+        # Big lettering survives a blur sized for a small handle, so scale with the box.
+        sigma = min(max(strength, 0.4 * mark.height), max(mark.width, mark.height) / 2)
+        base, patch, done = f"w{index}_{k}b", f"w{index}_{k}p", f"w{index}_{k}"
+        parts.append(f"[{current}]split=2[{base}][{patch}]")
+        parts.append(
+            f"[{patch}]crop={mark.width}:{mark.height}:{mark.x}:{mark.y},"
+            f"gblur=sigma={sigma:g}:steps=3[{patch}b]"
+        )
+        parts.append(f"[{base}][{patch}b]overlay={mark.x}:{mark.y}:enable='{enable}'[{done}]")
+        current = done
+    return parts, current
 
 
 def ffmpeg_color(hex_color: str) -> str:
@@ -110,7 +140,9 @@ def build_graph(
     frame = preset.size
     width, height = frame
     parts = []
-    for i, _ in enumerate(edl.clips):
+    for i, clip in enumerate(edl.clips):
+        blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
+        parts += blurred
         chain = frame_chain(
             edl.crop_mode,
             source,
@@ -121,7 +153,7 @@ def build_graph(
             layers.black_bars,
         )
         chain += ["setsar=1", f"fps={preset.fps}"]
-        parts.append(f"[{i}:v]{','.join(chain)}[v{i}]")
+        parts.append(f"[{label}]{','.join(chain)}[v{i}]")
     joined = "".join(f"[v{i}]" for i in range(len(edl.clips)))
     parts.append(f"{joined}concat=n={len(edl.clips)}:v=1:a=0[base]")
     current = "base"

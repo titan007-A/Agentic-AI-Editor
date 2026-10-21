@@ -13,7 +13,8 @@ from pathlib import Path
 import httpx
 
 from agentic_editor import download, review
-from agentic_editor.analysis import faces
+from agentic_editor.analysis import faces, watermarks
+from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
 from agentic_editor.cuts import clean_edl
@@ -204,8 +205,12 @@ def run(
     outputs = []
     with router.vision() as vision:
         reviewer = vision if _reachable(vision) else None
+        candidates = next(iter(analyses.values())).watermarks
+        marks = confirmed_watermarks(
+            candidates, reviewer, source.path, settings, work_dir, progress
+        )
         for preset in presets:
-            analysis = for_preset(preset)
+            analysis = for_preset(preset).model_copy(update={"watermarks": marks})
             edl, planner = plans[preset.name]
             dest = out_dir / f"{preset.name}.mp4"
             render_dir = work_dir / "render" / preset.name
@@ -242,6 +247,35 @@ def run(
     meta = {"title": source.title, "url": source.url, "notes": notes}
     (out_dir / "source.json").write_text(json.dumps(meta))
     return Result(source.title, outputs)
+
+
+def confirmed_watermarks(
+    candidates: list[Watermark],
+    vision: OllamaClient | None,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    progress: Progress,
+) -> list[Watermark]:
+    """Candidates the vision model agrees are overlays. Without it every candidate is
+    blurred: a smudge on some scenery is a smaller miss than a watermark left in."""
+    if not candidates:
+        return []
+    if vision is None:
+        log.warning("no vision model; blurring %d unconfirmed watermark(s)", len(candidates))
+        return candidates
+    cache = work_dir / f"watermarks-{vision.model.replace(':', '_').replace('/', '_')}.json"
+    if cache.exists():
+        checked = [Watermark.model_validate(m) for m in json.loads(cache.read_text())]
+    else:
+        progress("analyze", f"checking {len(candidates)} possible watermark(s)")
+        checked = watermarks.confirm(
+            vision, video, candidates, settings.ffmpeg_bin, work_dir / "watermark-checks"
+        )
+        cache.write_text(json.dumps([m.model_dump() for m in checked]))
+    kept = [m for m in checked if m.confirmed]
+    log.info("%d of %d watermark candidate(s) confirmed", len(kept), len(checked))
+    return kept
 
 
 def _reachable(client: OllamaClient) -> bool:

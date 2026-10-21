@@ -71,6 +71,8 @@ def render(
     for clip in edl.clips:
         inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video)]
     layers = Layers(crop_commands=crop_commands or {})
+    if preset.watermarks.blur:
+        layers.watermarks = analysis.watermarks
 
     def add_input(path: Path) -> int:
         inputs.extend(["-i", str(path)])

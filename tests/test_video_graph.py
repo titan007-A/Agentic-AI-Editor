@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.edl import EDL, Clip, Zoom
 from agentic_editor.presets import Preset
 from agentic_editor.render.video import Layers, build_graph, frame_chain, video_band
@@ -55,3 +56,24 @@ def test_graph_concats_clips_and_layers_overlays_in_order():
     order = [graph.index(s) for s in ("[2:v]overlay", "subtitles=", "[3:v]overlay=0:0:enable")]
     assert order == sorted(order)
     assert out == "out"
+
+
+def test_watermark_is_blurred_only_while_visible_in_clip_time():
+    mark = Watermark(x=100, y=20, width=200, height=60, spans=[(0, 8), (16, 24)], windows=4)
+    edl = EDL(clips=[Clip(start=6, end=20)], crop_mode="none")
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(watermarks=[mark]))
+    assert "crop=200:60:100:20,gblur=sigma=24:steps=3" in graph
+    # Source 6-8 s and 16-20 s are 0-2 s and 10-14 s of an input seeked to 6 s.
+    assert "enable='between(t,0.000,2.000)+between(t,10.000,14.000)'" in graph
+    assert "[w0_0]" in graph and graph.index("[w0_0]") < graph.index("[v0]")
+
+
+def test_clip_without_a_visible_watermark_is_left_alone():
+    mark = Watermark(x=100, y=20, width=200, height=60, spans=[(0, 4)], windows=1)
+    edl = EDL(clips=[Clip(start=10, end=20)], crop_mode="none")
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(watermarks=[mark]))
+    assert "gblur" not in graph and graph.startswith("[0:v]")
+
+
+def test_watermark_blur_is_on_by_default():
+    assert VERTICAL.watermarks.blur
