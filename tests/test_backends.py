@@ -25,4 +25,5 @@ def test_encoder_args_per_backend():
     assert vt[:2] == ["-c:v", "hevc_videotoolbox"] and "hvc1" in vt
     x264 = encoder_args(Backends("cpu", "cpu", "x264", "h264"), bitrate_mbps=8)
     assert x264[:2] == ["-c:v", "libx264"] and "12M" in x264
+    assert x264[x264.index("-crf") + 1] == "16"
     assert all(args[-2:] == ["-pix_fmt", "yuv420p"] for args in (nvenc, vt, x264))
