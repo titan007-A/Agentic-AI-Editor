@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { jobLabel } from "@/components/job-status";
+import { ShareButton } from "@/components/share-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,6 +99,7 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
               <Download /> Download
             </a>
           </Button>
+          <ShareButton output={output} name={`${jobLabel(job)}-${output.preset}`} />
           {output.has_thumbnail && (
             <Button variant="outline" asChild>
               <a href={thumbnailUrl(output)} download>
