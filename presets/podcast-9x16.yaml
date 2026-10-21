@@ -1,0 +1,43 @@
+name: podcast-9x16
+label: Podcast clip, speaker tracking (9:16)
+platform: instagram_reels
+aspect_ratio: "9:16"
+resolution: 1080x1920
+fps: 30
+min_duration: 30
+max_duration: 90
+clip_count: 2
+captions:
+  enabled: true
+  font: Anton-Regular
+  size: 78
+  color: "#FFFFFF"
+  highlight_color: "#3DDC84"
+  position: bottom
+  margin: 600
+  words_per_line: 4
+  animation: pop
+hook:
+  enabled: true
+  overlay: true
+title_overlay:
+  enabled: true
+  font: Anton-Regular
+  size: 64
+  color: "#FFFFFF"
+  box_color: "#111111"
+  offset: 240
+  duration: 4
+framing:
+  mode: face
+  smoothing: 0.9
+silence:
+  threshold_db: -38
+  min_duration: 0.5
+  max_pause: 0.8
+zoom_punch_ins: false
+audio:
+  source: original
+style_notes: >-
+  Conversation clip. Keep one complete idea or story with its setup and payoff; the
+  first sentence must make sense to someone who has not heard the episode.

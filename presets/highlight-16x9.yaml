@@ -1,0 +1,35 @@
+name: highlight-16x9
+label: Highlight reel (16:9)
+platform: youtube
+aspect_ratio: "16:9"
+resolution: 1920x1080
+fps: 30
+min_duration: 60
+max_duration: 180
+clip_count: 6
+captions:
+  enabled: true
+  font: OpenSans-ExtraBold
+  size: 54
+  color: "#FFFFFF"
+  highlight_color: "#FFE000"
+  position: bottom
+  margin: 80
+  words_per_line: 6
+  animation: highlight
+  uppercase: false
+hook:
+  enabled: true
+title_overlay:
+  enabled: true
+  font: Anton-Regular
+  size: 80
+  offset: 80
+  duration: 3
+framing:
+  mode: none
+audio:
+  source: original
+style_notes: >-
+  A highlight reel of the best moments in source order. Each clip should stand on its
+  own; prefer variety over several clips about the same thing.

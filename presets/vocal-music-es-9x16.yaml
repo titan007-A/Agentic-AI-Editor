@@ -1,0 +1,52 @@
+name: vocal-music-es-9x16
+label: Vocal music (Spanish)
+platform: instagram_reels
+aspect_ratio: "9:16"
+resolution: 1080x1920
+fps: 30
+min_duration: 20
+max_duration: 120
+clip_count: 1
+captions:
+  enabled: false
+hook:
+  enabled: true
+  overlay: false
+text_blocks:
+  - text: "Escucha la voz real de los artistas,\nsin Auto-Tune ni instrumentos adicionales"
+    font: OpenSans-ExtraBold
+    size: 42
+    color: "#FFFFFF"
+    anchor: top
+    offset: 340
+    max_shrink: 0.9
+  - text: "Síguenos ahora o te perderás\nlas próximas voces reales"
+    font: OpenSans-Regular
+    size: 38
+    color: "#FFFFFF"
+    anchor: bottom
+    offset: 470
+    max_shrink: 0.5
+framing:
+  mode: none
+  background: "#000000"
+  text_gap_above: 0
+  text_gap_below: 130
+audio:
+  source: vocals
+  highpass_hz: 60
+  loudness_lufs: -14
+  true_peak_db: -1.5
+  fade_in: 0.02
+  fade_out: 0.4
+silence:
+  threshold_db: -40
+  min_duration: 0.35
+bitrate_mbps: 12
+style_notes: >-
+  The source is a music performance and the soundtrack is the isolated lead vocal with
+  the instruments removed. Pick the single continuous passage where the singer's voice is
+  most impressive and recognisable, usually the chorus or a verse that builds into it.
+  Start exactly where a sung line begins, preferably the first line of a section, and end
+  after a line has finished and the note has died away. Never start or stop in the middle
+  of a lyric line.

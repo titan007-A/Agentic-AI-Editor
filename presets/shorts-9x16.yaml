@@ -1,0 +1,47 @@
+name: shorts-9x16
+label: Talking short (9:16)
+platform: instagram_reels
+aspect_ratio: "9:16"
+resolution: 1080x1920
+fps: 30
+min_duration: 15
+max_duration: 60
+clip_count: 3
+captions:
+  enabled: true
+  font: Anton-Regular
+  size: 86
+  color: "#FFFFFF"
+  highlight_color: "#FFE000"
+  outline_color: "#000000"
+  outline: 5
+  position: bottom
+  margin: 560
+  words_per_line: 3
+  animation: highlight
+  uppercase: true
+hook:
+  enabled: true
+  overlay: true
+title_overlay:
+  enabled: false
+  font: Anton-Regular
+  size: 72
+  color: "#FFFFFF"
+  box_color: "#000000"
+  offset: 260
+  duration: 3
+framing:
+  mode: face
+  smoothing: 0.85
+silence:
+  threshold_db: -35
+  min_duration: 0.4
+  max_pause: 0.6
+zoom_punch_ins: true
+audio:
+  source: original
+  loudness_lufs: -14
+style_notes: >-
+  Fast, punchy edit for Reels. Open on the most surprising or emotional line, cut every
+  aside and filler, and only keep moments that make sense without the rest of the video.
