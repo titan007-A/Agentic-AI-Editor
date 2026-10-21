@@ -15,7 +15,7 @@ export function JobList({ jobs }: { jobs: Job[] }) {
     <div className="space-y-2">
       {jobs.map((job) => (
         <Link key={job.id} href={`/job/?id=${job.id}`} className="block">
-          <Card className="gap-2 px-4 py-3 transition-colors hover:bg-secondary/40">
+          <Card className="gap-2 px-4 py-3 transition-transform hover:-rotate-[0.6deg] hover:bg-[#fdf3dc]">
             <div className="flex items-center justify-between gap-3">
               <span className="truncate text-sm font-medium">{jobLabel(job)}</span>
               <JobStatus job={job} />

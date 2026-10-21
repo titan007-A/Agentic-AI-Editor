@@ -43,24 +43,26 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
   }
 
   return (
-    <Card className="gap-4">
+    <Card className="tape tape-right gap-4">
       <CardHeader>
-        <CardTitle className="flex items-center justify-between gap-2 text-base">
+        <CardTitle className="flex items-center justify-between gap-2">
           <span className="truncate">{output.preset}</span>
-          <span className="shrink-0 text-sm font-normal text-muted-foreground">
+          <span className="shrink-0 text-xl font-medium text-muted-foreground">
             {seconds(output.duration)}
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <video
-          className="mx-auto max-h-[70vh] w-full rounded-md bg-muted object-contain"
-          src={videoUrl(output)}
-          poster={output.has_thumbnail ? thumbnailUrl(output) : undefined}
-          controls
-          playsInline
-          preload="metadata"
-        />
+        <div className="filmstrip">
+          <video
+            className="mx-auto max-h-[70vh] w-full rounded-sm bg-black object-contain"
+            src={videoUrl(output)}
+            poster={output.has_thumbnail ? thumbnailUrl(output) : undefined}
+            controls
+            playsInline
+            preload="metadata"
+          />
+        </div>
         {output.title && <p className="text-sm font-medium">{output.title}</p>}
         {output.edl.hook && (
           <p className="text-sm text-muted-foreground">Hook: {output.edl.hook}</p>

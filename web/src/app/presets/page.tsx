@@ -166,7 +166,9 @@ export default function PresetsPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-lg font-semibold">{draft.label}</h1>
+        <h1 className="font-hand text-3xl leading-tight font-bold break-words sm:text-4xl">
+          <span className="marker">{draft.label}</span>
+        </h1>
         <Badge variant="secondary" className="font-mono">
           {draft.name}
         </Badge>
@@ -177,7 +179,7 @@ export default function PresetsPage() {
       {SECTIONS.slice(0, 1).map((section) => (
         <Card key={section.title}>
           <CardHeader>
-            <CardTitle className="text-base">{section.title}</CardTitle>
+            <CardTitle>{section.title}</CardTitle>
           </CardHeader>
           <CardContent>
             <PresetSection fields={section.fields} preset={draft} fonts={fonts} onChange={edit} />
@@ -187,7 +189,7 @@ export default function PresetsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">On-screen text</CardTitle>
+          <CardTitle>On-screen text</CardTitle>
         </CardHeader>
         <CardContent>
           <TextBlocks preset={draft} fonts={fonts} onChange={edit} />
@@ -197,7 +199,7 @@ export default function PresetsPage() {
       {SECTIONS.slice(1).map((section) => (
         <Card key={section.title}>
           <CardHeader>
-            <CardTitle className="text-base">{section.title}</CardTitle>
+            <CardTitle>{section.title}</CardTitle>
           </CardHeader>
           <CardContent>
             <PresetSection fields={section.fields} preset={draft} fonts={fonts} onChange={edit} />
@@ -205,7 +207,7 @@ export default function PresetsPage() {
         </Card>
       ))}
 
-      <div className="fixed inset-x-0 bottom-0 border-t bg-background/90 backdrop-blur">
+      <div className="hand-rule-top fixed inset-x-0 bottom-0 bg-background/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-end gap-2 px-4 py-3">
           {dirty && (
             <Button

@@ -75,7 +75,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
   }
 
   return (
-    <Card>
+    <Card className="tape">
       <CardHeader>
         <CardTitle>New edit</CardTitle>
       </CardHeader>
@@ -132,7 +132,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
               {presets.map((p) => (
                 <label
                   key={p.name}
-                  className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-secondary/50"
+                  className="sketch-tile flex cursor-pointer items-start gap-3 p-3 hover:bg-[#fdf3dc]"
                 >
                   <Checkbox
                     checked={chosen.includes(p.name)}

@@ -228,7 +228,7 @@ function FieldInput({
           <input
             type="color"
             aria-label={`${field.label} picker`}
-            className="h-9 w-10 shrink-0 cursor-pointer rounded-md border bg-transparent p-1"
+            className="h-9 w-10 shrink-0 cursor-pointer rounded-[6px_3px_7px_3px] border-[1.5px] border-foreground bg-transparent p-1"
             value={(value as string) ?? "#000000"}
             onChange={(e) => onChange(e.target.value.toUpperCase())}
           />
@@ -299,7 +299,7 @@ function FieldGrid({
             key={field.path}
             className={
               inline
-                ? "flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                ? "sketch-tile flex items-center justify-between gap-3 px-3 py-2"
                 : wide
                   ? "space-y-2 sm:col-span-2"
                   : "space-y-2"
@@ -359,7 +359,7 @@ export function TextBlocks({
   return (
     <div className="space-y-4">
       {blocks.map((block, i) => (
-        <div key={i} className="space-y-4 rounded-md border p-3">
+        <div key={i} className="sketch-tile space-y-4 border-dashed p-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium">Text {i + 1}</span>
             <Button

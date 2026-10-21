@@ -47,7 +47,7 @@ export default function SystemPage() {
     <div className="mx-auto max-w-2xl space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Backends</CardTitle>
+          <CardTitle>Backends</CardTitle>
         </CardHeader>
         <CardContent>
           {info ? (
@@ -67,7 +67,7 @@ export default function SystemPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Downloader</CardTitle>
+          <CardTitle>Downloader</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">

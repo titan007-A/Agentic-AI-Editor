@@ -30,29 +30,37 @@ export default function LoginPage() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Agentic AI Editor</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              autoFocus
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy || !password}>
-            Log in
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+    <div className="space-y-8">
+      <div className="space-y-1 text-center">
+        <h1 className="font-hand text-5xl leading-none font-bold">
+          <span className="marker">Agentic AI Editor</span>
+        </h1>
+        <p className="font-hand text-2xl text-muted-foreground">cut it, grade it, post it.</p>
+      </div>
+      <Card className="tape">
+        <CardHeader>
+          <CardTitle>Welcome back</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                autoFocus
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <Button type="submit" className="w-full" disabled={busy || !password}>
+              Log in
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

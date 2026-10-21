@@ -30,7 +30,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       .catch(() => {});
   }, [onLogin]);
 
-  if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-16">{children}</main>;
+  if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
 
   async function logout() {
     await api.logout();
@@ -39,11 +39,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
+      <header className="hand-rule sticky top-0 z-10 bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
-          <Link href="/" className="flex items-center gap-2 font-semibold">
-            <Clapperboard className="size-5" />
-            <span className="hidden sm:inline">Agentic AI Editor</span>
+          <Link href="/" className="flex items-center gap-2">
+            <span className="grid size-9 -rotate-6 place-items-center rounded-[50%_45%_55%_40%] border-2 border-foreground bg-[var(--mustard)]">
+              <Clapperboard className="size-5" />
+            </span>
+            <span className="hidden font-hand text-2xl font-bold sm:inline">Agentic AI Editor</span>
           </Link>
           <nav className="flex flex-1 gap-1">
             {LINKS.map((link) => {
@@ -56,8 +58,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   key={link.href}
                   href={link.href}
                   className={cn(
-                    "rounded-md px-3 py-1.5 text-sm",
-                    active ? "bg-secondary text-foreground" : "text-muted-foreground",
+                    "px-2.5 py-1 text-sm font-semibold transition-colors sm:px-3",
+                    active
+                      ? "scribble text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {link.label}

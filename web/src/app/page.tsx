@@ -32,7 +32,7 @@ export default function Dashboard() {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <NewJobForm onCreated={refresh} />
       <section className="space-y-3">
-        <h2 className="text-sm font-medium">Recent jobs</h2>
+        <h2 className="font-hand text-3xl font-bold">Recent jobs</h2>
         <JobList jobs={jobs} />
       </section>
     </div>

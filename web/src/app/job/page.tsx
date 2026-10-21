@@ -55,7 +55,9 @@ function JobDetail() {
           </Link>
         </Button>
         <div className="min-w-0 flex-1 space-y-1">
-          <h1 className="truncate text-lg font-semibold">{jobLabel(job)}</h1>
+          <h1 className="line-clamp-2 font-hand text-3xl leading-tight font-bold break-words sm:text-4xl">
+            <span className="marker">{jobLabel(job)}</span>
+          </h1>
           <p className="truncate text-xs text-muted-foreground">{job.source}</p>
           {job.notes && <p className="text-sm">Notes: {job.notes}</p>}
         </div>
