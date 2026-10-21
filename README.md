@@ -14,7 +14,14 @@ Only use it on content you own or have permission to use.
 
 ```
 download -> analyze -> plan (EDL) -> snap cuts -> render -> review -> done
+                                         ^                     |
+                                         +---- fix and redo ---+
 ```
+
+- Analysis isolates the vocals when a preset asks for them, transcribes with word
+  timings, and finds scene cuts, silences, loudness and faces.
+- Review checks each render (length, framing, loudness, caption sync) and applies
+  deterministic fixes, re-rendering up to twice.
 
 - `backends.py` detects the machine at startup and picks the transcription backend
   (faster-whisper on CUDA, mlx-whisper on Apple Silicon, CPU int8 otherwise) and the
@@ -40,7 +47,8 @@ scripts/setup-linux.sh
 The script installs a static ffmpeg build with NVENC (Ubuntu's ffmpeg package has none)
 into `~/.local/opt/ffmpeg-nvenc` and points `.env` at it, installs the Python
 environment with the CUDA 12.8 build of PyTorch (needed for RTX 50-series/Blackwell
-GPUs), pulls the Ollama models and prints the detected backends.
+GPUs), pulls the Ollama models and prints the detected backends. Build the web app
+once with `(cd web && npm ci && npm run build)` if you want the browser interface.
 
 ## Setup: macOS on Apple Silicon
 
@@ -52,7 +60,11 @@ cp .env.example .env
 uv sync --extra ml
 ollama pull qwen3.5:9b && ollama pull qwen3.5:4b
 uv run aiedit backends
+(cd web && npm ci && npm run build)
 ```
+
+On macOS the platform layer transcribes with mlx-whisper; `ENCODER=videotoolbox` trades
+larger files for much faster encodes.
 
 ## Usage
 
@@ -94,6 +106,60 @@ Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.
 
+## Presets
+
+A preset is a YAML file in `presets/` whose file name matches its `name`. It sets the
+frame (`aspect_ratio`, `resolution`, `fps`), the length range, and how each part of the
+render behaves:
+
+| Section | Controls |
+| --- | --- |
+| `captions` | word-by-word captions: font, size, colours, position, animation |
+| `text_blocks` | fixed text drawn on every frame, such as a series tagline |
+| `framing` | face tracking, centre crop or none; background colour; black bar cropping |
+| `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
+| `silence` | what counts as a pause, and the longest pause kept inside a clip |
+| `hook`, `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
+| `style_notes` | plain-language guidance the planner reads before choosing the edit |
+
+The quickest way to make one is to duplicate an existing preset on the web app's
+Presets page and edit it there; the server validates every save. Editing the YAML by
+hand works too: `uv run aiedit presets` loads and validates all of them. Fonts are
+looked up by file name (without extension) in `fonts/`.
+
+## Models
+
+| Job | Setting | Default |
+| --- | --- | --- |
+| Planning the edit | `LLM_MODEL` | `qwen3.5:9b` (Ollama) |
+| Checking frames, thumbnails | `VISION_MODEL` | `qwen3.5:4b` (Ollama) |
+| Transcription | `WHISPER_MODEL` / `MLX_WHISPER_MODEL` | `large-v3-turbo` |
+| Vocal isolation | `SEPARATION_MODEL` | `vocals_mel_band_roformer.ckpt` |
+
+To try another model, pull it (`ollama pull <name>`) or pick one from
+`uv run audio-separator --list_models`, set it in `.env`, and run the benchmark and the
+end-to-end test. The Ollama models must support JSON-schema output, and the vision model
+must accept images. Changing the separation model re-separates cached sources the next
+time they are used. A new kind of model belongs in `router.py`, which is the only place
+that maps jobs to models.
+
+## Benchmark
+
+```
+uv run aiedit benchmark                 # Commons sample performance, 246 s
+uv run aiedit benchmark ~/Videos/x.mp4 -p shorts-9x16 --no-llm
+```
+
+It times each stage without the caches. On an RTX 5050 laptop (8 GB) under WSL2:
+
+```
+  transcription        11.8s  20.9x realtime, 83 words, faster-whisper
+  vocal separation     42.2s  5.8x realtime, vocals_mel_band_roformer.ckpt
+  llm qwen3.5:9b        6.7s  31.0 tokens/s over 203 tokens
+  llm qwen3.5:4b        3.2s  63.3 tokens/s over 195 tokens
+  render               14.3s  1.4x realtime, 42 fps at 1080x1920, libx264
+```
+
 ## Configuration
 
 All settings come from `.env`; see `.env.example`. Any backend can be forced:
@@ -116,7 +182,13 @@ UVR-MDX-NET-Voc_FT, in less time.
 
 ```
 uv sync --extra ml
-uv run pytest            # unit tests, no GPU or models needed
-uv run pytest -m e2e     # real pipeline on a short sample video
+uv run pre-commit install   # ruff and prettier on every commit
+uv run pytest               # unit tests, no GPU or models needed
+uv run pytest -m e2e        # real pipeline on a short sample video
 uv run ruff check . && uv run ruff format --check .
+(cd web && npm run lint && npm run format:check)
 ```
+
+CI runs the Python checks and the web lint, format and build on every pull request.
+The macOS job only runs when the workflow is started by hand (Actions, ci, Run
+workflow), because GitHub's Apple Silicon runners are often unavailable.
