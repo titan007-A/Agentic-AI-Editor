@@ -16,10 +16,17 @@ def _run(args: argparse.Namespace) -> int:
         print(f"unknown preset(s): {', '.join(missing)}; available: {', '.join(available)}")
         return 2
     backends = detect(settings)
+    presets = [available[n] for n in args.preset]
     for source in args.source:
-        for output in pipeline.run(source, [available[n] for n in args.preset], settings, backends):
+        for output in pipeline.run(source, presets, settings, backends, args.notes):
             clips = ", ".join(f"{c.start:.2f}-{c.end:.2f}" for c in output.edl.clips)
-            print(f"{output.preset}: {output.path} ({output.edl.duration:.1f}s from {clips})")
+            print(f"{output.preset}: {output.path}")
+            print(f"  {output.edl.duration:.1f}s from {clips}, planned by {output.planner}, "
+                  f"{output.renders} render(s)")  # fmt: skip
+            if output.edl.title:
+                print(f"  title: {output.edl.title}")
+            for issue in output.issues:
+                print(f"  unresolved: {issue}")
     return 0
 
 
@@ -43,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="edit one or more videos with one or more presets")
     run.add_argument("source", nargs="+", help="video URL or local file")
     run.add_argument("-p", "--preset", action="append", required=True)
+    run.add_argument("-n", "--notes", help="extra instructions for the planner")
     run.set_defaults(handler=_run)
 
     commands.add_parser("backends", help="show the detected backends").set_defaults(

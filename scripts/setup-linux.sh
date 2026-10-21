@@ -10,6 +10,11 @@ command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/";
 command -v ollama >/dev/null || { echo "ollama is required: https://ollama.com/download"; exit 1; }
 nvidia-smi >/dev/null 2>&1 || echo "warning: nvidia-smi failed, the GPU paths will be unavailable"
 
+# MediaPipe's face detector links against libGLESv2 even when it runs on the CPU.
+if ! ldconfig -p | grep -q libGLESv2.so.2; then
+    sudo apt-get install -y libgles2
+fi
+
 # Distribution ffmpeg packages are built without NVENC, so use a static build that has it.
 if [ ! -x "$FFMPEG_DIR/bin/ffmpeg" ]; then
     tmp="$(mktemp -d)"

@@ -54,11 +54,7 @@ def frame_chain(
         ]
         return chain
 
-    target = width / height
-    if src_w / src_h > target:
-        crop_w, crop_h = _even(src_h * target), src_h
-    else:
-        crop_w, crop_h = src_w, _even(src_w / target)
+    crop_w, crop_h = crop_size((src_w, src_h), frame)
     x = (src_w - crop_w) // 2
     y = (src_h - crop_h) // 2
     if mode == "face" and commands is not None:
@@ -68,6 +64,15 @@ def frame_chain(
         chain.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
     chain.append(f"scale={width}:{height}:flags=lanczos")
     return chain
+
+
+def crop_size(source: tuple[int, int], frame: tuple[int, int]) -> tuple[int, int]:
+    """Largest window with the frame's aspect ratio that fits inside the source."""
+    src_w, src_h = source
+    target = frame[0] / frame[1]
+    if src_w / src_h > target:
+        return _even(src_h * target), src_h
+    return src_w, _even(src_w / target)
 
 
 def _even(value: float) -> int:
