@@ -90,6 +90,15 @@ class Framing(Strict):
     text_gap_below: int | None = 130
 
 
+class Watermarks(Strict):
+    """Logos, channel names and usernames burnt into the source get blurred out."""
+
+    blur: bool = True
+    strength: float = Field(
+        default=18, ge=2, le=60, description="smallest blur radius, in source pixels"
+    )
+
+
 class Audio(Strict):
     source: Literal["original", "vocals"] = "original"
     highpass_hz: int = Field(default=0, ge=0)
@@ -128,6 +137,7 @@ class Preset(Strict):
     silence: Silence = Silence()
     zoom_punch_ins: bool = False
     framing: Framing = Framing()
+    watermarks: Watermarks = Watermarks()
     audio: Audio = Audio()
     bitrate_mbps: float = Field(default=12.0, gt=0)
     style_notes: str = ""

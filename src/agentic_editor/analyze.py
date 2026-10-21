@@ -11,7 +11,8 @@ from typing import Literal
 from pydantic import BaseModel
 
 from agentic_editor import ffmpeg
-from agentic_editor.analysis import audio, scenes, separation
+from agentic_editor.analysis import audio, scenes, separation, watermarks
+from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.router import ModelRouter
 from agentic_editor.transcript import Transcript
 
@@ -35,6 +36,7 @@ class Analysis(BaseModel):
     energy: list[float]
     energy_hop: float = ENERGY_HOP
     silences: list[tuple[float, float]] = []
+    watermarks: list[Watermark] = []
 
     def energy_between(self, start: float, end: float) -> float:
         """Mean level in dB over [start, end)."""
@@ -96,6 +98,18 @@ def analyze(
         return scenes.detect_cuts(video)
 
     cuts = _cached(work_dir / "scenes.json", run_scene_detection)
+
+    def run_watermark_search():
+        progress("analyze", "looking for watermarks")
+        found = watermarks.detect(
+            video, (info.width, info.height), info.duration, router.settings.ffmpeg_bin
+        )
+        return [m.model_dump() for m in found]
+
+    marks = [
+        Watermark.model_validate(m)
+        for m in _cached(work_dir / "watermarks.json", run_watermark_search)
+    ]
     samples = ffmpeg.read_audio(timeline_audio, 16000)
 
     return Analysis(
@@ -109,6 +123,7 @@ def analyze(
         transcript=transcript,
         scenes=cuts,
         energy=audio.energy_curve(samples, 16000, ENERGY_HOP),
+        watermarks=marks,
     )
 
 

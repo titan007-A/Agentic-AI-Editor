@@ -89,6 +89,13 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     ],
   },
   {
+    title: "Clean-up",
+    fields: [
+      { path: "watermarks.blur", label: "Blur watermarks and logos", kind: "switch" },
+      { path: "watermarks.strength", label: "Minimum blur (px)", kind: "number" },
+    ],
+  },
+  {
     title: "Audio",
     fields: [
       {
