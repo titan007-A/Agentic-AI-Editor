@@ -1,0 +1,22 @@
+# Local hooks so the versions come from uv.lock and web/package-lock.json, the same ones CI runs.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: prettier
+        name: prettier
+        # Prettier finds its Tailwind plugin relative to the working directory.
+        entry: bash -c 'cd web && node_modules/.bin/prettier --write --ignore-unknown "${@#web/}"' --
+        language: system
+        files: ^web/src/
+        # Generated shadcn components are kept as the generator writes them.
+        exclude: ^web/src/components/ui/
