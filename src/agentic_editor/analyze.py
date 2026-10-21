@@ -115,15 +115,20 @@ def analyze(
 def _vocals(original: Path, work_dir: Path, router: ModelRouter, progress: Progress):
     vocals = work_dir / "vocals.wav"
     meta = work_dir / "vocals.json"
+    model = router.settings.separation_model
     if vocals.exists() and meta.exists():
-        return vocals, json.loads(meta.read_text())["instrument_free"]
+        cached = json.loads(meta.read_text())
+        if cached.get("model") == model:
+            return vocals, cached["instrument_free"]
+        # Separated with another model: redo it, and the transcript that was made from it.
+        (work_dir / "transcript-vocals.json").unlink(missing_ok=True)
 
     progress("separate", "isolating vocals")
     stems_dir = work_dir / "stems"
     stems_dir.mkdir(exist_ok=True)
     stems = router.separate_vocals(original, stems_dir)
     track = separation.accept_stems(original, stems, vocals)
-    meta.write_text(json.dumps({"instrument_free": track.instrument_free}))
+    meta.write_text(json.dumps({"instrument_free": track.instrument_free, "model": model}))
     return vocals, track.instrument_free
 
 

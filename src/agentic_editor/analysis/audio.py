@@ -56,3 +56,13 @@ def levels(samples: np.ndarray) -> tuple[float, float]:
         return -180.0, -180.0
     rms = float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
     return to_db(rms), to_db(float(np.max(np.abs(samples))))
+
+
+def loudest_window_db(samples: np.ndarray, sample_rate: int, window: float = 0.05) -> float:
+    """RMS of the loudest stretch of `window` seconds: a hit counts, a lone click doesn't."""
+    size = max(1, int(sample_rate * window))
+    count = len(samples) // size
+    if count == 0:
+        return levels(samples)[0]
+    frames = samples[: count * size].reshape(count, size)
+    return to_db(float(np.sqrt(np.mean(np.square(frames, dtype=np.float64), axis=1)).max()))
