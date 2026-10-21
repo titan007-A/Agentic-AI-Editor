@@ -110,8 +110,8 @@ def fix(
             if clips != edl.clips:
                 edl, changed = edl.model_copy(update={"clips": clips}), True
         elif issue.kind == "loudness" and issue.measured is not None:
-            # Aim off-target by the error just measured; loudnorm falls back to dynamic
-            # mode on some material and lands short of where it was asked to go.
+            # Aim off-target by the error just measured, which covers what the final
+            # encode shifts.
             corrected = preset.audio.loudness_lufs + loudness_goal - issue.measured
             audio = preset.audio.model_copy(update={"loudness_lufs": corrected})
             preset, changed = preset.model_copy(update={"audio": audio}), True
