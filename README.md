@@ -69,7 +69,19 @@ them. Analysis results are cached per source file in `cache/`.
 
 ```
 uv run aiedit hash-password      # prints PASSWORD_HASH and SECRET_KEY lines for .env
+(cd web && npm ci && npm run build)   # once, and again after frontend changes
 uv run aiedit serve
+```
+
+For frontend work, run `npm run dev` in `web/` next to `aiedit serve`; the dev server
+proxies `/api` to port 8000. Format with `npm run format`.
+
+To use it from a phone on WSL2, set `networkingMode=mirrored` in `%UserProfile%\.wslconfig`
+and open `http://<windows-lan-ip>:8000`. If the phone can't connect, allow the port
+through the Windows firewall from an admin PowerShell:
+
+```
+New-NetFirewallRule -DisplayName "Agentic AI Editor" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
 ```
 
 `serve` runs the API, the job worker and the built frontend in one process on
