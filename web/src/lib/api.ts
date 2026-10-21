@@ -90,6 +90,7 @@ export const api = {
   presets: () => request<Preset[]>("GET", "/presets"),
   savePreset: (preset: Preset) => request<Preset>("PUT", `/presets/${preset.name}`, preset),
   deletePreset: (name: string) => request("DELETE", `/presets/${name}`),
+  presetYaml: (name: string) => request<{ yaml: string }>("GET", `/presets/${name}/yaml`),
   jobs: () => request<Job[]>("GET", "/jobs"),
   job: (id: string) => request<Job>("GET", `/jobs/${id}`),
   deleteJob: (id: string) => request("DELETE", `/jobs/${id}`),
@@ -112,7 +113,11 @@ export const thumbnailUrl = (output: Output) => `/api/outputs/${output.id}/thumb
 export function errorText(error: unknown): string {
   if (error instanceof ApiError && Array.isArray(error.detail)) {
     return error.detail
-      .map((d: { loc?: string[]; msg?: string }) => `${(d.loc ?? []).join(".")}: ${d.msg}`)
+      .map((d: { loc?: string[]; msg?: string }) => {
+        // Pydantic prefixes errors raised by validators with "Value error, ".
+        const msg = (d.msg ?? "").replace(/^Value error, /, "");
+        return d.loc?.length ? `${d.loc.join(".")}: ${msg}` : msg;
+      })
       .join("\n");
   }
   return error instanceof Error ? error.message : String(error);
