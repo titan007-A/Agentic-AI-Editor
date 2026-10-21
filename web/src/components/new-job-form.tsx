@@ -23,7 +23,10 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.presets().then(setPresets).catch(() => {});
+    api
+      .presets()
+      .then(setPresets)
+      .catch(() => {});
   }, []);
 
   const sources = [
@@ -108,7 +111,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
               {uploads.map((u) => (
                 <span
                   key={u.source}
-                  className="bg-secondary flex items-center gap-1 rounded-md px-2 py-1 text-xs"
+                  className="flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-xs"
                 >
                   {u.name}
                   <button
@@ -129,7 +132,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
               {presets.map((p) => (
                 <label
                   key={p.name}
-                  className="hover:bg-secondary/50 flex cursor-pointer items-start gap-3 rounded-md border p-3"
+                  className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-secondary/50"
                 >
                   <Checkbox
                     checked={chosen.includes(p.name)}
@@ -137,7 +140,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
                   />
                   <span className="space-y-0.5">
                     <span className="block text-sm font-medium">{p.label}</span>
-                    <span className="text-muted-foreground block text-xs">
+                    <span className="block text-xs text-muted-foreground">
                       {p.resolution} · {p.min_duration}-{p.max_duration}s
                     </span>
                   </span>

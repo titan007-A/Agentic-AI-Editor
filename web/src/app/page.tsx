@@ -10,7 +10,10 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
 
   const refresh = useCallback(() => {
-    api.jobs().then(setJobs).catch(() => {});
+    api
+      .jobs()
+      .then(setJobs)
+      .catch(() => {});
   }, []);
 
   const busy = jobs.some((j) => j.status === "queued" || j.status === "running");

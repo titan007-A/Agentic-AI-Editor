@@ -19,7 +19,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark h-full antialiased">
-      <body className="bg-background text-foreground min-h-full">
+      <body className="min-h-full bg-background text-foreground">
         <Shell>{children}</Shell>
         <Toaster position="top-center" />
       </body>

@@ -23,9 +23,9 @@ export function UsageNotice({ open, onAccept }: { open: boolean; onAccept: () =>
         <DialogHeader>
           <DialogTitle>Before you start</DialogTitle>
           <DialogDescription>
-            Only use this editor on videos you own or have permission to use. Downloading,
-            editing and reposting other people&apos;s work can break copyright law and the terms
-            of the sites you download from.
+            Only use this editor on videos you own or have permission to use. Downloading, editing
+            and reposting other people&apos;s work can break copyright law and the terms of the
+            sites you download from.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

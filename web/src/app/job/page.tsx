@@ -44,7 +44,7 @@ function JobDetail() {
     }
   }
 
-  if (!job) return <p className="text-muted-foreground text-sm">Loading...</p>;
+  if (!job) return <p className="text-sm text-muted-foreground">Loading...</p>;
 
   return (
     <div className="space-y-6">
@@ -56,7 +56,7 @@ function JobDetail() {
         </Button>
         <div className="min-w-0 flex-1 space-y-1">
           <h1 className="truncate text-lg font-semibold">{jobLabel(job)}</h1>
-          <p className="text-muted-foreground truncate text-xs">{job.source}</p>
+          <p className="truncate text-xs text-muted-foreground">{job.source}</p>
           {job.notes && <p className="text-sm">Notes: {job.notes}</p>}
         </div>
         <JobStatus job={job} />
@@ -71,7 +71,7 @@ function JobDetail() {
         <Card className="gap-3 p-4">
           <Progress value={progress * 100} />
           <p className="text-sm">{latest?.message ?? "Waiting for a free slot..."}</p>
-          <ul className="text-muted-foreground max-h-48 space-y-1 overflow-y-auto font-mono text-xs">
+          <ul className="max-h-48 space-y-1 overflow-y-auto font-mono text-xs text-muted-foreground">
             {events.map((e, i) => (
               <li key={i}>
                 {new Date(e.time + "Z").toLocaleTimeString()} {e.stage}: {e.message}
@@ -83,7 +83,7 @@ function JobDetail() {
 
       {job.status === "failed" && (
         <Card className="border-destructive p-4">
-          <p className="text-destructive text-sm whitespace-pre-wrap">{job.error}</p>
+          <p className="text-sm whitespace-pre-wrap text-destructive">{job.error}</p>
         </Card>
       )}
 

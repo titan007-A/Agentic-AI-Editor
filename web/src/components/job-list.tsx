@@ -9,18 +9,18 @@ import type { Job } from "@/lib/api";
 
 export function JobList({ jobs }: { jobs: Job[] }) {
   if (jobs.length === 0) {
-    return <p className="text-muted-foreground text-sm">No jobs yet.</p>;
+    return <p className="text-sm text-muted-foreground">No jobs yet.</p>;
   }
   return (
     <div className="space-y-2">
       {jobs.map((job) => (
         <Link key={job.id} href={`/job/?id=${job.id}`} className="block">
-          <Card className="hover:bg-secondary/40 gap-2 px-4 py-3 transition-colors">
+          <Card className="gap-2 px-4 py-3 transition-colors hover:bg-secondary/40">
             <div className="flex items-center justify-between gap-3">
               <span className="truncate text-sm font-medium">{jobLabel(job)}</span>
               <JobStatus job={job} />
             </div>
-            <div className="text-muted-foreground flex flex-wrap gap-x-3 text-xs">
+            <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
               <span>{job.presets.join(", ")}</span>
               <span>{new Date(job.created_at + "Z").toLocaleString()}</span>
             </div>

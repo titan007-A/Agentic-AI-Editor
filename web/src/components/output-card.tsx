@@ -47,14 +47,14 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2 text-base">
           <span className="truncate">{output.preset}</span>
-          <span className="text-muted-foreground shrink-0 text-sm font-normal">
+          <span className="shrink-0 text-sm font-normal text-muted-foreground">
             {seconds(output.duration)}
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <video
-          className="bg-muted mx-auto max-h-[70vh] w-full rounded-md object-contain"
+          className="mx-auto max-h-[70vh] w-full rounded-md bg-muted object-contain"
           src={videoUrl(output)}
           poster={output.has_thumbnail ? thumbnailUrl(output) : undefined}
           controls
@@ -63,7 +63,7 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
         />
         {output.title && <p className="text-sm font-medium">{output.title}</p>}
         {output.edl.hook && (
-          <p className="text-muted-foreground text-sm">Hook: {output.edl.hook}</p>
+          <p className="text-sm text-muted-foreground">Hook: {output.edl.hook}</p>
         )}
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">{output.planner}</Badge>
@@ -77,14 +77,14 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
           ))}
         </div>
         <details className="text-sm">
-          <summary className="text-muted-foreground cursor-pointer">Edit decisions</summary>
+          <summary className="cursor-pointer text-muted-foreground">Edit decisions</summary>
           <ul className="mt-2 space-y-2">
             {output.edl.clips.map((clip) => (
-              <li key={clip.start} className="bg-secondary/40 rounded-md p-2">
+              <li key={clip.start} className="rounded-md bg-secondary/40 p-2">
                 <span className="font-mono text-xs">
                   {seconds(clip.start)} - {seconds(clip.end)}
                 </span>
-                <p className="text-muted-foreground mt-1 text-xs">{clip.reason}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{clip.reason}</p>
               </li>
             ))}
           </ul>

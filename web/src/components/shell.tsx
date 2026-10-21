@@ -39,7 +39,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <header className="bg-background/90 sticky top-0 z-10 border-b backdrop-blur">
+      <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
           <Link href="/" className="flex items-center gap-2 font-semibold">
             <Clapperboard className="size-5" />
