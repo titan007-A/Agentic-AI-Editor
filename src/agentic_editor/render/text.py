@@ -50,8 +50,11 @@ def ink_extent(lines: list[str], path: Path, size: int, spacing: float) -> tuple
     """(top, bottom) of the visible ink relative to the first line's top."""
     font = _font(path, size)
     step = line_height(path, size, spacing)
-    boxes = [(i * step + font.getbbox(line)[1], i * step + font.getbbox(line)[3])
-             for i, line in enumerate(lines) if line.strip()]  # fmt: skip
+    boxes = [
+        (i * step + font.getbbox(line)[1], i * step + font.getbbox(line)[3])
+        for i, line in enumerate(lines)
+        if line.strip()
+    ]
     if not boxes:
         return 0.0, 0.0
     return min(b[0] for b in boxes), max(b[1] for b in boxes)
@@ -103,8 +106,7 @@ def place(
         # picture is better than running off the frame.
         ink_top, ink_bottom = ink_extent(lines, path, size, block.line_spacing)
         top = min(max(top, EDGE_MARGIN - ink_top), height - EDGE_MARGIN - ink_bottom)
-    return Placed(lines, path, size, top, block.color,
-                  line_height(path, size, block.line_spacing))  # fmt: skip
+    return Placed(lines, path, size, top, block.color, line_height(path, size, block.line_spacing))
 
 
 def draw(placed: list[Placed], frame: tuple[int, int], dest: Path) -> Path:
@@ -121,9 +123,15 @@ def draw(placed: list[Placed], frame: tuple[int, int], dest: Path) -> Path:
 
 
 def draw_banner(
-    text: str, path: Path, size: int, color: str, box: str | None,
-    frame: tuple[int, int], top: int, dest: Path,
-) -> Path:  # fmt: skip
+    text: str,
+    path: Path,
+    size: int,
+    color: str,
+    box: str | None,
+    frame: tuple[int, int],
+    top: int,
+    dest: Path,
+) -> Path:
     """A centered title with an optional solid box behind it."""
     width, _ = frame
     lines = text.split("\n")
@@ -137,10 +145,15 @@ def draw_banner(
         text_width = max(font.getlength(line) for line in lines)
         pad = size * 0.35
         canvas.rounded_rectangle(
-            ((width - text_width) / 2 - pad, top + ink_top - pad,
-             (width + text_width) / 2 + pad, top + ink_bottom + pad),
-            radius=pad, fill=box,
-        )  # fmt: skip
+            (
+                (width - text_width) / 2 - pad,
+                top + ink_top - pad,
+                (width + text_width) / 2 + pad,
+                top + ink_bottom + pad,
+            ),
+            radius=pad,
+            fill=box,
+        )
     for i, line in enumerate(lines):
         canvas.text(
             ((width - font.getlength(line)) / 2, top + i * step), line, font=font, fill=color

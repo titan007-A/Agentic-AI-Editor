@@ -1,0 +1,91 @@
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+from sqlalchemy import JSON, ForeignKey, String, Text, create_engine, event
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _new_id() -> str:
+    return uuid4().hex[:12]
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    source: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text, default="")
+    presets: Mapped[list[str]] = mapped_column(JSON)
+    notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    stage: Mapped[str] = mapped_column(String(32), default="queued")
+    progress: Mapped[float] = mapped_column(default=0.0)
+    error: Mapped[str | None] = mapped_column(Text)
+    parent_id: Mapped[str | None] = mapped_column(String(12))
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+    outputs: Mapped[list["Output"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan", order_by="Output.id"
+    )
+
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    stage: Mapped[str] = mapped_column(String(32))
+    message: Mapped[str] = mapped_column(Text)
+    progress: Mapped[float] = mapped_column(default=0.0)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class Output(Base):
+    __tablename__ = "outputs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    preset: Mapped[str] = mapped_column(String(64))
+    path: Mapped[str] = mapped_column(Text)
+    thumbnail: Mapped[str | None] = mapped_column(Text)
+    duration: Mapped[float]
+    title: Mapped[str] = mapped_column(Text, default="")
+    planner: Mapped[str] = mapped_column(String(64))
+    renders: Mapped[int] = mapped_column(default=1)
+    issues: Mapped[list[str]] = mapped_column(JSON, default=list)
+    edl: Mapped[dict] = mapped_column(JSON)
+
+    job: Mapped[Job] = relationship(back_populates="outputs")
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+
+
+def make_sessionmaker(path: Path) -> sessionmaker:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(connection, _record):
+        cursor = connection.cursor()
+        # WAL lets the SSE readers poll while the worker thread writes progress.
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    return sessionmaker(engine, expire_on_commit=False)

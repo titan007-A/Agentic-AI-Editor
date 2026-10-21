@@ -148,7 +148,14 @@ def chunk_lines(lines: list[Line], seconds: float = CHUNK_SECONDS) -> list[list[
     return chunks
 
 
-def _brief(preset: Preset, analysis: Analysis, notes: str | None) -> str:
+def _editor_notes(notes: str | None) -> str:
+    # Last in the prompt, where small models weigh instructions most.
+    if not notes:
+        return ""
+    return f"\n\nThe editor asked for this version: {notes}\nThis overrides the defaults above."
+
+
+def _brief(preset: Preset, analysis: Analysis) -> str:
     parts = [
         f"Format: {preset.label} for {preset.platform}.",
         f"The finished video is {preset.min_duration:g}-{preset.max_duration:g} seconds long "
@@ -158,8 +165,6 @@ def _brief(preset: Preset, analysis: Analysis, notes: str | None) -> str:
         parts.append("The transcript is sung lyrics from the isolated lead vocal of a song.")
     if preset.style_notes:
         parts.append(f"Style notes: {preset.style_notes}")
-    if notes:
-        parts.append(f"Notes from the editor for this version: {notes}")
     return "\n".join(parts)
 
 
@@ -174,13 +179,14 @@ def propose(
 ) -> list[Candidate]:
     low, high = _clip_range(preset)
     prompt = (
-        f"{_brief(preset, analysis, notes)}\n\n"
+        f"{_brief(preset, analysis)}\n\n"
         "Transcript lines (line number, start-end seconds, loudness, text):\n"
         + describe_lines(chunk)
         + f"\n\n{QUALITIES}\n"
         f"Propose up to 3 candidate segments from these lines. A segment is the run of "
         f"lines from start_line to end_line inclusive and should last {low:g}-{high:g} "
         f"seconds. Score hook, completeness and peak from 0 to 10 and give a one-line reason."
+        + _editor_notes(notes)
     )
     reply = llm.chat_json(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
@@ -248,8 +254,14 @@ def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], pres
             raise ValueError(f"C{pick.candidate} is not one of the candidates")
         c = candidates[pick.candidate]
         score = (c.hook + c.completeness + c.peak) / 30
-        chosen.append(Clip(start=lines[c.start_line].start, end=lines[c.end_line].end,
-                           reason=pick.reason, score=round(score, 2)))  # fmt: skip
+        chosen.append(
+            Clip(
+                start=lines[c.start_line].start,
+                end=lines[c.end_line].end,
+                reason=pick.reason,
+                score=round(score, 2),
+            )
+        )
     chosen.sort(key=lambda clip: clip.start)
     chosen = fit_duration(chosen, lines, preset)
 
@@ -274,13 +286,13 @@ def finalize(
     notes: str | None,
 ) -> EDL:
     prompt = (
-        f"{_brief(preset, analysis, notes)}\n\n"
+        f"{_brief(preset, analysis)}\n\n"
         f"Candidate segments:\n{_describe_candidates(candidates, lines)}\n\n"
         f"Pick the candidates to use, at most {preset.clip_count}, that do not overlap, with "
         f"a combined length of {preset.min_duration:g}-{preset.max_duration:g} seconds. "
         "Favour the strongest hook for the first clip. Also write: hook, a short on-screen "
         "line of at most 8 words that makes people keep watching; title, at most 60 "
-        "characters; caption_position, one of top, middle, bottom or null."
+        "characters; caption_position, one of top, middle, bottom or null." + _editor_notes(notes)
     )
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     schema = FinalPlan.model_json_schema()
@@ -296,9 +308,13 @@ def finalize(
         log.info("plan attempt %d rejected: %s", attempt + 1, "; ".join(found))
         messages += [
             {"role": "assistant", "content": json.dumps(reply)},
-            {"role": "user", "content": "That plan breaks these rules:\n- " + "\n- ".join(found)
-             + "\nFix it and answer again with the complete JSON."},
-        ]  # fmt: skip
+            {
+                "role": "user",
+                "content": "That plan breaks these rules:\n- "
+                + "\n- ".join(found)
+                + "\nFix it and answer again with the complete JSON.",
+            },
+        ]
     raise LLMError(f"no valid plan after {MAX_RETRIES} retries: {'; '.join(found)}")
 
 
@@ -331,17 +347,25 @@ def pick_emphasis(llm: OllamaClient, edl: EDL, analysis: Analysis, limit: int = 
         return []
     text = " ".join(w.text for w in words)
     reply = llm.chat_json(
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": (
-            f"Transcript of a finished short video:\n{text}\n\n"
-            f"Pick up to {limit} single words from it that carry the most emphasis and "
-            "deserve a quick zoom. Copy each word exactly as it appears."
-        )}],
+        [
+            {"role": "system", "content": SYSTEM},
+            {
+                "role": "user",
+                "content": (
+                    f"Transcript of a finished short video:\n{text}\n\n"
+                    f"Pick up to {limit} single words from it that carry the most emphasis and "
+                    "deserve a quick zoom. Copy each word exactly as it appears."
+                ),
+            },
+        ],
         Emphasis.model_json_schema(),
-    )  # fmt: skip
+    )
     zooms, used = [], set()
     for target in Emphasis.model_validate(reply).words[:limit]:
-        match = next((w for w in words if _normalize(w.text) == _normalize(target)
-                      and w.start not in used), None)  # fmt: skip
+        match = next(
+            (w for w in words if _normalize(w.text) == _normalize(target) and w.start not in used),
+            None,
+        )
         if match:
             used.add(match.start)
             zooms.append(Zoom(time=match.start, scale=1.15, duration=0.8))

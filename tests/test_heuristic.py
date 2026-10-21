@@ -6,8 +6,9 @@ PRESET = Preset(name="t", label="t", min_duration=4, max_duration=8)
 
 
 def phrase(start: float, count: int = 4) -> list[Word]:
-    return [Word(text=f"w{i}", start=start + i * 0.5, end=start + i * 0.5 + 0.4)
-            for i in range(count)]  # fmt: skip
+    return [
+        Word(text=f"w{i}", start=start + i * 0.5, end=start + i * 0.5 + 0.4) for i in range(count)
+    ]
 
 
 def test_picks_the_loud_phrase_aligned_window(make_analysis):

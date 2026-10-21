@@ -13,8 +13,9 @@ from agentic_editor.planner import (
 from agentic_editor.presets import Preset
 from agentic_editor.transcript import Word
 
-PRESET = Preset(name="t", label="t", min_duration=6, max_duration=12, clip_count=1,
-                zoom_punch_ins=True)  # fmt: skip
+PRESET = Preset(
+    name="t", label="t", min_duration=6, max_duration=12, clip_count=1, zoom_punch_ins=True
+)
 
 
 class FakeLLM:
@@ -30,23 +31,29 @@ class FakeLLM:
 
 
 def sentence(start: float, text: str) -> list[Word]:
-    return [Word(text=w, start=start + i * 0.4, end=start + i * 0.4 + 0.3)
-            for i, w in enumerate(text.split())]  # fmt: skip
+    return [
+        Word(text=w, start=start + i * 0.4, end=start + i * 0.4 + 0.3)
+        for i, w in enumerate(text.split())
+    ]
 
 
 def transcript():
-    return (sentence(0, "so this is the intro part")
-            + sentence(4, "nobody believed what happened next")
-            + sentence(8, "the whole room went silent")
-            + sentence(12, "and then everyone started laughing")
-            + sentence(16, "anyway thanks for watching"))  # fmt: skip
+    return (
+        sentence(0, "so this is the intro part")
+        + sentence(4, "nobody believed what happened next")
+        + sentence(8, "the whole room went silent")
+        + sentence(12, "and then everyone started laughing")
+        + sentence(16, "anyway thanks for watching")
+    )
 
 
 def candidates(*spans):
-    return {"candidates": [
-        {"start_line": a, "end_line": b, "hook": 8, "completeness": 7, "peak": 7, "reason": "x"}
-        for a, b in spans
-    ]}  # fmt: skip
+    return {
+        "candidates": [
+            {"start_line": a, "end_line": b, "hook": 8, "completeness": 7, "peak": 7, "reason": "x"}
+            for a, b in spans
+        ]
+    }
 
 
 def final(*picks, hook="Nobody saw this coming"):
@@ -60,8 +67,10 @@ def final(*picks, hook="Nobody saw this coming"):
 
 def test_lines_split_at_pauses(make_analysis):
     lines = build_lines(make_analysis(transcript(), 20.0))
-    assert [line.text for line in lines][:2] == ["so this is the intro part",
-                                                 "nobody believed what happened next"]  # fmt: skip
+    assert [line.text for line in lines][:2] == [
+        "so this is the intro part",
+        "nobody believed what happened next",
+    ]
     assert lines[1].start == 4.0
 
 
@@ -113,16 +122,20 @@ def test_short_plan_is_extended_by_whole_lines(make_analysis):
 
 
 def test_extension_grows_toward_the_closer_neighbour():
-    lines = [Line(0, 0.0, 3.0, [], "normal"), Line(1, 3.5, 6.0, [], "normal"),
-             Line(2, 60.0, 70.0, [], "normal")]  # fmt: skip
+    lines = [
+        Line(0, 0.0, 3.0, [], "normal"),
+        Line(1, 3.5, 6.0, [], "normal"),
+        Line(2, 60.0, 70.0, [], "normal"),
+    ]
     clips = fit_duration([Clip(start=3.5, end=6.0)], lines, PRESET)
     assert (clips[0].start, clips[0].end) == (0.0, 6.0)
 
 
 def test_vocal_lines_follow_where_the_singer_is_audible(make_analysis):
     words = sentence(2.0, "hold me now")
-    analysis = make_analysis(words, 30.0, audio_source="vocals",
-                             silences=[(0.0, 1.5), (5.0, 9.0), (24.0, 30.0)])  # fmt: skip
+    analysis = make_analysis(
+        words, 30.0, audio_source="vocals", silences=[(0.0, 1.5), (5.0, 9.0), (24.0, 30.0)]
+    )
     lines = build_lines(analysis)
     assert (lines[0].start, lines[0].end) == (1.5, 5.0)
     assert lines[0].text == "hold me now"

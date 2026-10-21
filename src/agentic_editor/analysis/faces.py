@@ -69,18 +69,21 @@ def detect(
             if not ok:
                 continue
             height, width = frame.shape[:2]
-            image = mp.Image(image_format=mp.ImageFormat.SRGB,
-                             data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # fmt: skip
+            image = mp.Image(
+                image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            )
             faces = []
             for detection in detector.detect(image).detections:
                 box = detection.bounding_box
-                faces.append(Face(
-                    cx=(box.origin_x + box.width / 2) / width,
-                    cy=(box.origin_y + box.height / 2) / height,
-                    width=box.width / width,
-                    height=box.height / height,
-                    score=detection.categories[0].score if detection.categories else 0.0,
-                ))  # fmt: skip
+                faces.append(
+                    Face(
+                        cx=(box.origin_x + box.width / 2) / width,
+                        cy=(box.origin_y + box.height / 2) / height,
+                        width=box.width / width,
+                        height=box.height / height,
+                        score=detection.categories[0].score if detection.categories else 0.0,
+                    )
+                )
             samples.append((t - start, faces))
     capture.release()
     return samples

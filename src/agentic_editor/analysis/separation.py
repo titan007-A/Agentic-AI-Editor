@@ -90,8 +90,11 @@ def is_instrument_free(source: np.ndarray, instrumental: np.ndarray) -> bool:
     src_rms, src_peak = levels(source)
     inst_rms, inst_peak = levels(instrumental)
     rms_margin, peak_margin = src_rms - inst_rms, src_peak - inst_peak
-    log.info("instrumental stem sits %.1f dB RMS / %.1f dB peak below the source",
-             rms_margin, peak_margin)  # fmt: skip
+    log.info(
+        "instrumental stem sits %.1f dB RMS / %.1f dB peak below the source",
+        rms_margin,
+        peak_margin,
+    )
     return (
         rms_margin >= INSTRUMENT_FREE_RMS_MARGIN_DB
         and peak_margin >= INSTRUMENT_FREE_PEAK_MARGIN_DB
