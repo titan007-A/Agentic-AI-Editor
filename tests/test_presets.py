@@ -59,3 +59,18 @@ def test_save_round_trips(tmp_path):
     )
     save_preset(preset, tmp_path)
     assert load_presets(tmp_path)["test"] == preset
+
+
+def test_retired_splice_settings_in_old_files_are_ignored():
+    preset = Preset.model_validate(
+        {
+            "name": "old",
+            "label": "Old",
+            "min_duration": 10,
+            "max_duration": 60,
+            "clip_count": 3,
+            "silence": {"threshold_db": -40, "max_pause": 0.6},
+        }
+    )
+    assert preset.silence.threshold_db == -40
+    assert "clip_count" not in preset.model_dump()

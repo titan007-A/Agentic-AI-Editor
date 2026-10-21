@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import download, review
+from agentic_editor import download, review, trim
 from agentic_editor.analysis import faces, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -21,7 +21,7 @@ from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
-from agentic_editor.planner import build_lines, fit_duration, plan_with_llm
+from agentic_editor.planner import plan_with_llm
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose
 from agentic_editor.render.video import crop_size
@@ -73,8 +73,8 @@ def plan(
     except (LLMError, httpx.HTTPError) as exc:
         log.warning("%s: LLM planning failed (%s), using the energy heuristic", preset.name, exc)
         edl, planner = plan_by_energy(analysis, preset), "heuristic"
-    edl = clean_edl(edl, analysis.transcript.words, analysis.silences, preset.silence.max_pause)
-    return edl, planner
+    edl = clean_edl(edl, analysis.transcript.words, analysis.silences)
+    return trim.apply(edl, analysis, preset), planner
 
 
 def face_commands(
@@ -107,9 +107,9 @@ def fix(
     changed = False
     for issue in issues:
         if issue.kind == "duration":
-            clips = fit_duration(edl.clips, build_lines(analysis), preset)
-            if clips != edl.clips:
-                edl, changed = edl.model_copy(update={"clips": clips}), True
+            trimmed = trim.apply(edl, analysis, preset)
+            if trimmed.clips != edl.clips:
+                edl, changed = trimmed, True
         elif issue.kind == "loudness" and issue.measured is not None:
             # Aim off-target by the error just measured, which covers what the final
             # encode shifts.

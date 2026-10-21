@@ -82,6 +82,13 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
         </div>
         <details className="text-sm">
           <summary className="cursor-pointer text-muted-foreground">Edit decisions</summary>
+          {(output.edl.decisions ?? []).length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+              {output.edl.decisions.map((decision) => (
+                <li key={decision}>{decision}</li>
+              ))}
+            </ul>
+          )}
           <ul className="mt-2 space-y-2">
             {output.edl.clips.map((clip) => (
               <li key={clip.start} className="rounded-md bg-secondary/40 p-2">

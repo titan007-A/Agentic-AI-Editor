@@ -6,7 +6,6 @@ resolution: 1080x1080
 fps: 30
 min_duration: 15
 max_duration: 60
-clip_count: 2
 captions:
   enabled: true
   font: Anton-Regular
@@ -17,8 +16,6 @@ captions:
   animation: karaoke
 framing:
   mode: center
-silence:
-  max_pause: 0.7
 audio:
   source: original
 style_notes: Feed post that plays muted by default, so the captions carry it.

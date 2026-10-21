@@ -37,9 +37,9 @@ def test_video_band_for_letterboxed_landscape_source():
     assert video_band("none", (720, 1280), FRAME) is None
 
 
-def test_graph_concats_clips_and_layers_overlays_in_order():
+def test_graph_layers_overlays_in_order():
     edl = EDL(
-        clips=[Clip(start=0, end=5), Clip(start=10, end=12)],
+        clips=[Clip(start=4, end=12)],
         crop_mode="none",
         zooms=[Zoom(time=11, scale=1.2, duration=0.5)],
     )
@@ -51,8 +51,8 @@ def test_graph_concats_clips_and_layers_overlays_in_order():
         fonts_dir=Path("/repo/fonts"),
     )
     graph, out = build_graph(edl, VERTICAL, (1920, 1080), layers)
-    assert "[v0][v1]concat=n=2:v=1:a=0[base]" in graph
-    assert "0.200*between(t,6.000,6.500)" in graph
+    assert "[v0]concat=n=1:v=1:a=0[base]" in graph
+    assert "0.200*between(t,7.000,7.500)" in graph
     order = [graph.index(s) for s in ("[2:v]overlay", "subtitles=", "[3:v]overlay=0:0:enable")]
     assert order == sorted(order)
     assert out == "out"

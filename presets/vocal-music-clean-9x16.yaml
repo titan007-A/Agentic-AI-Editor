@@ -6,7 +6,6 @@ resolution: 1080x1920
 fps: 30
 min_duration: 20
 max_duration: 120
-clip_count: 1
 captions:
   enabled: false
 hook:

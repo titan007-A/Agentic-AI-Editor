@@ -3,7 +3,6 @@ from agentic_editor.cuts import (
     extend_to_silence,
     snap_end,
     snap_start,
-    split_on_pauses,
 )
 from agentic_editor.edl import EDL, Clip
 from tests.conftest import words_from
@@ -42,12 +41,7 @@ def test_end_extends_to_where_audio_goes_quiet():
     assert extend_to_silence(4.5, [(4.0, 5.0)]) == 4.5
 
 
-def test_split_on_pauses_removes_long_gap():
-    pieces = split_on_pauses(Clip(start=0.9, end=5.6), WORDS, max_pause=1.0)
-    assert [(p.start, p.end) for p in pieces] == [(0.9, 2.8 + 0.30), (5.0 - 0.12, 5.6)]
-
-
-def test_clean_edl_snaps_every_clip():
+def test_clean_edl_snaps_the_segment_to_word_boundaries():
     edl = EDL(clips=[Clip(start=1.6, end=2.5)])
-    cleaned = clean_edl(edl, WORDS, silences=[], max_pause=None)
+    cleaned = clean_edl(edl, WORDS, silences=[])
     assert (cleaned.clips[0].start, cleaned.clips[0].end) == (1.35, 3.1)

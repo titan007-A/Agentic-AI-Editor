@@ -6,7 +6,6 @@ resolution: 1080x1920
 fps: 30
 min_duration: 15
 max_duration: 60
-clip_count: 3
 captions:
   enabled: true
   font: Anton-Regular
@@ -37,7 +36,6 @@ framing:
 silence:
   threshold_db: -35
   min_duration: 0.4
-  max_pause: 0.6
 zoom_punch_ins: true
 audio:
   source: original

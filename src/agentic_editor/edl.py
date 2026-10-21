@@ -47,12 +47,15 @@ class CaptionOverrides(BaseModel):
 class EDL(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    clips: list[Clip] = Field(min_length=1)
+    # Exactly one: a reel is one continuous stretch of the source, trimmed only at its
+    # start and end. Splicing pieces together is not allowed.
+    clips: list[Clip] = Field(min_length=1, max_length=1)
     hook: str = ""
     title: str = ""
     caption_overrides: CaptionOverrides = CaptionOverrides()
     zooms: list[Zoom] = []
     crop_mode: CropMode = "center"
+    decisions: list[str] = []
 
     @property
     def duration(self) -> float:
@@ -68,11 +71,16 @@ class EDL(BaseModel):
         return None
 
 
-def problems(edl: EDL, preset: Preset, source_duration: float, tolerance: float = 0.5) -> list[str]:
-    """Rule violations that the planner has to fix; empty when the EDL is usable."""
+def problems(
+    edl: EDL,
+    preset: Preset,
+    source_duration: float,
+    tolerance: float = 0.5,
+    allow_long: bool = False,
+) -> list[str]:
+    """Rule violations that the planner has to fix; empty when the EDL is usable. With
+    allow_long a segment over the maximum passes, for the trimmer to cut down."""
     found = []
-    if len(edl.clips) > preset.clip_count:
-        found.append(f"{len(edl.clips)} clips, the preset allows at most {preset.clip_count}")
     for i, clip in enumerate(edl.clips):
         if clip.end > source_duration + tolerance:
             found.append(
@@ -84,7 +92,7 @@ def problems(edl: EDL, preset: Preset, source_duration: float, tolerance: float 
         found.append(
             f"total {edl.duration:.1f}s is shorter than the {preset.min_duration:g}s minimum"
         )
-    if edl.duration > preset.max_duration + tolerance:
+    if not allow_long and edl.duration > preset.max_duration + tolerance:
         found.append(
             f"total {edl.duration:.1f}s is longer than the {preset.max_duration:g}s maximum"
         )

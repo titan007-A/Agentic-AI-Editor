@@ -1,7 +1,8 @@
 """LLM edit planning, kept to small questions a 7-9B model answers reliably.
 
-Pass 1 scores candidate segments one transcript chunk at a time. Pass 2 picks the
-finalists from those candidates and writes the hook and title. The model refers to
+Pass 1 scores candidate segments one transcript chunk at a time. Pass 2 picks the one
+segment to use and writes the hook and title. A segment is always a continuous run of
+lines: the reel is one stretch of the source, never pieces joined together. The model refers to
 transcript lines by number; turning lines into timestamps happens here, in code.
 """
 
@@ -69,13 +70,9 @@ class Emphasis(BaseModel):
     words: list[str]
 
 
-class Pick(BaseModel):
+class FinalPlan(BaseModel):
     candidate: int
     reason: str
-
-
-class FinalPlan(BaseModel):
-    picks: list[Pick] = Field(min_length=1)
     hook: str
     title: str
     caption_position: str | None = None
@@ -158,8 +155,9 @@ def _editor_notes(notes: str | None) -> str:
 def _brief(preset: Preset, analysis: Analysis) -> str:
     parts = [
         f"Format: {preset.label} for {preset.platform}.",
-        f"The finished video is {preset.min_duration:g}-{preset.max_duration:g} seconds long "
-        f"and made of at most {preset.clip_count} clip(s) from the source.",
+        f"The finished video is one continuous stretch of the source, "
+        f"{preset.min_duration:g}-{preset.max_duration:g} seconds long. It is never assembled "
+        "from separate pieces.",
     ]
     if analysis.audio_source == "vocals":
         parts.append("The transcript is sung lyrics from the isolated lead vocal of a song.")
@@ -168,16 +166,10 @@ def _brief(preset: Preset, analysis: Analysis) -> str:
     return "\n".join(parts)
 
 
-def _clip_range(preset: Preset) -> tuple[float, float]:
-    if preset.clip_count == 1:
-        return preset.min_duration, preset.max_duration
-    return max(3.0, preset.min_duration / preset.clip_count / 2), preset.max_duration
-
-
 def propose(
     llm: OllamaClient, chunk: list[Line], preset: Preset, analysis: Analysis, notes: str | None
 ) -> list[Candidate]:
-    low, high = _clip_range(preset)
+    low, high = preset.min_duration, preset.max_duration
     prompt = (
         f"{_brief(preset, analysis)}\n\n"
         "Transcript lines (line number, start-end seconds, loudness, text):\n"
@@ -215,7 +207,9 @@ def _describe_candidates(candidates: list[Candidate], lines: list[Line]) -> str:
 
 
 def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[Clip]:
-    """Grow or shrink the plan a whole line at a time until it fits the preset's length.
+    """Grow a short plan a whole line at a time, at its start or end, until it reaches the
+    preset's minimum. Lines only cover voiced stretches, so growing never adds a silent
+    head or tail. Plans that run long are trimmed by trim.apply, which picks the window.
 
     Small models are poor at arithmetic, so a plan that is a few seconds off is
     corrected here rather than sent back for another attempt."""
@@ -237,33 +231,20 @@ def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[C
             clips[-1] = clips[-1].model_copy(update={"end": after.end})
         else:
             clips[0] = clips[0].model_copy(update={"start": before.start})
-
-    while total() > preset.max_duration:
-        last = clips[-1]
-        inside = [ln for ln in lines if last.start < ln.end < last.end - 1e-6]
-        if not inside:
-            break
-        clips[-1] = last.model_copy(update={"end": inside[-1].end})
     return clips
 
 
 def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], preset: Preset) -> EDL:
-    chosen = []
-    for pick in plan.picks:
-        if not 0 <= pick.candidate < len(candidates):
-            raise ValueError(f"C{pick.candidate} is not one of the candidates")
-        c = candidates[pick.candidate]
-        score = (c.hook + c.completeness + c.peak) / 30
-        chosen.append(
-            Clip(
-                start=lines[c.start_line].start,
-                end=lines[c.end_line].end,
-                reason=pick.reason,
-                score=round(score, 2),
-            )
-        )
-    chosen.sort(key=lambda clip: clip.start)
-    chosen = fit_duration(chosen, lines, preset)
+    if not 0 <= plan.candidate < len(candidates):
+        raise ValueError(f"C{plan.candidate} is not one of the candidates")
+    c = candidates[plan.candidate]
+    clip = Clip(
+        start=lines[c.start_line].start,
+        end=lines[c.end_line].end,
+        reason=plan.reason,
+        score=round((c.hook + c.completeness + c.peak) / 30, 2),
+    )
+    chosen = fit_duration([clip], lines, preset)
 
     position = (
         plan.caption_position if plan.caption_position in ("top", "middle", "bottom") else None
@@ -288,9 +269,9 @@ def finalize(
     prompt = (
         f"{_brief(preset, analysis)}\n\n"
         f"Candidate segments:\n{_describe_candidates(candidates, lines)}\n\n"
-        f"Pick the candidates to use, at most {preset.clip_count}, that do not overlap, with "
-        f"a combined length of {preset.min_duration:g}-{preset.max_duration:g} seconds. "
-        "Favour the strongest hook for the first clip. Also write: hook, a short on-screen "
+        "Pick the single candidate to post as one continuous segment, favouring the strongest "
+        f"hook and a length of {preset.min_duration:g}-{preset.max_duration:g} seconds; a "
+        "longer one is trimmed at its start or end afterwards. Also write: hook, a short on-screen "
         "line of at most 8 words that makes people keep watching; title, at most 60 "
         "characters; caption_position, one of top, middle, bottom or null." + _editor_notes(notes)
     )
@@ -300,7 +281,7 @@ def finalize(
         reply = llm.chat_json(messages, schema)
         try:
             edl = to_edl(FinalPlan.model_validate(reply), candidates, lines, preset)
-            found = problems(edl, preset, analysis.duration)
+            found = problems(edl, preset, analysis.duration, allow_long=True)
         except (ValidationError, ValueError) as exc:
             found = [str(exc)]
         if not found:

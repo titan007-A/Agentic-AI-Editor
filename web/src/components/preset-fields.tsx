@@ -30,7 +30,6 @@ const NULLABLE = new Set([
   "title_overlay.box_color",
   "framing.text_gap_above",
   "framing.text_gap_below",
-  "silence.max_pause",
 ]);
 
 export const SECTIONS: { title: string; fields: Field[] }[] = [
@@ -45,7 +44,6 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "bitrate_mbps", label: "Bitrate (Mbps)", kind: "number", step: 0.5 },
       { path: "min_duration", label: "Min length (s)", kind: "number" },
       { path: "max_duration", label: "Max length (s)", kind: "number" },
-      { path: "clip_count", label: "Clips per video", kind: "number" },
       { path: "zoom_punch_ins", label: "Zoom on emphasis words", kind: "switch" },
       { path: "style_notes", label: "Style notes for the planner", kind: "textarea" },
     ],
@@ -111,7 +109,6 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "audio.fade_out", label: "Fade out (s)", kind: "number", step: 0.05 },
       { path: "silence.threshold_db", label: "Silence threshold (dB)", kind: "number" },
       { path: "silence.min_duration", label: "Min silence (s)", kind: "number", step: 0.05 },
-      { path: "silence.max_pause", label: "Cut pauses longer than (s)", kind: "number", step: 0.1 },
     ],
   },
   {

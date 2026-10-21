@@ -6,7 +6,6 @@ resolution: 1920x1080
 fps: 30
 min_duration: 60
 max_duration: 180
-clip_count: 6
 captions:
   enabled: true
   font: OpenSans-ExtraBold
