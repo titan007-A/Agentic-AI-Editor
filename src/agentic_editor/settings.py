@@ -26,7 +26,9 @@ class Settings(BaseSettings):
 
     whisper_model: str = "large-v3-turbo"
     mlx_whisper_model: str = "mlx-community/whisper-large-v3-turbo"
-    separation_model: str = "UVR-MDX-NET-Voc_FT.onnx"
+    # MelBand Roformer by Kimberley Jensen: 11.9 dB median vocal SDR on MUSDB18 against
+    # 8.5 for UVR-MDX-NET-Voc_FT, and faster. Any audio-separator model name works.
+    separation_model: str = "vocals_mel_band_roformer.ckpt"
 
     ollama_url: str = "http://127.0.0.1:11434"
     llm_model: str = "qwen3.5:9b"

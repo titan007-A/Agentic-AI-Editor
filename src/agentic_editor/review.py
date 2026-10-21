@@ -12,7 +12,7 @@ from agentic_editor import ffmpeg
 from agentic_editor.edl import EDL
 from agentic_editor.llm import OllamaClient
 from agentic_editor.presets import Preset
-from agentic_editor.render.audio import integrated_loudness
+from agentic_editor.render.audio import Loudness, measure_loudness
 from agentic_editor.transcript import Word
 
 log = logging.getLogger(__name__)
@@ -65,11 +65,16 @@ def check_format(info: ffmpeg.MediaInfo, preset: Preset, source_duration: float)
     return issues
 
 
-def check_loudness(measured: float, preset: Preset) -> list[Issue]:
+def check_loudness(measured: Loudness, preset: Preset) -> list[Issue]:
     target = preset.audio.loudness_lufs
-    if abs(measured - target) > LOUDNESS_TOLERANCE:
-        return [Issue("loudness", f"{measured:.1f} LUFS, target is {target:g}", measured)]
-    return []
+    level = measured.integrated
+    if abs(level - target) <= LOUDNESS_TOLERANCE:
+        return []
+    # Quieter than asked with the peaks already at the ceiling is the soundtrack stage
+    # choosing not to squash a dynamic vocal, not a mistake a re-render would fix.
+    if level < target and measured.true_peak >= preset.audio.true_peak_db - 1.0:
+        return []
+    return [Issue("loudness", f"{level:.1f} LUFS, target is {target:g}", level)]
 
 
 def caption_times(ass: str) -> list[tuple[float, float]]:
@@ -158,7 +163,7 @@ def review(
 ) -> list[Issue]:
     info = ffmpeg.probe(video)
     issues = check_format(info, preset, source_duration)
-    issues += check_loudness(integrated_loudness(video), preset)
+    issues += check_loudness(measure_loudness(video), preset)
     if captions is not None:
         issues += check_captions(captions.read_text(encoding="utf-8"), words, info.duration)
     if vision is not None and edl.crop_mode in ("face", "center"):

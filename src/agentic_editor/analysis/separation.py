@@ -9,14 +9,15 @@ from pathlib import Path
 import numpy as np
 
 from agentic_editor import ffmpeg
-from agentic_editor.analysis.audio import levels
+from agentic_editor.analysis.audio import levels, loudest_window_db
 
 log = logging.getLogger(__name__)
 
-# Calibrated on real songs with the original tool: full mixes leave the instrumental
-# stem 1-4 dB RMS below the source, already-clean vocals leave it 27-45 dB below.
+# Calibrated on real songs: full mixes leave the instrumental stem 1-4 dB RMS below the
+# source, already-clean vocals leave it 27-45 dB below. The loudest 50 ms of the stem
+# sits within 1 dB of the source's for music and 12-22 dB below it for speech.
 INSTRUMENT_FREE_RMS_MARGIN_DB = 20.0
-INSTRUMENT_FREE_PEAK_MARGIN_DB = 12.0
+INSTRUMENT_FREE_LOUDEST_MARGIN_DB = 8.0
 MIN_FINGERPRINT_CORRELATION = 0.20
 MAX_VOLUME_DROP_DB = 30.0
 
@@ -61,9 +62,12 @@ def run_separator(
     )
     separator.load_model(model_filename=model)
     if require_gpu:
-        _check_provider(model_dir / model, separator.onnx_execution_provider)
+        if model.endswith(".onnx"):
+            _check_provider(model_dir / model, separator.onnx_execution_provider)
+        elif separator.torch_device is None or separator.torch_device.type == "cpu":
+            raise SeparationFailed("PyTorch found no GPU for the separation model")
     outputs = [out_dir / Path(name).name for name in separator.separate(str(audio))]
-    vocals = next(p for p in outputs if "(Vocals)" in p.name)
+    vocals = next(p for p in outputs if "(vocals)" in p.name.lower())
     instrumental = next(p for p in outputs if p != vocals)
     log.info("separated %s in %.1fs", audio.name, time.monotonic() - started)
     return Stems(vocals=vocals, instrumental=instrumental)
@@ -85,19 +89,25 @@ def _check_provider(model_path: Path, providers: list[str] | None) -> None:
     log.info("vocal separation running on %s", wanted)
 
 
-def is_instrument_free(source: np.ndarray, instrumental: np.ndarray) -> bool:
-    """True when the model found essentially nothing but voice in the source."""
-    src_rms, src_peak = levels(source)
-    inst_rms, inst_peak = levels(instrumental)
-    rms_margin, peak_margin = src_rms - inst_rms, src_peak - inst_peak
+def is_instrument_free(source: np.ndarray, instrumental: np.ndarray, sample_rate: int) -> bool:
+    """True when the model found essentially nothing but voice in the source.
+
+    The loudest-window check catches a stem that is quiet overall but has real hits in it,
+    such as sparse percussion. It uses 50 ms windows rather than the single loudest sample
+    because Roformer models leave the odd click in an otherwise empty stem.
+    """
+    rms_margin = levels(source)[0] - levels(instrumental)[0]
+    loudest_margin = loudest_window_db(source, sample_rate) - loudest_window_db(
+        instrumental, sample_rate
+    )
     log.info(
-        "instrumental stem sits %.1f dB RMS / %.1f dB peak below the source",
+        "instrumental stem sits %.1f dB RMS / %.1f dB at its loudest below the source",
         rms_margin,
-        peak_margin,
+        loudest_margin,
     )
     return (
         rms_margin >= INSTRUMENT_FREE_RMS_MARGIN_DB
-        and peak_margin >= INSTRUMENT_FREE_PEAK_MARGIN_DB
+        and loudest_margin >= INSTRUMENT_FREE_LOUDEST_MARGIN_DB
     )
 
 
@@ -130,7 +140,7 @@ def accept_stems(source_wav: Path, stems: Stems, dest: Path) -> VocalTrack:
     """Decide which audio to keep and put it at `dest`."""
     rate = 22050
     source = ffmpeg.read_audio(source_wav, rate)
-    if is_instrument_free(source, ffmpeg.read_audio(stems.instrumental, rate)):
+    if is_instrument_free(source, ffmpeg.read_audio(stems.instrumental, rate), rate):
         log.info("source has no instruments to remove, keeping the original audio")
         shutil.copyfile(source_wav, dest)
         stems.vocals.unlink(missing_ok=True)

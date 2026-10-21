@@ -2,10 +2,13 @@ import argparse
 import logging
 import sys
 
-from agentic_editor import logs, pipeline
+from agentic_editor import ffmpeg, logs, pipeline
 from agentic_editor.backends import detect
 from agentic_editor.presets import load_presets
 from agentic_editor.settings import get_settings
+
+# A short CC BY 3.0 performance from Wikimedia Commons, also used by the end-to-end test.
+BENCHMARK_SAMPLE = "https://commons.wikimedia.org/wiki/File:Breathe_by_Rockbitch_(circa_2000).webm"
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -29,6 +32,21 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"  title: {output.edl.title}")
             for issue in output.issues:
                 print(f"  unresolved: {issue}")
+    return 0
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    from agentic_editor import benchmark
+
+    settings = get_settings()
+    presets = load_presets(settings.presets_dir)
+    if args.preset not in presets:
+        print(f"unknown preset {args.preset}; available: {', '.join(presets)}")
+        return 2
+    backends = detect(settings)
+    source = pipeline.resolve_source(args.source, settings)
+    results = benchmark.run(source.path, presets[args.preset], settings, backends, not args.no_llm)
+    print(benchmark.report(results, source.title, ffmpeg.probe(source.path).duration))
     return 0
 
 
@@ -92,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("-p", "--preset", action="append", required=True)
     run.add_argument("-n", "--notes", help="extra instructions for the planner")
     run.set_defaults(handler=_run)
+
+    bench = commands.add_parser("benchmark", help="time transcription, separation, LLMs, render")
+    bench.add_argument("source", nargs="?", default=BENCHMARK_SAMPLE, help="video URL or file")
+    bench.add_argument("-p", "--preset", default="vocal-music-9x16", help="frame to render")
+    bench.add_argument("--no-llm", action="store_true", help="skip the Ollama models")
+    bench.set_defaults(handler=_benchmark)
 
     commands.add_parser("backends", help="show the detected backends").set_defaults(
         handler=_backends

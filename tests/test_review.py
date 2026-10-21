@@ -1,5 +1,6 @@
 from agentic_editor.ffmpeg import MediaInfo
 from agentic_editor.presets import Preset
+from agentic_editor.render.audio import Loudness
 from agentic_editor.review import check_captions, check_faces, check_format, check_loudness
 from tests.conftest import words_from
 
@@ -32,8 +33,13 @@ def test_short_source_lowers_the_minimum():
 
 
 def test_loudness_tolerance():
-    assert check_loudness(-14.6, PRESET) == []
-    assert check_loudness(-17.0, PRESET)[0].kind == "loudness"
+    assert check_loudness(Loudness(-14.6, -3.0), PRESET) == []
+    assert check_loudness(Loudness(-17.0, -6.0), PRESET)[0].kind == "loudness"
+    assert check_loudness(Loudness(-12.0, -1.5), PRESET)[0].kind == "loudness"
+
+
+def test_loudness_held_back_by_peak_ceiling_is_accepted():
+    assert check_loudness(Loudness(-17.0, -1.6), PRESET) == []
 
 
 ASS = """[Events]

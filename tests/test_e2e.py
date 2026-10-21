@@ -10,7 +10,8 @@ import pytest
 from agentic_editor import ffmpeg, pipeline
 from agentic_editor.backends import detect
 from agentic_editor.presets import load_presets
-from agentic_editor.render.audio import integrated_loudness
+from agentic_editor.render.audio import measure_loudness
+from agentic_editor.review import check_loudness
 from agentic_editor.settings import get_settings
 
 # "Breathe" by Rockbitch, CC BY 3.0, via Wikimedia Commons.
@@ -31,5 +32,5 @@ def test_pipeline_renders_a_video_that_follows_the_preset(preset_name):
     info = ffmpeg.probe(output.path)
     assert (info.width, info.height) == preset.size
     assert preset.min_duration - 0.5 <= info.duration <= preset.max_duration + 0.5
-    assert abs(integrated_loudness(output.path) - preset.audio.loudness_lufs) <= 1.0
+    assert check_loudness(measure_loudness(output.path), preset) == []
     assert output.issues == []
