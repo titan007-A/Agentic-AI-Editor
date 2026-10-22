@@ -118,7 +118,7 @@ render behaves:
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline |
 | `framing` | face tracking, centre crop or none; background colour; black bar cropping |
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
-| `silence` | what counts as a pause, and the longest pause kept inside a clip |
+| `silence` | what counts as silence when trimming a quiet start or end |
 | `hook`, `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 

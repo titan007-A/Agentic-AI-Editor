@@ -109,11 +109,10 @@ class Audio(Strict):
 
 
 class Silence(Strict):
+    """What counts as silence, used to trim a silent start or end; never to cut inside."""
+
     threshold_db: float = -35.0
     min_duration: float = Field(default=0.4, gt=0)
-    max_pause: float | None = Field(
-        default=None, description="pauses longer than this inside a clip are cut out"
-    )
 
 
 class Preset(Strict):
@@ -125,7 +124,6 @@ class Preset(Strict):
     fps: int = Field(default=30, ge=12, le=60)
     min_duration: float = Field(gt=0)
     max_duration: float = Field(gt=0)
-    clip_count: int = Field(default=1, ge=1, le=20)
     captions: CaptionStyle = CaptionStyle()
     hook: Hook = Hook()
     title_overlay: TitleOverlay = TitleOverlay()
@@ -141,6 +139,20 @@ class Preset(Strict):
     audio: Audio = Audio()
     bitrate_mbps: float = Field(default=12.0, gt=0)
     style_notes: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_keys(cls, data: object) -> object:
+        # Every edit is now one continuous stretch of the source, so the settings that
+        # spliced several clips or cut pauses out are gone. Older files still load.
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k != "clip_count"}
+            silence = data.get("silence")
+            if isinstance(silence, dict):
+                data["silence"] = {k: v for k, v in silence.items() if k != "max_pause"}
+            elif silence is None:
+                data.pop("silence", None)  # a section left empty once max_pause went
+        return data
 
     @field_validator("resolution")
     @classmethod

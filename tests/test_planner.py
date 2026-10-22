@@ -13,9 +13,7 @@ from agentic_editor.planner import (
 from agentic_editor.presets import Preset
 from agentic_editor.transcript import Word
 
-PRESET = Preset(
-    name="t", label="t", min_duration=6, max_duration=12, clip_count=1, zoom_punch_ins=True
-)
+PRESET = Preset(name="t", label="t", min_duration=6, max_duration=12, zoom_punch_ins=True)
 
 
 class FakeLLM:
@@ -56,9 +54,10 @@ def candidates(*spans):
     }
 
 
-def final(*picks, hook="Nobody saw this coming"):
+def final(pick, hook="Nobody saw this coming"):
     return {
-        "picks": [{"candidate": p, "reason": "best"} for p in picks],
+        "candidate": pick,
+        "reason": "best",
         "hook": hook,
         "title": "The room went silent",
         "caption_position": "middle",
@@ -99,12 +98,11 @@ def test_out_of_range_candidates_are_dropped(make_analysis):
 
 
 def test_rule_violations_are_fed_back_and_retried(make_analysis):
-    preset = PRESET.model_copy(update={"clip_count": 1, "max_duration": 30})
-    llm = FakeLLM(candidates((1, 1), (3, 3)), final(0, 1), final(0), {"words": []})
-    edl = plan_with_llm(llm, make_analysis(transcript(), 20.0), preset)
+    llm = FakeLLM(candidates((1, 1), (3, 3)), final(7), final(0), {"words": []})
+    edl = plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
     assert len(edl.clips) == 1
     feedback = llm.prompts[2][-1]["content"]
-    assert "2 clips, the preset allows at most 1" in feedback
+    assert "C7 is not one of the candidates" in feedback
 
 
 def test_gives_up_after_two_retries(make_analysis):
@@ -142,9 +140,3 @@ def test_vocal_lines_follow_where_the_singer_is_audible(make_analysis):
     assert lines[1].start == 9.0 and lines[1].text == "(no clear words)"
     assert all(ln.end - ln.start <= 12.0 for ln in lines)
     assert "4s with no voice" in describe_lines(lines)
-
-
-def test_long_plan_is_trimmed_by_whole_lines(make_analysis):
-    lines = build_lines(make_analysis(transcript(), 20.0))
-    clips = fit_duration([Clip(start=lines[0].start, end=lines[4].end)], lines, PRESET)
-    assert clips[0].end == lines[2].end

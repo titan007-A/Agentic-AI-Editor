@@ -1,8 +1,6 @@
 """Deterministic cut cleanup: the planner picks rough times, this puts them on word
 boundaries so no cut lands mid-word."""
 
-import itertools
-
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.transcript import Word
 
@@ -54,23 +52,5 @@ def snap_clip(clip: Clip, words: list[Word], silences: list[tuple[float, float]]
     return clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
 
 
-def split_on_pauses(clip: Clip, words: list[Word], max_pause: float) -> list[Clip]:
-    """Cut pauses longer than max_pause out of a clip."""
-    inside = [w for w in words if clip.start <= w.start and w.end <= clip.end]
-    pieces = []
-    start = clip.start
-    for prev, nxt in itertools.pairwise(inside):
-        if nxt.start - prev.end > max_pause:
-            pieces.append(clip.model_copy(update={"start": start, "end": prev.end + TAIL}))
-            start = nxt.start - LEAD
-    pieces.append(clip.model_copy(update={"start": start, "end": clip.end}))
-    return [p for p in pieces if p.duration > 0.2]
-
-
-def clean_edl(
-    edl: EDL, words: list[Word], silences: list[tuple[float, float]], max_pause: float | None
-) -> EDL:
-    clips = [snap_clip(c, words, silences) for c in edl.clips]
-    if max_pause:
-        clips = [piece for c in clips for piece in split_on_pauses(c, words, max_pause)]
-    return edl.model_copy(update={"clips": clips})
+def clean_edl(edl: EDL, words: list[Word], silences: list[tuple[float, float]]) -> EDL:
+    return edl.model_copy(update={"clips": [snap_clip(c, words, silences) for c in edl.clips]})
