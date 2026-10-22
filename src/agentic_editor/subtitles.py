@@ -8,6 +8,7 @@ timed to the shots they describe. Placement moves a caption off any face it woul
 
 import itertools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,15 +32,174 @@ NEAR_EDGE = 220  # px from the frame edge for the fallback positions
 SETTLE = 0.6  # a pause this long lets a moved caption go back to its usual place
 
 
-def speech_cues(words: list[Word], per_line: int) -> list[Cue]:
-    """A few words at a time, broken at pauses, with word timings for the highlight."""
+# Longer linking words that, like short ones, belong with the word after them.
+LINKING = {
+    "they",
+    "there",
+    "don't",
+    "can't",
+    "won't",
+    "didn't",
+    "doesn't",
+    "would",
+    "could",
+    "should",
+    "have",
+    "been",
+    "were",
+    "that",
+    "this",
+    "these",
+    "those",
+    "with",
+    "from",
+    "into",
+    "onto",
+    "than",
+    "their",
+    "about",
+    "over",
+    "under",
+    "after",
+    "before",
+    "which",
+    "while",
+    "when",
+    "where",
+    "whose",
+    "because",
+    "para",
+    "pero",
+    "como",
+    "sobre",
+    "entre",
+    "desde",
+    "hasta",
+    "esta",
+    "este",
+    "estos",
+    "estas",
+    "esos",
+    "esas",
+    "porque",
+    "cuando",
+    "della",
+    "delle",
+    "degli",
+    "dello",
+    "nella",
+    "nelle",
+    "negli",
+    "sulla",
+    "sulle",
+    "come",
+    "questo",
+    "questa",
+    "quando",
+    "perché",
+    "dans",
+    "avec",
+    "pour",
+    "sans",
+    "cette",
+    "leurs",
+    "leur",
+    "quand",
+    "parce",
+    "pelo",
+    "pela",
+    "pelos",
+    "pelas",
+    "numa",
+    "essa",
+    "esse",
+    "isso",
+}
+
+
+def break_cost(before: str, after: str | None) -> float:
+    """How badly a caption line reads if it ends after `before`, ahead of `after`: free
+    after punctuation, cheap after a full word, costly after a short linking word ("of",
+    "the", "de", "los") or when it parts a number from the word before it."""
+    word = before.strip()
+    if word[-1:] in SENTENCE_END + CLAUSE_END:
+        return 0.0
+    bare = word.strip("\"'()").lower()
+    content = (len(bare) > 3 and bare not in LINKING) or any(ch.isdigit() for ch in word)
+    cost = 0.5 if content else 2.0
+    if after and after.strip()[:1].isdigit():
+        cost += 2.0
+    return cost
+
+
+AVERAGE_WORD = 6  # characters, with its space: how long `per_line` words usually run
+
+
+def split_well(
+    texts: list[str],
+    target: int,
+    longest: int,
+    cost_after,
+    fits=lambda i, j: True,
+    inside=lambda i, j: 0.0,
+) -> list[int]:
+    """Where to break words into lines of about `target` words' length and at most
+    `longest` words, with breaks where the text reads well; `fits(i, j)` says whether
+    words i to j fit on one line and `inside(i, j)` what reads badly within it. Length is
+    measured in characters, so one long word can be a line of its own. Returns the line
+    lengths in words."""
+    count = len(texts)
+    reach = [0, *itertools.accumulate(len(t) + 1 for t in texts)]
+    best = [0.0] + [float("inf")] * count
+    back = [0] * (count + 1)
+    for j in range(1, count + 1):
+        for i in range(max(0, j - longest), j):
+            size = j - i
+            if size > 1 and not fits(i, j):
+                continue
+            off = (reach[j] - reach[i] - target * AVERAGE_WORD) / AVERAGE_WORD
+            value = best[i] + 0.5 * off**2 + inside(i, j)
+            value += cost_after(j) if j < count else 0.0
+            if value < best[j]:
+                best[j], back[j] = value, i
+    sizes, j = [], count
+    while j > 0:
+        sizes.append(j - back[j])
+        j = back[j]
+    return sizes[::-1]
+
+
+def speech_cues(
+    words: list[Word], per_line: int, fits: Callable[[str], bool] | None = None
+) -> list[Cue]:
+    """A few words at a time, broken at pauses, with word timings for the highlight. A
+    line may take a word or two more than `per_line` when that keeps it from ending on a
+    linking word or leaving one word alone, as long as it `fits` the frame."""
+    longest = per_line + 2 if per_line >= 3 else per_line
     lines: list[list[Word]] = []
-    for word in words:
-        current = lines[-1] if lines else None
-        if current and len(current) < per_line and word.start - current[-1].end < LINE_BREAK_PAUSE:
-            current.append(word)
-        else:
-            lines.append([word])
+    # Each sentence starts its own line.
+    sentences = [
+        part
+        for phrase in phrases(words, LINE_BREAK_PAUSE)
+        for part in split_phrase(phrase, len(phrase), min_words=1)
+    ]
+    for phrase in sentences:
+        texts = [w.text for w in phrase]
+
+        def cost_after(j: int, texts: list[str] = texts) -> float:
+            return break_cost(texts[j - 1], texts[j])
+
+        def fit(i: int, j: int, texts: list[str] = texts) -> bool:
+            return fits is None or fits(" ".join(texts[i:j]))
+
+        def inside(i: int, j: int, texts: list[str] = texts) -> float:
+            # A clause that ends mid-line reads as if the line ran on past it.
+            return 1.5 * sum(t.strip()[-1:] in CLAUSE_END for t in texts[i : j - 1])
+
+        start = 0
+        for size in split_well(texts, per_line, longest, cost_after, fit, inside):
+            lines.append(phrase[start : start + size])
+            start += size
     return [_cue(line) for line in lines]
 
 
@@ -259,8 +419,8 @@ def sentences(words: list[Word]) -> list[list[Word]]:
 
 
 def even_parts(tokens: list[str], parts: int) -> list[list[str]]:
-    """Words in `parts` groups of about equal length, each break moved to just after a
-    comma or full stop when one is within a couple of words of it."""
+    """Words in `parts` groups of about equal length, each break moved, by a couple of
+    words at most, to where the text reads best (see break_cost)."""
     parts = max(1, min(parts, len(tokens)))
     reach = list(itertools.accumulate(len(t) + 1 for t in tokens))
     breaks: list[int] = []
@@ -268,12 +428,13 @@ def even_parts(tokens: list[str], parts: int) -> list[list[str]]:
         target = reach[-1] * k / parts
         allowed = range((breaks[-1] if breaks else 0) + 1, len(tokens) - (parts - k) + 1)
         ideal = min(allowed, key=lambda i: abs(reach[i - 1] - target))
-        pauses = [
-            i
-            for i in allowed
-            if abs(i - ideal) <= 2 and tokens[i - 1][-1:] in SENTENCE_END + CLAUSE_END
-        ]
-        breaks.append(min(pauses, key=lambda i: abs(i - ideal)) if pauses else ideal)
+        near = [i for i in allowed if abs(i - ideal) <= 2]
+        breaks.append(
+            min(
+                near,
+                key=lambda i: (break_cost(tokens[i - 1], tokens[i]), abs(reach[i - 1] - target)),
+            )
+        )
     edges = [0, *breaks, len(tokens)]
     return [tokens[a:b] for a, b in itertools.pairwise(edges)]
 
@@ -433,7 +594,23 @@ def fit_lines(cues: list[Cue], measure, max_width: float, max_lines: int = 2) ->
                     lines[-1] = f"{lines[-1]} {word}"
                 else:
                     lines.append(word)
-            return lines
+            if len(lines) != 2:
+                return lines
+            # Two lines: break where it reads best, keeping them close in width.
+            fitting = [
+                i
+                for i in range(1, len(words))
+                if measure(" ".join(words[:i])) <= max_width
+                and measure(" ".join(words[i:])) <= max_width
+            ]
+            at = min(
+                fitting,
+                key=lambda i: (
+                    break_cost(words[i - 1], words[i])
+                    + abs(measure(" ".join(words[:i])) - measure(" ".join(words[i:]))) / max_width
+                ),
+            )
+            return [" ".join(words[:at]), " ".join(words[at:])]
 
         words = cue.text.split()
         # As few captions as fit, with the words shared evenly between them, so none is

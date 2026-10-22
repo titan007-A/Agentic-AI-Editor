@@ -3,6 +3,7 @@
 import logging
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from agentic_editor import ffmpeg, framing, subtitles
@@ -72,7 +73,9 @@ def timeline_words(edl: EDL, analysis: Analysis):
     return words
 
 
-def caption_cues(edl: EDL, analysis: Analysis, style: CaptionStyle) -> list[Cue]:
+def caption_cues(
+    edl: EDL, analysis: Analysis, style: CaptionStyle, fits: Callable[[str], bool] | None = None
+) -> list[Cue]:
     """The captions for this reel in the style's mode. Translated and written captions
     come from the models before rendering; without them, fall back to the speech."""
     words = timeline_words(edl, analysis)
@@ -91,7 +94,7 @@ def caption_cues(edl: EDL, analysis: Analysis, style: CaptionStyle) -> list[Cue]
             ]
         return subtitles.lyric_cues(words, breaths=breaths)
     per_line = edl.caption_overrides.words_per_line or style.words_per_line
-    return subtitles.speech_cues(words, per_line)
+    return subtitles.speech_cues(words, per_line, fits)
 
 
 def banner_top(
@@ -281,15 +284,16 @@ def render(
     if preset.captions.enabled:
         style = preset.captions
         overrides = edl.caption_overrides
-        cues = caption_cues(edl, analysis, style)
         font = text.font_file(settings.fonts_dir, style.font)
+        sized = text.font_at(font, style.size)
+        room = frame[0] - 120 - 2 * style.outline
+
+        def measure(line: str) -> float:
+            return sized.getlength(line.upper() if style.uppercase else line)
+
+        cues = caption_cues(edl, analysis, style, lambda line: measure(line) <= room)
         if any(not c.words for c in cues):
-            sized = text.font_at(font, style.size)
-
-            def measure(line: str) -> float:
-                return sized.getlength(line.upper() if style.uppercase else line)
-
-            cues = subtitles.fit_lines(cues, measure, frame[0] - 120 - 2 * style.outline)
+            cues = subtitles.fit_lines(cues, measure, room)
         position = overrides.position or style.position
         placements = None
         if style.avoid_faces and (rows or obstacles):

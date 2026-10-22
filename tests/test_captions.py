@@ -4,7 +4,9 @@ from agentic_editor.render.captions import ass_color, ass_time, build_ass
 from agentic_editor.subtitles import Placement, lyric_cues, place, speech_cues, to_srt
 from tests.conftest import words_from
 
-WORDS = words_from("one@0.0-0.3 two@0.35-0.6 three@0.65-1.0 four@1.05-1.3 five@3.0-3.4")
+WORDS = words_from(
+    "one@0.0-0.3 two@0.35-0.6 three@0.65-1.0 four@1.05-1.3 five@1.35-1.6 six@1.65-1.9 seven@3.0-3.4"
+)
 FRAME = (1080, 1920)
 
 
@@ -22,7 +24,26 @@ def test_ass_time_format():
 
 
 def test_speech_lines_break_on_word_count_and_pauses():
-    assert [c.text for c in speech_cues(WORDS, per_line=3)] == ["one two three", "four", "five"]
+    assert [c.text for c in speech_cues(WORDS, per_line=3)] == [
+        "one two three",
+        "four five six",
+        "seven",
+    ]
+
+
+def test_speech_lines_dont_end_on_a_linking_word_or_leave_one_alone():
+    said = words_from(
+        "Well,@0-0.3 I'm@0.3-0.5 an@0.5-0.6 economist@0.6-1.2 and@1.2-1.4 in@1.4-1.5 "
+        "the@1.5-1.6 late@1.6-1.9 90s@1.9-2.3 I@2.3-2.4 was@2.4-2.6 working@2.6-3.0 "
+        "for@3.0-3.2 the@3.2-3.3 FCC.@3.3-3.8"
+    )
+    lines = [c.text for c in speech_cues(said, per_line=3)]
+    assert lines == [
+        "Well, I'm an economist",
+        "and in the late 90s",
+        "I was working",
+        "for the FCC.",
+    ]
 
 
 def test_lyric_lines_run_until_the_singer_breathes():
@@ -126,3 +147,12 @@ def test_a_moved_caption_stays_put_until_the_speaker_pauses():
     assert spots[0] != Placement(2, 520)
     assert spots[1] == spots[2] == spots[0]  # still speaking: no jumping back
     assert spots[3] == Placement(2, 520)  # after the pause, back to its usual place
+
+
+def test_a_line_too_wide_for_the_frame_is_split_where_it_reads_well():
+    said = words_from(
+        "the@0-0.2 Federal@0.2-0.6 Communications@0.6-1.3 Commission@1.3-1.9 in@1.9-2.0 "
+        "the@2.0-2.1 United@2.1-2.4 States.@2.4-2.9"
+    )
+    lines = [c.text for c in speech_cues(said, 3, fits=lambda line: len(line) <= 26)]
+    assert lines == ["the Federal", "Communications Commission", "in the United States."]
