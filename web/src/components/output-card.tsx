@@ -88,7 +88,9 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
         ) : (
           <div className="space-y-1 rounded-md border border-destructive/40 p-2 text-sm">
             <p className="font-medium text-destructive">
-              Needs a look · {Math.round(output.confidence * 100)}% sure
+              Needs a look
+              {(output.doubts ?? []).length > 0 &&
+                ` · ${Math.round(output.confidence * 100)}% sure`}
             </p>
             {doubts.length > 0 && (
               <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
