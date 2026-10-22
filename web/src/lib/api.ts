@@ -22,7 +22,40 @@ export type Output = {
   has_subtitles: boolean;
   confidence: number;
   doubts: string[];
+  verdict: Verdict | null;
+  pile: "ready" | "look" | null;
   edl: Edl;
+};
+
+export type Verdict = "approved" | "posted" | "dismissed";
+
+export type FeedFields = {
+  name: string;
+  kind: "folder" | "link";
+  location: string;
+  presets: string[];
+  notes: string | null;
+  enabled: boolean;
+  active_from: number | null;
+  active_to: number | null;
+  batch: number;
+  include_existing: boolean;
+};
+
+export type FeedItem = {
+  title: string;
+  source: string;
+  job_id: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type Feed = FeedFields & {
+  id: number;
+  last_checked: string | null;
+  last_result: string | null;
+  counts: Record<string, number>;
+  recent: FeedItem[];
 };
 
 export type Job = {
@@ -103,6 +136,15 @@ export const api = {
     request<Job[]>("POST", "/jobs", { sources, presets, notes: notes || null }),
   regenerate: (id: string, preset: string, notes: string) =>
     request<Job>("POST", `/jobs/${id}/regenerate`, { preset, notes: notes || null }),
+  feeds: () => request<Feed[]>("GET", "/feeds"),
+  createFeed: (feed: FeedFields) => request<Feed>("POST", "/feeds", feed),
+  updateFeed: (id: number, feed: FeedFields) => request<Feed>("PUT", `/feeds/${id}`, feed),
+  deleteFeed: (id: number) => request("DELETE", `/feeds/${id}`),
+  checkFeed: (id: number) => request<Feed>("POST", `/feeds/${id}/check`),
+  pileCounts: () => request<{ ready: number; look: number }>("GET", "/piles"),
+  pile: (name: "ready" | "look") => request<Job[]>("GET", `/piles/${name}`),
+  verdict: (outputId: number, verdict: Verdict | null) =>
+    request<Job>("POST", `/outputs/${outputId}/verdict`, { verdict }),
   upload: (file: File) => {
     const form = new FormData();
     form.append("file", file);
