@@ -20,7 +20,15 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { api, errorText, thumbnailUrl, videoUrl, type Job, type Output } from "@/lib/api";
+import {
+  api,
+  errorText,
+  subtitlesUrl,
+  thumbnailUrl,
+  videoUrl,
+  type Job,
+  type Output,
+} from "@/lib/api";
 
 function seconds(value: number) {
   const m = Math.floor(value / 60);
@@ -107,6 +115,13 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
             </a>
           </Button>
           <ShareButton output={output} name={`${jobLabel(job)}-${output.preset}`} />
+          {output.has_subtitles && (
+            <Button variant="outline" asChild>
+              <a href={subtitlesUrl(output)} download>
+                Subtitles
+              </a>
+            </Button>
+          )}
           {output.has_thumbnail && (
             <Button variant="outline" asChild>
               <a href={thumbnailUrl(output)} download>

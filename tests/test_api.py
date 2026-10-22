@@ -176,3 +176,17 @@ def test_rendered_video_downloads_with_a_readable_name(env):
     response = env.client.get(f"/api/outputs/{output_id}/video?download=true")
     assert response.content == b"fake video"
     assert 'filename="Sample-song-square-1x1.mp4"' in response.headers["content-disposition"]
+
+
+def test_subtitles_download_next_to_the_video(env):
+    job_id = start(env.client)[0]["id"]
+    output = env.client.get(f"/api/jobs/{job_id}").json()["outputs"][0]
+    assert output["has_subtitles"] is False
+    assert env.client.get(f"/api/outputs/{output['id']}/subtitles").status_code == 404
+
+    (env.settings.media_dir / "square-1x1.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+    output = env.client.get(f"/api/jobs/{job_id}").json()["outputs"][0]
+    assert output["has_subtitles"] is True
+    response = env.client.get(f"/api/outputs/{output['id']}/subtitles")
+    assert response.text.endswith("hi\n")
+    assert 'filename="Sample-song-square-1x1.srt"' in response.headers["content-disposition"]

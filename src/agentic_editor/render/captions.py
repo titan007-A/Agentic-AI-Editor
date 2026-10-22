@@ -1,9 +1,9 @@
 """Word-timed captions as an ASS subtitle file for libass."""
 
+from agentic_editor.edl import Cue
 from agentic_editor.presets import CaptionStyle
-from agentic_editor.transcript import Word
+from agentic_editor.subtitles import Placement
 
-LINE_BREAK_PAUSE = 0.6
 _ALIGNMENT = {"bottom": 2, "middle": 5, "top": 8}
 
 
@@ -20,35 +20,27 @@ def ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def group_lines(words: list[Word], per_line: int) -> list[list[Word]]:
-    lines: list[list[Word]] = []
-    for word in words:
-        current = lines[-1] if lines else None
-        if current and len(current) < per_line and word.start - current[-1].end < LINE_BREAK_PAUSE:
-            current.append(word)
-        else:
-            lines.append([word])
-    return lines
-
-
 def _clean(text: str, upper: bool) -> str:
     text = text.replace("{", "(").replace("}", ")").replace("\\", "")
-    return text.upper() if upper else text
+    text = text.upper() if upper else text
+    return text.replace("\n", "\\N")  # a line break fit_lines put in
 
 
 def build_ass(
-    words: list[Word],
+    cues: list[Cue],
     style: CaptionStyle,
     frame: tuple[int, int],
     font_family: str,
     *,
     position: str | None = None,
-    words_per_line: int | None = None,
     highlight_color: str | None = None,
+    placements: list[Placement] | None = None,
 ) -> str:
+    """ASS events for the cues. Cues with word timings get the style's animation; whole
+    lines (translated, written) fade in and out. `placements` moves single cues, e.g. off
+    a face; otherwise every cue sits at the style's position."""
     width, height = frame
     position = position or style.position
-    per_line = words_per_line or style.words_per_line
     highlight = ass_color(highlight_color or style.highlight_color)
     base = ass_color(style.color)
     margin = style.margin if position != "middle" else 0
@@ -68,11 +60,20 @@ def build_ass(
     )
 
     events = []
-    for line in group_lines(words, per_line):
+    for k, cue in enumerate(cues):
+        at = placements[k] if placements else None
+        # An explicit alignment and margin only when a cue has to move.
+        lead = f"{{\\an{at.alignment}}}" if at and at.alignment != _ALIGNMENT[position] else ""
+        margin_v = at.margin if at else 0
+        line = cue.words
+        if not line:
+            text = _clean(cue.text, style.uppercase)
+            events.append((cue.start, cue.end, margin_v, f"{lead}{{\\fad(120,120)}}{text}"))
+            continue
         texts = [_clean(w.text, style.uppercase) for w in line]
         line_end = line[-1].end
         if style.animation == "none":
-            events.append((line[0].start, line_end, " ".join(texts)))
+            events.append((line[0].start, line_end, margin_v, lead + " ".join(texts)))
         elif style.animation == "karaoke":
             # \kf sweeps each word from SecondaryColour to PrimaryColour over its duration.
             starts = [w.start for w in line[1:]] + [line_end]
@@ -80,7 +81,8 @@ def build_ass(
                 f"{{\\kf{max(1, round((nxt - w.start) * 100))}}}{t}"
                 for w, nxt, t in zip(line, starts, texts, strict=True)
             )
-            events.append((line[0].start, line_end, f"{{\\1c{highlight}\\2c{base}}}{tagged}"))
+            colours = f"{{\\1c{highlight}\\2c{base}}}"
+            events.append((line[0].start, line_end, margin_v, f"{lead}{colours}{tagged}"))
         else:
             pop = r"\fscx112\fscy112" if style.animation == "pop" else ""
             for i, word in enumerate(line):
@@ -89,11 +91,11 @@ def build_ass(
                     f"{{\\1c{highlight}{pop}}}{t}{{\\r}}" if j == i else t
                     for j, t in enumerate(texts)
                 ]
-                events.append((word.start, end, " ".join(parts)))
+                events.append((word.start, end, margin_v, lead + " ".join(parts)))
 
     body = "".join(
-        f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Caption,,0,0,0,,{text}\n"
-        for start, end, text in events
+        f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Caption,,0,0,{margin_v},,{text}\n"
+        for start, end, margin_v, text in events
         if end > start
     )
     return header + body

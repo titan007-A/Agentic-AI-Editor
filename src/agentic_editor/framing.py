@@ -30,6 +30,7 @@ FULL = 0.85  # a window this close to the whole picture just shows the whole pic
 MIN_SHOT = 1.0  # seconds; a cut closer than this to another isn't worth reframing for
 VIEW_EVERY = 4.0  # seconds between vision samples inside a long shot
 FACE_NEAR = 0.5  # seconds: faces this close to a vision sample count with it
+DROPOUT = 2.0  # seconds: a face the detector lost this briefly is still the same face
 
 Content = tuple[int, int, int, int]  # x, y, width, height of the picture, bars excluded
 Span = tuple[float, float]
@@ -97,16 +98,34 @@ def keep_spans(
     """Each thing that must stay whole at one moment: heads from the face detector, plus the
     vision model's must-keep items, minus heads the detector already has."""
     heads = head_spans(faces, at, src_width)
-    found = [
-        (s.x0, s.x1) for s in subjects if s.keep and not (s.kind == "head" and _detected(s, heads))
-    ]
+    found = []
+    for s in subjects:
+        if not s.keep or (s.kind == "head" and _detected(s, heads)):
+            continue
+        if s.kind == "head":
+            # The detector often loses a face for a moment when the head turns; the same
+            # face a second or two away is a far better guide than the vision model's
+            # loose head box.
+            nearby = _nearby_head(s, faces, at, src_width)
+            if nearby is not None:
+                heads.append(nearby)
+                continue
+        found.append((s.x0, s.x1))
     return found + heads
 
 
 def crossing(spans: list[Span], x: float, width: int, slack: float = 4.0) -> list[Span]:
-    """Spans that a window's left or right edge cuts through."""
-    left, right = x + slack, x + width - slack
-    return [s for s in spans if (s[0] < left < s[1]) or (s[0] < right < s[1])]
+    """Spans that a window's edge really cuts through: more than a tenth of the thing (and
+    more than a few pixels) left outside. Head spans include an estimate for the hair, and
+    a following crop lags its subject slightly; slivers of either are not a visible cut."""
+    left, right = x, x + width
+    cut = []
+    for a, b in spans:
+        outside = max(0.0, min(b, left) - a) + max(0.0, b - max(a, right))
+        inside = min(b, right) - max(a, left)
+        if inside > 0 and outside > max(slack, 0.1 * (b - a)):
+            cut.append((a, b))
+    return cut
 
 
 def check_times(
@@ -160,6 +179,21 @@ def views(
             whole = (max(left, whole[0]), min(right, whole[1]))
         out.append(View(t, whole))
     return out
+
+
+def _nearby_head(head: Subject, faces: list[Sample], at: float, src_width: int) -> Span | None:
+    """The head span of a detected face inside this vision head box, from the face sample
+    nearest in time within DROPOUT seconds."""
+    best: tuple[float, Span] | None = None
+    for t, found in faces:
+        if abs(t - at) > DROPOUT:
+            continue
+        for face in found:
+            cx = face.cx * src_width
+            if head.x0 <= cx <= head.x1 and (best is None or abs(t - at) < best[0]):
+                half = face.width * src_width * HEAD_WIDTH / 2
+                best = (abs(t - at), (cx - half, cx + half))
+    return best[1] if best else None
 
 
 def _detected(head: Subject, detected: list[Span]) -> bool:
@@ -353,3 +387,40 @@ def summary(shots: list[Shot], width: int) -> str:
         spans = ", ".join(f"{s.start:.1f}-{s.end:.1f}s" for s in widened)
         line += f", {len(widened)} widened so nothing is cut ({spans})"
     return line
+
+
+def screen_rows(
+    faces: list[Sample],
+    clip: Clip,
+    shots: list[Shot],
+    picture: Content,
+    src_size: tuple[int, int],
+    frame: tuple[int, int],
+    window: int,
+) -> list[tuple[float, list[Span]]]:
+    """The rows of the output frame each visible face covers, at reel times.
+
+    A face is mapped through the framing of the moment: the shot's window when there are
+    shots, otherwise one `window` pixels wide over the whole clip. The band runs from above
+    the forehead, where hair is, to below the chin."""
+    src_w, src_h = src_size
+    width, height = frame
+    top, picture_height = picture[1], picture[3]
+    rows = []
+    for t, found in faces:
+        if not clip.start <= t < clip.end:
+            continue
+        shot = next((s for s in shots if s.start <= t < s.end), None)
+        span = shot.width if shot else window
+        left = shot.x if shot and not shot.follow else None
+        scale = min(width / span, height / picture_height)
+        offset = (height - picture_height * scale) / 2
+        bands = []
+        for face in found:
+            if left is not None and not left <= face.cx * src_w <= left + span:
+                continue  # cropped out of this shot
+            y0 = (face.cy - 0.85 * face.height) * src_h
+            y1 = (face.cy + 0.6 * face.height) * src_h
+            bands.append(((y0 - top) * scale + offset, (y1 - top) * scale + offset))
+        rows.append((t - clip.start, bands))
+    return rows

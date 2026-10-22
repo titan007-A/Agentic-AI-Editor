@@ -28,6 +28,9 @@ const NULLABLE = new Set([
   "logo.file",
   "music.file",
   "title_overlay.box_color",
+  "captions.language",
+  "one_liner.box_color",
+  "one_liner.duration",
   "framing.text_gap_above",
   "framing.text_gap_below",
 ]);
@@ -52,6 +55,15 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     title: "Captions",
     fields: [
       { path: "captions.enabled", label: "Show captions", kind: "switch" },
+      {
+        path: "captions.mode",
+        label: "What they say",
+        kind: "select",
+        options: ["speech", "lyrics", "translated", "visual"],
+      },
+      { path: "captions.language", label: "Translate into", kind: "text" },
+      { path: "captions.avoid_faces", label: "Keep captions off faces", kind: "switch" },
+      { path: "captions.export_srt", label: "Also save an .srt file", kind: "switch" },
       { path: "captions.uppercase", label: "Uppercase", kind: "switch" },
       { path: "captions.font", label: "Font", kind: "font" },
       { path: "captions.size", label: "Size", kind: "number" },
@@ -114,6 +126,26 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "audio.fade_out", label: "Fade out (s)", kind: "number", step: 0.05 },
       { path: "silence.threshold_db", label: "Silence threshold (dB)", kind: "number" },
       { path: "silence.min_duration", label: "Min silence (s)", kind: "number", step: 0.05 },
+    ],
+  },
+  {
+    title: "One-liner",
+    fields: [
+      { path: "one_liner.enabled", label: "Write a one-line caption", kind: "switch" },
+      { path: "one_liner.hint", label: "What it should be about", kind: "textarea" },
+      { path: "one_liner.font", label: "Font", kind: "font" },
+      { path: "one_liner.size", label: "Size", kind: "number" },
+      { path: "one_liner.color", label: "Color", kind: "color" },
+      { path: "one_liner.box_color", label: "Box color", kind: "color" },
+      {
+        path: "one_liner.position",
+        label: "Position",
+        kind: "select",
+        options: ["top", "bottom"],
+      },
+      { path: "one_liner.offset", label: "Offset from edge (px)", kind: "number" },
+      { path: "one_liner.duration", label: "Seconds on screen (empty: all)", kind: "number" },
+      { path: "one_liner.max_words", label: "Max words", kind: "number" },
     ],
   },
   {

@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentic_editor.presets import Color, Preset
+from agentic_editor.transcript import Word
 
 CropMode = Literal["smart", "face", "center", "none"]
 
@@ -43,6 +44,18 @@ class Shot(BaseModel):
     reason: str = ""
 
 
+class Cue(BaseModel):
+    """One caption on the reel's own timeline. Word timings, when known, drive the
+    word-by-word highlight; translated or written captions show as whole lines."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    text: str
+    words: list[Word] = []
+
+
 class Zoom(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,6 +86,10 @@ class EDL(BaseModel):
     shots: list[Shot] = []
     # The picture's area in the source, black bars excluded: x, y, width, height.
     picture: tuple[int, int, int, int] | None = None
+    # Captions the models wrote (translated or from the visuals) and a one-line overlay;
+    # speech and lyrics captions are built from the transcript at render time instead.
+    cues: list[Cue] = []
+    one_liner: str = ""
     decisions: list[str] = []
 
     @property

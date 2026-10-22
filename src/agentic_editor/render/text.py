@@ -122,6 +122,25 @@ def draw(placed: list[Placed], frame: tuple[int, int], dest: Path) -> Path:
     return dest
 
 
+def font_at(path: Path, size: int) -> ImageFont.FreeTypeFont:
+    return _font(path, size)
+
+
+def balance(text: str, path: Path, size: int, max_width: int) -> str:
+    """Split a line that is too wide into two of similar length, rather than shrinking it."""
+    font = _font(path, size)
+    words = text.split()
+    if font.getlength(text) <= max_width or len(words) < 4:
+        return text
+    best = min(
+        range(1, len(words)),
+        key=lambda i: abs(
+            font.getlength(" ".join(words[:i])) - font.getlength(" ".join(words[i:]))
+        ),
+    )
+    return " ".join(words[:best]) + "\n" + " ".join(words[best:])
+
+
 def draw_banner(
     text: str,
     path: Path,
