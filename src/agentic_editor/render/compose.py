@@ -12,7 +12,7 @@ from agentic_editor.backends import Backends, encoder_args
 from agentic_editor.edl import EDL, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
-from agentic_editor.render import audio, captions, text
+from agentic_editor.render import audio, captions, grade, text
 from agentic_editor.render.video import Layers, build_graph, crop_size, video_band
 from agentic_editor.settings import ROOT, Settings
 
@@ -176,7 +176,9 @@ def render(
         return inputs.count("-i") - 1
 
     source = (analysis.width, analysis.height)
-    if preset.framing.crop_black_bars and edl.crop_mode == "none":
+    # Bars baked into the source would show against a background taken from the footage.
+    crop_bars = preset.framing.crop_black_bars or preset.framing.auto_background
+    if crop_bars and edl.crop_mode == "none":
         layers.black_bars = detect_black_bars(video, edl.clips[0].start)
         if layers.black_bars:
             source = layers.black_bars[:2]
@@ -196,6 +198,26 @@ def render(
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
 
     rows = face_rows(edl, analysis, preset, layers.content, faces) if faces else []
+
+    colour = preset.grade
+    if colour.auto or preset.framing.auto_background:
+        clip = edl.clips[0]
+        bars = layers.content or (
+            (layers.black_bars[2], layers.black_bars[3], *layers.black_bars[:2])
+            if layers.black_bars
+            else None
+        )
+        measured = grade.measure(video, clip.start, clip.end, settings.ffmpeg_bin, bars)
+        if colour.auto:
+            layers.correction = grade.correction(measured)
+        if preset.framing.auto_background:
+            text_colours = [b.color for b in preset.text_blocks] or [preset.captions.color]
+            dark = all(grade.is_dark(c) for c in text_colours)
+            layers.background = grade.background(measured, dark)
+    if colour.look != "none" or colour.lut:
+        lut = asset_path(colour.lut) if colour.lut else None
+        layers.look = grade.look_filters(colour.look, lut)
+        layers.look_strength = colour.strength
 
     sync = preset.beat_sync
     if sync.pulse and analysis.beats.beats:
