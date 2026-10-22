@@ -63,7 +63,11 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         options: ["speech", "lyrics", "translated", "visual"],
       },
       { path: "captions.language", label: "Translate into", kind: "text" },
-      { path: "captions.avoid_faces", label: "Keep captions off faces", kind: "switch" },
+      {
+        path: "captions.avoid_faces",
+        label: "Keep captions off faces and on-screen text",
+        kind: "switch",
+      },
       { path: "captions.export_srt", label: "Also save an .srt file", kind: "switch" },
       { path: "captions.uppercase", label: "Uppercase", kind: "switch" },
       { path: "captions.font", label: "Font", kind: "font" },

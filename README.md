@@ -141,7 +141,7 @@ render behaves:
 
 | Section | Controls |
 | --- | --- |
-| `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces; an .srt file is saved next to the video |
+| `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces and off text already in the picture (name banners, titles) while it is on screen; an .srt file is saved next to the video |
 | `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline |
 | `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage |

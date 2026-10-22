@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 
 from agentic_editor import agent, download, framing, hooks, review, subtitles, trim
-from agentic_editor.analysis import faces, subjects, watermarks
+from agentic_editor.analysis import faces, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
@@ -313,6 +313,38 @@ def smart_framing(
     return edl, commands
 
 
+def onscreen_text(
+    edl: EDL,
+    preset: Preset,
+    analysis: Analysis,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    vision: OllamaClient | None,
+    tracked: dict[tuple[float, float], list[tuple[float, list[onscreen.Box]]]],
+) -> list[tuple[float, list[onscreen.Box]]]:
+    """When the picture's own text (a name banner, a title) is on screen during the reel,
+    so captions and banners can keep off it."""
+    overlays = preset.captions.enabled or edl.one_liner or (preset.hook.overlay and edl.hook)
+    if vision is None or not (overlays or preset.title_overlay.enabled):
+        return []
+    clip = edl.clips[0]
+    key = (clip.start, clip.end)
+    if key not in tracked:
+        times = framing.view_times(clip, analysis.scenes)
+        found = [
+            (t, (s.x0, s.y0, s.x1, s.y1))
+            for t, items in subject_samples(vision, video, times, analysis, settings, work_dir)
+            for s in items
+            if s.kind == "text"
+        ]
+        tracked[key] = []
+        if found:
+            stamps, frames = onscreen.grab(video, clip.start, clip.end, settings.ffmpeg_bin)
+            tracked[key] = onscreen.track(stamps, frames, found, analysis.width)
+    return tracked[key]
+
+
 def fix(
     issues: list[review.Issue], edl: EDL, preset: Preset, analysis: Analysis, loudness_goal: float
 ) -> tuple[EDL, Preset, bool]:
@@ -356,6 +388,7 @@ def produce(
     """Render, review, fix and re-render up to MAX_FIXES times."""
     work_dir.mkdir(parents=True, exist_ok=True)
     detections: dict[tuple[float, float], list[faces.Sample]] = {}
+    tracked: dict[tuple[float, float], list[tuple[float, list[onscreen.Box]]]] = {}
     target = preset
     renders = 1
     while True:
@@ -370,9 +403,11 @@ def produce(
         if target.captions.enabled and target.captions.avoid_faces and key not in detections:
             detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
         face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
+        texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
         compose.render(
-            edl, target, analysis, video, dest, work_dir, settings, backends, commands, face_samples
-        )
+            edl, target, analysis, video, dest, work_dir, settings, backends, commands,
+            face_samples, texts,
+        )  # fmt: skip
         progress("review", f"checking {preset.name}")
         # Caption timing is checked against the spoken words, so only for captions of them.
         spoken = target.captions.enabled and target.captions.mode in ("speech", "lyrics")
