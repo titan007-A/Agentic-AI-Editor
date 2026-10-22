@@ -36,7 +36,15 @@ function seconds(value: number) {
   return m ? `${m}:${s}` : `${value.toFixed(1)}s`;
 }
 
-export function OutputCard({ job, output }: { job: Job; output: Output }) {
+export function OutputCard({
+  job,
+  output,
+  actions,
+}: {
+  job: Job;
+  output: Output;
+  actions?: React.ReactNode;
+}) {
   const router = useRouter();
   const [notes, setNotes] = useState("");
   const [open, setOpen] = useState(false);
@@ -178,6 +186,7 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          {actions}
         </div>
       </CardContent>
     </Card>

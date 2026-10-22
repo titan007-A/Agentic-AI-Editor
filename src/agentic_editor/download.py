@@ -34,6 +34,7 @@ def _ytdlp_options(dest: Path) -> dict:
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
     }
     if settings.ffmpeg_bin != "ffmpeg":
         options["ffmpeg_location"] = str(Path(settings.ffmpeg_bin).parent)

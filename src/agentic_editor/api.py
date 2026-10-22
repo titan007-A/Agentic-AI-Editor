@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
@@ -22,10 +22,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import jobs
+from agentic_editor import autopilot, jobs
 from agentic_editor.auth import verify_password
 from agentic_editor.backends import get_backends
-from agentic_editor.db import Event, Job, Output, Setting
+from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting
 from agentic_editor.download import update_ytdlp
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
@@ -36,6 +36,8 @@ log = logging.getLogger(__name__)
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 NOTICE_KEY = "usage_notice_accepted"
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
+SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
+PILE_LIMIT = 100
 
 
 class LoginRequest(BaseModel):
@@ -53,6 +55,39 @@ class RegenerateRequest(BaseModel):
     notes: str | None = None
 
 
+class FeedRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    kind: Literal["folder", "link"]
+    location: str = Field(min_length=1)
+    presets: list[str] = Field(min_length=1)
+    notes: str | None = None
+    enabled: bool = True
+    active_from: int | None = Field(default=None, ge=0, le=23)
+    active_to: int | None = Field(default=None, ge=0, le=23)
+    batch: int = Field(default=3, ge=1, le=20)
+    include_existing: bool = False
+
+
+class FeedItemView(BaseModel):
+    title: str
+    source: str
+    job_id: str | None
+    status: str  # the job's, or skipped
+    created_at: datetime
+
+
+class FeedView(FeedRequest):
+    id: int
+    last_checked: datetime | None
+    last_result: str | None
+    counts: dict[str, int]
+    recent: list[FeedItemView]
+
+
+class VerdictRequest(BaseModel):
+    verdict: Literal["approved", "posted", "dismissed"] | None
+
+
 class OutputView(BaseModel):
     id: int
     preset: str
@@ -65,6 +100,8 @@ class OutputView(BaseModel):
     has_subtitles: bool
     confidence: float
     doubts: list[str]
+    verdict: str | None = None
+    pile: str | None = None
     edl: dict
 
 
@@ -83,7 +120,7 @@ class JobView(BaseModel):
     outputs: list[OutputView] = []
 
 
-def job_view(job: Job) -> JobView:
+def job_view(job: Job, only: int | None = None) -> JobView:
     outputs = [
         OutputView(
             id=o.id,
@@ -97,9 +134,12 @@ def job_view(job: Job) -> JobView:
             has_subtitles=Path(o.path).with_suffix(".srt").exists(),
             confidence=o.confidence,
             doubts=o.doubts,
+            verdict=o.verdict,
+            pile=o.pile,
             edl=o.edl,
         )
         for o in job.outputs
+        if only is None or o.id == only
     ]
     return JobView(
         id=job.id,
@@ -117,10 +157,49 @@ def job_view(job: Job) -> JobView:
     )
 
 
+def feed_view(feed: Feed) -> FeedView:
+    def status(item: FeedItem) -> str:
+        if item.skipped:
+            return "skipped"
+        return item.job.status if item.job else "removed"
+
+    counts: dict[str, int] = {}
+    for item in feed.items:
+        counts[status(item)] = counts.get(status(item), 0) + 1
+    recent = [
+        FeedItemView(
+            title=i.title,
+            source=i.source,
+            job_id=i.job_id,
+            status=status(i),
+            created_at=i.created_at,
+        )
+        for i in feed.items
+        if not i.skipped
+    ][:10]
+    fields = FeedRequest.model_fields.keys()
+    return FeedView(
+        **{k: getattr(feed, k) for k in fields},
+        id=feed.id,
+        last_checked=feed.last_checked,
+        last_result=feed.last_result,
+        counts=counts,
+        recent=recent,
+    )
+
+
 def create_app(
     settings: Settings, session_factory: sessionmaker | None = None, start_worker: bool = True
 ) -> FastAPI:
     make_session = session_factory or jobs.sessions()
+
+    async def scan_feeds() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(autopilot.check_all, make_session, jobs.process)
+            except Exception:
+                log.exception("checking the feeds failed")
+            await asyncio.sleep(SCAN_SECONDS)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -137,8 +216,10 @@ def create_app(
             for sig, handler in saved.items():
                 signal.signal(sig, handler)
             log.info("job worker started with %d slot(s)", settings.max_concurrent_jobs)
+            scanner = asyncio.create_task(scan_feeds())
         yield
         if consumer is not None:
+            scanner.cancel()
             consumer.stop(graceful=True)
 
     app = FastAPI(title="Agentic AI Editor", lifespan=lifespan)
@@ -399,6 +480,85 @@ def create_app(
         if not output.thumbnail:
             raise HTTPException(404, "no thumbnail")
         return FileResponse(output.thumbnail, media_type="image/jpeg")
+
+    def find_feed(feed_id: int, session: Session) -> Feed:
+        feed = session.get(Feed, feed_id)
+        if feed is None:
+            raise HTTPException(404, "no such feed")
+        return feed
+
+    def checked_feed(body: FeedRequest) -> FeedRequest:
+        unknown = set(body.presets) - presets().keys()
+        if unknown:
+            raise HTTPException(422, f"unknown preset(s): {', '.join(sorted(unknown))}")
+        location = body.location.strip()
+        if body.kind == "folder":
+            folder = Path(location).expanduser()
+            if not folder.is_dir():
+                raise HTTPException(422, f"no such folder on this computer: {location}")
+            location = str(folder.resolve())
+        elif not location.startswith(("http://", "https://")):
+            raise HTTPException(422, "a playlist or channel feed needs a link")
+        if (body.active_from is None) != (body.active_to is None):
+            raise HTTPException(422, "give both hours, or neither for any time")
+        notes = body.notes.strip() if body.notes else None
+        return body.model_copy(update={"location": location, "notes": notes or None})
+
+    @app.get("/api/feeds")
+    def list_feeds(_: User, session: DB) -> list[FeedView]:
+        return [feed_view(f) for f in session.scalars(select(Feed).order_by(Feed.id))]
+
+    @app.post("/api/feeds")
+    def create_feed(body: FeedRequest, _: User, session: DB) -> FeedView:
+        feed = Feed(**checked_feed(body).model_dump())
+        session.add(feed)
+        session.commit()
+        # Look at once: what is already there is noted now, before anything new arrives.
+        autopilot.check(feed.id, make_session, jobs.process)
+        session.expire_all()
+        return feed_view(find_feed(feed.id, session))
+
+    @app.put("/api/feeds/{feed_id}")
+    def update_feed(feed_id: int, body: FeedRequest, _: User, session: DB) -> FeedView:
+        feed = find_feed(feed_id, session)
+        for key, value in checked_feed(body).model_dump().items():
+            setattr(feed, key, value)
+        session.commit()
+        return feed_view(feed)
+
+    @app.delete("/api/feeds/{feed_id}")
+    def delete_feed(feed_id: int, _: User, session: DB) -> dict:
+        session.delete(find_feed(feed_id, session))
+        session.commit()
+        return {"ok": True}
+
+    @app.post("/api/feeds/{feed_id}/check")
+    def check_feed(feed_id: int, _: User, session: DB) -> FeedView:
+        find_feed(feed_id, session)
+        autopilot.check(feed_id, make_session, jobs.process)
+        session.expire_all()
+        return feed_view(find_feed(feed_id, session))
+
+    @app.get("/api/piles")
+    def pile_counts(_: User, session: DB) -> dict[str, int]:
+        counts = {"ready": 0, "look": 0}
+        for output in session.scalars(select(Output)):
+            if output.pile:
+                counts[output.pile] += 1
+        return counts
+
+    @app.get("/api/piles/{pile}")
+    def pile(pile: Literal["ready", "look"], _: User, session: DB) -> list[JobView]:
+        """The outputs in a pile, newest first, each with its job."""
+        outputs = session.scalars(select(Output).order_by(Output.id.desc()))
+        return [job_view(o.job, only=o.id) for o in outputs if o.pile == pile][:PILE_LIMIT]
+
+    @app.post("/api/outputs/{output_id}/verdict")
+    def verdict(output_id: int, body: VerdictRequest, _: User, session: DB) -> JobView:
+        output = find_output(output_id, session)
+        output.verdict = body.verdict
+        session.commit()
+        return job_view(output.job, only=output.id)
 
     if settings.web_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")

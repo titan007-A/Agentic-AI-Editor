@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from types import SimpleNamespace
 
@@ -202,3 +203,55 @@ def test_subtitles_download_next_to_the_video(env):
     response = env.client.get(f"/api/outputs/{output['id']}/subtitles")
     assert response.text.endswith("hi\n")
     assert 'filename="Sample-song-square-1x1.srt"' in response.headers["content-disposition"]
+
+
+def add_folder_feed(env, folder, **fields):
+    body = {"name": "Drafts", "kind": "folder", "location": str(folder), "presets": ["square-1x1"]}
+    return env.client.post("/api/feeds", json={**body, **fields})
+
+
+def test_a_folder_feed_edits_what_it_holds_into_the_ready_pile(env, tmp_path):
+    folder = tmp_path / "drafts"
+    folder.mkdir()
+    for name in ("one.mp4", "two.mov"):
+        (folder / name).write_bytes(b"x")
+        os.utime(folder / name, (1000, 1000))
+    response = add_folder_feed(env, folder, include_existing=True, notes="warm look")
+    assert response.status_code == 200, response.text
+    feed = response.json()
+    assert feed["counts"] == {"done": 2} and feed["last_result"] == "started 2 new video(s)"
+    assert {c["source"] for c in env.calls} == {str(folder / "one.mp4"), str(folder / "two.mov")}
+    assert all(c["notes"] == "warm look" for c in env.calls)
+
+    ready = env.client.get("/api/piles/ready").json()
+    assert len(ready) == 2 and all(len(j["outputs"]) == 1 for j in ready)
+    # Checking again starts nothing: no video is edited twice.
+    again = env.client.post(f"/api/feeds/{feed['id']}/check").json()
+    assert again["last_result"] == "started 0 new video(s)" and len(env.calls) == 2
+
+
+def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):
+    def doubtful(source, presets, settings, backends, notes, progress):
+        result = env_run(source, presets, settings, backends, notes, progress)
+        result.outputs[0].confidence, result.outputs[0].doubts = 0.8, ["8s without voice at 18s"]
+        return result
+
+    env_run = env.run
+    env.run = doubtful
+    start(env.client)
+    assert env.client.get("/api/piles").json() == {"ready": 0, "look": 1}
+    (job,) = env.client.get("/api/piles/look").json()
+    output_id = job["outputs"][0]["id"]
+
+    env.client.post(f"/api/outputs/{output_id}/verdict", json={"verdict": "approved"})
+    assert env.client.get("/api/piles").json() == {"ready": 1, "look": 0}
+    env.client.post(f"/api/outputs/{output_id}/verdict", json={"verdict": "posted"})
+    assert env.client.get("/api/piles").json() == {"ready": 0, "look": 0}
+
+
+def test_feeds_are_checked_before_they_are_saved(env, tmp_path):
+    assert add_folder_feed(env, tmp_path / "missing").status_code == 422
+    link = {"name": "x", "kind": "link", "location": "not a link", "presets": ["square-1x1"]}
+    assert env.client.post("/api/feeds", json=link).status_code == 422
+    assert add_folder_feed(env, tmp_path, active_from=23).status_code == 422
+    assert add_folder_feed(env, tmp_path, presets=["nope"]).status_code == 422
