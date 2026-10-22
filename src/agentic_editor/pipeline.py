@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import download, framing, review, subtitles, trim
+from agentic_editor import download, framing, hooks, review, subtitles, trim
 from agentic_editor.analysis import faces, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -21,7 +21,7 @@ from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
-from agentic_editor.planner import plan_with_llm
+from agentic_editor.planner import plan_variants
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose
 from agentic_editor.render.video import crop_size
@@ -66,15 +66,21 @@ def resolve_source(value: str, settings: Settings) -> download.Source:
 
 def plan(
     llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None
-) -> tuple[EDL, str]:
-    """Plan with the LLM, falling back to the energy heuristic if it can't deliver."""
+) -> list[tuple[EDL, str]]:
+    """Plan each version with the LLM, falling back to the energy heuristic if it can't
+    deliver; then choose each one's opening and trim it to the preset."""
     try:
-        edl, planner = plan_with_llm(llm, analysis, preset, notes), llm.model
+        edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants)
+        planner = llm.model
     except (LLMError, httpx.HTTPError) as exc:
         log.warning("%s: LLM planning failed (%s), using the energy heuristic", preset.name, exc)
-        edl, planner = plan_by_energy(analysis, preset), "heuristic"
-    edl = clean_edl(edl, analysis.transcript.words, analysis.silences)
-    return trim.apply(edl, analysis, preset), planner
+        edls, planner = [plan_by_energy(analysis, preset)], "heuristic"
+    planned = []
+    for edl in edls:
+        edl = clean_edl(edl, analysis.transcript.words, analysis.silences)
+        edl = hooks.sharpen(llm, edl, analysis, preset, notes)
+        planned.append((trim.apply(edl, analysis, preset), planner))
+    return planned
 
 
 def face_commands(
@@ -410,8 +416,10 @@ def run(
     with router.planner() as llm:
         for preset in presets:
             progress("plan", f"planning {preset.name}")
-            edl, planner = plan(llm, for_preset(preset), preset, notes)
-            plans[preset.name] = (translated(llm, edl, for_preset(preset), preset, notes), planner)
+            plans[preset.name] = [
+                (translated(llm, edl, for_preset(preset), preset, notes), planner)
+                for edl, planner in plan(llm, for_preset(preset), preset, notes)
+            ]
 
     outputs = []
     with router.vision() as vision:
@@ -420,15 +428,15 @@ def run(
         marks = confirmed_watermarks(
             candidates, reviewer, source.path, settings, work_dir, progress
         )
-        for preset in presets:
+        for preset, (edl, planner) in [(p, v) for p in presets for v in plans[p.name]]:
             analysis = for_preset(preset).model_copy(update={"watermarks": marks})
-            edl, planner = plans[preset.name]
-            dest = out_dir / f"{preset.name}.mp4"
-            render_dir = work_dir / "render" / preset.name
+            name = preset.name + (f"-{'abcde'[edl.variant]}" if edl.variant else "")
+            dest = out_dir / f"{name}.mp4"
+            render_dir = work_dir / "render" / name
             edl = written_text(
                 reviewer, edl, analysis, preset, source.path, settings, render_dir, notes
             )
-            progress("render", f"rendering {preset.name}")
+            progress("render", f"rendering {name}")
             edl, renders, issues = produce(
                 edl,
                 preset,
@@ -447,7 +455,7 @@ def run(
                     thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
                 except LLMError as exc:
                     log.warning("no thumbnail for %s: %s", preset.name, exc)
-            (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
+            (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
             outputs.append(
                 Output(
                     preset.name,
@@ -459,7 +467,7 @@ def run(
                     [f"{i.kind}: {i.detail}" for i in issues],
                 )
             )
-            progress("done", f"{preset.name} -> {dest}")
+            progress("done", f"{name} -> {dest}")
 
     meta = {"title": source.title, "url": source.url, "notes": notes}
     (out_dir / "source.json").write_text(json.dumps(meta))

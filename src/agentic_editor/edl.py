@@ -83,6 +83,7 @@ class EDL(BaseModel):
     caption_overrides: CaptionOverrides = CaptionOverrides()
     zooms: list[Zoom] = []
     crop_mode: CropMode = "center"
+    variant: int = Field(default=0, ge=0, description="0 for the first version, 1 for B...")
     shots: list[Shot] = []
     # The picture's area in the source, black bars excluded: x, y, width, height.
     picture: tuple[int, int, int, int] | None = None

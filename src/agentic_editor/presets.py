@@ -86,6 +86,10 @@ class TitleOverlay(Strict):
 class Hook(Strict):
     enabled: bool = True
     overlay: bool = False
+    # Choose where the reel starts for the strongest first seconds.
+    optimize: bool = True
+    # Versions per video, each from a different strong segment, for comparing hooks.
+    variants: int = Field(default=1, ge=1, le=5)
 
 
 class Logo(Strict):

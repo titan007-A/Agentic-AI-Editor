@@ -167,6 +167,8 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     fields: [
       { path: "hook.enabled", label: "Plan a hook", kind: "switch" },
       { path: "hook.overlay", label: "Show hook as text", kind: "switch" },
+      { path: "hook.optimize", label: "Pick the strongest opening", kind: "switch" },
+      { path: "hook.variants", label: "Versions per video", kind: "number" },
       { path: "title_overlay.enabled", label: "Title overlay", kind: "switch" },
       { path: "title_overlay.font", label: "Title font", kind: "font" },
       { path: "title_overlay.size", label: "Title size", kind: "number" },
