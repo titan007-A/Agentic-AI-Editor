@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 AudioSource = Literal["original", "vocals"]
 Progress = Callable[[str, str], None]
 ENERGY_HOP = 0.5
+SPARSE_WORDS = 20  # words a minute below which a full mix is worth hearing without the band
 
 
 class Analysis(BaseModel):
@@ -95,6 +96,23 @@ def analyze(
     transcript = Transcript.model_validate(
         _cached(work_dir / f"transcript-{audio_source}.json", run_transcription)
     )
+    if audio_source == "original" and len(transcript.words) < SPARSE_WORDS * info.duration / 60:
+        # Whisper hears little of singing over a full band; the isolated vocals give the
+        # planner and the captions the words. The timing is the same, so they fit as is.
+        vocals, _ = _vocals(original, work_dir, router, progress)
+        sung = Transcript.model_validate(
+            _cached(
+                work_dir / "transcript-vocals.json",
+                lambda: router.transcribe(vocals).model_dump(),
+            )
+        )
+        if len(sung.words) > len(transcript.words):
+            log.info(
+                "using the vocals' %d words; the full mix gave %d",
+                len(sung.words),
+                len(transcript.words),
+            )
+            transcript = sung
 
     def run_scene_detection():
         progress("analyze", "detecting scene changes")
