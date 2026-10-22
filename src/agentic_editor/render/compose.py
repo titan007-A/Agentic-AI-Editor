@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from agentic_editor import ffmpeg, framing, subtitles
+from agentic_editor.analysis import onscreen
 from agentic_editor.analysis.faces import Sample
 from agentic_editor.analyze import Analysis
 from agentic_editor.backends import Backends, encoder_args
@@ -124,18 +125,24 @@ def banner_top(
     return min(options, key=cost)
 
 
-def face_rows(
+def clear_rows(
     edl: EDL,
     analysis: Analysis,
     preset: Preset,
     content: tuple[int, int, int, int] | None,
     faces: list[Sample],
+    texts: list[tuple[float, list[onscreen.Box]]] = (),
 ) -> list[tuple[float, list[tuple[float, float]]]]:
+    """The rows of the output frame to keep captions and banners off, at reel times:
+    faces, and text burnt into the picture while it is on screen."""
     source = (analysis.width, analysis.height)
     picture = content or (0, 0, *source)
     shots = edl.shots if edl.crop_mode == "smart" else []
     window = source[0] if edl.crop_mode == "none" else crop_size(source, preset.size)[0]
-    return framing.screen_rows(faces, edl.clips[0], shots, picture, source, preset.size, window)
+    clip = edl.clips[0]
+    return framing.screen_rows(
+        faces, clip, shots, picture, source, preset.size, window
+    ) + framing.box_rows(list(texts), clip, shots, picture, source, preset.size, window)
 
 
 def render(
@@ -149,6 +156,7 @@ def render(
     backends: Backends,
     crop_commands: dict[int, Path] | None = None,
     faces: list[Sample] | None = None,
+    texts: list[tuple[float, list[onscreen.Box]]] | None = None,
 ) -> Path:
     started = time.monotonic()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -197,7 +205,11 @@ def render(
             )
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
 
-    rows = face_rows(edl, analysis, preset, layers.content, faces) if faces else []
+    rows = (
+        clear_rows(edl, analysis, preset, layers.content, faces or [], texts or [])
+        if faces or texts
+        else []
+    )
 
     colour = preset.grade
     if colour.auto or preset.framing.auto_background:
@@ -226,7 +238,7 @@ def render(
         layers.pulses = [t - clip.start for t in times if clip.start <= t < clip.end]
         layers.pulse_scale = sync.pulse_scale
 
-    # Banners keep off faces, and captions keep off faces and banners.
+    # Banners keep off faces and the picture's own text; captions keep off those and banners.
     obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
 
     def banner(

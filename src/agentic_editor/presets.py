@@ -26,7 +26,7 @@ class CaptionStyle(Strict):
     # translated: what is said, in `language`. visual: written from what is on screen.
     mode: Literal["speech", "lyrics", "translated", "visual"] = "speech"
     language: str | None = Field(default=None, description="target language for translated")
-    avoid_faces: bool = True
+    avoid_faces: bool = True  # also keeps them off text already in the picture
     export_srt: bool = True
     font: str = "Anton-Regular"
     size: int = Field(default=84, ge=12, le=300)

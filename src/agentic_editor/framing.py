@@ -400,14 +400,45 @@ def screen_rows(
 ) -> list[tuple[float, list[Span]]]:
     """The rows of the output frame each visible face covers, at reel times.
 
-    A face is mapped through the framing of the moment: the shot's window when there are
-    shots, otherwise one `window` pixels wide over the whole clip. The band runs from above
-    the forehead, where hair is, to below the chin."""
+    The band runs from above the forehead, where hair is, to below the chin. A face is
+    on screen if its centre is inside the shot's window."""
     src_w, src_h = src_size
+    boxes = [
+        (
+            t,
+            [
+                (
+                    f.cx * src_w,
+                    (f.cy - 0.85 * f.height) * src_h,
+                    f.cx * src_w,
+                    (f.cy + 0.6 * f.height) * src_h,
+                )
+                for f in found
+            ],
+        )
+        for t, found in faces
+    ]
+    return box_rows(boxes, clip, shots, picture, src_size, frame, window)
+
+
+def box_rows(
+    boxes: list[tuple[float, list[tuple[float, float, float, float]]]],
+    clip: Clip,
+    shots: list[Shot],
+    picture: Content,
+    src_size: tuple[int, int],
+    frame: tuple[int, int],
+    window: int,
+) -> list[tuple[float, list[Span]]]:
+    """The rows of the output frame each box (x0, y0, x1, y1 in source pixels) covers, at
+    reel times, for the boxes the framing of the moment shows any of.
+
+    A box is mapped through the shot's window when there are shots, otherwise one `window`
+    pixels wide over the whole clip."""
     width, height = frame
     top, picture_height = picture[1], picture[3]
     rows = []
-    for t, found in faces:
+    for t, found in boxes:
         if not clip.start <= t < clip.end:
             continue
         shot = next((s for s in shots if s.start <= t < s.end), None)
@@ -416,11 +447,9 @@ def screen_rows(
         scale = min(width / span, height / picture_height)
         offset = (height - picture_height * scale) / 2
         bands = []
-        for face in found:
-            if left is not None and not left <= face.cx * src_w <= left + span:
+        for x0, y0, x1, y1 in found:
+            if left is not None and (x1 < left or x0 > left + span):
                 continue  # cropped out of this shot
-            y0 = (face.cy - 0.85 * face.height) * src_h
-            y1 = (face.cy + 0.6 * face.height) * src_h
             bands.append(((y0 - top) * scale + offset, (y1 - top) * scale + offset))
         rows.append((t - clip.start, bands))
     return rows
