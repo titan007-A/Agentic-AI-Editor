@@ -82,7 +82,7 @@ class Music(Strict):
 
 
 class Framing(Strict):
-    mode: Literal["face", "center", "none"] = "center"
+    mode: Literal["smart", "face", "center", "none"] = "smart"
     background: Color = "#000000"
     crop_black_bars: bool = False
     smoothing: float = Field(default=0.8, ge=0, le=0.99)

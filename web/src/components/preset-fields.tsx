@@ -78,7 +78,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
   {
     title: "Framing",
     fields: [
-      { path: "framing.mode", label: "Mode", kind: "select", options: ["face", "center", "none"] },
+      {
+        path: "framing.mode",
+        label: "Mode",
+        kind: "select",
+        options: ["smart", "face", "center", "none"],
+      },
       { path: "framing.background", label: "Background", kind: "color" },
       { path: "framing.crop_black_bars", label: "Crop black bars", kind: "switch" },
       { path: "framing.smoothing", label: "Tracking smoothing", kind: "number", step: 0.05 },

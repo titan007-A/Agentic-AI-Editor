@@ -28,7 +28,7 @@ title_overlay:
   offset: 240
   duration: 4
 framing:
-  mode: face
+  mode: smart
   smoothing: 0.9
 silence:
   threshold_db: -38

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from agentic_editor import ffmpeg
 from agentic_editor.edl import EDL
-from agentic_editor.llm import OllamaClient
+from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.presets import Preset
 from agentic_editor.render.audio import Loudness, measure_loudness
 from agentic_editor.transcript import Word
@@ -166,8 +166,13 @@ def review(
     issues += check_loudness(measure_loudness(video), preset)
     if captions is not None:
         issues += check_captions(captions.read_text(encoding="utf-8"), words, info.duration)
-    if vision is not None and edl.crop_mode in ("face", "center"):
-        issues += check_faces(vision, sample_frames(video, info.duration, work_dir / "frames"))
+    try:
+        if vision is not None and edl.crop_mode in ("face", "center"):
+            frames = sample_frames(video, info.duration, work_dir / "frames")
+            issues += check_faces(vision, frames)
+    except LLMError as exc:
+        # A flaky answer from the vision model must not sink a finished render.
+        log.warning("vision check skipped: %s", exc)
     for issue in issues:
         log.info("review: %s: %s", issue.kind, issue.detail)
     return issues
