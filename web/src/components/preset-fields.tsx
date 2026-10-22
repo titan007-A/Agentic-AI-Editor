@@ -149,6 +149,20 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     ],
   },
   {
+    title: "Beat",
+    fields: [
+      { path: "beat_sync.snap_trims", label: "Start and end on the beat", kind: "switch" },
+      { path: "beat_sync.pulse", label: "Pulse on the beat", kind: "switch" },
+      {
+        path: "beat_sync.pulse_on",
+        label: "Pulse on every",
+        kind: "select",
+        options: ["bar", "beat"],
+      },
+      { path: "beat_sync.pulse_scale", label: "Pulse size", kind: "number", step: 0.01 },
+    ],
+  },
+  {
     title: "Hook and title",
     fields: [
       { path: "hook.enabled", label: "Plan a hook", kind: "switch" },

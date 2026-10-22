@@ -120,6 +120,7 @@ render behaves:
 | `framing` | how the picture fills the frame (see below); background colour |
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
 | `silence` | what counts as silence when trimming a quiet start or end |
+| `beat_sync` | start and end on the beat (bar lines from the original mix), and an optional zoom pulse on each bar or beat |
 | `hook`, `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 

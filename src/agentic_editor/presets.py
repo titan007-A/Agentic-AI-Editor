@@ -129,6 +129,15 @@ class Audio(Strict):
     fade_out: float = Field(default=0.25, ge=0)
 
 
+class BeatSync(Strict):
+    """Musical timing: start and end on the beat, and an optional pulse on each bar."""
+
+    snap_trims: bool = False
+    pulse: bool = False
+    pulse_scale: float = Field(default=1.04, ge=1.0, le=1.2)
+    pulse_on: Literal["bar", "beat"] = "bar"
+
+
 class Silence(Strict):
     """What counts as silence, used to trim a silent start or end; never to cut inside."""
 
@@ -155,6 +164,7 @@ class Preset(Strict):
     outro: str | None = None
     music: Music = Music()
     silence: Silence = Silence()
+    beat_sync: BeatSync = BeatSync()
     zoom_punch_ins: bool = False
     framing: Framing = Framing()
     watermarks: Watermarks = Watermarks()
