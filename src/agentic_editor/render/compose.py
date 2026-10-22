@@ -33,6 +33,25 @@ def detect_black_bars(video: Path, start: float) -> tuple[int, int, int, int] | 
     return tuple(int(v) for v in matches[-1]) if matches else None
 
 
+def picture_area(
+    video: Path, start: float, end: float, size: tuple[int, int], probes: int = 4
+) -> tuple[int, int, int, int]:
+    """The part of the frame that holds picture, as x, y, width, height. Bars are measured
+    at a few points and the widest picture kept, so a dark scene isn't taken for a bar."""
+    found = []
+    for i in range(probes):
+        at = start + (end - start) * i / probes
+        bars = detect_black_bars(video, at)
+        if bars:
+            w, h, x, y = bars
+            found.append((x, y, x + w, y + h))
+    if not found:
+        return (0, 0, *size)
+    x0, y0 = min(f[0] for f in found), min(f[1] for f in found)
+    x1, y1 = max(f[2] for f in found), max(f[3] for f in found)
+    return (x0, y0, (x1 - x0) // 2 * 2, (y1 - y0) // 2 * 2)
+
+
 def timeline_words(edl: EDL, analysis: Analysis):
     words = []
     offset = 0.0
@@ -70,7 +89,15 @@ def render(
     inputs: list[str] = []
     for clip in edl.clips:
         inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video)]
-    layers = Layers(crop_commands=crop_commands or {})
+    layers = Layers()
+    if edl.crop_mode == "smart":
+        clip = edl.clips[0]
+        layers.content = edl.picture or picture_area(
+            video, clip.start, clip.end, (analysis.width, analysis.height)
+        )
+        layers.shot_commands = crop_commands or {}
+    else:
+        layers.crop_commands = crop_commands or {}
     if preset.watermarks.blur:
         layers.watermarks = analysis.watermarks
 

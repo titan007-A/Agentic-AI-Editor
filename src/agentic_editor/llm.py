@@ -52,20 +52,27 @@ class OllamaClient:
             # costs time and VRAM on the small models.
             "reasoning_effort": "none",
         }
-        started = time.monotonic()
-        response = self.http.post(f"{self.base_url}/v1/chat/completions", json=body)
-        if response.status_code != 200:
-            raise LLMError(f"{self.model} returned {response.status_code}: {response.text[:500]}")
-        data = response.json()
-        elapsed = time.monotonic() - started
-        tokens = data.get("usage", {}).get("completion_tokens", 0)
-        self.last_tokens_per_second = tokens / elapsed if elapsed else None
-        log.debug("%s: %d tokens in %.1fs", self.model, tokens, elapsed)
-        content = data["choices"][0]["message"].get("content") or ""
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"{self.model} did not return JSON: {content[:300]}") from exc
+        # Small models now and then stop mid-answer; one more try nearly always lands.
+        for attempt in range(2):
+            started = time.monotonic()
+            response = self.http.post(f"{self.base_url}/v1/chat/completions", json=body)
+            if response.status_code != 200:
+                raise LLMError(
+                    f"{self.model} returned {response.status_code}: {response.text[:500]}"
+                )
+            data = response.json()
+            elapsed = time.monotonic() - started
+            tokens = data.get("usage", {}).get("completion_tokens", 0)
+            self.last_tokens_per_second = tokens / elapsed if elapsed else None
+            log.debug("%s: %d tokens in %.1fs", self.model, tokens, elapsed)
+            content = data["choices"][0]["message"].get("content") or ""
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as exc:
+                if attempt:
+                    raise LLMError(f"{self.model} did not return JSON: {content[:300]}") from exc
+                log.info("%s returned broken JSON, asking again", self.model)
+        raise AssertionError("unreachable")
 
     def unload(self) -> None:
         """Evict the model from GPU memory now instead of after Ollama's idle timeout."""

@@ -330,31 +330,34 @@ def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> list
     return paths
 
 
+CONFIRM_PROMPT = (
+    "The first image is a frame from a video with a red box drawn on it. The second is a "
+    "close-up of the area inside the box. Was what is inside the box added on top of the "
+    "video afterwards, as a watermark, logo, channel or app name, @username, website or other "
+    "branding? Or is it part of the filmed scene itself, such as a wall, furniture, a window, "
+    "a lamp, a person, their clothes, or a real sign in the room? Answer overlay=true only "
+    "for something added on top."
+)
+
+
 def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_dir: Path):
     """Ask the vision model which candidates are overlays rather than parts of the scene."""
+    from agentic_editor.llm import LLMError
+
     confirmed = []
     for i, mark in enumerate(marks):
         dest = work_dir / f"watermark-{i}"
         dest.mkdir(parents=True, exist_ok=True)
-        reply = vision.chat_json(
-            [
-                {
-                    "role": "user",
-                    "content": (
-                        "The first image is a frame from a video with a red box drawn on it. The "
-                        "second is a close-up of the area inside the box. Was what is inside the "
-                        "box added on top of the video afterwards, as a watermark, logo, channel "
-                        "or app name, @username, website or other branding? Or is it part of the "
-                        "filmed scene itself, such as a wall, furniture, a window, a lamp, a "
-                        "person, their clothes, or a real sign in the room? Answer overlay=true "
-                        "only for something added on top."
-                    ),
-                }
-            ],
-            _Verdict.model_json_schema(),
-            images=_evidence(video, mark, ffmpeg_bin, dest),
-            temperature=0.0,
-        )
-        verdict = _Verdict.model_validate(reply)
-        confirmed.append(mark.model_copy(update={"confirmed": verdict.overlay}))
+        try:
+            reply = vision.chat_json(
+                [{"role": "user", "content": CONFIRM_PROMPT}],
+                _Verdict.model_json_schema(),
+                images=_evidence(video, mark, ffmpeg_bin, dest),
+                temperature=0.0,
+            )
+            overlay = _Verdict.model_validate(reply).overlay
+        except LLMError:
+            # Unsure is treated as yes: a watermark must never be left in.
+            overlay = True
+        confirmed.append(mark.model_copy(update={"confirmed": overlay}))
     return confirmed

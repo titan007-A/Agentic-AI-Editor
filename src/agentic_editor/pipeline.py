@@ -12,13 +12,13 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import download, review, trim
-from agentic_editor.analysis import faces, watermarks
+from agentic_editor import download, framing, review, trim
+from agentic_editor.analysis import faces, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
 from agentic_editor.cuts import clean_edl
-from agentic_editor.edl import EDL
+from agentic_editor.edl import EDL, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.planner import plan_with_llm
@@ -100,6 +100,117 @@ def face_commands(
     return commands
 
 
+def subject_samples(
+    vision: OllamaClient | None,
+    video: Path,
+    times: list[float],
+    analysis: Analysis,
+    settings: Settings,
+    work_dir: Path,
+) -> list[tuple[float, list[subjects.Subject]]]:
+    """Vision-model subjects at each time, cached so a re-render doesn't ask again."""
+    if vision is None or not times:
+        return [(t, []) for t in times]
+    cache = work_dir / f"subjects-{vision.model.replace(':', '_').replace('/', '_')}.json"
+    known = json.loads(cache.read_text()) if cache.exists() else {}
+    missing = [t for t in times if f"{t:.3f}" not in known]
+    if missing:
+        size = (analysis.width, analysis.height)
+        found = subjects.find(vision, video, missing, size, settings.ffmpeg_bin, work_dir / "views")
+        for t, items in zip(missing, found, strict=True):
+            known[f"{t:.3f}"] = [s.model_dump() for s in items]
+        cache.write_text(json.dumps(known))
+    return [(t, [subjects.Subject.model_validate(s) for s in known[f"{t:.3f}"]]) for t in times]
+
+
+def recheck_framing(
+    shots: list[Shot],
+    sampled: list[float],
+    seen: list[framing.View],
+    face_samples: list[faces.Sample],
+    content: tuple[int, int, int, int],
+    width: int,
+    preset: Preset,
+    analysis: Analysis,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    vision: OllamaClient | None,
+) -> tuple[list[Shot], list[str]]:
+    """Look again at fresh moments in each cropped shot and widen any whose window would
+    cut through something there. Geometry decides, from boxes: small vision models are
+    unreliable at judging a crop directly, but good at saying where things are."""
+    checks = [(k, t) for k, t in framing.check_times(shots, sampled) if shots[k].width < content[2]]
+    if not checks:
+        return shots, []
+    times = [t for _, t in checks]
+    found = dict(subject_samples(vision, video, times, analysis, settings, work_dir))
+    needed: dict[int, framing.Span] = {}
+    for k, t in checks:
+        shot = shots[k]
+        x = shot.x
+        if shot.follow:
+            path = framing.follow_path(
+                shot, seen, face_samples, content, analysis.width, preset.framing.smoothing
+            )
+            x = min(path, key=lambda p: abs(p[0] - (t - shot.start)))[1]
+        spans = framing.keep_spans(found[t], face_samples, t, analysis.width)
+        cut = framing.crossing(spans, x, shot.width)
+        if cut:
+            needed[k] = framing.union([*cut, *([needed[k]] if k in needed else [])])
+    if not needed:
+        return shots, [f"re-checked {len(checks)} moment(s); nothing at the edges"]
+    updated = list(shots)
+    for k, span in needed.items():
+        updated[k] = framing.widen_to(updated[k], span, content, width)
+    widened = ", ".join(f"{shots[k].start:.1f}-{shots[k].end:.1f}s" for k in sorted(needed))
+    note = f"re-checked {len(checks)} moment(s); widened {widened} where an edge cut something"
+    return framing.harmonize(updated, width, content), [note]
+
+
+def smart_framing(
+    edl: EDL,
+    preset: Preset,
+    analysis: Analysis,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    detections: dict[tuple[float, float], list[faces.Sample]],
+    vision: OllamaClient | None,
+) -> tuple[EDL, dict[int, Path]]:
+    """Frame each shot so nothing that matters is cut, and write the follow paths."""
+    clip = edl.clips[0]
+    key = (clip.start, clip.end)
+    if key not in detections:
+        detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
+    face_samples = [(clip.start + t, found) for t, found in detections[key]]
+    content = edl.picture or compose.picture_area(
+        video, clip.start, clip.end, (analysis.width, analysis.height)
+    )
+    width = framing.crop_width(content, preset.size)
+    times = framing.view_times(clip, analysis.scenes)
+    samples = subject_samples(vision, video, times, analysis, settings, work_dir)
+    seen = framing.views(samples, face_samples, content, analysis.width)
+    if not edl.shots:
+        shots = framing.frame_shots(
+            clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size
+        )
+        shots, recheck = recheck_framing(
+            shots, times, seen, face_samples, content, width, preset, analysis, video,
+            settings, work_dir, vision,
+        )  # fmt: skip
+        decisions = [*edl.decisions, framing.summary(shots, width), *recheck]
+        edl = edl.model_copy(update={"shots": shots, "picture": content, "decisions": decisions})
+    commands = {}
+    for k, shot in enumerate(edl.shots):
+        if shot.follow:
+            path = framing.follow_path(
+                shot, seen, face_samples, content, analysis.width, preset.framing.smoothing
+            )
+            commands[k] = faces.write_commands(path, f"crop@s{k}", work_dir / f"shot-{k}.cmd")
+    return edl, commands
+
+
 def fix(
     issues: list[review.Issue], edl: EDL, preset: Preset, analysis: Analysis, loudness_goal: float
 ) -> tuple[EDL, Preset, bool]:
@@ -146,7 +257,12 @@ def produce(
     target = preset
     renders = 1
     while True:
-        commands = face_commands(edl, target, analysis, video, settings, work_dir, detections)
+        if edl.crop_mode == "smart":
+            edl, commands = smart_framing(
+                edl, target, analysis, video, settings, work_dir, detections, vision
+            )
+        else:
+            commands = face_commands(edl, target, analysis, video, settings, work_dir, detections)
         compose.render(edl, target, analysis, video, dest, work_dir, settings, backends, commands)
         progress("review", f"checking {preset.name}")
         captions = work_dir / "captions.ass" if target.captions.enabled else None
@@ -229,7 +345,10 @@ def run(
             )
             thumbnail = None
             if reviewer is not None:
-                thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
+                try:
+                    thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
+                except LLMError as exc:
+                    log.warning("no thumbnail for %s: %s", preset.name, exc)
             (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
             outputs.append(
                 Output(

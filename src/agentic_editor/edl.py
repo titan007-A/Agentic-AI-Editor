@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentic_editor.presets import Color, Preset
 
-CropMode = Literal["face", "center", "none"]
+CropMode = Literal["smart", "face", "center", "none"]
 
 
 class Clip(BaseModel):
@@ -26,6 +26,21 @@ class Clip(BaseModel):
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+
+class Shot(BaseModel):
+    """How one stretch of the reel is framed: a window of the source, at the picture's full
+    height, `width` pixels wide from `x`. At the frame's own aspect it fills the frame;
+    wider, it is scaled down and padded above and below so nothing in it is cut."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: float = Field(ge=0, description="source time in seconds")
+    end: float = Field(gt=0, description="source time in seconds")
+    x: int = Field(ge=0)
+    width: int = Field(gt=0)
+    follow: bool = False  # the window tracks the subject's head instead of staying put
+    reason: str = ""
 
 
 class Zoom(BaseModel):
@@ -55,6 +70,9 @@ class EDL(BaseModel):
     caption_overrides: CaptionOverrides = CaptionOverrides()
     zooms: list[Zoom] = []
     crop_mode: CropMode = "center"
+    shots: list[Shot] = []
+    # The picture's area in the source, black bars excluded: x, y, width, height.
+    picture: tuple[int, int, int, int] | None = None
     decisions: list[str] = []
 
     @property

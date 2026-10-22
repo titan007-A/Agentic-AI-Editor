@@ -116,11 +116,21 @@ render behaves:
 | --- | --- |
 | `captions` | word-by-word captions: font, size, colours, position, animation |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline |
-| `framing` | face tracking, centre crop or none; background colour; black bar cropping |
+| `framing` | how the picture fills the frame (see below); background colour |
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
 | `silence` | what counts as silence when trimming a quiet start or end |
 | `hook`, `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
+
+Framing `smart` (the default) frames each shot so nothing that matters is cut. Heads
+come from the face detector; the vision model points out what else must stay whole (the
+microphone or instrument in use, readable text, a logo). A shot whose essentials fit a
+full-height 9:16 window is cropped, following the subject if it moves; one that doesn't is
+widened and padded above and below instead of cut, a name banner sliding in only widens
+the seconds it is on screen, and when most of a reel is too wide every shot gets the same
+framing so it doesn't jump at each cut. Fresh moments are then re-checked by geometry and
+any shot whose edge would cut something is widened before rendering. `face`, `center` and
+`none` (show the whole picture) remain for fixed looks.
 
 The quickest way to make one is to duplicate an existing preset on the web app's
 Presets page and edit it there; the server validates every save. Editing the YAML by

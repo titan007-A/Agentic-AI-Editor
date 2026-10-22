@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agentic_editor.analysis.watermarks import Watermark
-from agentic_editor.edl import EDL, Clip, CropMode
+from agentic_editor.edl import EDL, Clip, CropMode, Shot
 from agentic_editor.ffmpeg import escape_filter_path
 from agentic_editor.presets import Preset
 
@@ -25,6 +25,9 @@ class Layers:
     crop_commands: dict[int, Path] = field(default_factory=dict)
     black_bars: tuple[int, int, int, int] | None = None
     watermarks: list[Watermark] = field(default_factory=list)
+    # Smart framing: the picture's area without black bars, and a follow path per shot.
+    content: tuple[int, int, int, int] | None = None
+    shot_commands: dict[int, Path] = field(default_factory=dict)
 
 
 def blur_chain(
@@ -96,6 +99,32 @@ def frame_chain(
     return chain
 
 
+def shot_chain(
+    shot: Shot,
+    index: int,
+    content: tuple[int, int, int, int],
+    frame: tuple[int, int],
+    background: str,
+    commands: Path | None,
+) -> list[str]:
+    """Filters that frame one shot: crop its window at full picture height, then fill the
+    frame, or, for a window wider than the frame's aspect, fit it and pad above and below."""
+    width, height = frame
+    _, top, _, picture_height = content
+    crop = f"{shot.width}:{picture_height}:{shot.x}:{top}"
+    if shot.follow and commands is not None:
+        chain = [f"sendcmd=f='{escape_filter_path(commands)}'", f"crop@s{index}={crop}"]
+    else:
+        chain = [f"crop={crop}"]
+    if shot.width * height <= width * picture_height + height:  # fills the frame
+        return [*chain, f"scale={width}:{height}:flags=lanczos"]
+    return [
+        *chain,
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
+    ]
+
+
 def crop_size(source: tuple[int, int], frame: tuple[int, int]) -> tuple[int, int]:
     """Largest window with the frame's aspect ratio that fits inside the source."""
     src_w, src_h = source
@@ -140,9 +169,30 @@ def build_graph(
     frame = preset.size
     width, height = frame
     parts = []
+    segments = 0
     for i, clip in enumerate(edl.clips):
         blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
         parts += blurred
+        if edl.crop_mode == "smart" and edl.shots:
+            # One continuous clip, framed shot by shot and joined back in order.
+            content = layers.content or (0, 0, *source)
+            count = len(edl.shots)
+            parts.append(f"[{label}]split={count}" + "".join(f"[s{k}]" for k in range(count)))
+            for k, shot in enumerate(edl.shots):
+                start, end = shot.start - clip.start, shot.end - clip.start
+                chain = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
+                chain += shot_chain(
+                    shot,
+                    k,
+                    content,
+                    frame,
+                    preset.framing.background,
+                    layers.shot_commands.get(k),
+                )
+                chain += ["setsar=1", f"fps={preset.fps}"]
+                parts.append(f"[s{k}]{','.join(chain)}[v{segments}]")
+                segments += 1
+            continue
         chain = frame_chain(
             edl.crop_mode,
             source,
@@ -153,9 +203,10 @@ def build_graph(
             layers.black_bars,
         )
         chain += ["setsar=1", f"fps={preset.fps}"]
-        parts.append(f"[{label}]{','.join(chain)}[v{i}]")
-    joined = "".join(f"[v{i}]" for i in range(len(edl.clips)))
-    parts.append(f"{joined}concat=n={len(edl.clips)}:v=1:a=0[base]")
+        parts.append(f"[{label}]{','.join(chain)}[v{segments}]")
+        segments += 1
+    joined = "".join(f"[v{i}]" for i in range(segments))
+    parts.append(f"{joined}concat=n={segments}:v=1:a=0[base]")
     current = "base"
 
     def step(filters: str, label: str) -> None:
