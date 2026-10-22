@@ -33,6 +33,7 @@ Setting = Literal[
     "max_seconds",
     "min_seconds",
     "no_watermark_blur",
+    "start_point",
 ]
 
 LOOK_WORDS = {
@@ -61,7 +62,7 @@ TOPIC = {
     "captions_language": r"caption|subtitle|translat|text|language",
     "captions_from_picture": r"caption|subtitle|text|describ|see|show",
     "captions_lyrics": r"lyric|word|sing|caption|subtitle",
-    "one_liner": r"line|text|title|headline|say|write|caption|top|bottom",
+    "one_liner": r"line|text|title|headline|write|caption|top|bottom",
     "look": r"look|colou?r|grade|tone|style|feel|"
     + "|".join(re.escape(w) for words in LOOK_WORDS.values() for w in words),
     "colour_correction": r"colou?r|grade|bright|exposure|correct|dark|light",
@@ -73,6 +74,7 @@ TOPIC = {
     "max_seconds": r"\d|second|minute|\bsec|\bmin",
     "min_seconds": r"\d|second|minute|\bsec|\bmin",
     "no_watermark_blur": r"watermark|logo|blur",
+    "start_point": r"\b(start|begin|open)",
 }
 
 
@@ -111,9 +113,15 @@ Settings:
 - versions: make several versions; value is how many.
 - max_seconds / min_seconds: a length limit; value is the number of seconds.
 - no_watermark_blur: don't blur watermarks or logos.
+- start_point: the instruction says where the video should start; the moment itself also
+  goes in content_notes.
 
 content_notes: the editor's own words about which moment to use, where to start or end, or
 what the video is about; empty if the instruction says nothing about that."""
+
+
+# "start where...", "begin with...", "open on...": the editor is placing the opening.
+START_AT = r"\b(start|begin|open)\w*\s+(with|where|when|at|on|from|right|as|after)\b[^,.;]*"
 
 
 def interpret(llm, instruction: str) -> Requests:
@@ -122,7 +130,13 @@ def interpret(llm, instruction: str) -> Requests:
         Requests.model_json_schema(),
         temperature=0.0,
     )
-    return Requests.model_validate(reply)
+    wanted = Requests.model_validate(reply)
+    # Small models often read "begin with X" as content only, and then the hook optimiser
+    # would move the opening the editor asked for.
+    placed = any(r.setting == "start_point" for r in wanted.requests)
+    if not placed and (match := re.search(START_AT, instruction, re.IGNORECASE)):
+        wanted.requests.append(Request(setting="start_point", quote=match.group().strip()))
+    return wanted
 
 
 def _number(text: str) -> float | None:
@@ -273,6 +287,8 @@ def apply(preset: Preset, requests: list[Request], instruction: str) -> tuple[Pr
                 change("min_duration", n, f"at least {n:g} s")
             case "no_watermark_blur":
                 change("watermarks.blur", False, "watermark blur off")
+            case "start_point":
+                change("hook.optimize", False, "the opening stays where you asked it to start")
     try:
         updated = Preset.model_validate(data)
     except ValidationError as exc:
@@ -281,11 +297,26 @@ def apply(preset: Preset, requests: list[Request], instruction: str) -> tuple[Pr
     return updated, notes
 
 
+def start_point(requests: list[Request], instruction: str) -> str | None:
+    """The instruction's own words for where the video should start, if it says."""
+    for request in map(normalise, requests):
+        if request.setting == "start_point" and grounded(request, instruction) is None:
+            return request.quote.strip()
+    return None
+
+
 def confidence(
-    edl: EDL, issues: list[str], planner: str, preset: Preset
+    edl: EDL,
+    issues: list[str],
+    planner: str,
+    preset: Preset,
+    dead_air: list[tuple[float, float]] = (),
 ) -> tuple[float, list[str]]:
-    """How sure the agent is that the video can be posted as it is, and why not."""
+    """How sure the agent is that the video can be posted as it is, and why not.
+    `dead_air` is the long silences left inside the reel, in source time."""
     doubts = list(issues)
+    start = edl.clips[0].start
+    doubts += [f"{b - a:.0f}s without voice at {a - start:.0f}s" for a, b in dead_air]
     if planner == "heuristic":
         doubts.append("planned without the language model")
     failures = ("failed", "couldn't", "untranslated", "no vision model", "left shorter")

@@ -94,3 +94,32 @@ def test_problems_lower_confidence_and_say_why():
     assert score < 0.5
     assert "loudness: -18.0 LUFS" in doubts and "planned without the language model" in doubts
     assert any("under the 20s minimum" in d for d in doubts)
+
+
+def test_saying_where_to_start_keeps_that_opening():
+    text = "start where he talks about the FCC"
+    changed, notes = apply(PRESET, [ask("start_point", text)], text)
+    assert changed.hook.optimize is False
+    assert notes == ["from your instruction: the opening stays where you asked it to start"]
+
+
+def test_an_opening_the_model_missed_is_still_kept():
+    class Model:
+        def chat_json(self, messages, schema, **kwargs):
+            return {"requests": [], "content_notes": ""}
+
+    wanted = interpret(Model(), "Warm look. Begin with him saying hello, then the story")
+    assert [(r.setting, r.quote) for r in wanted.requests] == [
+        ("start_point", "Begin with him saying hello")
+    ]
+
+
+def test_saying_something_is_not_a_request_for_on_screen_text():
+    text = "begin with him saying hello"
+    assert grounded(ask("one_liner", text), text) is not None
+
+
+def test_a_long_stretch_without_voice_inside_the_reel_needs_a_look():
+    edl = EDL(clips=[Clip(start=60, end=85)])
+    score, doubts = confidence(edl, [], "qwen3.5:9b", PRESET, [(70.6, 77.9)])
+    assert doubts == ["7s without voice at 11s"] and score < 1.0

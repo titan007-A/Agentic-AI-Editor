@@ -101,3 +101,19 @@ def test_a_long_song_keeps_as_much_as_the_preset_allows(make_analysis):
     analysis = make_analysis([], 240.0, audio_source="vocals", silences=silences)
     edl = apply(plan(0.0, 240.0), analysis, VOCALS.model_copy(update={"max_duration": 120}))
     assert 100 <= edl.clips[0].duration <= 120
+
+
+def test_a_long_silence_inside_is_left_out_by_trimming_the_shorter_side(make_analysis):
+    pauses = [(3.0, 3.5), (6.0, 6.5), (10.0, 18.0), (22.0, 22.5), (30.0, 30.5)]
+    analysis = make_analysis([], 40.0, audio_source="vocals", silences=pauses)
+    edl = apply(plan(0.0, 40.0), analysis, VOCALS)
+    assert (edl.clips[0].start, edl.clips[0].end) == (17.75, 40.0)
+    assert edl.decisions == ["kept 17.8-40.0s, clear of 8s without voice"]
+
+
+def test_a_chosen_opening_is_not_dropped_to_avoid_a_silence(make_analysis):
+    pauses = [(3.0, 3.5), (6.0, 6.5), (10.0, 18.0), (22.0, 22.5), (30.0, 30.5)]
+    analysis = make_analysis([], 40.0, audio_source="vocals", silences=pauses)
+    fixed = VOCALS.model_copy(update={"hook": VOCALS.hook.model_copy(update={"optimize": False})})
+    edl = apply(plan(0.0, 40.0), analysis, fixed)
+    assert (edl.clips[0].start, edl.clips[0].end) == (0.0, 40.0)

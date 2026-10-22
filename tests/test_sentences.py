@@ -73,3 +73,40 @@ def test_the_hook_never_moves_the_start_into_the_middle_of_a_sentence(make_analy
     assert [ln.opens for ln in lines] == [True, False, True]
     choices = options(EDL(clips=[Clip(start=0.0, end=15.5)]), lines, PRESET)
     assert [c.start for c in choices] == [0.0, 9.5]
+
+
+def test_a_chosen_opening_is_kept_when_the_reel_is_too_long(make_analysis):
+    # Three sentences; the plan starts mid-way through the first and runs past the limit.
+    words = (
+        run_on(numbered(30, end_at=29))
+        + run_on(numbered(10, end_at=9), start=9.5)
+        + run_on(numbered(30, end_at=29), start=13.0)
+    )
+    analysis = make_analysis(words, 23.0, pauses=[(4.5, 4.9)])
+    lines = build_lines(analysis)
+    fixed = PRESET.model_copy(
+        update={"max_duration": 15, "hook": PRESET.hook.model_copy(update={"optimize": False})}
+    )
+    edl = apply(EDL(clips=[Clip(start=lines[1].start - 0.25, end=22.0)]), analysis, fixed)
+    clip = edl.clips[0]
+    # Back to where the first sentence begins, and out after the second, the last that fits.
+    assert (clip.start, clip.end) == (0.0, 13.1)
+    assert edl.decisions[-1].startswith("kept the planned opening at 0.0s")
+
+
+def test_a_kept_opening_ends_before_a_long_silence(make_analysis):
+    words = run_on(numbered(20, end_at=19)) + run_on(numbered(20, end_at=19), start=14.0)
+    analysis = make_analysis(words, 21.0, silences=[(6.0, 14.0)])
+    fixed = PRESET.model_copy(
+        update={"max_duration": 15, "hook": PRESET.hook.model_copy(update={"optimize": False})}
+    )
+    edl = apply(EDL(clips=[Clip(start=0.0, end=20.0)]), analysis, fixed)
+    assert (edl.clips[0].start, edl.clips[0].end) == (0.0, 6.6)
+
+
+def test_the_next_sentences_first_word_is_split_off():
+    phrase = run_on("it has remained true today. Well")
+    assert [[w.text for w in g] for g in split_phrase(phrase, max_words=24)] == [
+        ["it", "has", "remained", "true", "today."],
+        ["Well"],
+    ]

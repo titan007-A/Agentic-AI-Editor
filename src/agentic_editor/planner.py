@@ -8,6 +8,7 @@ transcript lines by number; turning lines into timestamps happens here, in code.
 
 import json
 import logging
+import re
 from bisect import bisect_left
 from dataclasses import dataclass
 
@@ -74,6 +75,11 @@ class CandidateList(BaseModel):
 
 class Emphasis(BaseModel):
     words: list[str]
+
+
+class _Start(BaseModel):
+    line: int
+    words: str = ""
 
 
 class FinalPlan(BaseModel):
@@ -317,6 +323,59 @@ def finalize(
     raise LLMError(f"no valid plan after {MAX_RETRIES} retries: {'; '.join(found)}")
 
 
+def _plain(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s']", " ", text.lower()).split())
+
+
+def find_start(llm: OllamaClient, lines: list[Line], asked: str) -> tuple[Line, str] | None:
+    """The line where the moment the editor asked to start on begins, and the words that
+    show it. One focused question per stretch of transcript, earliest first; an answer
+    only counts if its words really are in that line (or run on into the next)."""
+    for chunk in chunk_lines(lines):
+        reply = llm.chat_json(
+            [
+                {"role": "system", "content": SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        "Transcript lines of a video (line number, start-end seconds, "
+                        f'loudness, text):\n{describe_lines(chunk)}\n\nThe editor said: "{asked}". '
+                        "Which line is the first line of that moment? Answer line, its number, "
+                        "or -1 if the moment isn't in these lines, and words, copied exactly "
+                        "from that line, that show it is the moment."
+                    ),
+                },
+            ],
+            _Start.model_json_schema(),
+            temperature=0.0,
+        )
+        found = _Start.model_validate(reply)
+        here = {ln.index: ln for ln in chunk}
+        line = here.get(found.line)
+        if line is None or not _plain(found.words):
+            continue
+        following = lines[line.index + 1].text if line.index + 1 < len(lines) else ""
+        if _plain(found.words) in _plain(f"{line.text} {following}"):
+            return line, found.words.strip()
+    return None
+
+
+def from_line(first: Line, lines: list[Line], preset: Preset, reason: str) -> Candidate:
+    """A segment from the given line on, a little longer than the preset allows so the
+    trim can end it on a whole sentence, and stopping before a long stretch without voice."""
+    last = first
+    for line in lines[first.index + 1 :]:
+        if (
+            line.start - last.end >= GAP_NOTE_SECONDS
+            or line.end - first.start > preset.max_duration + 10
+        ):
+            break
+        last = line
+    return Candidate(
+        start_line=first.index, end_line=last.index, hook=5, completeness=5, peak=5, reason=reason
+    )
+
+
 def plan_with_llm(
     llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None = None
 ) -> EDL:
@@ -330,13 +389,48 @@ def _overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def plan_variants(
-    llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None, count: int
+    llm: OllamaClient,
+    analysis: Analysis,
+    preset: Preset,
+    notes: str | None,
+    count: int,
+    start_at: str | None = None,
 ) -> list[EDL]:
     """The best plan, then up to count-1 more from other strong segments that don't mostly
-    repeat one already chosen, each with its own hook and title."""
+    repeat one already chosen, each with its own hook and title. When the editor said where
+    to start, that moment is found first and the one plan starts there."""
     lines = build_lines(analysis)
     if not lines:
         raise LLMError("the transcript is empty, nothing to plan from")
+    if start_at:
+        found = find_start(llm, lines, start_at)
+        if found:
+            line, words = found
+            reason = f'starts where you asked ("{start_at}"): "{words}"'
+            candidate = from_line(line, lines, preset, reason)
+            edl = finalize(llm, [candidate], lines, preset, analysis, notes)
+            note = f'found where you asked to start: {line.start:.1f}s, "{words}"'
+            edls = [edl.model_copy(update={"decisions": [note]})]
+            if preset.zoom_punch_ins:
+                edls = [
+                    e.model_copy(update={"zooms": pick_emphasis(llm, e, analysis)}) for e in edls
+                ]
+            return edls
+    edls = _plan_best(llm, lines, analysis, preset, notes, count)
+    if start_at:
+        note = "couldn't find where you asked to start; planned the strongest segment instead"
+        edls = [e.model_copy(update={"decisions": [note, *e.decisions]}) for e in edls]
+    return edls
+
+
+def _plan_best(
+    llm: OllamaClient,
+    lines: list[Line],
+    analysis: Analysis,
+    preset: Preset,
+    notes: str | None,
+    count: int,
+) -> list[EDL]:
     candidates = []
     for chunk in chunk_lines(lines):
         candidates += propose(llm, chunk, preset, analysis, notes)

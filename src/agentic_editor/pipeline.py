@@ -67,12 +67,16 @@ def resolve_source(value: str, settings: Settings) -> download.Source:
 
 
 def plan(
-    llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None
+    llm: OllamaClient,
+    analysis: Analysis,
+    preset: Preset,
+    notes: str | None,
+    start_at: str | None = None,
 ) -> list[tuple[EDL, str]]:
     """Plan each version with the LLM, falling back to the energy heuristic if it can't
     deliver; then choose each one's opening and trim it to the preset."""
     try:
-        edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants)
+        edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants, start_at)
         planner = llm.model
     except (LLMError, httpx.HTTPError) as exc:
         log.warning("%s: LLM planning failed (%s), using the energy heuristic", preset.name, exc)
@@ -407,7 +411,7 @@ def run(
     out_dir = settings.media_dir / "outputs" / work_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends)
-    presets, instructed, notes_for = understand(router, presets, notes, progress)
+    presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
 
     analyses: dict[str, Analysis] = {}
     for preset in presets:
@@ -438,7 +442,7 @@ def run(
                     ),
                     planner,
                 )
-                for edl, planner in plan(llm, for_preset(preset), preset, planning_notes)
+                for edl, planner in plan(llm, for_preset(preset), preset, planning_notes, start_at)
             ]
 
     outputs = []
@@ -484,7 +488,9 @@ def run(
                     log.warning("no thumbnail for %s: %s", preset.name, exc)
             (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
             unresolved = [f"{i.kind}: {i.detail}" for i in issues]
-            score, doubts = agent.confidence(edl, unresolved, planner, preset)
+            clip = edl.clips[0]
+            quiet = trim.long_silences(clip.start, clip.end, analysis)
+            score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
             outputs.append(
                 Output(
                     preset.name,
@@ -507,20 +513,20 @@ def run(
 
 def understand(
     router: ModelRouter, presets: list[Preset], notes: str | None, progress: Progress
-) -> tuple[list[Preset], dict[str, list[str]], dict[str, str | None]]:
+) -> tuple[list[Preset], dict[str, list[str]], dict[str, str | None], str | None]:
     """Read the editor's instruction into each preset: the presets to use, what was changed
-    in each, and the notes left for the planner."""
+    in each, the notes left for the planner, and where the instruction says to start."""
     decisions: dict[str, list[str]] = {p.name: [] for p in presets}
     planning: dict[str, str | None] = {p.name: notes for p in presets}
     if not notes or not notes.strip():
-        return presets, decisions, planning
+        return presets, decisions, planning, None
     progress("plan", "reading your instruction")
     try:
         with router.planner() as llm:
             wanted = agent.interpret(llm, notes)
     except (LLMError, httpx.HTTPError) as exc:
         note = f"couldn't read the instruction ({exc}); kept the preset"
-        return presets, {p.name: [note] for p in presets}, planning
+        return presets, {p.name: [note] for p in presets}, planning, None
     updated = []
     for preset in presets:
         changed, decisions[preset.name] = agent.apply(preset, wanted.requests, notes)
@@ -529,7 +535,7 @@ def understand(
         if wanted.content_notes.strip():
             planning[preset.name] = wanted.content_notes.strip()
         updated.append(changed)
-    return updated, decisions, planning
+    return updated, decisions, planning, agent.start_point(wanted.requests, notes)
 
 
 def confirmed_watermarks(

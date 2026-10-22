@@ -61,9 +61,12 @@ def split_phrase(
 ) -> list[list[Word]]:
     """A phrase as lines that start where a sentence starts. A line still longer than
     max_words is split where a clause ends, or failing that at its longest pause."""
-    options = range(min_words, len(phrase) - min_words + 1)
-    if len(phrase) <= max_words:
-        options = [i for i in options if ends_sentence(phrase[i - 1])]
+    # A sentence end splits anywhere, even off a single word: "...true today. Well" must
+    # not end a line on the next sentence's first word.
+    ends = {i for i in range(1, len(phrase)) if ends_sentence(phrase[i - 1])}
+    options = sorted(ends)
+    if len(phrase) > max_words:
+        options = sorted(ends | set(range(min_words, len(phrase) - min_words + 1)))
     if not options:
         return [phrase]
     middle = len(phrase) / 2

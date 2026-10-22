@@ -61,10 +61,14 @@ def trim_silence(start: float, end: float, silences: Silences) -> tuple[float, f
     return start, end, notes
 
 
-def gap_limit(silences: Silences) -> float:
+def gap_limit(analysis: Analysis) -> float:
     """How long a silence has to be to stand out. Songs pause a couple of seconds between
-    every sung phrase; only breaks well beyond the usual pause are worth avoiding."""
-    gaps = sorted(e - s for s, e in merged(silences))
+    every sung phrase, so on a vocal stem only breaks well beyond the usual pause count. In
+    speech any long pause does: a noisy room may show no short silences at all, only the
+    long ones, which would otherwise pass as usual."""
+    if analysis.audio_source != "vocals":
+        return MIN_LONG_GAP
+    gaps = sorted(e - s for s, e in merged(analysis.silences))
     usual = gaps[len(gaps) // 2] if gaps else 0.0
     return max(MIN_LONG_GAP, GAP_FACTOR * usual)
 
@@ -78,6 +82,43 @@ def long_gaps(start: float, end: float, silences: Silences, limit: float) -> flo
     )
 
 
+def long_silences(start: float, end: float, analysis: Analysis) -> Silences:
+    """Silences well inside [start, end] long enough to play as dead air."""
+    limit = gap_limit(analysis)
+    return [
+        (a, b)
+        for a, b in merged(analysis.silences)
+        if b - a >= limit and start + 0.5 < a and b < end - 0.5
+    ]
+
+
+def avoid_dead_air(
+    start: float, end: float, preset: Preset, analysis: Analysis
+) -> tuple[float, float, str | None]:
+    """A reel is never cut inside, so when it runs through a long silence, keep the longest
+    voiced side that is long enough on its own (the side with the opening, when the
+    opening was chosen on purpose)."""
+    quiet = long_silences(start, end, analysis)
+    if not quiet:
+        return start, end, None
+    edges = [start, *[t for a, b in quiet for t in (a, b)], end]
+    sides = [
+        (
+            edges[i] if i == 0 else edges[i] - PREROLL,
+            edges[i + 1] if i + 2 == len(edges) else edges[i + 1] + DECAY,
+        )
+        for i in range(0, len(edges), 2)
+    ]
+    long_enough = [(a, b) for a, b in sides if b - a >= preset.min_duration]
+    if not preset.hook.optimize:
+        long_enough = long_enough[:1] if long_enough and long_enough[0][0] == start else []
+    if not long_enough:
+        return start, end, None
+    a, b = max(long_enough, key=lambda side: side[1] - side[0])
+    gap = next(q for q in quiet if q[1] <= a + PREROLL or q[0] >= b - DECAY)
+    return a, b, f"kept {a:.1f}-{b:.1f}s, clear of {gap[1] - gap[0]:.0f}s without voice"
+
+
 def score(start: float, end: float, anchor: float, limit: float, analysis: Analysis) -> float:
     """Loud and voiced throughout, a strong opening, near where the planner started."""
     return (
@@ -86,6 +127,39 @@ def score(start: float, end: float, anchor: float, limit: float, analysis: Analy
         - 0.5 * long_gaps(start, end, analysis.silences, limit)
         - 0.05 * abs(start - anchor)
     )
+
+
+def keep_opening(
+    start: float, end: float, lines: list[Line], analysis: Analysis, preset: Preset
+) -> tuple[float, float, str]:
+    """Too long, but the opening was chosen on purpose: keep it, from the start of its
+    sentence, and end after the last whole sentence that fits, before any long silence."""
+    inside = [ln for ln in lines if ln.start >= start - 1e-6 and ln.end <= end + 1e-6]
+    if not inside:
+        return start, start + preset.max_duration, f"kept the planned opening at {start:.1f}s"
+    first = inside[0]
+    begins = [ln for ln in lines if ln.opens and ln.start <= first.start]
+    s = max(start, first.start - PREROLL)
+    # Back to where the sentence begins, unless that would make it mostly lead-in.
+    if begins and first.start - begins[-1].start <= preset.max_duration / 3:
+        s = max(0.0, begins[-1].start - PREROLL)
+    limit = gap_limit(analysis)
+    quiet = [a for a, b in merged(analysis.silences) if b - a > limit and first.start < a < end]
+    if quiet and quiet[0] - s >= preset.min_duration:
+        end = quiet[0] + DECAY
+        inside = [ln for ln in inside if ln.end <= quiet[0] + 1e-6]
+    fits = [
+        min(end, ln.end + DECAY)
+        for ln in inside
+        if preset.min_duration <= min(end, ln.end + DECAY) - s <= preset.max_duration
+    ]
+    whole = [
+        min(end, ln.end + DECAY)
+        for ln in inside
+        if ln.closes and preset.min_duration <= min(end, ln.end + DECAY) - s <= preset.max_duration
+    ]
+    e = max(whole or fits or [s + preset.max_duration])
+    return s, e, f"kept the planned opening at {s:.1f}s and ended at {e:.1f}s to fit"
 
 
 def choose_window(
@@ -97,7 +171,7 @@ def choose_window(
     The plan was only too long, so for each possible start the window keeps as much as
     the preset allows; what is chosen is where that window sits."""
     inside = [ln for ln in lines if ln.start >= start - 1e-6 and ln.end <= end + 1e-6]
-    limit = gap_limit(analysis.silences)
+    limit = gap_limit(analysis)
 
     def windows_between(whole: bool) -> list[tuple[float, float]]:
         found = []
@@ -212,7 +286,14 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
     start, end, notes = trim_silence(clip.start, clip.end, analysis.silences)
     lines = build_lines(analysis)
     if end - start > preset.max_duration + 0.25:
-        start, end, note = choose_window(start, end, lines, analysis, preset)
+        if preset.hook.optimize:
+            start, end, note = choose_window(start, end, lines, analysis, preset)
+        else:
+            # The opening is the plan's, or the editor's, to choose.
+            start, end, note = keep_opening(start, end, lines, analysis, preset)
+        notes.append(note)
+    start, end, note = avoid_dead_air(start, end, preset, analysis)
+    if note:
         notes.append(note)
     start, end, moved = whole_sentences(start, end, lines, preset)
     notes += moved
