@@ -100,3 +100,29 @@ def test_a_banner_never_covers_one_already_placed():
     assert first == 1920 - 260 - 90
     assert second + 90 <= first or second >= first + 90
     assert second + 90 <= 250 - 24 or second >= 420 + 24
+
+
+def test_speech_is_translated_a_sentence_at_a_time_and_keeps_its_timing():
+    from agentic_editor.subtitles import translate_speech
+    from agentic_editor.transcript import Word
+
+    text = "I wrote this paper. It was one of the first papers on that"
+    words = [Word(text=w, start=i * 0.5, end=(i + 1) * 0.5) for i, w in enumerate(text.split())]
+    model = Model(
+        {
+            "lines": [
+                {"n": 0, "text": "Escribí este artículo."},
+                {"n": 1, "text": "Fue uno de los primeros artículos sobre eso"},
+            ]
+        }
+    )
+    cues = translate_speech(model, words, "Spanish", None, per_cue=4)
+    assert "0. I wrote this paper.\n1. It was one of the first papers on that" in model.prompts[0]
+    assert [c.text for c in cues] == [
+        "Escribí este artículo.",
+        "Fue uno de los",
+        "primeros artículos sobre eso",
+    ]
+    assert (cues[0].start, cues[0].end) == (0.0, 2.0)
+    assert cues[1].start == 2.0 and cues[-1].end == 6.5
+    assert all(a.end == b.start for a, b in itertools.pairwise(cues))

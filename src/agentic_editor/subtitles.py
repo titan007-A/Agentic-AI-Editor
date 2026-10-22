@@ -7,6 +7,7 @@ timed to the shots they describe. Placement moves a caption off any face it woul
 """
 
 import itertools
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 
 from agentic_editor.edl import Cue
 from agentic_editor.llm import LLMError
-from agentic_editor.transcript import Word
+from agentic_editor.transcript import Word, phrases, split_phrase
 
 LINE_BREAK_PAUSE = 0.6  # a pause this long starts a new caption line
 LYRIC_BREAK = 0.8  # sung lines are longer and breathe less often
@@ -190,6 +191,7 @@ def place(
 
 
 TRANSLATE_WORDS = 10  # lines of about a sentence give the model enough to translate well
+SENTENCE_WORDS = 40  # run-on speech is translated in parts no longer than this
 VISUAL_EVERY = 3.0  # seconds each caption written from the picture stays up
 CAPTION_WORDS = 8
 
@@ -240,6 +242,51 @@ def translate(llm, cues: list[Cue], language: str, notes: str | None) -> list[Cu
     if still:
         raise LLMError(f"no translation for caption line(s) {still}")
     return [c.model_copy(update={"text": done[n], "words": []}) for n, c in wanted.items()]
+
+
+def sentences(words: list[Word]) -> list[list[Word]]:
+    """Speech grouped into whole sentences; a run-on one is split at its pauses."""
+    return [g for p in phrases(words, LINE_BREAK_PAUSE) for g in split_phrase(p, SENTENCE_WORDS)]
+
+
+def spread(text: str, words: list[Word], per_cue: int) -> list[Cue]:
+    """A translated sentence over the time its original words took, in captions of about
+    `per_cue` words, each up while the matching share of the original is spoken."""
+    tokens = text.split()
+    if not tokens or not words:
+        return []
+    count = math.ceil(len(tokens) / per_cue)
+    size = math.ceil(len(tokens) / count)
+    chunks = [tokens[i : i + size] for i in range(0, len(tokens), size)]
+    lengths = [len(w.text.strip()) + 1 for w in words]
+    said, written = sum(lengths), sum(len(t) + 1 for t in tokens)
+
+    def time_at(share: float) -> float:
+        left = share * said
+        for word, n in zip(words, lengths, strict=True):
+            if left <= n:
+                return word.start + (word.end - word.start) * left / n
+            left -= n
+        return words[-1].end
+
+    cues, done, start = [], 0, words[0].start
+    for i, chunk in enumerate(chunks):
+        done += sum(len(t) + 1 for t in chunk)
+        end = words[-1].end if i == len(chunks) - 1 else time_at(done / written)
+        cues.append(Cue(start=round(start, 3), end=round(end, 3), text=" ".join(chunk)))
+        start = end
+    return cues
+
+
+def translate_speech(
+    llm, words: list[Word], language: str, notes: str | None, per_cue: int = TRANSLATE_WORDS
+) -> list[Cue]:
+    """Spoken captions in another language. Whole sentences go to the model, since a small
+    model given fragments rebuilds sentences out of its neighbours' words and drifts, and
+    each translation is laid back over its sentence's timing."""
+    groups = sentences(words)
+    done = translate(llm, [_cue(g) for g in groups], language, notes)
+    return [c for g, t in zip(groups, done, strict=True) for c in spread(t.text, g, per_cue)]
 
 
 def visual_cues(
