@@ -109,10 +109,23 @@ class Music(Strict):
 class Framing(Strict):
     mode: Literal["smart", "face", "center", "none"] = "smart"
     background: Color = "#000000"
+    # Take the background colour from the footage instead, toned to keep text readable.
+    auto_background: bool = False
     crop_black_bars: bool = False
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     text_gap_above: int | None = 0
     text_gap_below: int | None = 130
+
+
+class Grade(Strict):
+    """Colour for the picture: a light automatic correction, a look, a .cube LUT."""
+
+    auto: bool = False
+    look: Literal[
+        "none", "natural", "warm", "cool", "teal-orange", "film", "moody", "vivid", "mono", "faded"
+    ] = "none"
+    lut: str | None = Field(default=None, description=".cube file in the assets folder")
+    strength: float = Field(default=1.0, ge=0, le=1, description="how much of the look/LUT")
 
 
 class Watermarks(Strict):
@@ -172,6 +185,7 @@ class Preset(Strict):
     zoom_punch_ins: bool = False
     framing: Framing = Framing()
     watermarks: Watermarks = Watermarks()
+    grade: Grade = Grade()
     audio: Audio = Audio()
     bitrate_mbps: float = Field(default=12.0, gt=0)
     style_notes: str = ""

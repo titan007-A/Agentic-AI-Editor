@@ -117,7 +117,8 @@ render behaves:
 | `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces; an .srt file is saved next to the video |
 | `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline |
-| `framing` | how the picture fills the frame (see below); background colour |
+| `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage |
+| `grade` | colour: `auto` corrects a cast or a flat, dim picture; `look` (warm, cool, teal-orange, film, moody, vivid, mono, faded); a `.cube` LUT; `strength` |
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
 | `silence` | what counts as silence when trimming a quiet start or end |
 | `beat_sync` | start and end on the beat (bar lines from the original mix), and an optional zoom pulse on each bar or beat |

@@ -20,6 +20,10 @@ class Layers:
     hook_overlay: int | None = None
     hook_duration: float = 0.0
     pulses: list[float] = field(default_factory=list)  # reel times of beat pulses
+    correction: list[str] = field(default_factory=list)  # automatic colour fix
+    look: list[str] = field(default_factory=list)  # look and LUT, mixed in at look_strength
+    look_strength: float = 1.0
+    background: str | None = None  # overrides the preset's, e.g. taken from the footage
     pulse_scale: float = 1.0
     line_overlay: int | None = None
     line_duration: float = 0.0  # 0 keeps it up for the whole reel
@@ -60,6 +64,28 @@ def blur_chain(
         parts.append(f"[{base}][{patch}b]overlay={mark.x}:{mark.y}:enable='{enable}'[{done}]")
         current = done
     return parts, current
+
+
+def grade_chain(label: str, index: int, layers: Layers) -> tuple[list[str], str]:
+    """Colour the picture of one clip: the correction, then the look mixed in at its
+    strength. Returns graph parts and the label they end on."""
+    parts = []
+    if layers.correction:
+        parts.append(f"[{label}]{','.join(layers.correction)}[g{index}c]")
+        label = f"g{index}c"
+    if layers.look:
+        look = ",".join(layers.look)
+        if layers.look_strength >= 1:
+            parts.append(f"[{label}]{look}[g{index}l]")
+        else:
+            parts.append(f"[{label}]split=2[g{index}a][g{index}b]")
+            parts.append(f"[g{index}b]{look}[g{index}x]")
+            parts.append(
+                f"[g{index}a][g{index}x]blend=all_mode=normal:"
+                f"all_opacity={layers.look_strength:.2f}[g{index}l]"
+            )
+        label = f"g{index}l"
+    return parts, label
 
 
 def ffmpeg_color(hex_color: str) -> str:
@@ -181,9 +207,12 @@ def build_graph(
     width, height = frame
     parts = []
     segments = 0
+    background = layers.background or preset.framing.background
     for i, clip in enumerate(edl.clips):
         blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
         parts += blurred
+        graded, label = grade_chain(label, i, layers)
+        parts += graded
         if edl.crop_mode == "smart" and edl.shots:
             # One continuous clip, framed shot by shot and joined back in order.
             content = layers.content or (0, 0, *source)
@@ -197,7 +226,7 @@ def build_graph(
                     k,
                     content,
                     frame,
-                    preset.framing.background,
+                    background,
                     layers.shot_commands.get(k),
                 )
                 chain += ["setsar=1", f"fps={preset.fps}"]
@@ -208,7 +237,7 @@ def build_graph(
             edl.crop_mode,
             source,
             frame,
-            preset.framing.background,
+            background,
             f"c{i}",
             layers.crop_commands.get(i),
             layers.black_bars,
