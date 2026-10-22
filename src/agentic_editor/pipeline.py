@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import agent, download, framing, hooks, review, subtitles, trim
+from agentic_editor import agent, download, framing, hooks, review, silence, subtitles, trim
 from agentic_editor.analysis import faces, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -524,7 +524,7 @@ def run(
             (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
             unresolved = [f"{i.kind}: {i.detail}" for i in issues]
             clip = edl.clips[0]
-            quiet = trim.long_silences(clip.start, clip.end, analysis)
+            quiet = silence.long_silences(clip.start, clip.end, analysis)
             score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
             outputs.append(
                 Output(

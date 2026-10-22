@@ -18,6 +18,7 @@ from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL, CaptionOverrides, Clip, Zoom, problems
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.presets import Preset
+from agentic_editor.silence import long_silences
 from agentic_editor.transcript import Word, ends_sentence, gap, phrases, split_phrase
 
 log = logging.getLogger(__name__)
@@ -423,6 +424,13 @@ def plan_variants(
     return edls
 
 
+def dead_air(candidate: Candidate, lines: list[Line], analysis: Analysis, preset: Preset) -> float:
+    """Seconds without voice inside the part of a candidate that a reel would keep."""
+    start = lines[candidate.start_line].start
+    end = min(lines[candidate.end_line].end, start + preset.max_duration)
+    return sum(b - a for a, b in long_silences(start, end, analysis))
+
+
 def _plan_best(
     llm: OllamaClient,
     lines: list[Line],
@@ -438,7 +446,12 @@ def _plan_best(
         raise LLMError("the model proposed no usable segments")
     # The opening matters most for a short video, so the hook counts double.
     candidates.sort(key=lambda c: 2 * c.hook + c.completeness + c.peak, reverse=True)
-    edls = [finalize(llm, candidates[:12], lines, preset, analysis, notes)]
+    # Dead air can't be cut out of a reel, so segments without it go first, and they are
+    # the only ones offered when there are any.
+    quiet = {id(c): dead_air(c, lines, analysis, preset) for c in candidates}
+    candidates.sort(key=lambda c: quiet[id(c)] > 0)
+    clean = [c for c in candidates if not quiet[id(c)]]
+    edls = [finalize(llm, (clean or candidates)[:12], lines, preset, analysis, notes)]
     for other in candidates:
         if len(edls) >= count:
             break

@@ -174,3 +174,20 @@ def test_an_opening_whose_words_are_not_in_that_line_is_not_trusted(make_analysi
     lines = build_lines(make_analysis(transcript(), 20.0))
     assert find_start(FakeLLM({"line": 0, "words": "the whole room"}), lines, "x") is None
     assert find_start(FakeLLM({"line": -1, "words": ""}), lines, "x") is None
+
+
+def test_segments_without_dead_air_are_preferred(make_analysis):
+    words = (
+        sentence(0, "this opening line is strong")
+        + sentence(8, "after a long quiet stretch")
+        + sentence(11, "the story carries on here")
+        + sentence(14, "and ends on a high note")
+    )
+    analysis = make_analysis(words, 20.0, silences=[(2.0, 7.8)])
+    # The model lists the segment with the six quiet seconds first.
+    llm = FakeLLM(candidates((0, 1), (2, 3)), final(0))
+    plain = PRESET.model_copy(update={"zoom_punch_ins": False})
+    edl = plan_with_llm(llm, analysis, plain)
+    # The clean segment, grown by a line to the minimum, still clear of the silence.
+    assert (edl.clips[0].start, edl.clips[0].end) == (8.0, 16.3)
+    assert "C1" not in llm.prompts[1][-1]["content"]  # only the clean one was offered
