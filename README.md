@@ -133,6 +133,24 @@ Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.
 
+## Autopilot
+
+The Autopilot page in the web app watches feeds and edits each new video once:
+
+- A feed is a folder on this computer, or a playlist or channel link (a bare YouTube
+  channel link reads its Videos tab; add its Shorts tab as a feed of its own). Each feed
+  has its presets, an optional instruction for every video, and optionally the hours new
+  videos may start, such as 23:00 to 07:00 for overnight.
+- Feeds are checked every five minutes, and on demand. A new feed notes what is already
+  there and edits only what arrives later, unless told to edit that too. Files still
+  being copied into a folder are left until they stop changing.
+- Every video a feed starts or passes over is remembered, so none is edited twice. Each
+  is an ordinary job: one that fails is marked failed and the rest carry on, a few at a
+  time per feed.
+- Finished videos land in one of two piles: Ready, when the agent has no doubts, and
+  Needs a look, with its doubts listed. "Looks fine" moves a video to Ready, "Posted"
+  and "Dismiss" take it off the piles.
+
 ## Presets
 
 A preset is a YAML file in `presets/` whose file name matches its `name`. It sets the

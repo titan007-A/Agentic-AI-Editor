@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import JSON, ForeignKey, String, Text, create_engine, event
+from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -68,8 +68,64 @@ class Output(Base):
     # 0-1: how sure the agent is the video is ready to post as it is.
     confidence: Mapped[float] = mapped_column(default=1.0)
     doubts: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # The editor's call, which overrides the agent's: approved, posted or dismissed.
+    verdict: Mapped[str | None] = mapped_column(String(16))
 
     job: Mapped[Job] = relationship(back_populates="outputs")
+
+    @property
+    def pile(self) -> str | None:
+        """ready, look (needs a look) or None once posted or dismissed."""
+        if self.verdict in ("posted", "dismissed"):
+            return None
+        if self.verdict == "approved" or not (self.doubts or self.issues):
+            return "ready"
+        return "look"
+
+
+class Feed(Base):
+    """A folder, playlist or channel the autopilot watches for new videos."""
+
+    __tablename__ = "feeds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16))  # folder or link
+    location: Mapped[str] = mapped_column(Text)
+    presets: Mapped[list[str]] = mapped_column(JSON)
+    notes: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    # Hours of the day (0-23) new videos may start, e.g. 23 to 7 for overnight; None for any.
+    active_from: Mapped[int | None]
+    active_to: Mapped[int | None]
+    batch: Mapped[int] = mapped_column(default=3)  # videos in progress at once, at most
+    include_existing: Mapped[bool] = mapped_column(default=False)
+    last_checked: Mapped[datetime | None]
+    last_result: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    items: Mapped[list["FeedItem"]] = relationship(
+        back_populates="feed", cascade="all, delete-orphan", order_by="FeedItem.id.desc()"
+    )
+
+
+class FeedItem(Base):
+    """A video a feed has seen, so it is never edited twice."""
+
+    __tablename__ = "feed_items"
+    __table_args__ = (UniqueConstraint("feed_id", "key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    feed_id: Mapped[int] = mapped_column(ForeignKey("feeds.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(Text)
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
+    skipped: Mapped[bool] = mapped_column(default=False)  # already there when the feed began
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    feed: Mapped[Feed] = relationship(back_populates="items")
+    job: Mapped[Job | None] = relationship()
 
 
 class Setting(Base):
