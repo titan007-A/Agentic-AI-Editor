@@ -77,6 +77,23 @@ uv run aiedit run ~/Videos/talk.mp4 -p shorts-9x16
 Outputs go to `media/outputs/<source-hash>/<preset>.mp4`, next to the EDL that produced
 them. Analysis results are cached per source file in `cache/`.
 
+`-n` (or the notes box in the web app) takes a plain-language instruction:
+
+```
+uv run aiedit run talk.mp4 -p shorts-9x16 -n "Spanish subtitles, warm look, under 30 seconds, start where he talks about the FCC"
+```
+
+The planning model lists the setting changes the instruction asks for, each with the
+instruction's own words that ask for it, and the rest (which moment to use) goes to the
+planner. Every change is checked in code before it is applied: its words must be in the
+instruction and be about that setting, and a language, look or length must actually be
+named. Changes nobody asked for are logged and dropped, so an instruction never turns on
+something it didn't mention. Each change shows in the output's edit decisions.
+
+Every output gets a confidence score. Review issues, a fallback planner, a failed
+translation or caption step, or a reel that came out short each lower it and are listed;
+an output with none of them is marked ready to post, the rest "needs a look".
+
 ## Web app
 
 ```

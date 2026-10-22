@@ -137,6 +137,18 @@ def test_regenerate_reuses_the_source_with_new_notes(env):
     }
 
 
+def test_regenerating_keeps_the_earlier_instruction(env):
+    response = env.client.post(
+        "/api/jobs",
+        json={"sources": ["https://x.test/v"], "presets": ["square-1x1"], "notes": "warm look"},
+    )
+    first = response.json()[0]
+    env.client.post(
+        f"/api/jobs/{first['id']}/regenerate", json={"preset": "square-1x1", "notes": "start later"}
+    )
+    assert env.calls[-1]["notes"] == "warm look\nstart later"
+
+
 def test_preset_edits_are_validated_before_saving(env):
     presets = env.client.get("/api/presets").json()
     preset = next(p for p in presets if p["name"] == "square-1x1")

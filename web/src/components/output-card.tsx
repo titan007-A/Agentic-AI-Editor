@@ -40,6 +40,9 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
   const router = useRouter();
   const [notes, setNotes] = useState("");
   const [open, setOpen] = useState(false);
+  // Issues already show as badges below; older outputs have issues but no doubts.
+  const doubts = (output.doubts ?? []).filter((d) => !output.issues.includes(d));
+  const ready = doubts.length === 0 && output.issues.length === 0;
 
   async function regenerate() {
     try {
@@ -79,6 +82,22 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
         {output.title && <p className="text-sm font-medium">{output.title}</p>}
         {output.edl.hook && (
           <p className="text-sm text-muted-foreground">Hook: {output.edl.hook}</p>
+        )}
+        {ready ? (
+          <Badge>Ready to post</Badge>
+        ) : (
+          <div className="space-y-1 rounded-md border border-destructive/40 p-2 text-sm">
+            <p className="font-medium text-destructive">
+              Needs a look · {Math.round(output.confidence * 100)}% sure
+            </p>
+            {doubts.length > 0 && (
+              <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
+                {doubts.map((doubt) => (
+                  <li key={doubt}>{doubt}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">{output.planner}</Badge>

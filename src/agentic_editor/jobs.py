@@ -99,6 +99,8 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
                     renders=out.renders,
                     issues=out.issues,
                     edl=out.edl.model_dump(mode="json"),
+                    confidence=out.confidence,
+                    doubts=out.doubts,
                 )
             )
         job.status, job.stage, job.progress = "done", "done", 1.0
