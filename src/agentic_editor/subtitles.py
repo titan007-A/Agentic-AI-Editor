@@ -15,13 +15,20 @@ from pydantic import BaseModel
 
 from agentic_editor.edl import Cue
 from agentic_editor.llm import LLMError
-from agentic_editor.transcript import Word, phrases, split_phrase
+from agentic_editor.transcript import (
+    CLAUSE_END,
+    SENTENCE_END,
+    Word,
+    phrases,
+    split_phrase,
+)
 
 LINE_BREAK_PAUSE = 0.6  # a pause this long starts a new caption line
 LYRIC_BREAK = 0.8  # sung lines are longer and breathe less often
 LYRIC_WORDS = 8
 FACE_PAD = 24  # px kept clear around a face
 NEAR_EDGE = 220  # px from the frame edge for the fallback positions
+SETTLE = 0.6  # a pause this long lets a moved caption go back to its usual place
 
 
 def speech_cues(words: list[Word], per_line: int) -> list[Cue]:
@@ -160,10 +167,11 @@ def place(
 ) -> list[Placement]:
     """A position per cue that keeps it off every face on screen while it shows.
 
-    `faces` gives, at reel times, the rows each face covers in the output frame. The
-    preferred position wins whenever it is clear; otherwise the clear position nearest to
-    it, and a caption stays where the previous one was if that is still clear, so they
-    don't hop around between lines."""
+    `faces` gives, at reel times, the rows each face (or other thing to keep clear)
+    covers in the output frame. The preferred position wins whenever it is clear;
+    otherwise the clear position nearest to it. A caption that had to move stays where it
+    went, while that is clear, until the speaker pauses, so captions don't jump between
+    the top and bottom of the frame line by line."""
     first = Placement(_ALIGN[preferred], margin if preferred != "middle" else 0)
     options = [
         first,
@@ -174,7 +182,7 @@ def place(
         Placement(5, 0),
     ]
     chosen: list[Placement] = []
-    for cue in cues:
+    for k, cue in enumerate(cues):
         covered = [
             band for t, bands in faces if cue.start - 0.2 <= t <= cue.end + 0.2 for band in bands
         ]
@@ -183,7 +191,8 @@ def place(
             return overlap(option.band(line_height, frame_height), covered)
 
         previous = chosen[-1] if chosen else None
-        if previous is not None and clash(previous) == 0 and clash(first) > 0:
+        speaking = k > 0 and cue.start - cues[k - 1].end < SETTLE
+        if previous is not None and clash(previous) == 0 and (clash(first) > 0 or speaking):
             chosen.append(previous)
             continue
         chosen.append(min(options, key=lambda o: (clash(o), options.index(o))))
@@ -249,15 +258,33 @@ def sentences(words: list[Word]) -> list[list[Word]]:
     return [g for p in phrases(words, LINE_BREAK_PAUSE) for g in split_phrase(p, SENTENCE_WORDS)]
 
 
+def even_parts(tokens: list[str], parts: int) -> list[list[str]]:
+    """Words in `parts` groups of about equal length, each break moved to just after a
+    comma or full stop when one is within a couple of words of it."""
+    parts = max(1, min(parts, len(tokens)))
+    reach = list(itertools.accumulate(len(t) + 1 for t in tokens))
+    breaks: list[int] = []
+    for k in range(1, parts):
+        target = reach[-1] * k / parts
+        allowed = range((breaks[-1] if breaks else 0) + 1, len(tokens) - (parts - k) + 1)
+        ideal = min(allowed, key=lambda i: abs(reach[i - 1] - target))
+        pauses = [
+            i
+            for i in allowed
+            if abs(i - ideal) <= 2 and tokens[i - 1][-1:] in SENTENCE_END + CLAUSE_END
+        ]
+        breaks.append(min(pauses, key=lambda i: abs(i - ideal)) if pauses else ideal)
+    edges = [0, *breaks, len(tokens)]
+    return [tokens[a:b] for a, b in itertools.pairwise(edges)]
+
+
 def spread(text: str, words: list[Word], per_cue: int) -> list[Cue]:
     """A translated sentence over the time its original words took, in captions of about
     `per_cue` words, each up while the matching share of the original is spoken."""
     tokens = text.split()
     if not tokens or not words:
         return []
-    count = math.ceil(len(tokens) / per_cue)
-    size = math.ceil(len(tokens) / count)
-    chunks = [tokens[i : i + size] for i in range(0, len(tokens), size)]
+    chunks = even_parts(tokens, math.ceil(len(tokens) / per_cue))
     lengths = [len(w.text.strip()) + 1 for w in words]
     said, written = sum(lengths), sum(len(t) + 1 for t in tokens)
 
@@ -398,13 +425,25 @@ def fit_lines(cues: list[Cue], measure, max_width: float, max_lines: int = 2) ->
         if cue.words:
             out.append(cue)
             continue
-        lines: list[str] = []
-        for word in cue.text.split():
-            if lines and measure(f"{lines[-1]} {word}") <= max_width:
-                lines[-1] = f"{lines[-1]} {word}"
-            else:
-                lines.append(word)
-        chunks = [lines[i : i + max_lines] for i in range(0, len(lines), max_lines)]
+
+        def wrap(words: list[str]) -> list[str]:
+            lines: list[str] = []
+            for word in words:
+                if lines and measure(f"{lines[-1]} {word}") <= max_width:
+                    lines[-1] = f"{lines[-1]} {word}"
+                else:
+                    lines.append(word)
+            return lines
+
+        words = cue.text.split()
+        # As few captions as fit, with the words shared evenly between them, so none is
+        # left holding a word or two.
+        count = math.ceil(len(wrap(words)) / max_lines)
+        while True:
+            chunks = [wrap(part) for part in even_parts(words, count)]
+            if all(len(c) <= max_lines for c in chunks) or count >= len(words):
+                break
+            count += 1
         total = sum(len(" ".join(c)) for c in chunks)
         start = cue.start
         for chunk in chunks:

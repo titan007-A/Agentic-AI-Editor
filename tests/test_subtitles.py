@@ -120,9 +120,26 @@ def test_speech_is_translated_a_sentence_at_a_time_and_keeps_its_timing():
     assert "0. I wrote this paper.\n1. It was one of the first papers on that" in model.prompts[0]
     assert [c.text for c in cues] == [
         "Escribí este artículo.",
-        "Fue uno de los",
-        "primeros artículos sobre eso",
+        "Fue uno de los primeros",
+        "artículos sobre eso",
     ]
     assert (cues[0].start, cues[0].end) == (0.0, 2.0)
     assert cues[1].start == 2.0 and cues[-1].end == 6.5
     assert all(a.end == b.start for a, b in itertools.pairwise(cues))
+
+
+def test_captions_break_after_a_comma_near_the_middle():
+    from agentic_editor.subtitles import even_parts
+
+    text = "los 90 trabajaba para la FCC, la Comisión Federal de Comunicaciones"
+    first, second = even_parts(text.split(" "), 2)
+    assert first[-1] == "FCC," and second[0] == "la"
+
+
+def test_a_long_caption_is_shared_out_instead_of_leaving_a_word_alone():
+    from agentic_editor.subtitles import fit_lines
+
+    cue = Cue(start=0, end=4, text="Comisión Federal de Comunicaciones en Estados Unidos.")
+    fitted = fit_lines([cue], lambda s: 10 * len(s), max_width=200)
+    assert len(fitted) == 2
+    assert all(len(c.text.replace("\n", " ").split()) >= 3 for c in fitted)

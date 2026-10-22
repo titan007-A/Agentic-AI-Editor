@@ -111,3 +111,18 @@ def test_scraps_of_sparse_singing_are_joined_into_phrases():
     breaths = [(1.8, 3.8), (4.7, 5.6), (11.6, 17.0), (17.9, 18.6)]
     texts = [c.text for c in lyric_cues(sung, max_words=8, breaths=breaths)]
     assert texts == ["Maybe Save me", "I am the one that can't see you", "And you"]
+
+
+def test_a_moved_caption_stays_put_until_the_speaker_pauses():
+    cues = [
+        Cue(start=0, end=1, text="a"),
+        Cue(start=1.1, end=2, text="b"),
+        Cue(start=2.1, end=3, text="c"),
+        Cue(start=4.0, end=5, text="d"),
+    ]
+    # Something sits on the usual bottom position only while the first line shows.
+    blocked = [(0.5, [(1300.0, 1500.0)])]
+    spots = place(cues, "bottom", 520, 110, 1920, blocked)
+    assert spots[0] != Placement(2, 520)
+    assert spots[1] == spots[2] == spots[0]  # still speaking: no jumping back
+    assert spots[3] == Placement(2, 520)  # after the pause, back to its usual place
