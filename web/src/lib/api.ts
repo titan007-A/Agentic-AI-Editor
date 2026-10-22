@@ -20,6 +20,8 @@ export type Output = {
   issues: string[];
   has_thumbnail: boolean;
   has_subtitles: boolean;
+  confidence: number;
+  doubts: string[];
   edl: Edl;
 };
 

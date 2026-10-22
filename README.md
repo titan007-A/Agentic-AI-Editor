@@ -19,7 +19,11 @@ download -> analyze -> plan (EDL) -> snap cuts -> render -> review -> done
 ```
 
 - Analysis isolates the vocals when a preset asks for them, transcribes with word
-  timings, and finds scene cuts, silences, loudness and faces.
+  timings, and finds scene cuts, silences, short pauses, loudness and faces.
+- Every reel is one continuous stretch of the source, trimmed only at its ends. Speech
+  reels start and end on whole sentences: the transcript's punctuation and the pauses
+  heard in the audio mark where they begin and end. Translated speech captions are
+  translated a sentence at a time and laid back over the original timing.
 - Review checks each render (length, framing, loudness, caption sync) and applies
   deterministic fixes, re-rendering up to twice.
 
@@ -77,6 +81,29 @@ uv run aiedit run ~/Videos/talk.mp4 -p shorts-9x16
 Outputs go to `media/outputs/<source-hash>/<preset>.mp4`, next to the EDL that produced
 them. Analysis results are cached per source file in `cache/`.
 
+`-n` (or the notes box in the web app) takes a plain-language instruction:
+
+```
+uv run aiedit run talk.mp4 -p shorts-9x16 -n "Spanish subtitles, warm look, under 30 seconds, start where he talks about the FCC"
+```
+
+The planning model lists the setting changes the instruction asks for, each with the
+instruction's own words that ask for it, and the rest (which moment to use) goes to the
+planner. Every change is checked in code before it is applied: its words must be in the
+instruction and be about that setting, and a language, look or length must actually be
+named. Changes nobody asked for are logged and dropped, so an instruction never turns on
+something it didn't mention. Each change shows in the output's edit decisions. An
+instruction that says where to start ("start where...", "begin with...") is looked up
+on its own: the planning model names the transcript line where that moment begins and
+the words that show it, and the answer counts only if those words are in that line. The
+reel starts there, `hook.optimize` is off for that job so nothing moves the opening, and
+it ends on the last whole sentence that fits, before any long silence.
+
+Every output gets a confidence score. Review issues, a fallback planner, a failed
+translation or caption step, a long stretch without voice, or a reel that came out short
+each lower it and are listed; an output with none of them is marked ready to post, the
+rest "needs a look".
+
 ## Web app
 
 ```
@@ -122,7 +149,7 @@ render behaves:
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
 | `silence` | what counts as silence when trimming a quiet start or end |
 | `beat_sync` | start and end on the beat (bar lines from the original mix), and an optional zoom pulse on each bar or beat |
-| `hook` | `optimize` picks the strongest opening line (the planning model reads them for speech; the strongest entrance wins for music); `variants` makes up to five versions per video from different strong segments, saved as `preset-b.mp4` and so on |
+| `hook` | `optimize` lets the editor choose where the reel starts: the strongest opening line (the planning model reads them for speech; the strongest entrance wins for music), and the strongest stretch when the plan runs long. Off, the planned opening stays and a long plan is cut from the end; `variants` makes up to five versions per video from different strong segments, saved as `preset-b.mp4` and so on |
 | `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 

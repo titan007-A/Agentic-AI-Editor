@@ -153,3 +153,24 @@ def test_variants_come_from_different_segments(make_analysis):
     # The second candidate lies inside the first plan, so the next version is built from
     # the third, grown back to the minimum length; the two share under half their time.
     assert spans == [(0.0, 9.9), (8.0, 17.5)]
+
+
+def test_a_requested_opening_is_found_and_the_plan_starts_there(make_analysis):
+    from agentic_editor.planner import plan_variants
+
+    plain = PRESET.model_copy(update={"zoom_punch_ins": False})
+    llm = FakeLLM({"line": 2, "words": "the whole room"}, final(0))
+    edls = plan_variants(
+        llm, make_analysis(transcript(), 20.0), plain, None, 1, start_at="start when it goes quiet"
+    )
+    assert len(edls) == 1 and edls[0].clips[0].start == 8.0
+    assert edls[0].decisions == ['found where you asked to start: 8.0s, "the whole room"']
+    assert 'The editor said: "start when it goes quiet"' in llm.prompts[0][-1]["content"]
+
+
+def test_an_opening_whose_words_are_not_in_that_line_is_not_trusted(make_analysis):
+    from agentic_editor.planner import find_start
+
+    lines = build_lines(make_analysis(transcript(), 20.0))
+    assert find_start(FakeLLM({"line": 0, "words": "the whole room"}), lines, "x") is None
+    assert find_start(FakeLLM({"line": -1, "words": ""}), lines, "x") is None

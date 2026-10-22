@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -64,6 +65,9 @@ class Output(Base):
     renders: Mapped[int] = mapped_column(default=1)
     issues: Mapped[list[str]] = mapped_column(JSON, default=list)
     edl: Mapped[dict] = mapped_column(JSON)
+    # 0-1: how sure the agent is the video is ready to post as it is.
+    confidence: Mapped[float] = mapped_column(default=1.0)
+    doubts: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     job: Mapped[Job] = relationship(back_populates="outputs")
 
@@ -88,4 +92,32 @@ def make_sessionmaker(path: Path) -> sessionmaker:
         cursor.close()
 
     Base.metadata.create_all(engine)
+    add_missing_columns(engine)
     return sessionmaker(engine, expire_on_commit=False)
+
+
+def add_missing_columns(engine) -> None:
+    """create_all makes new tables but never touches existing ones; add the columns later
+    versions introduced so an older database keeps working."""
+    with engine.begin() as connection:
+        for table in Base.metadata.sorted_tables:
+            have = {
+                row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table.name})")
+            }
+            for column in table.columns:
+                if column.name in have:
+                    continue
+                literal = "NULL"
+                if column.default is not None:
+                    value = column.default.arg
+                    # Callable defaults (list, dict) are wrapped to take a context argument.
+                    value = value(None) if callable(value) else value
+                    if isinstance(value, bool | int | float):
+                        literal = str(int(value) if isinstance(value, bool) else value)
+                    elif isinstance(value, list | dict | str):
+                        text = value if isinstance(value, str) else json.dumps(value)
+                        literal = "'" + text.replace("'", "''") + "'"
+                kind = column.type.compile(engine.dialect)
+                connection.exec_driver_sql(
+                    f"ALTER TABLE {table.name} ADD COLUMN {column.name} {kind} DEFAULT {literal}"
+                )

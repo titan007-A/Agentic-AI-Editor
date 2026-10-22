@@ -63,6 +63,8 @@ class OutputView(BaseModel):
     issues: list[str]
     has_thumbnail: bool
     has_subtitles: bool
+    confidence: float
+    doubts: list[str]
     edl: dict
 
 
@@ -93,6 +95,8 @@ def job_view(job: Job) -> JobView:
             issues=o.issues,
             has_thumbnail=bool(o.thumbnail),
             has_subtitles=Path(o.path).with_suffix(".srt").exists(),
+            confidence=o.confidence,
+            doubts=o.doubts,
             edl=o.edl,
         )
         for o in job.outputs
@@ -323,12 +327,14 @@ def create_app(
         job = find_job(job_id, session)
         if body.preset not in presets():
             raise HTTPException(422, f"unknown preset {body.preset}")
+        # The new notes say what should change; the earlier instruction still stands.
+        notes = "\n".join(n.strip() for n in (job.notes, body.notes) if n and n.strip())
         new = enqueue(
             session,
             source=job.source,
             title=job.title,
             presets=[body.preset],
-            notes=body.notes,
+            notes=notes or None,
             parent_id=job.id,
         )
         return job_view(new)

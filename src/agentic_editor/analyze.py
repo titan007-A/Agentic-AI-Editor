@@ -37,6 +37,7 @@ class Analysis(BaseModel):
     energy: list[float]
     energy_hop: float = ENERGY_HOP
     silences: list[tuple[float, float]] = []
+    pauses: list[tuple[float, float]] = []
     watermarks: list[Watermark] = []
     beats: Beats = Beats()
 
@@ -131,6 +132,7 @@ def analyze(
         transcript=transcript,
         scenes=cuts,
         energy=audio.energy_curve(samples, 16000, ENERGY_HOP),
+        pauses=audio.pauses(samples, 16000),
         watermarks=marks,
         beats=rhythm,
     )

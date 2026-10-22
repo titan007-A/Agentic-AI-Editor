@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import download, framing, hooks, review, subtitles, trim
+from agentic_editor import agent, download, framing, hooks, review, subtitles, trim
 from agentic_editor.analysis import faces, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -44,6 +44,8 @@ class Output:
     thumbnail: Path | None = None
     renders: int = 1
     issues: list[str] = field(default_factory=list)
+    confidence: float = 1.0
+    doubts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -65,12 +67,16 @@ def resolve_source(value: str, settings: Settings) -> download.Source:
 
 
 def plan(
-    llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None
+    llm: OllamaClient,
+    analysis: Analysis,
+    preset: Preset,
+    notes: str | None,
+    start_at: str | None = None,
 ) -> list[tuple[EDL, str]]:
     """Plan each version with the LLM, falling back to the energy heuristic if it can't
     deliver; then choose each one's opening and trim it to the preset."""
     try:
-        edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants)
+        edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants, start_at)
         planner = llm.model
     except (LLMError, httpx.HTTPError) as exc:
         log.warning("%s: LLM planning failed (%s), using the energy heuristic", preset.name, exc)
@@ -139,10 +145,15 @@ def translated(
     if not style.language:
         note = "translated captions asked for without a language; showing the speech"
         return edl.model_copy(update={"decisions": [*edl.decisions, note]})
-    lines = subtitles.lyric_cues(compose.timeline_words(edl, analysis), subtitles.TRANSLATE_WORDS)
+    words = compose.timeline_words(edl, analysis)
     update: dict = {}
     try:
-        update["cues"] = subtitles.translate(llm, lines, style.language, notes)
+        if analysis.audio_source == "vocals":
+            # Sung lines are translated line by line, so the song keeps its lines.
+            lines = subtitles.lyric_cues(words, subtitles.TRANSLATE_WORDS)
+            update["cues"] = subtitles.translate(llm, lines, style.language, notes)
+        else:
+            update["cues"] = subtitles.translate_speech(llm, words, style.language, notes)
         note = f"captions translated into {style.language} ({len(update['cues'])} lines)"
     except (LLMError, httpx.HTTPError) as exc:
         note = f"translation failed ({exc}); showing the speech"
@@ -400,6 +411,7 @@ def run(
     out_dir = settings.media_dir / "outputs" / work_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends)
+    presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
 
     analyses: dict[str, Analysis] = {}
     for preset in presets:
@@ -416,9 +428,21 @@ def run(
     with router.planner() as llm:
         for preset in presets:
             progress("plan", f"planning {preset.name}")
+            planning_notes = notes_for[preset.name]
             plans[preset.name] = [
-                (translated(llm, edl, for_preset(preset), preset, notes), planner)
-                for edl, planner in plan(llm, for_preset(preset), preset, notes)
+                (
+                    translated(
+                        llm,
+                        edl.model_copy(
+                            update={"decisions": [*instructed[preset.name], *edl.decisions]}
+                        ),
+                        for_preset(preset),
+                        preset,
+                        planning_notes,
+                    ),
+                    planner,
+                )
+                for edl, planner in plan(llm, for_preset(preset), preset, planning_notes, start_at)
             ]
 
     outputs = []
@@ -434,7 +458,14 @@ def run(
             dest = out_dir / f"{name}.mp4"
             render_dir = work_dir / "render" / name
             edl = written_text(
-                reviewer, edl, analysis, preset, source.path, settings, render_dir, notes
+                reviewer,
+                edl,
+                analysis,
+                preset,
+                source.path,
+                settings,
+                render_dir,
+                notes_for[preset.name],
             )
             progress("render", f"rendering {name}")
             edl, renders, issues = produce(
@@ -456,6 +487,10 @@ def run(
                 except LLMError as exc:
                     log.warning("no thumbnail for %s: %s", preset.name, exc)
             (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
+            unresolved = [f"{i.kind}: {i.detail}" for i in issues]
+            clip = edl.clips[0]
+            quiet = trim.long_silences(clip.start, clip.end, analysis)
+            score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
             outputs.append(
                 Output(
                     preset.name,
@@ -464,7 +499,9 @@ def run(
                     planner,
                     thumbnail,
                     renders,
-                    [f"{i.kind}: {i.detail}" for i in issues],
+                    unresolved,
+                    score,
+                    doubts,
                 )
             )
             progress("done", f"{name} -> {dest}")
@@ -472,6 +509,33 @@ def run(
     meta = {"title": source.title, "url": source.url, "notes": notes}
     (out_dir / "source.json").write_text(json.dumps(meta))
     return Result(source.title, outputs)
+
+
+def understand(
+    router: ModelRouter, presets: list[Preset], notes: str | None, progress: Progress
+) -> tuple[list[Preset], dict[str, list[str]], dict[str, str | None], str | None]:
+    """Read the editor's instruction into each preset: the presets to use, what was changed
+    in each, the notes left for the planner, and where the instruction says to start."""
+    decisions: dict[str, list[str]] = {p.name: [] for p in presets}
+    planning: dict[str, str | None] = {p.name: notes for p in presets}
+    if not notes or not notes.strip():
+        return presets, decisions, planning, None
+    progress("plan", "reading your instruction")
+    try:
+        with router.planner() as llm:
+            wanted = agent.interpret(llm, notes)
+    except (LLMError, httpx.HTTPError) as exc:
+        note = f"couldn't read the instruction ({exc}); kept the preset"
+        return presets, {p.name: [note] for p in presets}, planning, None
+    updated = []
+    for preset in presets:
+        changed, decisions[preset.name] = agent.apply(preset, wanted.requests, notes)
+        # The planner gets what the instruction said about the content; when the model
+        # didn't separate that out, it gets the whole instruction rather than nothing.
+        if wanted.content_notes.strip():
+            planning[preset.name] = wanted.content_notes.strip()
+        updated.append(changed)
+    return updated, decisions, planning, agent.start_point(wanted.requests, notes)
 
 
 def confirmed_watermarks(

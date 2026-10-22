@@ -27,7 +27,8 @@ class _Choice(BaseModel):
 
 
 def options(edl: EDL, lines: list[Line], preset: Preset) -> list[Line]:
-    """Lines the reel could open on: early in the segment, keeping it long enough."""
+    """Lines the reel could open on: early in the segment, keeping it long enough, and
+    starting a sentence rather than picking one up halfway. The first is the planned start."""
     clip = edl.clips[0]
     found = [
         ln
@@ -35,7 +36,7 @@ def options(edl: EDL, lines: list[Line], preset: Preset) -> list[Line]:
         if clip.start - 0.5 <= ln.start <= clip.start + LOOKAHEAD
         and clip.end - (ln.start - PREROLL) >= preset.min_duration
     ]
-    return found[:MAX_OPTIONS]
+    return [ln for i, ln in enumerate(found) if i == 0 or ln.opens][:MAX_OPTIONS]
 
 
 def opening_strength(start: float, analysis: Analysis) -> float:

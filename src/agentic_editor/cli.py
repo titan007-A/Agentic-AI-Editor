@@ -30,8 +30,12 @@ def _run(args: argparse.Namespace) -> int:
             )
             if output.edl.title:
                 print(f"  title: {output.edl.title}")
-            for issue in output.issues:
-                print(f"  unresolved: {issue}")
+            if output.doubts:
+                print(f"  needs a look ({output.confidence:.0%} sure):")
+                for doubt in output.doubts:
+                    print(f"    {doubt}")
+            else:
+                print("  ready to post")
     return 0
 
 
@@ -108,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="edit one or more videos with one or more presets")
     run.add_argument("source", nargs="+", help="video URL or local file")
     run.add_argument("-p", "--preset", action="append", required=True)
-    run.add_argument("-n", "--notes", help="extra instructions for the planner")
+    run.add_argument("-n", "--notes", help="an instruction in plain words")
     run.set_defaults(handler=_run)
 
     bench = commands.add_parser("benchmark", help="time transcription, separation, LLMs, render")

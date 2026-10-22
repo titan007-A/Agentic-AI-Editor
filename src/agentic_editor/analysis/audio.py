@@ -66,3 +66,26 @@ def loudest_window_db(samples: np.ndarray, sample_rate: int, window: float = 0.0
         return levels(samples)[0]
     frames = samples[: count * size].reshape(count, size)
     return to_db(float(np.sqrt(np.mean(np.square(frames, dtype=np.float64), axis=1)).max()))
+
+
+def pauses(
+    samples: np.ndarray, sample_rate: int, min_duration: float = 0.15, below_db: float = 9.0
+) -> list[tuple[float, float]]:
+    """Short breaks in the voice: stretches at least `below_db` under the overall level.
+    Whisper stretches each word up to the next one, so its timings hide these."""
+    size = int(sample_rate * 0.01)
+    count = len(samples) // size
+    if count == 0:
+        return []
+    frames = samples[: count * size].reshape(count, size).astype(np.float64)
+    rms = np.sqrt(np.mean(np.square(frames), axis=1))
+    quiet = 20 * np.log10(np.maximum(rms, 1e-9)) < levels(samples)[0] - below_db
+    found, start = [], None
+    for i, q in enumerate([*quiet, False]):
+        if q and start is None:
+            start = i
+        elif not q and start is not None:
+            if (i - start) * 0.01 >= min_duration:
+                found.append((round(start * 0.01, 2), round(i * 0.01, 2)))
+            start = None
+    return found
