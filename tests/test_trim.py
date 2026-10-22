@@ -87,3 +87,17 @@ def test_too_short_after_trimming_grows_into_neighbouring_lines(make_analysis):
 def test_voice_bounds_skip_silence_at_both_edges():
     assert voice_bounds(0, 30, [(0, 4), (25, 30)]) == (4, 25)
     assert voice_bounds(5, 20, [(0, 4), (25, 30)]) == (5, 20)
+
+
+def test_a_click_between_two_silences_does_not_count_as_the_voice(make_analysis):
+    analysis = make_analysis([], 60.0, audio_source="vocals", silences=[(0.0, 19.0), (19.1, 21.1)])
+    edl = apply(plan(0.0, 60.0), analysis, VOCALS)
+    assert edl.clips[0].start == 21.1 - 0.25
+
+
+def test_a_long_song_keeps_as_much_as_the_preset_allows(make_analysis):
+    # Sung phrases of 8 s with the usual 2.5 s pause between them, for four minutes.
+    silences = [(t + 8.0, t + 10.5) for t in range(0, 240, 11)]
+    analysis = make_analysis([], 240.0, audio_source="vocals", silences=silences)
+    edl = apply(plan(0.0, 240.0), analysis, VOCALS.model_copy(update={"max_duration": 120}))
+    assert 100 <= edl.clips[0].duration <= 120

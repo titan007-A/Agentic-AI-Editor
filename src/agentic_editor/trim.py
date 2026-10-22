@@ -14,16 +14,30 @@ from agentic_editor.presets import Preset
 PREROLL = 0.25  # keep the breath before the first word
 DECAY = 0.6  # let the last note or word ring out
 MIN_SILENT_EDGE = 0.6  # shorter quiet at an edge reads as a natural lead-in
-LONG_GAP = 2.0  # silence inside a window worth steering around
+BLIP = 0.3  # sound this short between two silences is a click, not a voice
+MIN_LONG_GAP = 4.0  # silence inside a window only matters past this, or past
+GAP_FACTOR = 2.0  # this many times the source's usual gap between phrases
 OPENING = 3.0  # seconds that decide whether people keep watching
 
 Silences = list[tuple[float, float]]
 
 
+def merged(silences: Silences) -> Silences:
+    """Join silences that only a blip separates, so a click doesn't count as the voice."""
+    out: Silences = []
+    for s, e in sorted(silences):
+        if out and s - out[-1][1] < BLIP:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
 def voice_bounds(start: float, end: float, silences: Silences) -> tuple[float, float]:
     """First and last moments with sound between start and end."""
+    silences = merged(silences)
     first, last = start, end
-    for s, e in sorted(silences):
+    for s, e in silences:
         if s <= first < e:
             first = e
     for s, e in sorted(silences, reverse=True):
@@ -46,23 +60,30 @@ def trim_silence(start: float, end: float, silences: Silences) -> tuple[float, f
     return start, end, notes
 
 
-def long_gaps(start: float, end: float, silences: Silences) -> float:
-    """Seconds of long silence inside a window."""
+def gap_limit(silences: Silences) -> float:
+    """How long a silence has to be to stand out. Songs pause a couple of seconds between
+    every sung phrase; only breaks well beyond the usual pause are worth avoiding."""
+    gaps = sorted(e - s for s, e in merged(silences))
+    usual = gaps[len(gaps) // 2] if gaps else 0.0
+    return max(MIN_LONG_GAP, GAP_FACTOR * usual)
+
+
+def long_gaps(start: float, end: float, silences: Silences, limit: float) -> float:
+    """Seconds of unusually long silence inside a window."""
     return sum(
         min(end, b) - max(start, a)
-        for a, b in silences
-        if b - a >= LONG_GAP and b > start and a < end
+        for a, b in merged(silences)
+        if b - a >= limit and b > start and a < end
     )
 
 
-def score(start: float, end: float, anchor: float, analysis: Analysis) -> float:
+def score(start: float, end: float, anchor: float, limit: float, analysis: Analysis) -> float:
     """Loud and voiced throughout, a strong opening, near where the planner started."""
     return (
         analysis.energy_between(start, end)
         + 0.5 * analysis.energy_between(start, min(end, start + OPENING))
-        - 3.0 * long_gaps(start, end, analysis.silences)
-        - 0.2 * abs(start - anchor)
-        + 0.05 * (end - start)
+        - 0.5 * long_gaps(start, end, analysis.silences, limit)
+        - 0.05 * abs(start - anchor)
     )
 
 
@@ -70,26 +91,39 @@ def choose_window(
     start: float, end: float, lines: list[Line], analysis: Analysis, preset: Preset
 ) -> tuple[float, float, str]:
     """The best continuous window inside [start, end] that fits the preset, starting where
-    a line starts and ending where one ends, so nothing is cut mid-word or mid-note."""
+    a line starts and ending where one ends, so nothing is cut mid-word or mid-note.
+
+    The plan was only too long, so for each possible start the window keeps as much as
+    the preset allows; what is chosen is where that window sits."""
     inside = [ln for ln in lines if ln.start >= start - 1e-6 and ln.end <= end + 1e-6]
-    best: tuple[float, float, float] | None = None
+    limit = gap_limit(analysis.silences)
+    windows = []
     for i, first in enumerate(inside):
         s = max(start, first.start - PREROLL)
-        for last in inside[i:]:
-            e = min(end, last.end + DECAY)
-            if e - s > preset.max_duration:
-                break
-            if e - s < preset.min_duration:
-                continue
-            value = score(s, e, start, analysis)
-            if best is None or value > best[0]:
-                best = (value, s, e)
+        ends = [
+            min(end, last.end + DECAY)
+            for last in inside[i:]
+            if preset.min_duration <= min(end, last.end + DECAY) - s <= preset.max_duration
+        ]
+        if ends:
+            windows.append((s, max(ends)))
+    best: tuple[float, float, float] | None = None
+    if windows:
+        # Windows that start late run into the end of the material and come out short;
+        # only those close to the longest possible compete.
+        longest = max(e - s for s, e in windows)
+        for s, e in windows:
+            if e - s >= 0.85 * longest:
+                value = score(s, e, start, limit, analysis)
+                if best is None or value > best[0]:
+                    best = (value, s, e)
     if best is not None:
         _, s, e = best
         return (
             s,
             e,
-            f"kept {s:.1f}-{e:.1f}s, the strongest stretch that fits {preset.max_duration:g}s",
+            f"kept {s:.1f}-{e:.1f}s, the strongest {e - s:.0f}s stretch that fits "
+            f"{preset.max_duration:g}s",
         )
     # No line-aligned window fits, usually one very long sung or spoken passage: keep the
     # opening and stop at the limit, after the last line that still fits.
