@@ -6,6 +6,7 @@ intro goes quiet once the instruments are removed), and when the material runs l
 than the preset allows it chooses which continuous window to keep.
 """
 
+from agentic_editor.analysis.beats import Beats
 from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL
 from agentic_editor.planner import Line, build_lines, fit_duration
@@ -139,6 +140,33 @@ def choose_window(
     )
 
 
+def snap_to_beat(
+    start: float, end: float, rhythm: Beats, max_duration: float
+) -> tuple[float, float, str | None]:
+    """Move the start back onto the bar line or beat just before it, and the end on to the
+    next one after, so the reel opens and closes with the music. Only ever outward, so no
+    word is cut, and only by a beat or two, so no long quiet lead-in is added."""
+    beat = rhythm.interval
+    if not beat:
+        return start, end, None
+
+    def before(times: list[float], reach: float) -> float | None:
+        found = [t for t in times if start - reach <= t <= start]
+        return max(found) if found else None
+
+    def after(times: list[float], reach: float, opening: float) -> float | None:
+        found = [t for t in times if end <= t <= end + reach and t - opening <= max_duration]
+        return min(found) if found else None
+
+    new_start = before(rhythm.downbeats, 2 * beat) or before(rhythm.beats, beat) or start
+    new_end = after(rhythm.downbeats, 2 * beat, new_start) or after(rhythm.beats, beat, new_start)
+    new_end = new_end or end
+    if (new_start, new_end) == (start, end):
+        return start, end, None
+    note = f"start and end moved onto the beat ({rhythm.tempo:.0f} BPM)"
+    return new_start, new_end, note
+
+
 def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
     clip = edl.clips[0]
     start, end, notes = trim_silence(clip.start, clip.end, analysis.silences)
@@ -157,4 +185,9 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
                 f"only {clip.duration:.1f}s of voiced material; left shorter than the "
                 f"{preset.min_duration:g}s minimum rather than padded with silence"
             )
+    if preset.beat_sync.snap_trims:
+        start, end, note = snap_to_beat(clip.start, clip.end, analysis.beats, preset.max_duration)
+        if note:
+            clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
+            notes.append(note)
     return edl.model_copy(update={"clips": [clip], "decisions": [*edl.decisions, *notes]})

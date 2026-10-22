@@ -197,6 +197,13 @@ def render(
 
     rows = face_rows(edl, analysis, preset, layers.content, faces) if faces else []
 
+    sync = preset.beat_sync
+    if sync.pulse and analysis.beats.beats:
+        clip = edl.clips[0]
+        times = analysis.beats.downbeats if sync.pulse_on == "bar" else analysis.beats.beats
+        layers.pulses = [t - clip.start for t in times if clip.start <= t < clip.end]
+        layers.pulse_scale = sync.pulse_scale
+
     # Banners keep off faces, and captions keep off faces and banners.
     obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
 

@@ -19,6 +19,8 @@ class Layers:
     title_duration: float = 0.0
     hook_overlay: int | None = None
     hook_duration: float = 0.0
+    pulses: list[float] = field(default_factory=list)  # reel times of beat pulses
+    pulse_scale: float = 1.0
     line_overlay: int | None = None
     line_duration: float = 0.0  # 0 keeps it up for the whole reel
     logo: int | None = None
@@ -140,8 +142,15 @@ def _even(value: float) -> int:
     return int(value) // 2 * 2
 
 
-def zoom_expression(edl: EDL) -> str | None:
+PULSE_SECONDS = 0.3
+
+
+def zoom_expression(edl: EDL, pulses: list[float] = (), pulse_scale: float = 1.0) -> str | None:
+    """Scale over time: the planner's punch-ins, plus short pulses that ease back out."""
     terms = []
+    for t in pulses:
+        d = PULSE_SECONDS
+        terms.append(f"{pulse_scale - 1:.3f}*between(t,{t:.3f},{t + d:.3f})*(1-(t-{t:.3f})/{d})")
     for zoom in edl.zooms:
         t = edl.to_output_time(zoom.time)
         if t is None:
@@ -216,7 +225,7 @@ def build_graph(
         parts.append(f"[{current}]{filters}[{label}]")
         current = label
 
-    if (zoom := zoom_expression(edl)) is not None:
+    if (zoom := zoom_expression(edl, layers.pulses, layers.pulse_scale)) is not None:
         step(
             f"scale=w='trunc({width}*({zoom})/2)*2':h='trunc({height}*({zoom})/2)*2'"
             f":eval=frame:flags=bicubic,crop={width}:{height}",
