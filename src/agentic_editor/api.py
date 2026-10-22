@@ -62,6 +62,7 @@ class OutputView(BaseModel):
     renders: int
     issues: list[str]
     has_thumbnail: bool
+    has_subtitles: bool
     edl: dict
 
 
@@ -91,6 +92,7 @@ def job_view(job: Job) -> JobView:
             renders=o.renders,
             issues=o.issues,
             has_thumbnail=bool(o.thumbnail),
+            has_subtitles=Path(o.path).with_suffix(".srt").exists(),
             edl=o.edl,
         )
         for o in job.outputs
@@ -364,12 +366,25 @@ def create_app(
             stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
         )
 
+    def download_name(output) -> str:
+        return re.sub(r"[^\w.-]+", "-", f"{output.job.title or 'video'}-{output.preset}")[:100]
+
     @app.get("/api/outputs/{output_id}/video")
     def video(output_id: int, _: User, session: DB, download: bool = False) -> FileResponse:
         output = find_output(output_id, session)
-        name = re.sub(r"[^\w.-]+", "-", f"{output.job.title or 'video'}-{output.preset}")[:100]
+        name = download_name(output)
         return FileResponse(
             output.path, media_type="video/mp4", filename=f"{name}.mp4" if download else None
+        )
+
+    @app.get("/api/outputs/{output_id}/subtitles")
+    def subtitles(output_id: int, _: User, session: DB) -> FileResponse:
+        output = find_output(output_id, session)
+        srt = Path(output.path).with_suffix(".srt")
+        if not srt.exists():
+            raise HTTPException(404, "no subtitles for this video")
+        return FileResponse(
+            srt, media_type="application/x-subrip", filename=f"{download_name(output)}.srt"
         )
 
     @app.get("/api/outputs/{output_id}/thumbnail")

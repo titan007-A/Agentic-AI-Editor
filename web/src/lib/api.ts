@@ -18,6 +18,7 @@ export type Output = {
   renders: number;
   issues: string[];
   has_thumbnail: boolean;
+  has_subtitles: boolean;
   edl: Edl;
 };
 
@@ -110,6 +111,8 @@ export const videoUrl = (output: Output, download = false) =>
   `/api/outputs/${output.id}/video${download ? "?download=true" : ""}`;
 
 export const thumbnailUrl = (output: Output) => `/api/outputs/${output.id}/thumbnail`;
+
+export const subtitlesUrl = (output: Output) => `/api/outputs/${output.id}/subtitles`;
 
 export function errorText(error: unknown): string {
   if (error instanceof ApiError && Array.isArray(error.detail)) {

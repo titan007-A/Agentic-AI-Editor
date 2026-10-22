@@ -19,6 +19,8 @@ class Layers:
     title_duration: float = 0.0
     hook_overlay: int | None = None
     hook_duration: float = 0.0
+    line_overlay: int | None = None
+    line_duration: float = 0.0  # 0 keeps it up for the whole reel
     logo: int | None = None
     captions: Path | None = None
     fonts_dir: Path | None = None
@@ -236,6 +238,8 @@ def build_graph(
         overlay(layers.hook_overlay, "hooked", layers.hook_duration)
     if layers.title_overlay is not None:
         overlay(layers.title_overlay, "titled", layers.title_duration)
+    if layers.line_overlay is not None:
+        overlay(layers.line_overlay, "lined", layers.line_duration or None)
     if layers.logo is not None:
         logo = preset.logo
         x = str(logo.margin) if logo.position.endswith("left") else f"W-w-{logo.margin}"

@@ -22,6 +22,12 @@ class Strict(BaseModel):
 
 class CaptionStyle(Strict):
     enabled: bool = True
+    # speech: what is said, word by word. lyrics: sung lines from the isolated vocals.
+    # translated: what is said, in `language`. visual: written from what is on screen.
+    mode: Literal["speech", "lyrics", "translated", "visual"] = "speech"
+    language: str | None = Field(default=None, description="target language for translated")
+    avoid_faces: bool = True
+    export_srt: bool = True
     font: str = "Anton-Regular"
     size: int = Field(default=84, ge=12, le=300)
     color: Color = "#FFFFFF"
@@ -33,6 +39,21 @@ class CaptionStyle(Strict):
     words_per_line: int = Field(default=3, ge=1, le=12)
     animation: Literal["highlight", "pop", "karaoke", "none"] = "highlight"
     uppercase: bool = True
+
+
+class OneLiner(Strict):
+    """A single line the vision model writes about the video, burned in."""
+
+    enabled: bool = False
+    font: str = "OpenSans-ExtraBold"
+    size: int = Field(default=64, ge=12, le=300)
+    color: Color = "#FFFFFF"
+    box_color: Color | None = "#000000"
+    position: Literal["top", "bottom"] = "top"
+    offset: int = Field(default=260, ge=0, description="px from the anchored frame edge")
+    duration: float | None = Field(default=None, gt=0, description="seconds; None for all")
+    max_words: int = Field(default=10, ge=2, le=20)
+    hint: str = Field(default="", description="what the line should be about or sound like")
 
 
 class TextBlock(Strict):
@@ -127,6 +148,7 @@ class Preset(Strict):
     captions: CaptionStyle = CaptionStyle()
     hook: Hook = Hook()
     title_overlay: TitleOverlay = TitleOverlay()
+    one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
     logo: Logo = Logo()
     intro: str | None = None

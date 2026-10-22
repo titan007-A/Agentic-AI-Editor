@@ -114,7 +114,8 @@ render behaves:
 
 | Section | Controls |
 | --- | --- |
-| `captions` | word-by-word captions: font, size, colours, position, animation |
+| `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces; an .srt file is saved next to the video |
+| `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline |
 | `framing` | how the picture fills the frame (see below); background colour |
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |

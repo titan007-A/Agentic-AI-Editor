@@ -12,13 +12,13 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import download, framing, review, trim
+from agentic_editor import download, framing, review, subtitles, trim
 from agentic_editor.analysis import faces, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
 from agentic_editor.cuts import clean_edl
-from agentic_editor.edl import EDL, Shot
+from agentic_editor.edl import EDL, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.planner import plan_with_llm
@@ -121,6 +121,91 @@ def subject_samples(
             known[f"{t:.3f}"] = [s.model_dump() for s in items]
         cache.write_text(json.dumps(known))
     return [(t, [subjects.Subject.model_validate(s) for s in known[f"{t:.3f}"]]) for t in times]
+
+
+def translated(
+    llm: OllamaClient, edl: EDL, analysis: Analysis, preset: Preset, notes: str | None
+) -> EDL:
+    """Captions in another language, made while the planning model is loaded."""
+    style = preset.captions
+    if not (style.enabled and style.mode == "translated"):
+        return edl
+    if not style.language:
+        note = "translated captions asked for without a language; showing the speech"
+        return edl.model_copy(update={"decisions": [*edl.decisions, note]})
+    lines = subtitles.lyric_cues(compose.timeline_words(edl, analysis), subtitles.TRANSLATE_WORDS)
+    update: dict = {}
+    try:
+        update["cues"] = subtitles.translate(llm, lines, style.language, notes)
+        note = f"captions translated into {style.language} ({len(update['cues'])} lines)"
+    except (LLMError, httpx.HTTPError) as exc:
+        note = f"translation failed ({exc}); showing the speech"
+    # The on-screen hook and title follow the captions into the same language.
+    overlays = {k: v for k, v in (("hook", edl.hook), ("title", edl.title)) if v}
+    if overlays:
+        wrapped = [Cue(start=0, end=1, text=v) for v in overlays.values()]
+        try:
+            done = subtitles.translate(llm, wrapped, style.language, notes)
+            update |= {k: c.text for k, c in zip(overlays, done, strict=True)}
+        except (LLMError, httpx.HTTPError):
+            note += "; hook and title left untranslated"
+    return edl.model_copy(update={**update, "decisions": [*edl.decisions, note]})
+
+
+def written_text(
+    vision: OllamaClient | None,
+    edl: EDL,
+    analysis: Analysis,
+    preset: Preset,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    notes: str | None,
+) -> EDL:
+    """Captions and the one-line overlay the vision model writes from the picture."""
+    want_cues = preset.captions.enabled and preset.captions.mode == "visual" and not edl.cues
+    want_line = preset.one_liner.enabled and not edl.one_liner
+    if not (want_cues or want_line):
+        return edl
+    if vision is None:
+        note = "no vision model to write captions or the one-liner"
+        return edl.model_copy(update={"decisions": [*edl.decisions, note]})
+    clip = edl.clips[0]
+    frames_dir = work_dir / "written"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    def frames(count: int, name: str) -> list[Path]:
+        times = [clip.start + clip.duration * (i + 0.5) / count for i in range(count)]
+        return [
+            subjects.grab(video, t, frames_dir / f"{name}-{i}.jpg", settings.ffmpeg_bin)
+            for i, t in enumerate(times)
+        ]
+
+    # What is said gives the model the subject; frames alone only show a person talking.
+    said = " ".join(w.text for w in analysis.transcript.between(clip.start, clip.end))
+    context = " ".join(said.split()[:120])
+    update: dict = {}
+    decisions = list(edl.decisions)
+    if want_cues:
+        count = min(8, max(1, round(clip.duration / subtitles.VISUAL_EVERY)))
+        try:
+            update["cues"] = subtitles.visual_cues(
+                vision, frames(count, "caption"), clip.duration, context, notes
+            )
+            decisions.append(f"wrote {len(update['cues'])} caption(s) from the picture")
+        except LLMError as exc:
+            decisions.append(f"captions from the picture failed ({exc}); showing the speech")
+    if want_line:
+        line = preset.one_liner
+        try:
+            language = preset.captions.language if preset.captions.mode == "translated" else None
+            update["one_liner"] = subtitles.one_line(
+                vision, frames(4, "line"), line.max_words, line.hint, context, notes, language
+            )
+            decisions.append(f'one-liner: "{update["one_liner"]}"')
+        except LLMError as exc:
+            decisions.append(f"one-liner failed ({exc})")
+    return edl.model_copy(update={**update, "decisions": decisions})
 
 
 def recheck_framing(
@@ -263,9 +348,18 @@ def produce(
             )
         else:
             commands = face_commands(edl, target, analysis, video, settings, work_dir, detections)
-        compose.render(edl, target, analysis, video, dest, work_dir, settings, backends, commands)
+        clip = edl.clips[0]
+        key = (clip.start, clip.end)
+        if target.captions.enabled and target.captions.avoid_faces and key not in detections:
+            detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
+        face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
+        compose.render(
+            edl, target, analysis, video, dest, work_dir, settings, backends, commands, face_samples
+        )
         progress("review", f"checking {preset.name}")
-        captions = work_dir / "captions.ass" if target.captions.enabled else None
+        # Caption timing is checked against the spoken words, so only for captions of them.
+        spoken = target.captions.enabled and target.captions.mode in ("speech", "lyrics")
+        captions = work_dir / "captions.ass" if spoken else None
         issues = review.review(
             dest,
             edl,
@@ -316,7 +410,8 @@ def run(
     with router.planner() as llm:
         for preset in presets:
             progress("plan", f"planning {preset.name}")
-            plans[preset.name] = plan(llm, for_preset(preset), preset, notes)
+            edl, planner = plan(llm, for_preset(preset), preset, notes)
+            plans[preset.name] = (translated(llm, edl, for_preset(preset), preset, notes), planner)
 
     outputs = []
     with router.vision() as vision:
@@ -330,6 +425,9 @@ def run(
             edl, planner = plans[preset.name]
             dest = out_dir / f"{preset.name}.mp4"
             render_dir = work_dir / "render" / preset.name
+            edl = written_text(
+                reviewer, edl, analysis, preset, source.path, settings, render_dir, notes
+            )
             progress("render", f"rendering {preset.name}")
             edl, renders, issues = produce(
                 edl,

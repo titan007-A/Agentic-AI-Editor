@@ -167,3 +167,33 @@ def test_a_half_second_reframe_is_folded_into_its_neighbour():
     ]
     merged = absorb_short(parts)
     assert [(s.start, s.end, s.width) for s in merged] == [(0, 8.5, 1920), (8.5, 40, 606)]
+
+
+def test_faces_map_into_output_rows_through_the_framing():
+    from agentic_editor.framing import screen_rows
+
+    crop = Shot(start=10, end=20, x=600, width=606)
+    wide = Shot(start=20, end=30, x=0, width=1920)
+    face = Face(cx=0.47, cy=0.4, width=0.1, height=0.2, score=0.9)
+    rows = screen_rows(
+        [(12.0, [face]), (25.0, [face])], CLIP, [crop, wide], FULL, (1920, 1080), FRAME, 606
+    )
+    (t1, (cropped,)), (t2, (padded,)) = rows
+    assert (t1, t2) == (2.0, 15.0)
+    # Full-height crop: 1080 source rows fill 1920 output rows.
+    assert round(cropped[0]) == round((0.4 - 0.17) * 1080 * 1920 / 1080)
+    # Whole picture: scaled to 1080 wide and centred, so the face sits in the middle band.
+    assert 656 < padded[0] < padded[1] < 1264
+
+
+def test_a_face_the_detector_lost_for_a_moment_still_beats_a_loose_vision_box():
+    loose = Subject(kind="head", label="head", x0=616, y0=0, x1=1242, y1=1080, keep=True)
+    # No face sample near 10.5 s, but the same face 1.5 s later.
+    (shot,) = frame([(10.5, [loose])], faces=[face_at(12.0, 900, 300)])
+    assert shot.width == 606
+
+
+def test_a_sliver_of_a_head_past_the_edge_is_not_a_cut():
+    # A 560 px head span in a 606 px following crop that lags by 20 px.
+    assert crossing([(500.0, 1060.0)], 520, 606) == []
+    assert crossing([(500.0, 1060.0)], 600, 606) == [(500.0, 1060.0)]

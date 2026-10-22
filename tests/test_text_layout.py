@@ -51,3 +51,14 @@ def test_long_lines_shrink_to_fit_width():
     path = font_file(FONTS, "OpenSans-ExtraBold")
     placed = place(block(text="x" * 80, max_width=900), path, FRAME, None, None)
     assert placed.size < 60
+
+
+def test_a_long_one_liner_is_split_into_two_even_lines():
+    from agentic_editor.render.text import balance
+    from agentic_editor.settings import get_settings
+
+    font = get_settings().fonts_dir / "OpenSans-ExtraBold.ttf"
+    text = "The voice that made a whole stadium go completely silent"
+    first, second = balance(text, font, 64, 900).split("\n")
+    assert abs(len(first) - len(second)) < 15
+    assert balance("Short line", font, 64, 900) == "Short line"
