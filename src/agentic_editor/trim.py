@@ -98,16 +98,25 @@ def choose_window(
     the preset allows; what is chosen is where that window sits."""
     inside = [ln for ln in lines if ln.start >= start - 1e-6 and ln.end <= end + 1e-6]
     limit = gap_limit(analysis.silences)
-    windows = []
-    for i, first in enumerate(inside):
-        s = max(start, first.start - PREROLL)
-        ends = [
-            min(end, last.end + DECAY)
-            for last in inside[i:]
-            if preset.min_duration <= min(end, last.end + DECAY) - s <= preset.max_duration
-        ]
-        if ends:
-            windows.append((s, max(ends)))
+
+    def windows_between(whole: bool) -> list[tuple[float, float]]:
+        found = []
+        for i, first in enumerate(inside):
+            if whole and not first.opens:
+                continue
+            s = max(start, first.start - PREROLL)
+            ends = [
+                min(end, last.end + DECAY)
+                for last in inside[i:]
+                if (last.closes or not whole)
+                and preset.min_duration <= min(end, last.end + DECAY) - s <= preset.max_duration
+            ]
+            if ends:
+                found.append((s, max(ends)))
+        return found
+
+    # Whole sentences when the material allows; a long run-on sentence may leave no choice.
+    windows = windows_between(whole=True) or windows_between(whole=False)
     best: tuple[float, float, float] | None = None
     if windows:
         # Windows that start late run into the end of the material and come out short;
@@ -167,6 +176,37 @@ def snap_to_beat(
     return new_start, new_end, note
 
 
+def whole_sentences(
+    start: float, end: float, lines: list[Line], preset: Preset
+) -> tuple[float, float, list[str]]:
+    """Move a start that falls inside a sentence back to where the sentence begins, and an
+    end inside one on to where it ends, if the reel stays short enough; otherwise forward
+    or back to the nearest sentence boundary inside the reel, if it stays long enough."""
+    spoken = [ln for ln in lines if ln.words and start - 0.5 <= ln.start and ln.end <= end + 0.5]
+    notes = []
+    if spoken and not spoken[0].opens:
+        first = spoken[0]
+        earlier = [ln for ln in lines if ln.opens and ln.words and ln.start < first.start]
+        later = [ln for ln in spoken[1:] if ln.opens]
+        if earlier and end - (earlier[-1].start - PREROLL) <= preset.max_duration + 0.25:
+            start = max(0.0, earlier[-1].start - PREROLL)
+            notes.append(f"started at {start:.1f}s, where the sentence begins")
+        elif later and end - (later[0].start - PREROLL) >= preset.min_duration:
+            start = later[0].start - PREROLL
+            notes.append(f"started at {start:.1f}s, on the next whole sentence")
+    if spoken and not spoken[-1].closes:
+        last = spoken[-1]
+        after = [ln for ln in lines if ln.closes and ln.words and ln.end > last.end]
+        before = [ln for ln in spoken[:-1] if ln.closes and ln.start >= start - 0.5]
+        if after and after[0].end + DECAY - start <= preset.max_duration + 0.25:
+            end = after[0].end + DECAY
+            notes.append(f"ended at {end:.1f}s, where the sentence ends")
+        elif before and before[-1].end + DECAY - start >= preset.min_duration:
+            end = before[-1].end + DECAY
+            notes.append(f"ended at {end:.1f}s, after the last whole sentence")
+    return start, end, notes
+
+
 def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
     clip = edl.clips[0]
     start, end, notes = trim_silence(clip.start, clip.end, analysis.silences)
@@ -174,6 +214,8 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
     if end - start > preset.max_duration + 0.25:
         start, end, note = choose_window(start, end, lines, analysis, preset)
         notes.append(note)
+    start, end, moved = whole_sentences(start, end, lines, preset)
+    notes += moved
     clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
     if clip.duration < preset.min_duration:
         grown = fit_duration([clip], lines, preset)[0]

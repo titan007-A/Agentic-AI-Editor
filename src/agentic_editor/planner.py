@@ -8,6 +8,7 @@ transcript lines by number; turning lines into timestamps happens here, in code.
 
 import json
 import logging
+from bisect import bisect_left
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field, ValidationError
@@ -16,7 +17,7 @@ from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL, CaptionOverrides, Clip, Zoom, problems
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.presets import Preset
-from agentic_editor.transcript import Word, phrases
+from agentic_editor.transcript import Word, ends_sentence, gap, phrases, split_phrase
 
 log = logging.getLogger(__name__)
 
@@ -44,13 +45,18 @@ class Line:
     end: float
     words: list[Word]
     loudness: str
+    # False when a long sentence had to be split: the line picks up mid-sentence, or
+    # runs on into the next line.
+    opens: bool = True
+    closes: bool = True
 
     @property
     def text(self) -> str:
         return " ".join(w.text for w in self.words) or "(no clear words)"
 
     def render(self) -> str:
-        return f"L{self.index} [{self.start:.1f}-{self.end:.1f}] ({self.loudness}) {self.text}"
+        text = ("..." if not self.opens else "") + self.text + ("..." if not self.closes else "")
+        return f"L{self.index} [{self.start:.1f}-{self.end:.1f}] ({self.loudness}) {text}"
 
 
 class Candidate(BaseModel):
@@ -105,24 +111,35 @@ def build_lines(analysis: Analysis, max_words: int = 24) -> list[Line]:
     words = analysis.transcript.words
     if analysis.audio_source == "vocals" and analysis.silences:
         spans = [
-            (start, end, [w for w in words if start <= (w.start + w.end) / 2 < end])
+            (start, end, [w for w in words if start <= (w.start + w.end) / 2 < end], True, True)
             for start, end in voiced_regions(analysis)
         ]
     else:
         spans = []
-        for phrase in phrases(words, min_gap=0.5):
-            for i in range(0, len(phrase), max_words):
-                group = phrase[i : i + max_words]
-                spans.append((group[0].start, group[-1].end, group))
+        starts = [a for a, _ in analysis.pauses]
 
-    levels = sorted(analysis.energy_between(start, end) for start, end, _ in spans)
+        def pause(before: Word, after: Word) -> float:
+            # The break sits between the two word starts, inside the stretched first word.
+            lo, hi = before.start + 0.1, after.start + 0.1
+            found = analysis.pauses[max(0, bisect_left(starts, lo) - 1) : bisect_left(starts, hi)]
+            heard = sum(max(0.0, min(b, hi) - max(a, lo)) for a, b in found)
+            return max(heard, gap(before, after))
+
+        for phrase in phrases(words, min_gap=0.5):
+            groups = split_phrase(phrase, max_words, pause)
+            for i, group in enumerate(groups):
+                opens = i == 0 or ends_sentence(groups[i - 1][-1])
+                closes = i == len(groups) - 1 or ends_sentence(group[-1])
+                spans.append((group[0].start, group[-1].end, group, opens, closes))
+
+    levels = sorted(analysis.energy_between(start, end) for start, end, *_ in spans)
     loud = levels[int(len(levels) * 0.75)] if levels else 0.0
     quiet = levels[int(len(levels) * 0.25)] if levels else 0.0
     lines = []
-    for index, (start, end, group) in enumerate(spans):
+    for index, (start, end, group, opens, closes) in enumerate(spans):
         level = analysis.energy_between(start, end)
         label = "loud" if level >= loud else "quiet" if level <= quiet else "normal"
-        lines.append(Line(index, round(start, 2), round(end, 2), group, label))
+        lines.append(Line(index, round(start, 2), round(end, 2), group, label, opens, closes))
     return lines
 
 
@@ -172,9 +189,10 @@ def propose(
     low, high = preset.min_duration, preset.max_duration
     prompt = (
         f"{_brief(preset, analysis)}\n\n"
-        "Transcript lines (line number, start-end seconds, loudness, text):\n"
-        + describe_lines(chunk)
-        + f"\n\n{QUALITIES}\n"
+        "Transcript lines (line number, start-end seconds, loudness, text). A line that "
+        'starts with "..." picks up in the middle of a sentence and one that ends with "..." '
+        "runs on into the next, so a segment starts on a line without the leading dots and "
+        "ends on one without the trailing dots:\n" + describe_lines(chunk) + f"\n\n{QUALITIES}\n"
         f"Propose up to 3 candidate segments from these lines. A segment is the run of "
         f"lines from start_line to end_line inclusive and should last {low:g}-{high:g} "
         f"seconds. Score hook, completeness and peak from 0 to 10 and give a one-line reason."
