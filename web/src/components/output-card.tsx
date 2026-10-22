@@ -56,7 +56,10 @@ export function OutputCard({ job, output }: { job: Job; output: Output }) {
     <Card className="tape tape-right gap-4">
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2">
-          <span className="truncate">{output.preset}</span>
+          <span className="truncate">
+            {output.preset}
+            {output.edl.variant ? ` · version ${"ABCDE"[output.edl.variant]}` : ""}
+          </span>
           <span className="shrink-0 text-xl font-medium text-muted-foreground">
             {seconds(output.duration)}
           </span>

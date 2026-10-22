@@ -302,6 +302,20 @@ def finalize(
 def plan_with_llm(
     llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None = None
 ) -> EDL:
+    return plan_variants(llm, analysis, preset, notes, count=1)[0]
+
+
+def _overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Share of the shorter span that the other one covers."""
+    shared = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
+    return shared / max(1e-6, min(a[1] - a[0], b[1] - b[0]))
+
+
+def plan_variants(
+    llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None, count: int
+) -> list[EDL]:
+    """The best plan, then up to count-1 more from other strong segments that don't mostly
+    repeat one already chosen, each with its own hook and title."""
     lines = build_lines(analysis)
     if not lines:
         raise LLMError("the transcript is empty, nothing to plan from")
@@ -310,11 +324,23 @@ def plan_with_llm(
         candidates += propose(llm, chunk, preset, analysis, notes)
     if not candidates:
         raise LLMError("the model proposed no usable segments")
-    candidates.sort(key=lambda c: c.hook + c.completeness + c.peak, reverse=True)
-    edl = finalize(llm, candidates[:12], lines, preset, analysis, notes)
+    # The opening matters most for a short video, so the hook counts double.
+    candidates.sort(key=lambda c: 2 * c.hook + c.completeness + c.peak, reverse=True)
+    edls = [finalize(llm, candidates[:12], lines, preset, analysis, notes)]
+    for other in candidates:
+        if len(edls) >= count:
+            break
+        span = (lines[other.start_line].start, lines[other.end_line].end)
+        if any(_overlap(span, (e.clips[0].start, e.clips[0].end)) > 0.5 for e in edls):
+            continue
+        try:
+            edl = finalize(llm, [other], lines, preset, analysis, notes)
+        except LLMError:
+            continue
+        edls.append(edl.model_copy(update={"variant": len(edls)}))
     if preset.zoom_punch_ins:
-        edl = edl.model_copy(update={"zooms": pick_emphasis(llm, edl, analysis)})
-    return edl
+        edls = [e.model_copy(update={"zooms": pick_emphasis(llm, e, analysis)}) for e in edls]
+    return edls
 
 
 def _normalize(word: str) -> str:

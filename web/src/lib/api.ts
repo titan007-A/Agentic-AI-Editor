@@ -6,6 +6,7 @@ export type Edl = {
   title: string;
   zooms: { time: number; scale: number; duration: number }[];
   crop_mode: string;
+  variant: number;
   decisions: string[];
 };
 

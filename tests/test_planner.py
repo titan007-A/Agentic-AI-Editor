@@ -140,3 +140,16 @@ def test_vocal_lines_follow_where_the_singer_is_audible(make_analysis):
     assert lines[1].start == 9.0 and lines[1].text == "(no clear words)"
     assert all(ln.end - ln.start <= 12.0 for ln in lines)
     assert "4s with no voice" in describe_lines(lines)
+
+
+def test_variants_come_from_different_segments(make_analysis):
+    from agentic_editor.planner import plan_variants
+
+    llm = FakeLLM(candidates((0, 1), (1, 2), (3, 4)), final(0), final(0), final(0))
+    preset = PRESET.model_copy(update={"zoom_punch_ins": False})
+    edls = plan_variants(llm, make_analysis(transcript(), 20.0), preset, None, count=3)
+    spans = [(e.clips[0].start, e.clips[0].end) for e in edls]
+    assert [e.variant for e in edls] == [0, 1]
+    # The second candidate lies inside the first plan, so the next version is built from
+    # the third, grown back to the minimum length; the two share under half their time.
+    assert spans == [(0.0, 9.9), (8.0, 17.5)]

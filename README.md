@@ -121,7 +121,8 @@ render behaves:
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
 | `silence` | what counts as silence when trimming a quiet start or end |
 | `beat_sync` | start and end on the beat (bar lines from the original mix), and an optional zoom pulse on each bar or beat |
-| `hook`, `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
+| `hook` | `optimize` picks the strongest opening line (the planning model reads them for speech; the strongest entrance wins for music); `variants` makes up to five versions per video from different strong segments, saved as `preset-b.mp4` and so on |
+| `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 
 Framing `smart` (the default) frames each shot so nothing that matters is cut. Heads
