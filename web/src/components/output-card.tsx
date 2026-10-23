@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { jobLabel } from "@/components/job-status";
+import { OutputVideo } from "@/components/output-video";
 import { ShareButton } from "@/components/share-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,14 +83,7 @@ export function OutputCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="filmstrip">
-          <video
-            className="mx-auto max-h-[70vh] w-full rounded-sm bg-black object-contain"
-            src={videoUrl(output)}
-            poster={output.has_thumbnail ? thumbnailUrl(output) : undefined}
-            controls
-            playsInline
-            preload="metadata"
-          />
+          <OutputVideo output={output} />
         </div>
         {output.title && <p className="text-sm font-medium">{output.title}</p>}
         {output.edl.hook && (

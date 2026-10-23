@@ -17,6 +17,8 @@ import { keepIfSame } from "@/lib/poller.mjs";
 type PileName = "ready" | "look";
 
 const REFRESH_MS = 15000;
+// Cards shown at first, and added by each "Show more".
+const PAGE = 12;
 
 export default function AutopilotPage() {
   const [counts, setCounts] = useState({ ready: 0, look: 0 });
@@ -60,6 +62,7 @@ export default function AutopilotPage() {
 
 function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
   const [jobs, setJobs] = useState<Job[] | null>(null);
+  const [shown, setShown] = useState(PAGE);
 
   usePolling(
     () =>
@@ -89,40 +92,55 @@ function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
       </p>
     );
   }
+  const more = jobs.length - shown;
   return (
-    <div className="grid grid-cols-1 gap-6 pt-2 md:grid-cols-2">
-      {jobs.map((job) => {
-        const output = job.outputs[0];
-        return (
-          <OutputCard
-            key={output.id}
-            job={job}
-            output={output}
-            actions={
-              <>
-                {name === "look" ? (
+    <div className="space-y-6 pt-2">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        {jobs.slice(0, shown).map((job) => {
+          const output = job.outputs[0];
+          return (
+            <OutputCard
+              key={output.id}
+              job={job}
+              output={output}
+              actions={
+                <>
+                  {name === "look" ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => decide(output.id, "approved", "Moved to ready")}
+                    >
+                      <Check /> Looks fine
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={() => decide(output.id, "posted", "Marked as posted")}
+                    >
+                      <Send /> Posted
+                    </Button>
+                  )}
                   <Button
-                    variant="outline"
-                    onClick={() => decide(output.id, "approved", "Moved to ready")}
+                    variant="ghost"
+                    onClick={() => decide(output.id, "dismissed", "Dismissed")}
                   >
-                    <Check /> Looks fine
+                    <X /> Dismiss
                   </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    onClick={() => decide(output.id, "posted", "Marked as posted")}
-                  >
-                    <Send /> Posted
-                  </Button>
-                )}
-                <Button variant="ghost" onClick={() => decide(output.id, "dismissed", "Dismissed")}>
-                  <X /> Dismiss
-                </Button>
-              </>
-            }
-          />
-        );
-      })}
+                </>
+              }
+            />
+          );
+        })}
+      </div>
+      {more > 0 && (
+        <Button
+          variant="outline"
+          className="w-full sm:w-auto"
+          onClick={() => setShown((n) => n + PAGE)}
+        >
+          Show more ({more} left)
+        </Button>
+      )}
     </div>
   );
 }
