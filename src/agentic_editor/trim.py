@@ -63,13 +63,14 @@ def avoid_dead_air(
         )
         for i in range(0, len(edges), 2)
     ]
-    long_enough = [(a, b) for a, b in sides if b - a >= preset.min_duration]
+    # Side k runs from the end of quiet[k - 1] to the start of quiet[k].
+    long_enough = [k for k, (a, b) in enumerate(sides) if b - a >= preset.min_duration]
     if not preset.hook.optimize:
-        long_enough = long_enough[:1] if long_enough and long_enough[0][0] == start else []
+        long_enough = long_enough[:1] if long_enough and long_enough[0] == 0 else []
     if not long_enough:
         return start, end, None
-    a, b = max(long_enough, key=lambda side: side[1] - side[0])
-    gap = next(q for q in quiet if q[1] <= a + PREROLL or q[0] >= b - DECAY)
+    k = max(long_enough, key=lambda k: sides[k][1] - sides[k][0])
+    (a, b), gap = sides[k], quiet[max(0, k - 1)]
     return a, b, f"kept {a:.1f}-{b:.1f}s, clear of {gap[1] - gap[0]:.0f}s without voice"
 
 
