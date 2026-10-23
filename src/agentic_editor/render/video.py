@@ -100,6 +100,7 @@ def frame_chain(
     crop_label: str,
     commands: Path | None,
     black_bars: tuple[int, int, int, int] | None,
+    picture_width: float = 1.0,
 ) -> list[str]:
     """Filters that turn one source clip into a frame-sized clip."""
     width, height = frame
@@ -112,7 +113,8 @@ def frame_chain(
 
     if mode == "none":
         chain += [
-            f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos",
+            f"scale={_even(width * picture_width)}:{height}"
+            ":force_original_aspect_ratio=decrease:flags=lanczos",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
         ]
         return chain
@@ -186,13 +188,13 @@ def zoom_expression(edl: EDL, pulses: list[float] = (), pulse_scale: float = 1.0
 
 
 def video_band(
-    mode: CropMode, source: tuple[int, int], frame: tuple[int, int]
+    mode: CropMode, source: tuple[int, int], frame: tuple[int, int], picture_width: float = 1.0
 ) -> tuple[float, float] | None:
     """Rows of the frame covered by the picture when it is letterboxed, else None."""
     if mode != "none":
         return None
     width, height = frame
-    scaled = min(height, width * source[1] / source[0])
+    scaled = min(height, _even(width * picture_width) * source[1] / source[0])
     if scaled >= height - 1:
         return None
     top = (height - scaled) / 2
@@ -241,6 +243,7 @@ def build_graph(
             f"c{i}",
             layers.crop_commands.get(i),
             layers.black_bars,
+            preset.framing.picture_width,
         )
         chain += ["setsar=1", f"fps={preset.fps}"]
         parts.append(f"[{label}]{','.join(chain)}[v{segments}]")

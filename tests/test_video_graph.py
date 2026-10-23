@@ -77,3 +77,12 @@ def test_clip_without_a_visible_watermark_is_left_alone():
 
 def test_watermark_blur_is_on_by_default():
     assert VERTICAL.watermarks.blur
+
+
+def test_an_inset_picture_is_drawn_narrower_and_centred():
+    chain = frame_chain("none", (1920, 1080), FRAME, "#000000", "c0", None, None, 0.74)
+    assert chain[0].startswith("scale=798:1920:force_original_aspect_ratio=decrease")
+    assert chain[1] == "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x000000"
+    top, bottom = video_band("none", (1920, 1080), FRAME, 0.74)
+    assert round(bottom - top) == round(798 * 1080 / 1920)
+    assert round(top + bottom) == 1920
