@@ -7,6 +7,8 @@ from agentic_editor.backends import detect
 from agentic_editor.presets import load_presets
 from agentic_editor.settings import get_settings
 
+log = logging.getLogger(__name__)
+
 # A short CC BY 3.0 performance from Wikimedia Commons, also used by the end-to-end test.
 BENCHMARK_SAMPLE = "https://commons.wikimedia.org/wiki/File:Breathe_by_Rockbitch_(circa_2000).webm"
 
@@ -20,8 +22,17 @@ def _run(args: argparse.Namespace) -> int:
         return 2
     backends = detect(settings)
     presets = [available[n] for n in args.preset]
+    failed = 0
     for source in args.source:
-        for output in pipeline.run(source, presets, settings, backends, args.notes).outputs:
+        try:
+            result = pipeline.run(source, presets, settings, backends, args.notes)
+        except Exception as exc:
+            # One video that can't be edited doesn't hold up the rest of the batch.
+            log.debug("editing %s failed", source, exc_info=True)
+            print(f"{source}: failed: {type(exc).__name__}: {exc}")
+            failed += 1
+            continue
+        for output in result.outputs:
             clips = ", ".join(f"{c.start:.2f}-{c.end:.2f}" for c in output.edl.clips)
             print(f"{output.preset}: {output.path}")
             print(
@@ -36,7 +47,7 @@ def _run(args: argparse.Namespace) -> int:
                     print(f"    {doubt}")
             else:
                 print("  ready to post")
-    return 0
+    return 1 if failed else 0
 
 
 def _learn(args: argparse.Namespace) -> int:
