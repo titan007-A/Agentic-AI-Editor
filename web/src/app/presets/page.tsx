@@ -58,11 +58,16 @@ export default function PresetsPage() {
 
   const openDraft = useCallback(
     (preset: Preset, notes: string[]) => {
-      if (dirty && !window.confirm("A learned draft is ready. Discard unsaved changes?")) return;
+      if (
+        dirty &&
+        !window.confirm("A learned draft is ready. Discard your unsaved changes to open it?")
+      )
+        return false;
       setDraft(preset);
       setIsNew(true);
       setDirty(true);
       setLearned(notes);
+      return true;
     },
     [dirty],
   );

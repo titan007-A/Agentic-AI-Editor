@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, Upload, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -16,13 +16,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { usePolling } from "@/hooks/use-polling";
-import { api, errorText, type Preset, type StyleDraft } from "@/lib/api";
+import { api, ApiError, errorText, type Preset, type StyleDraft } from "@/lib/api";
+import { recall, remember } from "@/lib/session-value.mjs";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const POLL_MS = 2000;
+// The draft being learned, so leaving the page or reloading doesn't lose it.
+const DRAFT_KEY = "learning-style-draft";
 
 /** Learns a style from a reel and hands back the drafted preset. Waiting carries on
- * after the dialog is closed, so the draft still opens when it is ready. */
+ * after the dialog is closed, and after coming back to the page, so the draft still
+ * opens when it is ready. `onDraft` says whether the draft was opened. */
 export function LearnStyleDialog({
   open,
   onOpenChange,
@@ -32,7 +36,7 @@ export function LearnStyleDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   taken: string[];
-  onDraft: (preset: Preset, notes: string[]) => void;
+  onDraft: (preset: Preset, notes: string[]) => boolean;
 }) {
   const [link, setLink] = useState("");
   const [upload, setUpload] = useState<{ source: string; name: string } | null>(null);
@@ -41,6 +45,7 @@ export function LearnStyleDialog({
   const [draft, setDraft] = useState<StyleDraft | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const waiting = draft?.status === "queued" || draft?.status === "running";
+  const kept = draft?.status === "done" && draft.preset ? draft.preset : null;
   const source = upload?.source ?? link.trim();
   const nameProblem =
     name && !NAME_PATTERN.test(name)
@@ -49,24 +54,57 @@ export function LearnStyleDialog({
         ? `${name} already exists`
         : null;
 
+  function forget() {
+    remember(DRAFT_KEY, null);
+    setDraft(null);
+  }
+
+  function openKept(latest: StyleDraft) {
+    if (!latest.preset || !onDraft(latest.preset, latest.notes)) return false;
+    forget();
+    onOpenChange(false);
+    setLink("");
+    setUpload(null);
+    setName("");
+    return true;
+  }
+
+  function arrived(latest: StyleDraft) {
+    setDraft(latest);
+    if (latest.status === "done" && latest.preset) {
+      toast.success(`Draft ready: ${latest.preset.label}`);
+      if (!openKept(latest)) {
+        toast("The learned draft is kept", {
+          description: "Open it from Learn from a reel when you're ready.",
+          action: { label: "Show", onClick: () => onOpenChange(true) },
+        });
+      }
+    } else if (latest.status === "failed") {
+      remember(DRAFT_KEY, null);
+      toast.error(`Couldn't learn from the reel: ${latest.error}`, { duration: 10000 });
+    }
+  }
+
   const draftId = draft?.id;
   usePolling(
     async () => {
-      if (!draftId) return;
-      const latest = await api.styleDraft(draftId);
-      setDraft(latest);
-      if (latest.status === "done" && latest.preset) {
-        toast.success(`Draft ready: ${latest.preset.label}`);
-        onDraft(latest.preset, latest.notes);
-        onOpenChange(false);
-        setDraft(null);
-        setLink("");
-        setUpload(null);
-        setName("");
-      }
+      if (draftId) arrived(await api.styleDraft(draftId));
     },
     draftId && waiting ? POLL_MS : null,
   );
+
+  // A draft started before leaving the page picks up where it was.
+  const resume = useEffectEvent((latest: StyleDraft) => arrived(latest));
+  useEffect(() => {
+    const id = recall(DRAFT_KEY);
+    if (!id) return;
+    api
+      .styleDraft(id)
+      .then(resume)
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 404) remember(DRAFT_KEY, null);
+      });
+  }, []);
 
   async function addFile(files: FileList | null) {
     const file = files?.[0];
@@ -86,7 +124,9 @@ export function LearnStyleDialog({
   async function start() {
     setBusy(true);
     try {
-      setDraft(await api.learnStyle(source, name.trim() || null));
+      const started = await api.learnStyle(source, name.trim() || null);
+      remember(DRAFT_KEY, started.id);
+      setDraft(started);
     } catch (err) {
       toast.error(errorText(err));
     } finally {
@@ -105,7 +145,15 @@ export function LearnStyleDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {waiting ? (
+        {kept && draft ? (
+          <div className="space-y-2 py-2 text-sm" role="status">
+            <p>
+              The draft <span className="font-medium">{kept.label}</span> is ready and not opened
+              yet.
+            </p>
+            <p className="text-xs break-all text-muted-foreground">From {draft.source}</p>
+          </div>
+        ) : waiting ? (
           <div className="flex items-center gap-3 py-4 text-sm" role="status">
             <Loader2 className="size-5 shrink-0 animate-spin" />
             <span>
@@ -174,12 +222,21 @@ export function LearnStyleDialog({
           </div>
         )}
 
-        {!waiting && (
+        {kept && draft ? (
           <DialogFooter>
-            <Button disabled={busy || !source || !!nameProblem} onClick={start}>
-              Learn the style
+            <Button variant="ghost" onClick={forget}>
+              Discard it
             </Button>
+            <Button onClick={() => openKept(draft)}>Open the draft</Button>
           </DialogFooter>
+        ) : (
+          !waiting && (
+            <DialogFooter>
+              <Button disabled={busy || !source || !!nameProblem} onClick={start}>
+                Learn the style
+              </Button>
+            </DialogFooter>
+          )
         )}
       </DialogContent>
     </Dialog>
