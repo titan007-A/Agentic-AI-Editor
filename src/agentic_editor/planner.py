@@ -236,8 +236,9 @@ def fit_duration(
 ) -> list[Clip]:
     """Grow a short plan a whole line at a time, at its start or end (only its end without
     grow_back, when the opening was chosen on purpose), until it reaches the preset's
-    minimum. Lines only cover voiced stretches, so growing never adds a silent head or
-    tail. Plans that run long are trimmed by trim.apply, which picks the window.
+    minimum, never past its maximum. Lines only cover voiced stretches, so growing never
+    adds a silent head or tail. Plans that run long are trimmed by trim.apply, which picks
+    the window.
 
     Small models are poor at arithmetic, so a plan that is a few seconds off is
     corrected here rather than sent back for another attempt."""
@@ -250,6 +251,12 @@ def fit_duration(
         after = next((ln for ln in lines if ln.start >= clips[-1].end - 1e-6), None)
         before = next((ln for ln in reversed(lines) if ln.end <= clips[0].start + 1e-6), None)
         if not grow_back:
+            before = None
+        # A line that would carry the plan past the maximum is left out, even if that
+        # leaves the plan short: a reel ends after a whole line, never inside one.
+        if after is not None and after.end - clips[0].start > preset.max_duration:
+            after = None
+        if before is not None and clips[-1].end - before.start > preset.max_duration:
             before = None
         # Grow toward whichever neighbour is closer, so a plan doesn't swallow a long
         # stretch of nothing when there is material right on the other side.

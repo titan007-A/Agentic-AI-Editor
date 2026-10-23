@@ -52,3 +52,22 @@ def test_trimming_snaps_to_the_beat_when_the_preset_asks(make_analysis):
 def test_pulses_ease_back_out_after_each_bar():
     expr = zoom_expression(EDL(clips=[Clip(start=0, end=10)]), [2.0], 1.04)
     assert expr == "1+0.040*between(t,2.000,2.300)*(1-(t-2.000)/0.3)"
+
+
+def test_an_earlier_start_never_carries_a_full_reel_past_the_maximum():
+    beat = 60 / 70
+    beats = [round(8.4 + beat * i, 3) for i in range(60)]
+    rhythm = Beats(tempo=70, beats=beats, downbeats=beats[::4])
+    start, end, _ = snap_to_beat(10.0, 40.0, rhythm, 30.0)
+    assert end - start <= 30.0
+
+
+def test_the_note_says_which_end_moved():
+    start, end, note = snap_to_beat(10.8, 40.3, RHYTHM, max_duration=29.8)
+    assert (start, end) == (10.5, 40.3)
+    assert note == "start moved onto the beat (120 BPM)"
+
+
+def test_a_bar_line_at_zero_counts():
+    rhythm = Beats(tempo=120.0, beats=[0.0, 0.5, 1.0], downbeats=[0.0])
+    assert snap_to_beat(0.3, 20.0, rhythm, 60)[0] == 0.0

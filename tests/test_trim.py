@@ -117,3 +117,13 @@ def test_a_chosen_opening_is_not_dropped_to_avoid_a_silence(make_analysis):
     fixed = VOCALS.model_copy(update={"hook": VOCALS.hook.model_copy(update={"optimize": False})})
     edl = apply(plan(0.0, 40.0), analysis, fixed)
     assert (edl.clips[0].start, edl.clips[0].end) == (0.0, 40.0)
+
+
+def test_growing_a_short_plan_never_passes_the_maximum(make_analysis):
+    preset = VOCALS.model_copy(update={"min_duration": 20, "max_duration": 22})
+    analysis = make_analysis(
+        [], 40.0, audio_source="vocals", silences=[(0.0, 5.0), (15.0, 15.4), (30.0, 40.0)]
+    )
+    edl = apply(plan(5.0, 15.0), analysis, preset)
+    assert edl.clips[0].duration <= 22
+    assert any("left shorter" in d for d in edl.doubts)

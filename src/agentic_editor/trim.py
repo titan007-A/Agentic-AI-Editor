@@ -195,13 +195,21 @@ def snap_to_beat(
         found = [t for t in times if end <= t <= end + reach and t - opening <= max_duration]
         return min(found) if found else None
 
-    new_start = before(rhythm.downbeats, 2 * beat) or before(rhythm.beats, beat) or start
-    new_end = after(rhythm.downbeats, 2 * beat, new_start) or after(rhythm.beats, beat, new_start)
-    new_end = new_end or end
-    if (new_start, new_end) == (start, end):
+    new_start = before(rhythm.downbeats, 2 * beat)
+    if new_start is None:
+        new_start = before(rhythm.beats, beat)
+    # An earlier start must not carry a reel that fits past the maximum.
+    if new_start is None or end - new_start > max(max_duration, end - start):
+        new_start = start
+    new_end = after(rhythm.downbeats, 2 * beat, new_start)
+    if new_end is None:
+        new_end = after(rhythm.beats, beat, new_start)
+    if new_end is None:
+        new_end = end
+    moved = [name for name, a, b in (("start", new_start, start), ("end", new_end, end)) if a != b]
+    if not moved:
         return start, end, None
-    note = f"start and end moved onto the beat ({rhythm.tempo:.0f} BPM)"
-    return new_start, new_end, note
+    return new_start, new_end, f"{' and '.join(moved)} moved onto the beat ({rhythm.tempo:.0f} BPM)"
 
 
 def whole_sentences(

@@ -28,7 +28,7 @@ from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
 from agentic_editor.cuts import clean_edl
-from agentic_editor.edl import EDL, Cue, Shot
+from agentic_editor.edl import EDL, Clip, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.planner import plan_variants
@@ -357,6 +357,29 @@ def onscreen_text(
     return tracked[key]
 
 
+def moved(edl: EDL, old: Clip) -> EDL:
+    """The plan after its clip moved from `old`: the shots and the picture area are worked
+    out again for the new stretch, and the models' captions, timed on the reel, shift with
+    its start and drop what fell outside."""
+    clip = edl.clips[0]
+    shift = clip.start - old.start
+
+    def shifted(cue: Cue) -> Cue:
+        words = [
+            w.model_copy(update={"start": w.start - shift, "end": w.end - shift}) for w in cue.words
+        ]
+        return cue.model_copy(
+            update={
+                "start": round(max(0.0, cue.start - shift), 3),
+                "end": round(min(clip.duration, cue.end - shift), 3),
+                "words": [w for w in words if w.end > 0 and w.start < clip.duration],
+            }
+        )
+
+    cues = [shifted(c) for c in edl.cues if c.end - shift > 0 and c.start - shift < clip.duration]
+    return edl.model_copy(update={"shots": [], "picture": None, "cues": cues})
+
+
 def fix(
     issues: list[review.Issue], edl: EDL, preset: Preset, analysis: Analysis, loudness_goal: float
 ) -> tuple[EDL, Preset, bool]:
@@ -366,7 +389,7 @@ def fix(
         if issue.kind == "duration":
             trimmed = trim.apply(edl, analysis, preset)
             if trimmed.clips != edl.clips:
-                edl, changed = trimmed, True
+                edl, changed = moved(trimmed, edl.clips[0]), True
         elif issue.kind == "loudness" and issue.measured is not None:
             # Aim off-target by the error just measured, which covers what the final
             # encode shifts.
