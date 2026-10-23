@@ -128,6 +128,22 @@ class FeedItem(Base):
     job: Mapped[Job | None] = relationship()
 
 
+class StyleDraft(Base):
+    """A preset being drafted from a reel that has the look wanted."""
+
+    __tablename__ = "style_drafts"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    source: Mapped[str] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
+    preset: Mapped[dict | None] = mapped_column(JSON)
+    notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

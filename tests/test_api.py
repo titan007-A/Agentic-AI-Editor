@@ -6,12 +6,13 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from agentic_editor import jobs, pipeline
+from agentic_editor import jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
 from agentic_editor.db import make_sessionmaker
 from agentic_editor.edl import EDL, Clip
+from agentic_editor.presets import Preset
 from agentic_editor.settings import ROOT, Settings
 
 PASSWORD = "correct horse"
@@ -50,6 +51,21 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
     monkeypatch.setattr(
         jobs, "process", lambda job_id: jobs.run_job(job_id, sessions, settings, env.run)
+    )
+
+    def fake_learn(source, settings, backends, name, progress):
+        progress("read", "reading the text on 6 frames")
+        if "broken" in source:
+            raise ValueError("no picture in it")
+        preset = Preset(
+            name=name or "shorts-9x16", label="Talking short", min_duration=10, max_duration=30
+        )
+        return style.Draft(preset, ["Captions: none"])
+
+    monkeypatch.setattr(
+        jobs,
+        "learn_style",
+        lambda draft_id: jobs.run_learning(draft_id, sessions, settings, fake_learn),
     )
     with TestClient(create_app(settings, sessions, start_worker=False)) as client:
         env.client = client
@@ -255,3 +271,28 @@ def test_feeds_are_checked_before_they_are_saved(env, tmp_path):
     assert env.client.post("/api/feeds", json=link).status_code == 422
     assert add_folder_feed(env, tmp_path, active_from=23).status_code == 422
     assert add_folder_feed(env, tmp_path, presets=["nope"]).status_code == 422
+
+
+def learned(client, **body) -> dict:
+    response = client.post("/api/styles", json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+    return client.get(f"/api/styles/{response.json()['id']}").json()
+
+
+def test_a_style_is_learned_into_a_draft_preset_that_is_not_saved(env):
+    draft = learned(env.client, source="https://x.test/reel")
+    assert draft["status"] == "done" and draft["notes"] == ["Captions: none"]
+    # Named after its label, without taking the name of a preset that exists.
+    assert draft["preset"]["name"] == "shorts-9x16-2"
+    assert "shorts-9x16-2" not in {p["name"] for p in env.client.get("/api/presets").json()}
+    assert learned(env.client, source="https://x.test/r", name="mine")["preset"]["name"] == "mine"
+
+
+def test_a_reel_that_cannot_be_learned_from_says_why(env):
+    draft = learned(env.client, source="https://x.test/broken")
+    assert draft["status"] == "failed" and "no picture in it" in draft["error"]
+    assert env.client.post("/api/styles", json={"source": "/home/x.mp4"}).status_code == 422
+    bad_name = {"source": "https://x.test/r", "name": "Not A Name"}
+    assert env.client.post("/api/styles", json=bad_name).status_code == 422
+    assert env.client.get("/api/styles/nope").status_code == 404

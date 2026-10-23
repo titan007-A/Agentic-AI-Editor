@@ -6,9 +6,9 @@ from functools import lru_cache
 from huey import SqliteHuey
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import pipeline
+from agentic_editor import pipeline, style
 from agentic_editor.backends import get_backends
-from agentic_editor.db import Event, Job, Output, make_sessionmaker
+from agentic_editor.db import Event, Job, Output, StyleDraft, make_sessionmaker
 from agentic_editor.presets import load_presets
 from agentic_editor.settings import Settings, get_settings
 
@@ -108,6 +108,55 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
         db.commit()
 
 
+def unused_name(base: str, taken: set[str]) -> str:
+    name, n = base, 2
+    while name in taken:
+        name, n = f"{base}-{n}", n + 1
+    return name
+
+
+def run_learning(
+    draft_id: str, Session: sessionmaker, settings: Settings, learn=style.learn
+) -> None:
+    """Draft a preset from a reference reel. It runs on the job queue, so it never has
+    the GPU at the same time as an edit."""
+    with Session() as db:
+        draft = db.get(StyleDraft, draft_id)
+        draft.status = "running"
+        db.commit()
+        source, name = draft.source, draft.name
+
+    def progress(stage: str, message: str) -> None:
+        with Session() as db:
+            db.get(StyleDraft, draft_id).message = message
+            db.commit()
+
+    try:
+        learned = learn(source, settings, get_backends(), name, progress)
+    except Exception as exc:
+        log.exception("learning from %s failed", source)
+        with Session() as db:
+            draft = db.get(StyleDraft, draft_id)
+            draft.status, draft.error = "failed", f"{type(exc).__name__}: {exc}"
+            db.commit()
+        return
+
+    preset = learned.preset
+    if not name:
+        taken = set(load_presets(settings.presets_dir))
+        preset = preset.model_copy(update={"name": unused_name(preset.name, taken)})
+    with Session() as db:
+        draft = db.get(StyleDraft, draft_id)
+        draft.preset, draft.notes = preset.model_dump(mode="json"), learned.notes
+        draft.status, draft.message = "done", "draft ready"
+        db.commit()
+
+
 @huey.task()
 def process(job_id: str) -> None:
     run_job(job_id, sessions(), get_settings())
+
+
+@huey.task()
+def learn_style(draft_id: str) -> None:
+    run_learning(draft_id, sessions(), get_settings())
