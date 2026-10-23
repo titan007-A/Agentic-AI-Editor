@@ -49,7 +49,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <>
       <header className="hand-rule sticky top-0 z-10 bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4 sm:gap-4">
-          <Link href="/" onNavigate={guard} className="flex items-center gap-2">
+          <Link
+            href="/"
+            onNavigate={guard}
+            className="flex min-h-11 items-center gap-2 sm:min-h-0"
+            aria-label="Agentic AI Editor, jobs"
+          >
             <span className="grid size-9 -rotate-6 place-items-center rounded-[50%_45%_55%_40%] border-2 border-foreground bg-[var(--mustard)]">
               <Clapperboard className="size-5" />
             </span>
@@ -66,14 +71,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   key={link.href}
                   href={link.href}
                   onNavigate={guard}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "px-1.5 py-1 text-sm font-semibold transition-colors sm:px-3",
-                    active
-                      ? "scribble text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
+                    // Tall enough to tap on a phone; the underline stays on the word.
+                    "inline-flex min-h-11 items-center px-1.5 text-sm font-semibold transition-colors sm:min-h-0 sm:px-3",
+                    active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  {link.label}
+                  <span className={cn("py-1", active && "scribble")}>{link.label}</span>
                 </Link>
               );
             })}

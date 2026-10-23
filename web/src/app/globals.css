@@ -285,6 +285,22 @@ body::before {
   box-shadow: none;
 }
 
+/* Phones get buttons of at least 44 px to tap; wider screens keep the compact sizes. */
+@media (max-width: 639px) {
+  [data-variant]:is([data-slot="button"], [data-slot="dialog-trigger"]) {
+    min-height: 44px;
+  }
+
+  [data-variant]:is([data-slot="button"], [data-slot="dialog-trigger"])[data-size^="icon"] {
+    min-width: 44px;
+  }
+
+  /* Keeps titles clear of the dialog's close button, which grows too. */
+  [data-slot="dialog-header"] {
+    padding-right: 2.5rem;
+  }
+}
+
 [data-slot="input"],
 [data-slot="textarea"],
 [data-slot="select-trigger"] {
@@ -417,6 +433,11 @@ body::before {
   border: 2px solid var(--ink) !important;
   border-radius: var(--wobble-lg) !important;
   box-shadow: 3px 4px 0 var(--ink) !important;
+}
+
+/* Validation errors come one per line. */
+[data-sonner-toast] :is([data-title], [data-description]) {
+  white-space: pre-line;
 }
 
 [data-sonner-toast][data-type="error"] {
