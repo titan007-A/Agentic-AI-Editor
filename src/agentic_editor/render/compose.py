@@ -15,7 +15,7 @@ from agentic_editor.backends import Backends, encoder_args
 from agentic_editor.edl import EDL, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
-from agentic_editor.render import audio, captions, grade, text
+from agentic_editor.render import audio, captions, fonts, grade, text
 from agentic_editor.render.video import Layers, build_graph, crop_size, video_band
 from agentic_editor.settings import ROOT, Settings
 
@@ -228,6 +228,15 @@ def render(
         if layers.black_bars:
             source = layers.black_bars[:2]
 
+    # Text a bundled font can't draw gets a Noto font for its script.
+    font_folder = settings.models_dir / "fonts"
+    translated = preset.captions.mode == "translated" and preset.captions.language
+    language = preset.captions.language if translated else analysis.transcript.language
+
+    def face(name: str, *texts: str) -> text.Face:
+        primary = text.font_file(settings.fonts_dir, name)
+        return text.Face(fonts.chain(primary, texts, font_folder, language))
+
     # Banners keep off faces, the picture's own text and the preset's text blocks; captions
     # keep off those and banners.
     obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
@@ -240,9 +249,7 @@ def render(
                 if block.anchor == "top"
                 else preset.framing.text_gap_below
             )
-            placed.append(
-                text.place(block, text.font_file(settings.fonts_dir, block.font), frame, band, gap)
-            )
+            placed.append(text.place(block, face(block.font, block.text), frame, band, gap))
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
         obstacles += [(0.0, edl.duration, *block.band) for block in placed]
 
@@ -283,7 +290,7 @@ def render(
         words: str, font_name: str, size: int, color: str, box: str | None,
         position: str, offset: int, until: float, name: str,
     ) -> int:  # fmt: skip
-        font = text.font_file(settings.fonts_dir, font_name)
+        font = face(font_name, words)
         wrapped = text.balance(words, font, size, frame[0] - 160)
         # Placed by the rows it really covers, box included, with `offset` still where the
         # first line starts.
@@ -326,12 +333,11 @@ def render(
         style = preset.captions
         overrides = edl.caption_overrides
         font = text.font_file(settings.fonts_dir, style.font)
-        sized = text.caption_font(font, style.size)
+        said = [w.text for w in timeline_words(edl, analysis)] + [c.text for c in edl.cues]
+        said = [line.upper() if style.uppercase else line for line in said]
+        chain = fonts.chain(font, said, font_folder, language)
+        measure = text.caption_measure(chain, style.size, style.uppercase)
         room = frame[0] - 120 - 2 * style.outline
-
-        def measure(line: str) -> float:
-            return sized.getlength(line.upper() if style.uppercase else line)
-
         cues = caption_cues(edl, analysis, style, lambda line: measure(line) <= room)
         if any(not c.words for c in cues):
             cues = subtitles.fit_lines(cues, measure, room)
@@ -357,10 +363,15 @@ def render(
             highlight_color=overrides.highlight_color,
             placements=placements,
             scales=scales,
+            font_chain=chain,
         )
         layers.captions = work_dir / "captions.ass"
         layers.captions.write_text(ass, encoding="utf-8")
         layers.fonts_dir = settings.fonts_dir
+        if len(chain) > 1:
+            layers.fonts_dir = fonts.gather(
+                [*text.bundled_fonts(settings.fonts_dir), *chain[1:]], work_dir / "fonts"
+            )
         if style.export_srt:
             dest.with_suffix(".srt").write_text(subtitles.to_srt(cues), encoding="utf-8")
 
