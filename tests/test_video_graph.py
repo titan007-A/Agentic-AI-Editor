@@ -130,3 +130,17 @@ def test_shipped_letterboxed_presets_take_off_baked_in_bars():
     edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="none")
     graph, _ = build_graph(edl, italian, (558, 426), Layers(black_bars=(558, 426, 40, 0)))
     assert "crop=558:426:40:0" in graph and "color=0xC8A77D" in graph
+
+
+def test_a_silent_intro_gets_silence_and_joins_the_reel_in_one_graph():
+    from agentic_editor.ffmpeg import MediaInfo
+    from agentic_editor.render.compose import bookend_graph
+
+    silent = MediaInfo(1.5, 1920, 1080, 25, has_audio=False, has_video=True)
+    sound = MediaInfo(2.0, 1080, 1920, 30, has_audio=True, has_video=True)
+    parts, video, audio = bookend_graph(FRAME, 30, [(5, silent)], [(6, sound)], "out", 4)
+    graph = ";".join(parts)
+    assert "[5:a]" not in graph
+    assert "anullsrc=r=48000:cl=stereo,atrim=duration=1.500[ba0]" in graph
+    assert "[bv0][ba0][out][reel_a][bv1][ba1]concat=n=3:v=1:a=1[joined_v][joined_a]" in graph
+    assert (video, audio) == ("joined_v", "joined_a")

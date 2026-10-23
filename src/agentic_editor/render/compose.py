@@ -359,42 +359,71 @@ def render(
 
     audio_index = add_input(soundtrack)
     graph, out = build_graph(edl, preset, source, layers)
-    main = dest if not (preset.intro or preset.outro) else work_dir / "main.mp4"
+    maps = [f"[{out}]", f"{audio_index}:a"]
+    if preset.intro or preset.outro:
+        # Joined in the same graph, so the reel is encoded once.
+        before = [bookend(asset_path(preset.intro), add_input)] if preset.intro else []
+        after = [bookend(asset_path(preset.outro), add_input)] if preset.outro else []
+        parts, video_out, audio_out = bookend_graph(
+            frame, preset.fps, before, after, out, audio_index
+        )
+        graph = ";".join([graph, *parts])
+        maps = [f"[{video_out}]", f"[{audio_out}]"]
     ffmpeg.run([
         "-y", *inputs, "-filter_complex", graph,
-        "-map", f"[{out}]", "-map", f"{audio_index}:a",
+        "-map", maps[0], "-map", maps[1],
         *encoder_args(backends, preset.bitrate_mbps),
         "-r", str(preset.fps),
         "-c:a", "aac", "-b:a", "256k", "-ar", str(audio.SAMPLE_RATE),
-        "-movflags", "+faststart", str(main),
+        "-movflags", "+faststart", str(dest),
     ])  # fmt: skip
-
-    if main != dest:
-        add_bookends(main, preset, dest, backends)
     log.info(
         "rendered %s with %s in %.1fs", dest.name, backends.encoder_name, time.monotonic() - started
     )
     return dest
 
 
-def add_bookends(main: Path, preset: Preset, dest: Path, backends: Backends) -> None:
-    width, height = preset.size
-    pieces = [asset_path(p) for p in (preset.intro,) if p] + [main]
-    pieces += [asset_path(p) for p in (preset.outro,) if p]
-    inputs, parts, labels = [], [], []
-    for i, piece in enumerate(pieces):
-        inputs += ["-i", str(piece)]
+def bookend(path: Path, add_input: Callable[[Path], int]) -> tuple[int, ffmpeg.MediaInfo]:
+    info = ffmpeg.probe(path)
+    if not info.has_video:
+        raise ValueError(f"{path.name} has no picture to use as an intro or outro")
+    return add_input(path), info
+
+
+def bookend_graph(
+    frame: tuple[int, int],
+    fps: int,
+    before: list[tuple[int, ffmpeg.MediaInfo]],
+    after: list[tuple[int, ffmpeg.MediaInfo]],
+    video: str,
+    audio_input: int,
+) -> tuple[list[str], str, str]:
+    """Graph parts that put intro clips (inputs with their probed info) before the reel
+    and outro clips after it, each fitted to the frame. A clip without sound gets silence
+    for its length, so the soundtrack after it stays in step."""
+    width, height = frame
+    rate = f"sample_rates={audio.SAMPLE_RATE}:channel_layouts=stereo"
+    parts, labels = [], []
+
+    def piece(k: int, index: int, info: ffmpeg.MediaInfo) -> None:
         parts.append(
-            f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={preset.fps}[v{i}]"
+            f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p[bv{k}]"
         )
-        parts.append(
-            f"[{i}:a]aformat=sample_rates={audio.SAMPLE_RATE}:channel_layouts=stereo[a{i}]"
-        )
-        labels.append(f"[v{i}][a{i}]")
-    parts.append(f"{''.join(labels)}concat=n={len(pieces)}:v=1:a=1[v][a]")
-    ffmpeg.run([
-        "-y", *inputs, "-filter_complex", ";".join(parts), "-map", "[v]", "-map", "[a]",
-        *encoder_args(backends, preset.bitrate_mbps),
-        "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", str(dest),
-    ])  # fmt: skip
+        if info.has_audio:
+            parts.append(f"[{index}:a]aformat={rate}[ba{k}]")
+        else:
+            parts.append(
+                f"anullsrc=r={audio.SAMPLE_RATE}:cl=stereo,"
+                f"atrim=duration={max(info.duration, 0.04):.3f}[ba{k}]"
+            )
+        labels.append(f"[bv{k}][ba{k}]")
+
+    for k, (index, info) in enumerate(before):
+        piece(k, index, info)
+    parts.append(f"[{audio_input}:a]aformat={rate}[reel_a]")
+    labels.append(f"[{video}][reel_a]")
+    for k, (index, info) in enumerate(after, start=len(before)):
+        piece(k, index, info)
+    parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=1[joined_v][joined_a]")
+    return parts, "joined_v", "joined_a"
