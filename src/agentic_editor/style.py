@@ -78,6 +78,7 @@ LOUD = -12.0  # LUFS: a reel louder than this sets the preset's loudness target
 MAX_LOUDNESS = -9.0
 PART = 0.6  # of the box's width: text narrower than this is likely only part of it
 DARK = 70  # brightest channel of a background a dark border would vanish into
+THICKEST = 0.3  # of the line's height: a border wider than this is the background
 
 FORMATS = {(9, 16): (1080, 1920), (4, 5): (1080, 1350), (1, 1): (1080, 1080),
            (16, 9): (1920, 1080)}  # fmt: skip
@@ -335,11 +336,14 @@ def roles(
     return found
 
 
-def outline_of(crop: np.ndarray, mask: np.ndarray) -> tuple[tuple[int, int, int], int] | None:
+def outline_of(
+    crop: np.ndarray, mask: np.ndarray, line_height: int
+) -> tuple[tuple[int, int, int], int] | None:
     """A border drawn around the letters, as its colour and width in pixels; width 0 when
-    the letters plainly have none. A border is a band unlike what lies beyond it. With no
-    band, a light background means no border, but on a dark one a dark border would look
-    the same, so that can't be told (None)."""
+    the letters plainly have none. A border is a thin band unlike what lies beyond it.
+    With no band, a light background means no border, but on a dark one a dark border
+    would look the same, so that can't be told (None); nor can a "band" too thick for a
+    border, which is the background behind the text."""
     if mask.sum() < 20:
         return None
     near = ndimage.binary_dilation(mask, iterations=2) & ~ndimage.binary_dilation(mask)
@@ -360,8 +364,10 @@ def outline_of(crop: np.ndarray, mask: np.ndarray) -> tuple[tuple[int, int, int]
     )
     if not beyond.any() or np.all(np.abs(crop[beyond] - colour) <= 40, axis=1).mean() >= 0.6:
         return None if colour.max() < DARK else ((0, 0, 0), 0)
-    if np.abs(colour - crop[mask].astype(np.int16).mean(axis=0)).max() < 96:
-        return (0, 0, 0), 0  # a band, but too like the letters to be a border
+    if width > THICKEST * line_height:
+        return None
+    if width < 2 or np.abs(colour - crop[mask].astype(np.int16).mean(axis=0)).max() < 96:
+        return (0, 0, 0), 0  # a shadow's edge, or too like the letters to be a border
     return tuple(int(c) for c in colour), width
 
 
@@ -456,10 +462,10 @@ def measure(frame: np.ndarray, sighting: Sighting, picture: Box | None = None) -
             other = None  # named, but not really there
         elif second.sum() > main.sum():
             colour, other = other, colour  # the model named the highlighted word's colour
+    border = outline_of(crop, letters, found[0][1] - found[0][0])
     return Measured(
-        text.split("\n"), boxes, colour, fill, other, outline_of(crop, letters),
-        backdrop_of(crop, letters),
-    )  # fmt: skip
+        text.split("\n"), boxes, colour, fill, other, border, backdrop_of(crop, letters)
+    )
 
 
 def _ink_box(font: ImageFont.FreeTypeFont, text: str) -> tuple[int, int, int, int]:

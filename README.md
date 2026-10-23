@@ -196,16 +196,20 @@ uv run aiedit learn reference.mp4 --name raw-vocals-es --save
 or "Learn from a reel" on the web app's Presets page, which opens the draft in the editor
 with what was found listed above it. Nothing is saved until you save it.
 
-- Layout, from the pixels: whether the picture fills the frame or sits on a flat
-  background, the background colour, how wide the picture is, and the gaps to the text.
-- Text: the vision model reads every text on six frames (two in the opening seconds).
+- Layout, from the pixels: whether the picture fills the frame, sits on a flat background
+  (and its colour), or sits on a blurred copy of itself (drawn here as a colour taken from
+  the footage); how wide the picture is, and the gaps to the text.
+- Text: the vision model reads every text on six frames (two in the opening seconds, the
+  rest timed to words being said or sung, since captions only show then). Frames are read
+  padded to a square: on a tall frame its boxes drift down by up to a tenth of the height.
   Text that stays the whole reel becomes a text block, captions that change become caption
   settings, text only in the opening seconds becomes the hook banner. A username in a
   corner and text that belongs to the video shown (inside a letterboxed picture) are left
   out. The model's boxes are only roughly right, so each text is then found in the pixels:
   its exact colour, position, line breaks, an outline and a highlighted word's colour.
   Every bundled font is tried at the size that matches the measured widths, and the one
-  whose heights and stroke thickness match best is chosen. Caption sizes and margins are
+  whose heights and stroke thickness match best is chosen; every reading of a text is
+  measured and they vote, so one bad box can't decide it. Caption sizes and margins are
   measured against libass, which draws captions smaller than Pillow draws text blocks.
 - Captions are `speech` or `lyrics` when they are the words heard, `translated` when they
   are in another language, `visual` otherwise.
