@@ -92,9 +92,23 @@ def caption_cues(
                 for a, b in voiced_regions(analysis)
                 if b > clip.start and a < clip.end
             ]
-        return subtitles.lyric_cues(words, breaths=breaths)
+        return subtitles.lyric_cues(words, breaths=breaths, fits=fits)
     per_line = edl.caption_overrides.words_per_line or style.words_per_line
     return subtitles.speech_cues(words, per_line, fits)
+
+
+def caption_scales(
+    cues: list[Cue], measure: Callable[[str], float], room: float, pop: bool
+) -> list[float]:
+    """How much to shrink each caption so that none runs off the frame: one holding a
+    word too long for the frame's width is drawn smaller rather than cut off."""
+    scales = []
+    for cue in cues:
+        width = max(measure(line) for line in cue.text.split("\n"))
+        if pop and cue.words:
+            width += 0.12 * max(measure(w.text) for w in cue.words)  # the spoken word grows
+        scales.append(min(1.0, room / max(1.0, width)))
+    return scales
 
 
 def banner_top(
@@ -290,7 +304,7 @@ def render(
         style = preset.captions
         overrides = edl.caption_overrides
         font = text.font_file(settings.fonts_dir, style.font)
-        sized = text.font_at(font, style.size)
+        sized = text.caption_font(font, style.size)
         room = frame[0] - 120 - 2 * style.outline
 
         def measure(line: str) -> float:
@@ -299,6 +313,7 @@ def render(
         cues = caption_cues(edl, analysis, style, lambda line: measure(line) <= room)
         if any(not c.words for c in cues):
             cues = subtitles.fit_lines(cues, measure, room)
+        scales = caption_scales(cues, measure, room, style.animation == "pop")
         position = overrides.position or style.position
         placements = None
         if style.avoid_faces and (rows or obstacles):
@@ -319,6 +334,7 @@ def render(
             position=position,
             highlight_color=overrides.highlight_color,
             placements=placements,
+            scales=scales,
         )
         layers.captions = work_dir / "captions.ass"
         layers.captions.write_text(ass, encoding="utf-8")

@@ -68,3 +68,21 @@ def test_captions_ask_libass_for_the_weight_by_its_own_family_name():
     assert font_family(font_file(FONTS, "OpenSans-ExtraBold")) == "Open Sans ExtraBold"
     assert font_family(font_file(FONTS, "OpenSans-Regular")) == "Open Sans"
     assert font_family(font_file(FONTS, "Anton-Regular")) == "Anton"
+
+
+def test_captions_are_measured_at_the_size_libass_draws_them():
+    from agentic_editor.render.text import caption_font
+
+    # libass draws Anton at size 84 about 396 px wide for this line; Pillow's own size 84
+    # is 686 px, which split and shrank captions that fit.
+    width = caption_font(font_file(FONTS, "Anton-Regular"), 84).getlength("THE QUICK BROWN FOX")
+    assert 380 < width < 410
+
+
+def test_a_caption_holding_a_word_too_wide_for_the_frame_is_drawn_smaller():
+    from agentic_editor.edl import Cue
+    from agentic_editor.render.compose import caption_scales
+
+    cues = [Cue(start=0, end=1, text="short"), Cue(start=1, end=2, text="x" * 30)]
+    scales = caption_scales(cues, lambda line: 40.0 * len(line), 950, pop=False)
+    assert scales[0] == 1.0 and 40.0 * 30 * scales[1] <= 950

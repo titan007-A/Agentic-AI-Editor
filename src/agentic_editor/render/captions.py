@@ -1,5 +1,7 @@
 """Word-timed captions as an ASS subtitle file for libass."""
 
+import math
+
 from agentic_editor.edl import Cue
 from agentic_editor.presets import CaptionStyle
 from agentic_editor.subtitles import Placement
@@ -35,10 +37,12 @@ def build_ass(
     position: str | None = None,
     highlight_color: str | None = None,
     placements: list[Placement] | None = None,
+    scales: list[float] | None = None,
 ) -> str:
     """ASS events for the cues. Cues with word timings get the style's animation; whole
     lines (translated, written) fade in and out. `placements` moves single cues, e.g. off
-    a face; otherwise every cue sits at the style's position."""
+    a face; otherwise every cue sits at the style's position. `scales` draws single cues
+    smaller, e.g. one holding a word too long for the frame."""
     width, height = frame
     position = position or style.position
     highlight = ass_color(highlight_color or style.highlight_color)
@@ -65,6 +69,9 @@ def build_ass(
         # An explicit alignment and margin only when a cue has to move.
         lead = f"{{\\an{at.alignment}}}" if at and at.alignment != _ALIGNMENT[position] else ""
         margin_v = at.margin if at else 0
+        percent = min(100, math.floor(100 * scales[k])) if scales else 100
+        scaled = f"\\fscx{percent}\\fscy{percent}" if percent < 100 else ""
+        lead += f"{{{scaled}}}" if scaled else ""
         line = cue.words
         if not line:
             text = _clean(cue.text, style.uppercase)
@@ -84,11 +91,12 @@ def build_ass(
             colours = f"{{\\1c{highlight}\\2c{base}}}"
             events.append((line[0].start, line_end, margin_v, f"{lead}{colours}{tagged}"))
         else:
-            pop = r"\fscx112\fscy112" if style.animation == "pop" else ""
+            popped = round(percent * 1.12)
+            pop = f"\\fscx{popped}\\fscy{popped}" if style.animation == "pop" else ""
             for i, word in enumerate(line):
                 end = line[i + 1].start if i + 1 < len(line) else line_end
                 parts = [
-                    f"{{\\1c{highlight}{pop}}}{t}{{\\r}}" if j == i else t
+                    f"{{\\1c{highlight}{pop}}}{t}{{\\r{scaled}}}" if j == i else t
                     for j, t in enumerate(texts)
                 ]
                 events.append((word.start, end, margin_v, lead + " ".join(parts)))

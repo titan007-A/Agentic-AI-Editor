@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from agentic_editor.presets import TextBlock
+from agentic_editor.render import fonts
 
 EDGE_MARGIN = 24
 
@@ -127,6 +128,11 @@ def draw(placed: list[Placed], frame: tuple[int, int], dest: Path) -> Path:
 
 def font_at(path: Path, size: int) -> ImageFont.FreeTypeFont:
     return _font(path, size)
+
+
+def caption_font(path: Path, size: float) -> ImageFont.FreeTypeFont:
+    """The font as large as libass draws a caption of `size`, for measuring captions."""
+    return ImageFont.truetype(str(path), size * fonts.libass_scale(path))
 
 
 def balance(text: str, path: Path, size: int, max_width: int) -> str:
