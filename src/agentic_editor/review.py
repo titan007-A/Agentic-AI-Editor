@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from agentic_editor import ffmpeg
 from agentic_editor.edl import EDL
-from agentic_editor.llm import LLMError, OllamaClient
+from agentic_editor.llm import LLMError, OllamaClient, parse
 from agentic_editor.presets import Preset
 from agentic_editor.render.audio import Loudness, measure_loudness
 from agentic_editor.transcript import Word
@@ -142,7 +142,7 @@ def check_faces(vision: OllamaClient, frames: list[Path]) -> list[Issue]:
         images=frames,
         temperature=0.0,
     )
-    checks = FrameChecks.model_validate(reply).frames
+    checks = parse(FrameChecks, reply).frames
     cut = [i for i, c in enumerate(checks) if c.face_visible and c.face_cut_off]
     if cut:
         return [Issue("framing", f"face cut off by the frame edge in sampled frame(s) {cut}")]
@@ -196,7 +196,7 @@ def pick_thumbnail(vision: OllamaClient, video: Path, duration: float, work_dir:
         images=frames,
         temperature=0.0,
     )
-    index = min(max(ThumbnailPick.model_validate(reply).frame, 0), len(frames) - 1)
+    index = min(max(parse(ThumbnailPick, reply).frame, 0), len(frames) - 1)
     dest = video.with_suffix(".jpg")
     t = duration * (index + 0.5) / len(frames)
     ffmpeg.run(["-y", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1", "-q:v", "2",

@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ValidationError
 
 from agentic_editor.edl import EDL
+from agentic_editor.llm import parse
 from agentic_editor.presets import Preset
 
 Setting = Literal[
@@ -130,7 +131,7 @@ def interpret(llm, instruction: str) -> Requests:
         Requests.model_json_schema(),
         temperature=0.0,
     )
-    wanted = Requests.model_validate(reply)
+    wanted = parse(Requests, reply)
     # Small models often read "begin with X" as content only, and then the hook optimiser
     # would move the opening the editor asked for.
     placed = any(r.setting == "start_point" for r in wanted.requests)

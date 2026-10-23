@@ -342,7 +342,7 @@ CONFIRM_PROMPT = (
 
 def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_dir: Path):
     """Ask the vision model which candidates are overlays rather than parts of the scene."""
-    from agentic_editor.llm import LLMError
+    from agentic_editor.llm import LLMError, parse
 
     confirmed = []
     for i, mark in enumerate(marks):
@@ -355,7 +355,7 @@ def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_d
                 images=_evidence(video, mark, ffmpeg_bin, dest),
                 temperature=0.0,
             )
-            overlay = _Verdict.model_validate(reply).overlay
+            overlay = parse(_Verdict, reply).overlay
         except LLMError:
             # Unsure is treated as yes: a watermark must never be left in.
             overlay = True

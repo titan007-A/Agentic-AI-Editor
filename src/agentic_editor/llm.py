@@ -7,12 +7,22 @@ import time
 from pathlib import Path
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 log = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
     pass
+
+
+def parse[M: BaseModel](model: type[M], reply: object) -> M:
+    """A reply as `model`. A reply outside the schema's limits (a score of 11, a box with
+    three corners) raises LLMError like any other bad answer, so callers' fallbacks apply."""
+    try:
+        return model.model_validate(reply)
+    except ValidationError as exc:
+        raise LLMError(f"reply doesn't fit {model.__name__}: {exc.errors()[0]['msg']}") from exc
 
 
 class OllamaClient:
@@ -66,17 +76,26 @@ class OllamaClient:
         # Small models now and then stop mid-answer; one more try nearly always lands.
         for attempt in range(2):
             started = time.monotonic()
-            response = self.http.post(f"{self.base_url}/v1/chat/completions", json=body)
+            try:
+                response = self.http.post(f"{self.base_url}/v1/chat/completions", json=body)
+            except httpx.HTTPError as exc:
+                # A timeout or a restarted server is one more failed answer to fall back from.
+                raise LLMError(f"{self.model} could not be reached: {exc!r}") from exc
             if response.status_code != 200:
                 raise LLMError(
                     f"{self.model} returned {response.status_code}: {response.text[:500]}"
                 )
-            data = response.json()
+            try:
+                data = response.json()
+                content = data["choices"][0]["message"].get("content") or ""
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                raise LLMError(
+                    f"{self.model} sent an unexpected reply: {response.text[:300]}"
+                ) from exc
             elapsed = time.monotonic() - started
-            tokens = data.get("usage", {}).get("completion_tokens", 0)
+            tokens = (data.get("usage") or {}).get("completion_tokens", 0)
             self.last_tokens_per_second = tokens / elapsed if elapsed else None
             log.debug("%s: %d tokens in %.1fs", self.model, tokens, elapsed)
-            content = data["choices"][0]["message"].get("content") or ""
             try:
                 return json.loads(content)
             except json.JSONDecodeError as exc:

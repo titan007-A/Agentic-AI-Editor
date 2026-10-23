@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL
-from agentic_editor.llm import LLMError
+from agentic_editor.llm import LLMError, parse
 from agentic_editor.planner import Line, build_lines
 from agentic_editor.presets import Preset
 from agentic_editor.trim import PREROLL
@@ -74,7 +74,7 @@ def pick_by_reading(llm, choices: list[Line], notes: str | None) -> tuple[int, s
         _Choice.model_json_schema(),
         temperature=0.0,
     )
-    choice = _Choice.model_validate(reply)
+    choice = parse(_Choice, reply)
     if not 0 <= choice.option < len(choices):
         return 0, ""
     return choice.option, choice.reason.strip()

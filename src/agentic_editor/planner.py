@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL, CaptionOverrides, Clip, Zoom, problems
-from agentic_editor.llm import LLMError, OllamaClient
+from agentic_editor.llm import LLMError, OllamaClient, parse
 from agentic_editor.presets import Preset
 from agentic_editor.silence import long_silences
 from agentic_editor.transcript import Word, ends_sentence, gap, phrases, split_phrase
@@ -211,7 +211,7 @@ def propose(
     )
     first, last = chunk[0].index, chunk[-1].index
     valid = []
-    for candidate in CandidateList.model_validate(reply).candidates:
+    for candidate in parse(CandidateList, reply).candidates:
         if first <= candidate.start_line <= candidate.end_line <= last:
             valid.append(candidate)
         else:
@@ -350,7 +350,7 @@ def find_start(llm: OllamaClient, lines: list[Line], asked: str) -> tuple[Line, 
             _Start.model_json_schema(),
             temperature=0.0,
         )
-        found = _Start.model_validate(reply)
+        found = parse(_Start, reply)
         here = {ln.index: ln for ln in chunk}
         line = here.get(found.line)
         if line is None or not _plain(found.words):
@@ -493,7 +493,7 @@ def pick_emphasis(llm: OllamaClient, edl: EDL, analysis: Analysis, limit: int = 
         Emphasis.model_json_schema(),
     )
     zooms, used = [], set()
-    for target in Emphasis.model_validate(reply).words[:limit]:
+    for target in parse(Emphasis, reply).words[:limit]:
         match = next(
             (w for w in words if _normalize(w.text) == _normalize(target) and w.start not in used),
             None,
