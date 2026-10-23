@@ -15,6 +15,7 @@ import httpx
 from agentic_editor import (
     agent,
     download,
+    ffmpeg,
     framing,
     hooks,
     review,
@@ -34,6 +35,7 @@ from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.planner import overlap, pick_emphasis, plan_variants
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose
+from agentic_editor.render.audio import measure_loudness
 from agentic_editor.render.video import crop_size
 from agentic_editor.router import ModelRouter
 from agentic_editor.settings import Settings
@@ -110,6 +112,14 @@ def plan(
                 edl = edl.noted(f"no punch-in zooms ({exc})")
         planned.append((edl.model_copy(update={"variant": len(planned)}), planner))
     return planned
+
+
+def needs_faces(edl: EDL, preset: Preset, analysis: Analysis) -> bool:
+    """Whether making this plan looks for faces: to frame it, or to keep captions off them."""
+    if edl.crop_mode == "smart" or (preset.captions.enabled and preset.captions.avoid_faces):
+        return True
+    source = (analysis.width, analysis.height)
+    return edl.crop_mode == "face" and crop_size(source, preset.size)[0] < source[0]
 
 
 def face_commands(
@@ -432,10 +442,12 @@ def produce(
     backends: Backends,
     vision: OllamaClient | None,
     progress: Progress,
+    detections: dict[tuple[float, float], list[faces.Sample]] | None = None,
 ) -> tuple[EDL, int, list[review.Issue]]:
-    """Render, review, fix and re-render up to MAX_FIXES times."""
+    """Render, review, fix and re-render up to MAX_FIXES times. `detections` are the faces
+    already found, by clip."""
     work_dir.mkdir(parents=True, exist_ok=True)
-    detections: dict[tuple[float, float], list[faces.Sample]] = {}
+    detections = {} if detections is None else detections
     tracked: dict[tuple[float, float], list[tuple[float, list[onscreen.Box]]]] = {}
     target = preset
     renders = 1
@@ -457,6 +469,8 @@ def produce(
                 edl, target, analysis, video, dest, work_dir, settings, backends, commands,
                 face_samples, texts,
             )  # fmt: skip
+            # Measured while another job may have the GPU: these only need the CPU.
+            info, loudness = ffmpeg.probe(dest), measure_loudness(dest)
         progress("review", f"checking {preset.name}")
         # Caption timing is checked against the spoken words, so only for captions of them.
         spoken = target.captions.enabled and target.captions.mode in ("speech", "lyrics")
@@ -470,6 +484,8 @@ def produce(
             compose.timeline_words(edl, analysis),
             vision,
             work_dir,
+            info=info,
+            loudness=loudness,
         )
         if not issues or renders > MAX_FIXES:
             return edl, renders, issues
@@ -528,9 +544,22 @@ def edit(
             failed(", ".join(p.name for p in presets if p.audio.source == kind), exc)
     presets = [p for p in presets if p.audio.source in analyses]
 
+    silenced: dict[tuple[str, float, float], Analysis] = {}
+
     def for_preset(preset: Preset) -> Analysis:
-        base = analyses[preset.audio.source]
-        return with_silences(base, preset.silence.threshold_db, preset.silence.min_duration)
+        """The analysis with silences as this preset counts them, each way found once."""
+        key = (preset.audio.source, preset.silence.threshold_db, preset.silence.min_duration)
+        if key not in silenced:
+            silenced[key] = with_silences(analyses[key[0]], *key[1:])
+        return silenced[key]
+
+    # Silences are read from the audio before the planner takes the GPU.
+    for preset in list(presets):
+        try:
+            for_preset(preset)
+        except Exception as exc:
+            failed(preset.name, exc)
+            presets.remove(preset)
 
     plans = {}
     with router.planner() as llm:
@@ -561,6 +590,28 @@ def edit(
                 ]
             except Exception as exc:
                 failed(preset.name, exc)
+
+    # Faces and the picture's black bars need only the CPU, so they are found before the
+    # vision model takes the GPU. One that fails here is tried again by the render.
+    detections: dict[tuple[float, float], list[faces.Sample]] = {}
+    for preset in presets:
+        analysis, prepared = for_preset(preset), []
+        for edl, planner in plans.get(preset.name, []):
+            clip = edl.clips[0]
+            key = (clip.start, clip.end)
+            try:
+                if key not in detections and needs_faces(edl, preset, analysis):
+                    detections[key] = faces.detect(
+                        source.path, clip.start, clip.end, settings.models_dir
+                    )
+                if edl.crop_mode == "smart" and edl.picture is None:
+                    size = (analysis.width, analysis.height)
+                    picture = compose.picture_area(source.path, clip.start, clip.end, size)
+                    edl = edl.model_copy(update={"picture": picture})
+            except Exception as exc:
+                log.warning("%s: faces or picture area left for the render: %s", preset.name, exc)
+            prepared.append((edl, planner))
+        plans[preset.name] = prepared
 
     outputs = []
     with router.vision() as vision:
@@ -597,6 +648,7 @@ def edit(
                     backends,
                     reviewer,
                     progress,
+                    detections,
                 )
                 thumbnail = None
                 if reviewer is not None:

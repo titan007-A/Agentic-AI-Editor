@@ -160,10 +160,14 @@ def review(
     words: list[Word],
     vision: OllamaClient | None,
     work_dir: Path,
+    info: ffmpeg.MediaInfo | None = None,
+    loudness: Loudness | None = None,
 ) -> list[Issue]:
-    info = ffmpeg.probe(video)
+    """What is wrong with a render. `info` and `loudness` are the render's, when they
+    were measured already."""
+    info = info or ffmpeg.probe(video)
     issues = check_format(info, preset, source_duration)
-    issues += check_loudness(measure_loudness(video), preset)
+    issues += check_loudness(loudness or measure_loudness(video), preset)
     if captions is not None:
         issues += check_captions(captions.read_text(encoding="utf-8"), words, info.duration)
     try:
