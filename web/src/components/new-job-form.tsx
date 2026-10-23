@@ -1,6 +1,6 @@
 "use client";
 
-import { Upload, X } from "lucide-react";
+import { Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -9,15 +9,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { UploadList } from "@/components/upload-list";
+import { useUploads } from "@/hooks/use-uploads";
 import { api, errorText, type Job, type Preset } from "@/lib/api";
-
-type Upload = { source: string; name: string };
 
 export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [chosen, setChosen] = useState<string[]>([]);
   const [links, setLinks] = useState("");
-  const [uploads, setUploads] = useState<Upload[]>([]);
+  const uploads = useUploads();
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -34,27 +34,16 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
       .split(/\s+/)
       .map((s) => s.trim())
       .filter(Boolean),
-    ...uploads.map((u) => u.source),
+    ...uploads.sources,
   ];
 
   function toggle(name: string, on: boolean) {
     setChosen((current) => (on ? [...current, name] : current.filter((n) => n !== name)));
   }
 
-  async function addFiles(files: FileList | null) {
-    if (!files) return;
-    setBusy(true);
-    try {
-      for (const file of Array.from(files)) {
-        const uploaded = await api.upload(file);
-        setUploads((current) => [...current, uploaded]);
-      }
-    } catch (err) {
-      toast.error(errorText(err));
-    } finally {
-      setBusy(false);
-      if (fileInput.current) fileInput.current.value = "";
-    }
+  function addFiles(files: FileList | null) {
+    if (files) uploads.add(Array.from(files));
+    if (fileInput.current) fileInput.current.value = "";
   }
 
   async function submit(event: React.FormEvent) {
@@ -64,7 +53,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
       const jobs = await api.createJobs(sources, chosen, notes);
       toast.success(`${jobs.length} job${jobs.length === 1 ? "" : "s"} queued`);
       setLinks("");
-      setUploads([]);
+      uploads.clear();
       setNotes("");
       onCreated(jobs);
     } catch (err) {
@@ -103,26 +92,11 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={busy}
                 onClick={() => fileInput.current?.click()}
               >
                 <Upload /> Upload files
               </Button>
-              {uploads.map((u) => (
-                <span
-                  key={u.source}
-                  className="flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-xs"
-                >
-                  {u.name}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${u.name}`}
-                    onClick={() => setUploads((c) => c.filter((x) => x.source !== u.source))}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              ))}
+              <UploadList items={uploads.items} onRemove={uploads.remove} />
             </div>
           </div>
 
@@ -163,9 +137,11 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
           <Button
             type="submit"
             className="w-full sm:w-auto"
-            disabled={busy || sources.length === 0 || chosen.length === 0}
+            disabled={busy || uploads.pending || sources.length === 0 || chosen.length === 0}
           >
-            Start {sources.length > 1 ? `${sources.length} jobs` : "job"}
+            {uploads.pending
+              ? "Waiting for the uploads..."
+              : `Start ${sources.length > 1 ? `${sources.length} jobs` : "job"}`}
           </Button>
         </form>
       </CardContent>

@@ -17,6 +17,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorText, type Feed, type FeedFields, type Preset } from "@/lib/api";
+import { wholeNumber } from "@/lib/form-values.mjs";
 
 const BLANK: FeedFields = {
   name: "",
@@ -32,6 +33,9 @@ const BLANK: FeedFields = {
 };
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
+// The server's limits on videos in progress at once per feed.
+const MIN_BATCH = 1;
+const MAX_BATCH = 20;
 
 export const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
@@ -39,6 +43,9 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
   const [fields, setFields] = useState<FeedFields>(feed ?? BLANK);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [busy, setBusy] = useState(false);
+  // Kept as typed, so the field can be cleared and retyped.
+  const [batchText, setBatchText] = useState(String(fields.batch));
+  const batch = wholeNumber(batchText, MIN_BATCH, MAX_BATCH);
   const timed = fields.active_from !== null;
 
   useEffect(() => {
@@ -60,7 +67,8 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
     event.preventDefault();
     setBusy(true);
     try {
-      const body = { ...fields, notes: fields.notes?.trim() || null };
+      if (batch === null) return;
+      const body = { ...fields, batch, notes: fields.notes?.trim() || null };
       const saved = feed ? await api.updateFeed(feed.id, body) : await api.createFeed(body);
       toast.success(feed ? "Feed saved" : `Feed added: ${saved.last_result ?? "checked"}`);
       onSaved(saved);
@@ -152,10 +160,18 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
         </label>
         {timed && (
           <div className="flex items-center gap-2 text-sm">
-            <span>From</span>
-            <HourPicker value={fields.active_from ?? 23} onChange={(h) => set("active_from", h)} />
-            <span>to</span>
-            <HourPicker value={fields.active_to ?? 7} onChange={(h) => set("active_to", h)} />
+            <span aria-hidden>From</span>
+            <HourPicker
+              label="Start at"
+              value={fields.active_from ?? 23}
+              onChange={(h) => set("active_from", h)}
+            />
+            <span aria-hidden>to</span>
+            <HourPicker
+              label="Stop at"
+              value={fields.active_to ?? 7}
+              onChange={(h) => set("active_to", h)}
+            />
           </div>
         )}
         <label className="flex items-center justify-between gap-3 text-sm">
@@ -167,21 +183,36 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
           />
         </label>
         <label className="flex items-center justify-between gap-3 text-sm">
-          <span>Videos in progress at once</span>
+          <span>
+            Videos in progress at once
+            {batch === null && (
+              <span className="block text-xs text-destructive">
+                A whole number from {MIN_BATCH} to {MAX_BATCH}
+              </span>
+            )}
+          </span>
           <Input
             type="number"
-            min={1}
-            max={20}
+            inputMode="numeric"
+            min={MIN_BATCH}
+            max={MAX_BATCH}
             className="w-20"
-            value={fields.batch}
-            onChange={(e) => set("batch", Number(e.target.value) || 1)}
+            aria-invalid={batch === null}
+            value={batchText}
+            onChange={(e) => setBatchText(e.target.value)}
           />
         </label>
       </div>
 
       <Button
         type="submit"
-        disabled={busy || !fields.name.trim() || !fields.location.trim() || !fields.presets.length}
+        disabled={
+          busy ||
+          batch === null ||
+          !fields.name.trim() ||
+          !fields.location.trim() ||
+          !fields.presets.length
+        }
       >
         {busy ? "Checking..." : feed ? "Save feed" : "Add feed"}
       </Button>
@@ -189,10 +220,18 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
   );
 }
 
-function HourPicker({ value, onChange }: { value: number; onChange: (hour: number) => void }) {
+function HourPicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (hour: number) => void;
+}) {
   return (
     <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>
-      <SelectTrigger className="w-24">
+      <SelectTrigger className="w-24" aria-label={label}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

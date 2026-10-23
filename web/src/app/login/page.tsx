@@ -1,16 +1,26 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorText } from "@/lib/api";
+import { safeNext } from "@/lib/next-path.mjs";
 
 export default function LoginPage() {
+  return (
+    <Suspense>
+      <Login />
+    </Suspense>
+  );
+}
+
+function Login() {
   const router = useRouter();
+  const next = useSearchParams().get("next");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,7 +31,7 @@ export default function LoginPage() {
     setError("");
     try {
       await api.login(password);
-      router.push("/");
+      router.replace(safeNext(next, window.location.origin));
     } catch (err) {
       setError(errorText(err));
     } finally {
