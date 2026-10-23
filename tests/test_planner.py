@@ -88,7 +88,6 @@ def test_plans_from_candidates_and_maps_lines_to_times(make_analysis):
     )
     assert edl.hook == "Nobody saw this coming"
     assert edl.caption_overrides.position == "middle"
-    assert [z.time for z in edl.zooms] == [8 + 4 * 0.4]
 
 
 def test_out_of_range_candidates_are_dropped(make_analysis):

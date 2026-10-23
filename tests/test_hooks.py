@@ -70,3 +70,20 @@ def test_optimizing_can_be_switched_off(make_analysis):
     preset = PRESET.model_copy(update={"hook": PRESET.hook.model_copy(update={"optimize": False})})
     edl = EDL(clips=[Clip(start=0, end=20)])
     assert sharpen(Reader(1), edl, make_analysis(talk(), 30.0), preset, None) == edl
+
+
+def test_a_later_opening_lands_back_on_the_beat(make_analysis):
+    from agentic_editor.analysis.beats import Beats
+
+    rhythm = Beats(
+        tempo=120.0,
+        beats=[i * 0.5 for i in range(60)],
+        downbeats=[0.5 + i * 2.0 for i in range(15)],
+    )
+    preset = PRESET.model_copy(
+        update={"beat_sync": PRESET.beat_sync.model_copy(update={"snap_trims": True})}
+    )
+    analysis = make_analysis(talk(), 30.0, beats=rhythm)
+    edl = sharpen(Reader(1), EDL(clips=[Clip(start=0, end=20)]), analysis, preset, None)
+    assert edl.clips[0].start == 3.5  # the beat before 3.75; the bar line is too far back
+    assert edl.decisions[-1].startswith("start") and "beat" in edl.decisions[-1]

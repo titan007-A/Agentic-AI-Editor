@@ -1,7 +1,10 @@
-from agentic_editor import pipeline, trim
+from agentic_editor import hooks, pipeline, trim
+from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.llm import LLMError
+from agentic_editor.planner import build_lines
 from agentic_editor.presets import Preset
+from agentic_editor.transcript import Word
 from tests.conftest import words_from
 
 WORDS = words_from("a.@0-0.5 b.@1-1.5 c.@3-3.5 d.@5-5.5 e.@7-7.5 f.@9-9.5")
@@ -33,3 +36,95 @@ def test_a_reel_left_short_is_a_doubt_once(make_analysis):
     edl = trim.apply(EDL(clips=[Clip(start=0, end=9.5)]), make_analysis(WORDS, 10), preset)
     edl = trim.apply(edl, make_analysis(WORDS, 10), preset)
     assert len(edl.doubts) == 1 and "left shorter" in edl.doubts[0]
+
+
+def sentence(start, text):
+    return [
+        Word(text=w, start=start + i * 0.4, end=start + i * 0.4 + 0.3)
+        for i, w in enumerate(text.split())
+    ]
+
+
+class Replies:
+    """Canned replies in order; an LLMError in the list is raised instead."""
+
+    model = "fake"
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+
+    def chat_json(self, messages, schema, **kwargs):
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def talk(make_analysis, loud_from: float = 60.0):
+    words = [w for k in range(25) for w in sentence(k * 4, f"this is sentence number {k} here.")]
+    energy = [-30.0 if i * 0.5 < loud_from else -24.0 for i in range(200)]
+    return make_analysis(words, 100.0, energy)
+
+
+def planned_as(monkeypatch, *edls):
+    monkeypatch.setattr(pipeline, "plan_variants", lambda *args, **kwargs: list(edls))
+
+
+def test_the_opening_is_chosen_inside_the_window_the_reel_keeps(make_analysis, monkeypatch):
+    analysis = talk(make_analysis)
+    preset = Preset(name="t", label="t", min_duration=15, max_duration=30)
+    planned_as(monkeypatch, EDL(clips=[Clip(start=0.0, end=99.0)]))
+    ((edl, _),) = pipeline.plan(
+        Replies({"option": 2, "reason": "a question"}), analysis, preset, None
+    )
+    cleaned = clean_edl(EDL(clips=[Clip(start=0.0, end=99.0)]), analysis.transcript.words, [])
+    trimmed = trim.apply(cleaned, analysis, preset)
+    choices = hooks.options(trimmed, build_lines(analysis), preset)
+    assert edl.clips[0].start == round(choices[2].start - trim.PREROLL, 3)
+    assert edl.decisions[-1].startswith("opened") and "a question" in edl.decisions[-1]
+
+
+def test_versions_that_trim_down_to_the_same_stretch_are_made_once(make_analysis, monkeypatch):
+    analysis = talk(make_analysis)
+    analysis = analysis.model_copy(
+        update={"energy": [-18.0 if 40 <= i * 0.5 < 62 else -30.0 for i in range(200)]}
+    )
+    preset = Preset(name="t", label="t", min_duration=15, max_duration=20, hook={"variants": 2})
+    planned_as(
+        monkeypatch,
+        EDL(clips=[Clip(start=0.0, end=62.0)]),
+        EDL(clips=[Clip(start=40.0, end=99.0)], variant=1),
+    )
+    options = {"option": 0, "reason": "x"}
+    assert len(pipeline.plan(Replies(options, options), analysis, preset, None)) == 1
+
+
+def test_punch_ins_are_picked_from_what_the_reel_keeps(make_analysis, monkeypatch):
+    analysis = talk(make_analysis)
+    preset = Preset(name="t", label="t", min_duration=15, max_duration=30, zoom_punch_ins=True)
+    planned_as(monkeypatch, EDL(clips=[Clip(start=0.0, end=99.0)]))
+    # "2" is said only before the window, "20" only inside it.
+    llm = Replies({"option": 0, "reason": "x"}, {"words": ["2", "20"]})
+    ((edl, _),) = pipeline.plan(llm, analysis, preset, None)
+    clip = edl.clips[0]
+    assert len(edl.zooms) == 1 and clip.start <= edl.zooms[0].time < clip.end
+
+
+def test_a_failed_punch_in_pick_keeps_the_plan(make_analysis):
+    class Model:
+        model = "fake"
+
+        def chat_json(self, messages, schema, **kwargs):
+            asked = set(schema.get("properties", {}))
+            if "candidates" in asked:
+                span = {"start_line": 0, "end_line": 6, "hook": 8, "completeness": 8, "peak": 8}
+                return {"candidates": [span | {"reason": "x"}]}
+            if "candidate" in asked:
+                return {"candidate": 0, "reason": "x", "hook": "Wait", "title": "T"}
+            if "option" in asked:
+                return {"option": 0, "reason": "x"}
+            raise LLMError("broken JSON")  # the punch-in words
+
+    preset = Preset(name="t", label="t", min_duration=15, max_duration=30, zoom_punch_ins=True)
+    ((edl, planner),) = pipeline.plan(Model(), talk(make_analysis), preset, None)
+    assert planner == "fake" and edl.hook == "Wait" and edl.zooms == []

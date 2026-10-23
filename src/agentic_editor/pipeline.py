@@ -31,7 +31,7 @@ from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL, Clip, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
-from agentic_editor.planner import plan_variants
+from agentic_editor.planner import overlap, pick_emphasis, plan_variants
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose
 from agentic_editor.render.video import crop_size
@@ -84,18 +84,29 @@ def plan(
     start_at: str | None = None,
 ) -> list[tuple[EDL, str]]:
     """Plan each version with the LLM, falling back to the energy heuristic if it can't
-    deliver; then choose each one's opening and trim it to the preset."""
+    deliver; then trim each one to the preset and choose its opening inside what it keeps.
+    A version that trims down onto one already made is left out."""
     try:
         edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants, start_at)
         planner = llm.model
     except (LLMError, httpx.HTTPError) as exc:
         log.warning("%s: LLM planning failed (%s), using the energy heuristic", preset.name, exc)
         edls, planner = [plan_by_energy(analysis, preset)], "heuristic"
-    planned = []
+    planned: list[tuple[EDL, str]] = []
     for edl in edls:
         edl = clean_edl(edl, analysis.transcript.words, analysis.silences)
+        edl = trim.apply(edl, analysis, preset)
         edl = hooks.sharpen(llm, edl, analysis, preset, notes)
-        planned.append((trim.apply(edl, analysis, preset), planner))
+        span = (edl.clips[0].start, edl.clips[0].end)
+        if any(overlap(span, (e.clips[0].start, e.clips[0].end)) > 0.5 for e, _ in planned):
+            log.info("%s: a version trimmed down onto one already planned; left out", preset.name)
+            continue
+        if preset.zoom_punch_ins and planner != "heuristic":
+            try:
+                edl = edl.model_copy(update={"zooms": pick_emphasis(llm, edl, analysis)})
+            except LLMError as exc:
+                edl = edl.noted(f"no punch-in zooms ({exc})")
+        planned.append((edl.model_copy(update={"variant": len(planned)}), planner))
     return planned
 
 
