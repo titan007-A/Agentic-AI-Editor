@@ -1,9 +1,10 @@
 "use client";
 
-import { Copy, FileCode, Save, Trash2 } from "lucide-react";
+import { Copy, FileCode, Save, Sparkles, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { LearnStyleDialog } from "@/components/learn-style-dialog";
 import { PresetSection, SECTIONS, TextBlocks } from "@/components/preset-fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,8 @@ export default function PresetsPage() {
   const [copyName, setCopyName] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [yaml, setYaml] = useState<string | null>(null);
+  const [learnOpen, setLearnOpen] = useState(false);
+  const [learned, setLearned] = useState<string[]>([]);
 
   const load = useCallback(
     (select?: string) =>
@@ -48,8 +51,20 @@ export default function PresetsPage() {
         setDraft(list.find((p) => p.name === select) ?? list[0] ?? null);
         setIsNew(false);
         setDirty(false);
+        setLearned([]);
       }),
     [],
+  );
+
+  const openDraft = useCallback(
+    (preset: Preset, notes: string[]) => {
+      if (dirty && !window.confirm("A learned draft is ready. Discard unsaved changes?")) return;
+      setDraft(preset);
+      setIsNew(true);
+      setDirty(true);
+      setLearned(notes);
+    },
+    [dirty],
   );
 
   useEffect(() => {
@@ -70,6 +85,7 @@ export default function PresetsPage() {
     setDraft(presets.find((p) => p.name === name) ?? null);
     setIsNew(false);
     setDirty(false);
+    setLearned([]);
   }
 
   function duplicate() {
@@ -149,6 +165,9 @@ export default function PresetsPage() {
           </Select>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setLearnOpen(true)}>
+            <Sparkles /> Learn from a reel
+          </Button>
           <Button variant="outline" onClick={() => setCopyOpen(true)}>
             <Copy /> Duplicate
           </Button>
@@ -175,6 +194,34 @@ export default function PresetsPage() {
         {isNew && <Badge>new</Badge>}
         {dirty && <Badge variant="outline">unsaved</Badge>}
       </div>
+
+      {learned.length > 0 && (
+        <Card className="tape">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between gap-2">
+              What the reel showed
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Hide these notes"
+                onClick={() => setLearned([])}
+              >
+                <X />
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="list-disc space-y-1 pl-5 text-sm">
+              {learned.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Check the settings below, then Save. Nothing is saved yet.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {SECTIONS.slice(0, 1).map((section) => (
         <Card key={section.title}>
@@ -223,6 +270,13 @@ export default function PresetsPage() {
           </Button>
         </div>
       </div>
+
+      <LearnStyleDialog
+        open={learnOpen}
+        onOpenChange={setLearnOpen}
+        taken={presets.map((p) => p.name)}
+        onDraft={openDraft}
+      />
 
       <Dialog open={copyOpen} onOpenChange={setCopyOpen}>
         <DialogContent>

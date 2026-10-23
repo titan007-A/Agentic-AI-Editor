@@ -79,6 +79,17 @@ export type JobEvent = { stage: string; message: string; progress: number; time:
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Preset = { name: string; label: string; platform: string } & Record<string, any>;
 
+export type StyleDraft = {
+  id: string;
+  source: string;
+  status: "queued" | "running" | "done" | "failed";
+  message: string;
+  preset: Preset | null;
+  notes: string[];
+  error: string | null;
+  created_at: string;
+};
+
 export type SystemInfo = {
   accelerator: string;
   transcriber: string;
@@ -129,6 +140,9 @@ export const api = {
   savePreset: (preset: Preset) => request<Preset>("PUT", `/presets/${preset.name}`, preset),
   deletePreset: (name: string) => request("DELETE", `/presets/${name}`),
   presetYaml: (name: string) => request<{ yaml: string }>("GET", `/presets/${name}/yaml`),
+  learnStyle: (source: string, name: string | null) =>
+    request<StyleDraft>("POST", "/styles", { source, name }),
+  styleDraft: (id: string) => request<StyleDraft>("GET", `/styles/${id}`),
   jobs: () => request<Job[]>("GET", "/jobs"),
   job: (id: string) => request<Job>("GET", `/jobs/${id}`),
   deleteJob: (id: string) => request("DELETE", `/jobs/${id}`),
