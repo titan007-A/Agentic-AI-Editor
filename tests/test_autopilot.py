@@ -1,4 +1,6 @@
+import contextlib
 import os
+import threading
 from datetime import datetime
 
 import pytest
@@ -153,3 +155,40 @@ def test_a_first_look_that_fails_still_leaves_what_was_there_alone(Session):
     check(feed_id, Session, started.append, offline, NIGHT)
     result = check(feed_id, Session, started.append, lambda f: entries("old1", "old2"), NIGHT)
     assert started == [] and result.startswith("2 video(s) already there")
+
+
+def test_two_checks_of_one_feed_at_once_start_each_video_once(Session):
+    feed_id = add_feed(Session, include_existing=True)
+    both = threading.Barrier(2, timeout=0.5)
+
+    def slow(feed):
+        # Without the per-feed lock both listings run side by side.
+        with contextlib.suppress(threading.BrokenBarrierError):
+            both.wait()
+        return entries("a", "b")
+
+    started, errors = [], []
+
+    def look():
+        try:
+            check(feed_id, Session, started.append, slow, NIGHT)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=look) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and len(started) == 2
+
+
+def test_one_feed_failing_doesnt_stop_the_others_being_checked(Session):
+    feeds = [add_feed(Session, include_existing=True) for _ in range(2)]
+
+    def start(job_id):
+        raise RuntimeError("the queue is gone")
+
+    autopilot.check_all(Session, start, lister=lambda f: entries(f"v{f.id}"), now=NIGHT)
+    with Session() as db:
+        assert all(db.get(Feed, i).last_result for i in feeds)
