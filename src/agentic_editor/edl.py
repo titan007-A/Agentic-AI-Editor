@@ -123,10 +123,13 @@ def problems(
     source_duration: float,
     tolerance: float = 0.5,
     allow_long: bool = False,
+    available: float | None = None,
 ) -> list[str]:
     """Rule violations that the planner has to fix; empty when the EDL is usable. With
-    allow_long a segment over the maximum passes, for the trimmer to cut down."""
+    allow_long a segment over the maximum passes, for the trimmer to cut down. When only
+    `available` seconds of material exist, a plan that long is long enough."""
     found = []
+    shortest = preset.min_duration if available is None else min(preset.min_duration, available)
     for i, clip in enumerate(edl.clips):
         if clip.end > source_duration + tolerance:
             found.append(
@@ -134,10 +137,8 @@ def problems(
             )
         if i and clip.start < edl.clips[i - 1].end:
             found.append(f"clip {i} starts before clip {i - 1} ends; clips must be in order")
-    if edl.duration < preset.min_duration - tolerance:
-        found.append(
-            f"total {edl.duration:.1f}s is shorter than the {preset.min_duration:g}s minimum"
-        )
+    if edl.duration < shortest - tolerance:
+        found.append(f"total {edl.duration:.1f}s is shorter than the {shortest:g}s minimum")
     if not allow_long and edl.duration > preset.max_duration + tolerance:
         found.append(
             f"total {edl.duration:.1f}s is longer than the {preset.max_duration:g}s maximum"

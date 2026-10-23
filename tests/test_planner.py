@@ -191,3 +191,36 @@ def test_segments_without_dead_air_are_preferred(make_analysis):
     # The clean segment, grown by a line to the minimum, still clear of the silence.
     assert (edl.clips[0].start, edl.clips[0].end) == (8.0, 16.3)
     assert "C1" not in llm.prompts[1][-1]["content"]  # only the clean one was offered
+
+
+def test_a_source_shorter_than_the_minimum_is_still_planned(make_analysis):
+    from agentic_editor import pipeline
+
+    words = [w for k in range(3) for w in sentence(k * 4, f"this is sentence {k} here.")]
+    preset = PRESET.model_copy(
+        update={"min_duration": 15, "max_duration": 60, "zoom_punch_ins": False}
+    )
+    llm = FakeLLM(candidates((0, 2)), final(0), {"option": 0, "reason": "x"})
+    llm.model = "fake"
+    (edl, planner), *_ = pipeline.plan(llm, make_analysis(words, 12.0), preset, None)
+    assert planner == "fake" and edl.hook == "Nobody saw this coming"
+    assert len(llm.prompts) <= 3  # no retries over a length the source doesn't have
+
+
+def test_a_requested_opening_near_the_end_is_kept_and_flagged(make_analysis):
+    from agentic_editor import trim
+    from agentic_editor.planner import plan_variants
+
+    words = [w for k in range(10) for w in sentence(k * 4, f"this is sentence {k} here.")]
+    words += sentence(40, "and finally the FCC part.")
+    analysis = make_analysis(words, 44.0)
+    preset = PRESET.model_copy(
+        update={"min_duration": 15, "max_duration": 30, "zoom_punch_ins": False}
+    )
+    preset = preset.model_copy(update={"hook": preset.hook.model_copy(update={"optimize": False})})
+    fcc = next(ln for ln in build_lines(analysis) if "FCC" in ln.text)
+    llm = FakeLLM({"line": fcc.index, "words": "the FCC part"}, final(0))
+    (edl,) = plan_variants(llm, analysis, preset, None, 1, start_at="start at the FCC part")
+    edl = trim.apply(edl, analysis, preset)
+    assert edl.clips[0].start >= fcc.start - 0.25
+    assert edl.doubts and "after the chosen opening" in edl.doubts[0]

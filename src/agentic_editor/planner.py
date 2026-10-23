@@ -231,10 +231,13 @@ def _describe_candidates(candidates: list[Candidate], lines: list[Line]) -> str:
     return "\n".join(rows)
 
 
-def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[Clip]:
-    """Grow a short plan a whole line at a time, at its start or end, until it reaches the
-    preset's minimum. Lines only cover voiced stretches, so growing never adds a silent
-    head or tail. Plans that run long are trimmed by trim.apply, which picks the window.
+def fit_duration(
+    clips: list[Clip], lines: list[Line], preset: Preset, grow_back: bool = True
+) -> list[Clip]:
+    """Grow a short plan a whole line at a time, at its start or end (only its end without
+    grow_back, when the opening was chosen on purpose), until it reaches the preset's
+    minimum. Lines only cover voiced stretches, so growing never adds a silent head or
+    tail. Plans that run long are trimmed by trim.apply, which picks the window.
 
     Small models are poor at arithmetic, so a plan that is a few seconds off is
     corrected here rather than sent back for another attempt."""
@@ -246,6 +249,8 @@ def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[C
     while total() < preset.min_duration:
         after = next((ln for ln in lines if ln.start >= clips[-1].end - 1e-6), None)
         before = next((ln for ln in reversed(lines) if ln.end <= clips[0].start + 1e-6), None)
+        if not grow_back:
+            before = None
         # Grow toward whichever neighbour is closer, so a plan doesn't swallow a long
         # stretch of nothing when there is material right on the other side.
         gap_after = after.start - clips[-1].end if after else float("inf")
@@ -259,7 +264,13 @@ def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[C
     return clips
 
 
-def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], preset: Preset) -> EDL:
+def to_edl(
+    plan: FinalPlan,
+    candidates: list[Candidate],
+    lines: list[Line],
+    preset: Preset,
+    keep_start: bool = False,
+) -> EDL:
     if not 0 <= plan.candidate < len(candidates):
         raise ValueError(f"C{plan.candidate} is not one of the candidates")
     c = candidates[plan.candidate]
@@ -269,7 +280,7 @@ def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], pres
         reason=plan.reason,
         score=round((c.hook + c.completeness + c.peak) / 30, 2),
     )
-    chosen = fit_duration([clip], lines, preset)
+    chosen = fit_duration([clip], lines, preset, grow_back=not keep_start)
 
     position = (
         plan.caption_position if plan.caption_position in ("top", "middle", "bottom") else None
@@ -290,7 +301,14 @@ def finalize(
     preset: Preset,
     analysis: Analysis,
     notes: str | None,
+    keep_start: bool = False,
 ) -> EDL:
+    """The plan from the candidate the model picks. With keep_start the plan opens where
+    its candidate does, the moment the editor asked to start on."""
+    # A short source, or the stretch after a requested opening, may hold less than the
+    # preset's minimum; a plan using all of it is as long as it can be.
+    opening = lines[candidates[0].start_line].start if keep_start else lines[0].start
+    available = lines[-1].end - opening
     prompt = (
         f"{_brief(preset, analysis)}\n\n"
         f"Candidate segments:\n{_describe_candidates(candidates, lines)}\n\n"
@@ -305,8 +323,8 @@ def finalize(
     for attempt in range(MAX_RETRIES + 1):
         reply = llm.chat_json(messages, schema)
         try:
-            edl = to_edl(FinalPlan.model_validate(reply), candidates, lines, preset)
-            found = problems(edl, preset, analysis.duration, allow_long=True)
+            edl = to_edl(FinalPlan.model_validate(reply), candidates, lines, preset, keep_start)
+            found = problems(edl, preset, analysis.duration, allow_long=True, available=available)
         except (ValidationError, ValueError) as exc:
             found = [str(exc)]
         if not found:
@@ -409,7 +427,7 @@ def plan_variants(
             line, words = found
             reason = f'starts where you asked ("{start_at}"): "{words}"'
             candidate = from_line(line, lines, preset, reason)
-            edl = finalize(llm, [candidate], lines, preset, analysis, notes)
+            edl = finalize(llm, [candidate], lines, preset, analysis, notes, keep_start=True)
             note = f'found where you asked to start: {line.start:.1f}s, "{words}"'
             edls = [edl.model_copy(update={"decisions": [note]})]
             if preset.zoom_punch_ins:

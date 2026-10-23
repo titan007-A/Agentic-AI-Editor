@@ -254,13 +254,15 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
     doubts = []
     clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
     if clip.duration < preset.min_duration:
-        grown = fit_duration([clip], lines, preset)[0]
+        # Without hook.optimize the opening is the plan's or the editor's, so only the end grows.
+        grown = fit_duration([clip], lines, preset, grow_back=preset.hook.optimize)[0]
         if grown != clip:
             notes.append(f"extended to {grown.start:.1f}-{grown.end:.1f}s with neighbouring lines")
             clip = grown
         if clip.duration < preset.min_duration - 0.5:
+            what = "voiced material" if preset.hook.optimize else "voice after the chosen opening"
             doubts.append(
-                f"only {clip.duration:.1f}s of voiced material; left shorter than the "
+                f"only {clip.duration:.1f}s of {what}; left shorter than the "
                 f"{preset.min_duration:g}s minimum rather than padded with silence"
             )
             notes.append(doubts[-1])
