@@ -81,7 +81,13 @@ class Slot:
                 raise
         self._owner, self._depth = threading.get_ident(), times
         if waited:
-            progress("resume", f"got the {self.name} after {time.monotonic() - started:.0f}s")
+            try:
+                progress("resume", f"got the {self.name} after {time.monotonic() - started:.0f}s")
+            except BaseException:
+                # Nothing would ever release it, and every other job would wait for good.
+                self._depth = 1
+                self.release()
+                raise
 
     def release(self) -> None:
         if not self.held():
