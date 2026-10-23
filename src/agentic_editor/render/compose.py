@@ -141,7 +141,12 @@ def clear_rows(
     source = (analysis.width, analysis.height)
     picture = content or (0, 0, *source)
     shots = edl.shots if edl.crop_mode == "smart" else []
-    window = source[0] if edl.crop_mode == "none" else crop_size(source, preset.size)[0]
+    # An inset picture is drawn smaller, as if a wider window were fitted to the frame.
+    window = (
+        source[0] / preset.framing.picture_width
+        if edl.crop_mode == "none"
+        else crop_size(source, preset.size)[0]
+    )
     clip = edl.clips[0]
     return framing.screen_rows(
         faces, clip, shots, picture, source, preset.size, window
@@ -195,7 +200,7 @@ def render(
             source = layers.black_bars[:2]
 
     if preset.text_blocks:
-        band = video_band(edl.crop_mode, source, frame)
+        band = video_band(edl.crop_mode, source, frame, preset.framing.picture_width)
         placed = []
         for block in preset.text_blocks:
             gap = (

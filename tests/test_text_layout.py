@@ -1,5 +1,5 @@
 from agentic_editor.presets import TextBlock
-from agentic_editor.render.text import EDGE_MARGIN, font_file, ink_extent, place
+from agentic_editor.render.text import EDGE_MARGIN, font_family, font_file, ink_extent, place
 from agentic_editor.settings import ROOT
 
 FONTS = ROOT / "fonts"
@@ -62,3 +62,9 @@ def test_a_long_one_liner_is_split_into_two_even_lines():
     first, second = balance(text, font, 64, 900).split("\n")
     assert abs(len(first) - len(second)) < 15
     assert balance("Short line", font, 64, 900) == "Short line"
+
+
+def test_captions_ask_libass_for_the_weight_by_its_own_family_name():
+    assert font_family(font_file(FONTS, "OpenSans-ExtraBold")) == "Open Sans ExtraBold"
+    assert font_family(font_file(FONTS, "OpenSans-Regular")) == "Open Sans"
+    assert font_family(font_file(FONTS, "Anton-Regular")) == "Anton"

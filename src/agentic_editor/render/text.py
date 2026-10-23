@@ -24,7 +24,10 @@ def font_file(fonts_dir: Path, name: str) -> Path:
 
 
 def font_family(path: Path) -> str:
-    return ImageFont.truetype(str(path), 20).getname()[0]
+    """The name libass finds this face by. A weight other than regular or bold is a family
+    of its own there ("Open Sans ExtraBold"); the shared name gets the regular face."""
+    family, style = ImageFont.truetype(str(path), 20).getname()
+    return family if style in ("Regular", "Bold", "Italic", "Bold Italic") else f"{family} {style}"
 
 
 @dataclass(frozen=True)

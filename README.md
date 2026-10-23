@@ -181,7 +181,49 @@ framing so it doesn't jump at each cut. Fresh moments are then re-checked by geo
 any shot whose edge would cut something is widened before rendering. `face`, `center` and
 `none` (show the whole picture) remain for fixed looks.
 
-The quickest way to make one is to duplicate an existing preset on the web app's
+`framing.picture_width` shows the whole picture narrower than the frame (0.74 of its
+width, say), centred on the background, for pages that inset their videos.
+
+### Learning a style from a reel
+
+Give a reel that already looks the way you want, and a preset is drafted from it:
+
+```
+uv run aiedit learn "https://www.instagram.com/reel/..." --name raw-vocals-es
+uv run aiedit learn reference.mp4 --name raw-vocals-es --save
+```
+
+or "Learn from a reel" on the web app's Presets page, which opens the draft in the editor
+with what was found listed above it. Nothing is saved until you save it.
+
+- Layout, from the pixels: whether the picture fills the frame, sits on a flat background
+  (and its colour), or sits on a blurred copy of itself (drawn here as a colour taken from
+  the footage); how wide the picture is, and the gaps to the text.
+- Text: the vision model reads every text on six frames (two in the opening seconds, the
+  rest timed to words being said or sung, since captions only show then). Frames are read
+  padded to a square: on a tall frame its boxes drift down by up to a tenth of the height.
+  Text that stays the whole reel becomes a text block, captions that change become caption
+  settings, text only in the opening seconds becomes the hook banner. A username in a
+  corner and text that belongs to the video shown (inside a letterboxed picture) are left
+  out. The model's boxes are only roughly right, so each text is then found in the pixels:
+  its exact colour, position, line breaks, an outline and a highlighted word's colour.
+  Every bundled font is tried at the size that matches the measured widths, and the one
+  whose heights and stroke thickness match best is chosen; every reading of a text is
+  measured and they vote, so one bad box can't decide it. Caption sizes and margins are
+  measured against libass, which draws captions smaller than Pillow draws text blocks.
+- Captions are `speech` or `lyrics` when they are the words heard, `translated` when they
+  are in another language, `visual` otherwise.
+- Look: black and white is recognised; other looks are left for you.
+- Sound: speech or singing (the planning model reads the transcript and what the frames
+  show), and for singing, whether the instruments were taken out, in which case the
+  preset isolates the vocals. The loudness target follows the reel's.
+- The length range is set around the reel's length, and the planning model writes the
+  label and the style notes.
+
+Text that changes from video to video (a song title, "Day 28") is flagged so you can edit
+it. Logos, music beds, intros and outros are not learned.
+
+The quickest way to make one by hand is to duplicate an existing preset on the web app's
 Presets page and edit it there; the server validates every save. Editing the YAML by
 hand works too: `uv run aiedit presets` loads and validates all of them. Fonts are
 looked up by file name (without extension) in `fonts/`.

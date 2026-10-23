@@ -25,7 +25,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from agentic_editor import autopilot, jobs
 from agentic_editor.auth import verify_password
 from agentic_editor.backends import get_backends
-from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting
+from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting, StyleDraft
 from agentic_editor.download import update_ytdlp
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
@@ -53,6 +53,22 @@ class JobRequest(BaseModel):
 class RegenerateRequest(BaseModel):
     preset: str
     notes: str | None = None
+
+
+class LearnRequest(BaseModel):
+    source: str = Field(min_length=1)
+    name: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]*$")
+
+
+class StyleDraftView(BaseModel):
+    id: str
+    source: str
+    status: str
+    message: str
+    preset: dict | None
+    notes: list[str]
+    error: str | None
+    created_at: datetime
 
 
 class FeedRequest(BaseModel):
@@ -367,6 +383,13 @@ def create_app(
         partial.replace(uploads / name)
         return {"source": f"{UPLOAD_PREFIX}{name}", "name": file.filename}
 
+    def check_source(source: str) -> None:
+        if source.startswith(UPLOAD_PREFIX):
+            if not UPLOAD_REF.fullmatch(source.removeprefix(UPLOAD_PREFIX)):
+                raise HTTPException(422, "bad upload reference")
+        elif not source.startswith(("http://", "https://")):
+            raise HTTPException(422, f"not a link or upload: {source}")
+
     @app.post("/api/jobs")
     def create_jobs(body: JobRequest, _: User, session: DB) -> list[JobView]:
         unknown = set(body.presets) - presets().keys()
@@ -374,16 +397,32 @@ def create_app(
             raise HTTPException(422, f"unknown preset(s): {', '.join(sorted(unknown))}")
         created = []
         for source in dict.fromkeys(s.strip() for s in body.sources if s.strip()):
-            if source.startswith(UPLOAD_PREFIX):
-                if not UPLOAD_REF.fullmatch(source.removeprefix(UPLOAD_PREFIX)):
-                    raise HTTPException(422, "bad upload reference")
-            elif not source.startswith(("http://", "https://")):
-                raise HTTPException(422, f"not a link or upload: {source}")
+            check_source(source)
             title = source if source.startswith("http") else ""
             created.append(
                 enqueue(session, source=source, title=title, presets=body.presets, notes=body.notes)
             )
         return [job_view(j) for j in created]
+
+    def draft_view(draft: StyleDraft) -> StyleDraftView:
+        return StyleDraftView(**{k: getattr(draft, k) for k in StyleDraftView.model_fields})
+
+    @app.post("/api/styles")
+    def start_learning(body: LearnRequest, _: User, session: DB) -> StyleDraftView:
+        source = body.source.strip()
+        check_source(source)
+        draft = StyleDraft(source=source, name=body.name)
+        session.add(draft)
+        session.commit()
+        jobs.learn_style(draft.id)
+        return draft_view(draft)
+
+    @app.get("/api/styles/{draft_id}")
+    def get_style(draft_id: str, _: User, session: DB) -> StyleDraftView:
+        draft = session.get(StyleDraft, draft_id)
+        if draft is None:
+            raise HTTPException(404, "no such draft")
+        return draft_view(draft)
 
     @app.get("/api/jobs")
     def list_jobs(_: User, session: DB) -> list[JobView]:

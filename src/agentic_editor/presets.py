@@ -112,6 +112,13 @@ class Framing(Strict):
     # Take the background colour from the footage instead, toned to keep text readable.
     auto_background: bool = False
     crop_black_bars: bool = False
+    picture_width: float = Field(
+        default=1.0,
+        ge=0.3,
+        le=1.0,
+        description="share of the frame width the whole picture "
+        "takes when it isn't cropped (mode none)",
+    )
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     text_gap_above: int | None = 0
     text_gap_below: int | None = 130

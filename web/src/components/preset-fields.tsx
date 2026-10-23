@@ -104,6 +104,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "framing.background", label: "Background", kind: "color" },
       { path: "framing.auto_background", label: "Background from the footage", kind: "switch" },
       { path: "framing.crop_black_bars", label: "Crop black bars", kind: "switch" },
+      {
+        path: "framing.picture_width",
+        label: "Picture width when not cropped (share of the frame)",
+        kind: "number",
+        step: 0.01,
+      },
       { path: "framing.smoothing", label: "Tracking smoothing", kind: "number", step: 0.05 },
       { path: "framing.text_gap_above", label: "Gap above video (px)", kind: "number" },
       { path: "framing.text_gap_below", label: "Gap below video (px)", kind: "number" },
