@@ -317,3 +317,18 @@ def test_a_reel_that_cannot_be_learned_from_says_why(env):
     bad_name = {"source": "https://x.test/r", "name": "Not A Name"}
     assert env.client.post("/api/styles", json=bad_name).status_code == 422
     assert env.client.get("/api/styles/nope").status_code == 404
+
+
+def test_a_job_with_some_versions_failed_is_done_and_says_which(env):
+    made = env.run
+
+    def partly(*args):
+        result = made(*args)
+        result.failures.append("vocal-music-9x16: RuntimeError: encoder crashed")
+        return result
+
+    env.run = partly
+    created = start(env.client, presets=["square-1x1"])
+    job = env.client.get(f"/api/jobs/{created[0]['id']}").json()
+    assert job["status"] == "done" and len(job["outputs"]) == 1
+    assert job["error"] == "vocal-music-9x16: RuntimeError: encoder crashed"

@@ -62,6 +62,8 @@ class Output:
 class Result:
     title: str
     outputs: list[Output]
+    # One line per preset or version that couldn't be made; the others still are.
+    failures: list[str] = field(default_factory=list)
 
 
 def is_url(value: str) -> bool:
@@ -509,13 +511,22 @@ def edit(
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
+    failures: list[str] = []
+    errors: list[Exception] = []
+
+    def failed(what: str, exc: Exception) -> None:
+        log.exception("%s failed", what)
+        failures.append(f"{what}: {type(exc).__name__}: {exc}")
+        errors.append(exc)
 
     analyses: dict[str, Analysis] = {}
-    for preset in presets:
-        if preset.audio.source not in analyses:
-            analyses[preset.audio.source] = analyze(
-                source.path, work_dir, router, preset.audio.source, progress
-            )
+    for kind in dict.fromkeys(p.audio.source for p in presets):
+        try:
+            analyses[kind] = analyze(source.path, work_dir, router, kind, progress)
+        except Exception as exc:
+            # Vocals that can't be isolated sink the presets that need them, not the others.
+            failed(", ".join(p.name for p in presets if p.audio.source == kind), exc)
+    presets = [p for p in presets if p.audio.source in analyses]
 
     def for_preset(preset: Preset) -> Analysis:
         base = analyses[preset.audio.source]
@@ -526,25 +537,30 @@ def edit(
         for preset in presets:
             progress("plan", f"planning {preset.name}")
             planning_notes = notes_for[preset.name]
-            applied, failed = instructed[preset.name]
-            plans[preset.name] = [
-                (
-                    translated(
-                        llm,
-                        edl.model_copy(
-                            update={
-                                "decisions": [*applied, *edl.decisions],
-                                "doubts": [*failed, *edl.doubts],
-                            }
+            applied, missed = instructed[preset.name]
+            try:
+                plans[preset.name] = [
+                    (
+                        translated(
+                            llm,
+                            edl.model_copy(
+                                update={
+                                    "decisions": [*applied, *edl.decisions],
+                                    "doubts": [*missed, *edl.doubts],
+                                }
+                            ),
+                            for_preset(preset),
+                            preset,
+                            planning_notes,
                         ),
-                        for_preset(preset),
-                        preset,
-                        planning_notes,
-                    ),
-                    planner,
-                )
-                for edl, planner in plan(llm, for_preset(preset), preset, planning_notes, start_at)
-            ]
+                        planner,
+                    )
+                    for edl, planner in plan(
+                        llm, for_preset(preset), preset, planning_notes, start_at
+                    )
+                ]
+            except Exception as exc:
+                failed(preset.name, exc)
 
     outputs = []
     with router.vision() as vision:
@@ -553,63 +569,71 @@ def edit(
         marks = confirmed_watermarks(
             candidates, reviewer, source.path, settings, work_dir, progress
         )
-        for preset, (edl, planner) in [(p, v) for p in presets for v in plans[p.name]]:
+        for preset, (edl, planner) in [(p, v) for p in presets for v in plans.get(p.name, [])]:
             analysis = for_preset(preset).model_copy(update={"watermarks": marks})
             name = preset.name + (f"-{'abcde'[edl.variant]}" if edl.variant else "")
             dest = out_dir / f"{name}.mp4"
             render_dir = work_dir / "render" / name
-            edl = written_text(
-                reviewer,
-                edl,
-                analysis,
-                preset,
-                source.path,
-                settings,
-                render_dir,
-                notes_for[preset.name],
-            )
-            progress("render", f"rendering {name}")
-            edl, renders, issues = produce(
-                edl,
-                preset,
-                analysis,
-                source.path,
-                dest,
-                render_dir,
-                settings,
-                backends,
-                reviewer,
-                progress,
-            )
-            thumbnail = None
-            if reviewer is not None:
-                try:
-                    thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
-                except LLMError as exc:
-                    log.warning("no thumbnail for %s: %s", preset.name, exc)
-            (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
-            unresolved = [f"{i.kind}: {i.detail}" for i in issues]
-            clip = edl.clips[0]
-            quiet = silence.long_silences(clip.start, clip.end, analysis)
-            score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
-            outputs.append(
-                Output(
-                    preset.name,
-                    dest,
+            try:
+                edl = written_text(
+                    reviewer,
                     edl,
-                    planner,
-                    thumbnail,
-                    renders,
-                    unresolved,
-                    score,
-                    doubts,
+                    analysis,
+                    preset,
+                    source.path,
+                    settings,
+                    render_dir,
+                    notes_for[preset.name],
                 )
-            )
-            progress("done", f"{name} -> {dest}")
+                progress("render", f"rendering {name}")
+                edl, renders, issues = produce(
+                    edl,
+                    preset,
+                    analysis,
+                    source.path,
+                    dest,
+                    render_dir,
+                    settings,
+                    backends,
+                    reviewer,
+                    progress,
+                )
+                thumbnail = None
+                if reviewer is not None:
+                    try:
+                        thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
+                    except LLMError as exc:
+                        log.warning("no thumbnail for %s: %s", preset.name, exc)
+                (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
+                unresolved = [f"{i.kind}: {i.detail}" for i in issues]
+                clip = edl.clips[0]
+                quiet = silence.long_silences(clip.start, clip.end, analysis)
+                score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
+                outputs.append(
+                    Output(
+                        preset.name,
+                        dest,
+                        edl,
+                        planner,
+                        thumbnail,
+                        renders,
+                        unresolved,
+                        score,
+                        doubts,
+                    )
+                )
+                progress("done", f"{name} -> {dest}")
+            except Exception as exc:
+                # One version that can't be made doesn't lose the ones already rendered.
+                failed(name, exc)
 
+    if errors and not outputs:
+        if len(errors) == 1:
+            raise errors[0]
+        raise RuntimeError("; ".join(failures)) from errors[-1]
     meta = {"title": source.title, "url": source.url, "notes": notes}
     (out_dir / "source.json").write_text(json.dumps(meta))
-    return Result(source.title, outputs)
+    return Result(source.title, outputs, failures)
 
 
 def understand(

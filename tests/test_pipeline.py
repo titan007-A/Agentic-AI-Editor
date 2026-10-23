@@ -1,4 +1,8 @@
-from agentic_editor import hooks, pipeline, trim
+from contextlib import contextmanager
+
+import pytest
+
+from agentic_editor import download, hooks, pipeline, trim
 from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.llm import LLMError
@@ -128,3 +132,51 @@ def test_a_failed_punch_in_pick_keeps_the_plan(make_analysis):
     preset = Preset(name="t", label="t", min_duration=15, max_duration=30, zoom_punch_ins=True)
     ((edl, planner),) = pipeline.plan(Model(), talk(make_analysis), preset, None)
     assert planner == "fake" and edl.hook == "Wait" and edl.zooms == []
+
+
+class Offline:
+    """A ModelRouter whose models are never reached."""
+
+    def __init__(self, *args):
+        pass
+
+    @contextmanager
+    def planner(self):
+        yield Down()
+
+    vision = planner
+
+
+def edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken: set[str]):
+    """pipeline.edit with analysis, planning and rendering faked; rendering `broken`
+    versions raises."""
+
+    def produce(edl, preset, analysis, video, dest, *args):
+        if dest.stem in broken:
+            raise RuntimeError(f"encoder crashed on {dest.stem}")
+        dest.write_bytes(b"mp4")
+        return edl, 1, []
+
+    analysis = make_analysis(WORDS, 10)
+    monkeypatch.setattr(pipeline, "ModelRouter", Offline)
+    monkeypatch.setattr(pipeline, "analyze", lambda *args: analysis)
+    monkeypatch.setattr(pipeline, "with_silences", lambda a, *args: a)
+    monkeypatch.setattr(pipeline, "_reachable", lambda client: False)
+    monkeypatch.setattr(pipeline, "produce", produce)
+    settings = type("S", (), {"media_dir": tmp_path / "media"})
+    source = download.Source(path=tmp_path / "source.mp4", title="Talk")
+    work = tmp_path / "cache" / "abc"
+    return pipeline.edit(source, work, presets, settings, None, None, lambda *args: None)
+
+
+def test_one_failed_version_keeps_the_others(make_analysis, monkeypatch, tmp_path):
+    presets = [Preset(name=n, label=n, min_duration=4, max_duration=8) for n in ("a", "b", "c")]
+    result = edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken={"b"})
+    assert [o.preset for o in result.outputs] == ["a", "c"]
+    assert result.failures == ["b: RuntimeError: encoder crashed on b"]
+
+
+def test_a_job_whose_every_version_failed_still_fails(make_analysis, monkeypatch, tmp_path):
+    presets = [Preset(name="a", label="a", min_duration=4, max_duration=8)]
+    with pytest.raises(RuntimeError, match="encoder crashed on a"):
+        edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken={"a"})

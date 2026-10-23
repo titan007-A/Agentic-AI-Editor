@@ -20,8 +20,10 @@ def _run(args: argparse.Namespace) -> int:
         return 2
     backends = detect(settings)
     presets = [available[n] for n in args.preset]
+    code = 0
     for source in args.source:
-        for output in pipeline.run(source, presets, settings, backends, args.notes).outputs:
+        result = pipeline.run(source, presets, settings, backends, args.notes)
+        for output in result.outputs:
             clips = ", ".join(f"{c.start:.2f}-{c.end:.2f}" for c in output.edl.clips)
             print(f"{output.preset}: {output.path}")
             print(
@@ -36,7 +38,10 @@ def _run(args: argparse.Namespace) -> int:
                     print(f"    {doubt}")
             else:
                 print("  ready to post")
-    return 0
+        for failure in result.failures:
+            print(f"failed: {failure}")
+            code = 1
+    return code
 
 
 def _learn(args: argparse.Namespace) -> int:
