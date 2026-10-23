@@ -44,7 +44,7 @@ def test_video_band_for_letterboxed_landscape_source():
 def test_graph_layers_overlays_in_order():
     edl = EDL(
         clips=[Clip(start=4, end=12)],
-        crop_mode="none",
+        crop_mode="center",
         zooms=[Zoom(time=11, scale=1.2, duration=0.5)],
     )
     layers = Layers(
@@ -144,3 +144,25 @@ def test_a_silent_intro_gets_silence_and_joins_the_reel_in_one_graph():
     assert "anullsrc=r=48000:cl=stereo,atrim=duration=1.500[ba0]" in graph
     assert "[bv0][ba0][out][reel_a][bv1][ba1]concat=n=3:v=1:a=1[joined_v][joined_a]" in graph
     assert (video, audio) == ("joined_v", "joined_a")
+
+
+def test_zooms_never_cut_into_a_picture_shown_whole_to_keep_everything():
+    from agentic_editor.edl import Shot
+
+    zooms = [Zoom(time=1, scale=1.2, duration=0.5), Zoom(time=6, scale=1.2, duration=0.5)]
+    # Letterboxed at the frame's full width: no room at all.
+    edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="none", zooms=zooms)
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(pulses=[3.0], pulse_scale=1.05))
+    assert "between(t" not in graph
+    # An inset picture may grow until it reaches the frame's edges, and no further.
+    inset = VERTICAL.model_copy(
+        update={"framing": VERTICAL.framing.model_copy(update={"picture_width": 0.9})}
+    )
+    graph, _ = build_graph(edl, inset, (1920, 1080), Layers())
+    assert "0.111*between(t,1.000,1.500)" in graph
+    # Smart framing: the cropped shot zooms, the shot widened to keep a banner doesn't.
+    shots = [Shot(start=0, end=5, x=600, width=606), Shot(start=5, end=10, x=0, width=1248)]
+    edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="smart", shots=shots, zooms=zooms)
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(pulses=[4.9], pulse_scale=1.05))
+    assert "0.200*between(t,1.000,1.500)" in graph and "between(t,6.000" not in graph
+    assert "0.050*between(t,4.900,5.000)*(1-(t-4.900)/0.3)" in graph

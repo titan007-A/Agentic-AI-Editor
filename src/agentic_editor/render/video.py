@@ -1,6 +1,7 @@
 """Builds the ffmpeg video filtergraph for an EDL. Pure string building, so the
 graph can be unit tested without running ffmpeg."""
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -214,18 +215,61 @@ def _even(value: float) -> int:
 PULSE_SECONDS = 0.3
 
 
-def zoom_expression(edl: EDL, pulses: list[float] = (), pulse_scale: float = 1.0) -> str | None:
-    """Scale over time: the planner's punch-ins, plus short pulses that ease back out."""
+def zoom_expression(
+    edl: EDL,
+    pulses: list[float] = (),
+    pulse_scale: float = 1.0,
+    room: list[tuple[float, float, float]] | None = None,
+) -> str | None:
+    """Scale over time: the planner's punch-ins, plus short pulses that ease back out.
+    `room` gives reel stretches and the most each may be zoomed (see zoom_room)."""
+    room = room or [(0.0, math.inf, math.inf)]
     terms = []
+
+    def add(start: float, end: float, scale: float, shape: str = "") -> None:
+        for a, b, most in room:
+            low, high = max(start, a), min(end, b)
+            amount = min(scale, most) - 1
+            if high > low and amount >= 0.001:
+                terms.append(f"{amount:.3f}*between(t,{low:.3f},{high:.3f}){shape}")
+
     for t in pulses:
         d = PULSE_SECONDS
-        terms.append(f"{pulse_scale - 1:.3f}*between(t,{t:.3f},{t + d:.3f})*(1-(t-{t:.3f})/{d})")
+        add(t, t + d, pulse_scale, f"*(1-(t-{t:.3f})/{d})")
     for zoom in edl.zooms:
         t = edl.to_output_time(zoom.time)
         if t is None:
             continue
-        terms.append(f"{zoom.scale - 1:.3f}*between(t,{t:.3f},{t + zoom.duration:.3f})")
+        add(t, t + zoom.duration, zoom.scale)
     return "1+" + "+".join(terms) if terms else None
+
+
+def zoom_room(
+    edl: EDL, preset: Preset, source: tuple[int, int], layers: Layers
+) -> list[tuple[float, float, float]]:
+    """How far each stretch of the reel may be zoomed into. A window cropped to fill the
+    frame may be; a picture shown whole, or a window widened so nothing in it is cut, only
+    as far as its padding leaves room before the zoom would cut into it after all."""
+    frame = preset.size
+    width, height = frame
+    if edl.crop_mode == "none":
+        w, h = layers.black_bars[:2] if layers.black_bars else source
+        box = _even(width * preset.framing.picture_width)
+        scale = min(box / w, height / h)
+        return [(0.0, edl.duration, min(width / (w * scale), height / (h * scale)))]
+    if edl.crop_mode != "smart" or not edl.shots:
+        return [(0.0, edl.duration, math.inf)]
+    clip = edl.clips[0]
+    content = layers.content or (0, 0, *source)
+    room = []
+    for shot in edl.shots:
+        w, h = shot.width, shot.height or content[3]
+        most = math.inf
+        if abs(w * height - width * h) > 2 * max(width, height):  # padded, not filling
+            scale = min(width / w, height / h)
+            most = min(width / (w * scale), height / (h * scale))
+        room.append((shot.start - clip.start, shot.end - clip.start, most))
+    return room
 
 
 def video_band(
@@ -302,7 +346,8 @@ def build_graph(
         parts.append(f"[{current}]{filters}[{label}]")
         current = label
 
-    if (zoom := zoom_expression(edl, layers.pulses, layers.pulse_scale)) is not None:
+    room = zoom_room(edl, preset, source, layers)
+    if (zoom := zoom_expression(edl, layers.pulses, layers.pulse_scale, room)) is not None:
         step(
             f"scale=w='trunc({width}*({zoom})/2)*2':h='trunc({height}*({zoom})/2)*2'"
             f":eval=frame:flags=bicubic,crop={width}:{height}",
