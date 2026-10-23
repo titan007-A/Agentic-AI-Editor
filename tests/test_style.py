@@ -227,3 +227,12 @@ def test_captions_are_speech_lyrics_translated_or_written():
         "Spanish",
     )
     assert style.caption_mode(["A quiet street"], Transcript(), False, "English")[0] == "visual"
+
+
+def test_huge_learned_text_still_makes_a_valid_preset():
+    from agentic_editor.style import Measured, fit_font, text_block
+
+    m = Measured(lines=["WOW"], boxes=[(300, 700, 40, 1040)], colour=(255, 255, 255), fill=0.4)
+    fit = fit_font(m, [BOLD])
+    assert fit.size > 300
+    assert text_block(m, fit, (1080, 1920)).size == 300

@@ -141,6 +141,8 @@ def banner_top(
     for top, bottom in taken:
         options += [round(bottom + gap), round(top - gap - height)]
     options = [o for o in options if 0 <= o <= frame_height - height]
+    if not options:
+        options = [min(max(near, 0), max(0, frame_height - height))]
     seen = [bands for t, bands in rows if until is None or t <= until]
 
     def cost(top: int) -> tuple[float, int]:
