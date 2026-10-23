@@ -42,7 +42,8 @@ def test_reels_get_the_nearest_standard_format():
     assert style.target_size(720, 1280) == ("9:16", (1080, 1920))
     assert style.target_size(1080, 1350) == ("4:5", (1080, 1350))
     assert style.target_size(1000, 1000) == ("1:1", (1080, 1080))
-    assert style.target_size(1080, 1500) == ("1080:1500", (1080, 1500))
+    assert style.target_size(320, 240) == ("4:3", (1440, 1080))
+    assert style.target_size(1080, 1500) == ("18:25", (1080, 1500))
 
 
 def test_the_opening_seconds_get_frames_of_their_own():

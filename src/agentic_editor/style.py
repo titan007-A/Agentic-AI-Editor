@@ -14,6 +14,7 @@ notes say what was measured, what was guessed and what was left out.
 import difflib
 import itertools
 import logging
+import math
 import re
 import statistics
 import subprocess
@@ -80,8 +81,8 @@ PART = 0.6  # of the box's width: text narrower than this is likely only part of
 DARK = 70  # brightest channel of a background a dark border would vanish into
 THICKEST = 0.3  # of the line's height: a border wider than this is the background
 
-FORMATS = {(9, 16): (1080, 1920), (4, 5): (1080, 1350), (1, 1): (1080, 1080),
-           (16, 9): (1920, 1080)}  # fmt: skip
+FORMATS = {(9, 16): (1080, 1920), (4, 5): (1080, 1350), (3, 4): (1080, 1440),
+           (1, 1): (1080, 1080), (4, 3): (1440, 1080), (16, 9): (1920, 1080)}  # fmt: skip
 
 READ_PROMPT = (
     "This is one frame of a short video made for phones. List every piece of text drawn "
@@ -217,7 +218,8 @@ def target_size(width: int, height: int) -> tuple[str, tuple[int, int]]:
     if abs(num / den - width / height) < 0.02:
         return f"{num}:{den}", size
     scaled = (1080, round(1080 * height / width / 2) * 2)
-    return f"{scaled[0]}:{scaled[1]}", scaled
+    common = math.gcd(*scaled)
+    return f"{scaled[0] // common}:{scaled[1] // common}", scaled
 
 
 def read_times(duration: float, words: list[Word] = ()) -> list[float]:
