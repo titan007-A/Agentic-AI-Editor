@@ -117,7 +117,8 @@ _videos_lock = threading.Lock()
 
 
 def video(work_dir: Path) -> Slot:
-    """The slot for one source video, whose cache folder is `work_dir`."""
+    """The slot for one video, by its folder: the cache folder while it is edited, the
+    download folder while it downloads."""
     with _videos_lock:
         if work_dir not in _videos:
             _videos[work_dir] = Slot(f"video {work_dir.name}", lambda: work_dir / "busy.lock")
