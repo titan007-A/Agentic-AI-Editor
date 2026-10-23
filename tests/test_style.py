@@ -59,6 +59,15 @@ def test_frames_are_read_while_words_are_on_screen():
     assert len(times) == 6
 
 
+def test_boxes_on_the_reading_square_map_back_onto_the_frame():
+    # A 9:16 frame fills the middle 56.25% of the square's width.
+    x0, y0, x1, y1 = style.from_square([500, 250, 781, 500], (1080, 1920))
+    assert abs(x0 - 0.5) < 1e-6 and abs(x1 - 1.0) < 1e-3 and (y0, y1) == (0.25, 0.5)
+    assert style.from_square([0, 0, 100, 100], (1080, 1920))[0] == 0.0  # off the frame
+    _, y0, _, y1 = style.from_square([0, 500, 1000, 600], (1920, 1080))
+    assert abs(y0 - 0.5) < 1e-6 and abs(y1 - (0.6 - 0.21875) / 0.5625) < 1e-6
+
+
 def test_symbols_the_fonts_cannot_draw_are_dropped():
     assert style.clean("🎵 La Mejor Música\n  Día 28 ") == "La Mejor Música\nDía 28"
 
@@ -112,6 +121,12 @@ def test_sparse_lyrics_still_count_as_captions():
     assert sorted(found) == [("captions", [0.5, 35.8]), ("title", [0.5, 2.5])]
 
 
+def test_the_typical_reading_is_the_one_most_agree_on():
+    assert style._typical([636, 560, 562, 700]) == 561  # two captions moved off a face
+    assert style._typical([113, 96, 93, 259]) == 94.5
+    assert style._typical([40]) == 40
+
+
 def test_one_bad_reading_does_not_decide_the_font():
     lines = ["Follow us for more iconic raw vocals"]
     good = measured_from(drawn(lines, BOLD, 38, 1450), lines)
@@ -146,6 +161,19 @@ def test_a_loose_box_still_finds_the_text_and_its_outline():
     assert len(m.boxes) == 1 and abs(m.boxes[0][0] - 1515) < 12
     colour, width = m.outline
     assert colour == (0, 0, 0) and 3 <= width <= 6
+
+
+def test_a_highlighted_word_is_not_taken_for_the_caption_colour():
+    image = Image.new("RGB", FRAME, "black")
+    canvas = ImageDraw.Draw(image)
+    face = ImageFont.truetype(str(ANTON), 80)
+    x = (FRAME[0] - face.getlength("YOU ARE THE SHADOW")) / 2
+    canvas.text((x, 1640), "YOU", font=face, fill=(255, 224, 0))
+    canvas.text((x + face.getlength("YOU "), 1640), "ARE THE SHADOW", font=face, fill="white")
+    seen = Sighting(1, "YOU ARE THE SHADOW", (0.22, 0.86, 0.78, 0.89), "yellow", "white")
+    m = style.measure(np.asarray(image), seen)
+    assert m.colour == (255, 255, 255) and m.other == (255, 224, 0)
+    assert m.boxes[0][2] < x + 5 and m.boxes[0][3] > FRAME[0] - x - 5  # all of it
 
 
 def test_the_picture_is_ignored_when_looking_for_text_on_the_padding():

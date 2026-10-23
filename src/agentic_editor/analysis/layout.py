@@ -34,7 +34,14 @@ NAMED = {
     "green": (40, 200, 70),
     "brown": (130, 80, 40),
     "beige": (225, 200, 160),
+    "cream": (255, 245, 210),
+    "teal": (0, 150, 140),
+    "magenta": (230, 0, 160),
+    "lime": (160, 230, 40),
+    "navy": (20, 30, 110),
+    "maroon": (120, 20, 30),
 }
+PALETTE = np.array(sorted(set(NAMED.values())), np.float32)
 
 
 def sample(
@@ -55,7 +62,8 @@ def sample(
     )
 
 
-def frame_at(video: Path, at: float, size: tuple[int, int], ffmpeg_bin: str) -> np.ndarray:
+def frame_at(video: Path, at: float, size: tuple[int, int], ffmpeg_bin: str) -> np.ndarray | None:
+    """The frame at `at` as RGB, or None when there is none (a time past the last frame)."""
     width, height = size
     raw = subprocess.run(
         [ffmpeg_bin, "-v", "error", "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1",
@@ -64,7 +72,9 @@ def frame_at(video: Path, at: float, size: tuple[int, int], ffmpeg_bin: str) -> 
         capture_output=True,
         check=True,
     ).stdout  # fmt: skip
-    return np.frombuffer(raw, np.uint8).reshape(height, width, 3)
+    if len(raw) < width * height * 3:
+        return None
+    return np.frombuffer(raw[: width * height * 3], np.uint8).reshape(height, width, 3)
 
 
 def background(frames: np.ndarray) -> tuple[int, int, int] | None:
@@ -133,18 +143,27 @@ def _clusters(pixels: np.ndarray, k: int = 6, rounds: int = 10) -> list[np.ndarr
 
 
 def text_colour(crop: np.ndarray, name: str) -> tuple[int, int, int]:
-    """The exact colour of the letters in `crop`, which the vision model called `name`:
-    of the crop's main colours, the one nearest that name. The median of the pixels close
-    to it leaves out the blended pixels along the letters' edges."""
-    target = np.array(NAMED.get(name.lower().split()[-1] if name else "", NAMED["white"]))
+    """The exact colour of the letters in `crop`, which the vision model called `name`.
+    For a colour it named, the pixels nearer that name than any other, so a yellow word
+    beside white ones keeps to itself; otherwise, of the crop's main colours, the one
+    nearest. The median of the pixels close to it leaves out blended edge pixels."""
+    words = name.lower().split() if name else []
+    known = words[-1] if words and words[-1] in NAMED else None
+    target = np.array(NAMED[known or "white"], np.float32)
     pixels = crop.reshape(-1, 3).astype(np.float32)
-    groups = _clusters(pixels)
-    group = min(groups, key=lambda g: np.abs(g.mean(axis=0) - target).sum())
+    group = None
+    if known:
+        nearest = np.argmin(np.abs(pixels[:, None] - PALETTE[None]).sum(axis=2), axis=1)
+        mine = pixels[nearest == np.argmin(np.abs(PALETTE - target).sum(axis=1))]
+        if len(mine) >= max(20, 0.002 * len(pixels)):
+            group = mine
+    if group is None:
+        group = min(_clusters(pixels), key=lambda g: np.abs(g.mean(axis=0) - target).sum())
     centre = np.median(group, axis=0)
     core = group[np.abs(group - centre).max(axis=1) <= 24]
     colour = np.median(core if len(core) else group, axis=0)
     # Flat white and black come out a step off after compression; put them back.
-    colour = np.where(colour >= 247, 255, np.where(colour <= 8, 0, colour))
+    colour = np.where(colour >= 240, 255, np.where(colour <= 12, 0, colour))
     return tuple(int(c) for c in np.round(colour))
 
 

@@ -58,7 +58,10 @@ log = logging.getLogger(__name__)
 Progress = Callable[[str, str], None]
 
 LAYOUT_FRAMES = 24
-READ_WIDTH = 720  # the vision model reads text well at this width
+# Frames are read padded to a square this size. On a tall frame the vision model's boxes
+# drift down the further down the text is, by over a tenth of the height near the bottom;
+# on a square they are a few percent off at most.
+READ_SQUARE = 1280
 OPENING = 4.0  # seconds: text seen only before this is a title that opens the reel
 STEADY = 0.75  # share of the frames a tagline must be on, unchanged
 SIMILAR = 0.8  # how alike two readings must be to count as the same text
@@ -400,8 +403,15 @@ def measure(frame: np.ndarray, sighting: Sighting, picture: Box | None = None) -
     if window.size == 0 or not text:
         return None
     colour = layout.text_colour(window, sighting.colour)
+    other = None
+    if sighting.other and sighting.other.lower() != sighting.colour.lower():
+        candidate = layout.text_colour(window, sighting.other)
+        if candidate != colour:
+            other = candidate
+    # A word in a second colour is part of the text too.
+    drawn = layout.ink(window, colour) | (layout.ink(window, other) if other else False)
     # The box's height bounds a letter's, with room for a box drawn too tight.
-    mask = layout.letters(layout.ink(window, colour), max(1.5 * (y1 - y0), 0.06) * height)
+    mask = layout.letters(drawn, max(1.5 * (y1 - y0), 0.06) * height)
     if picture is not None:
         px0, py0, px1, py1 = picture
         mask[
@@ -419,11 +429,12 @@ def measure(frame: np.ndarray, sighting: Sighting, picture: Box | None = None) -
     rows = slice(max(0, found[0][0] - pad), found[-1][1] + pad)
     cols = slice(max(0, min(f[2] for f in found) - pad), max(f[3] for f in found) + pad)
     crop, letters = window[rows, cols], mask[rows, cols]
-    other = None
-    if sighting.other and sighting.other.lower() != sighting.colour.lower():
-        candidate = layout.text_colour(crop, sighting.other)
-        if candidate != colour and layout.ink(crop, candidate).mean() >= 0.005:
-            other = candidate
+    if other is not None:
+        main, second = layout.ink(crop, colour) & letters, layout.ink(crop, other) & letters
+        if second.sum() < 0.005 * letters.size:
+            other = None  # named, but not really there
+        elif second.sum() > main.sum():
+            colour, other = other, colour  # the model named the highlighted word's colour
     return Measured(
         text.split("\n"), boxes, colour, fill, other, outline_of(crop, letters),
         backdrop_of(crop, letters),
@@ -524,10 +535,18 @@ def _vote(fits: list[FontFit]) -> Path:
 
 
 def _typical(values: list[float]) -> float:
-    """The median, after dropping readings far from it (two lines read as one)."""
-    middle = statistics.median(values)
-    kept = [v for v in values if middle / 1.4 <= v <= middle * 1.4]
-    return statistics.median(kept or values)
+    """The value most readings agree on: the median of the largest bunch of close values.
+    A caption moved off a face, or two lines read as one, stays out of it."""
+    ordered = sorted(values)
+    bunches = [[ordered[0]]]
+    for v in ordered[1:]:
+        if v - bunches[-1][-1] <= max(8.0, 0.08 * abs(v)):
+            bunches[-1].append(v)
+        else:
+            bunches.append([v])
+    middle = statistics.median(ordered)
+    best = max(bunches, key=lambda b: (len(b), b[0] <= middle <= b[-1]))
+    return statistics.median(best)
 
 
 def consensus(samples: list[Measured], fonts: list[Path]) -> tuple[Measured, FontFit] | None:
@@ -689,16 +708,49 @@ def caption_mode(
     return "visual", None
 
 
+def in_square(size: tuple[int, int]) -> tuple[float, float, float, float]:
+    """Where a frame of `size` sits once fitted into the reading square, as shares of the
+    square: left, top, width, height."""
+    width, height = size
+    if height >= width:
+        share = width / height
+        return (1 - share) / 2, 0.0, share, 1.0
+    share = height / width
+    return 0.0, (1 - share) / 2, 1.0, share
+
+
+def from_square(box: list[int], size: tuple[int, int]) -> Box:
+    """A 0-1000 box on the reading square, as shares of the frame itself."""
+    left, top, w, h = in_square(size)
+    x0, y0, x1, y1 = (min(1000, max(0, v)) / 1000 for v in box)
+    return (
+        _share((x0 - left) / w), _share((y0 - top) / h),
+        _share((x1 - left) / w), _share((y1 - top) / h),
+    )  # fmt: skip
+
+
+def _share(value: float) -> float:
+    return min(1.0, max(0.0, value))
+
+
 def read_frames(
-    vision: OllamaClient, video: Path, times: list[float], work: Path, ffmpeg_bin: str
+    vision: OllamaClient,
+    video: Path,
+    size: tuple[int, int],
+    times: list[float],
+    work: Path,
+    ffmpeg_bin: str,
 ) -> tuple[list[Sighting], list[str]]:
     work.mkdir(parents=True, exist_ok=True)
     sightings, scenes = [], []
+    side = READ_SQUARE
+    fit = f"scale={side}:{side}:force_original_aspect_ratio=decrease"
+    pad = f"pad={side}:{side}:(ow-iw)/2:(oh-ih)/2:black"
     for i, at in enumerate(times):
         image = work / f"read-{i}.jpg"
         subprocess.run(
             [ffmpeg_bin, "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(video),
-             "-frames:v", "1", "-vf", f"scale={READ_WIDTH}:-2", "-q:v", "2", str(image)],
+             "-frames:v", "1", "-vf", f"{fit},{pad}", "-q:v", "2", str(image)],
             check=True,
         )  # fmt: skip
         try:
@@ -717,8 +769,9 @@ def read_frames(
         log.info("%.1fs: %s; %d text(s)", at, reply.scene, len(reply.items))
         items = []
         for item in reply.items:
-            x0, y0, x1, y1 = (min(1000, max(0, v)) / 1000 for v in item.box)
+            x0, y0, x1, y1 = from_square(item.box, size)
             if x1 > x0 and y1 > y0 and item.text.strip():
+                log.info("%.1fs: %r at %s, %s", at, item.text, item.box, item.color)
                 items.append(Sighting(at, item.text, (x0, y0, x1, y1), item.color.strip(),
                                       item.other_color.strip()))  # fmt: skip
         sightings += join_lines(items)
@@ -765,8 +818,9 @@ def learn(
     progress("read", f"reading the text on {len(times)} frames")
     with router.vision() as vision:
         sightings, scenes = read_frames(
-            vision, source.path, times, work_dir / "style", settings.ffmpeg_bin
-        )
+            vision, source.path, (info.width, info.height), times, work_dir / "style",
+            settings.ffmpeg_bin,
+        )  # fmt: skip
     if not scenes:
         notes.append("The vision model didn't answer, so no text was read: add it by hand")
     found = roles(group(sightings), times, picture, padded)
@@ -782,6 +836,8 @@ def learn(
     def measured(g: list[Sighting]) -> list[Measured]:
         found = []
         for s in g:
+            if full_frames[s.at] is None:
+                continue
             outside = padded and not _inside(s.box, picture)
             m = measure(full_frames[s.at], s, picture if outside else None)
             if m is not None:
