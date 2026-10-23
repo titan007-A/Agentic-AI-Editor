@@ -382,6 +382,7 @@ def test_feeds_are_checked_before_they_are_saved(env, tmp_path):
     link = {"name": "x", "kind": "link", "location": "not a link", "presets": ["square-1x1"]}
     assert env.client.post("/api/feeds", json=link).status_code == 422
     assert add_folder_feed(env, tmp_path, active_from=23).status_code == 422
+    assert add_folder_feed(env, tmp_path, active_from=7, active_to=7).status_code == 422
     assert add_folder_feed(env, tmp_path, presets=["nope"]).status_code == 422
 
 

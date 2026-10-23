@@ -571,6 +571,10 @@ def create_app(
             raise HTTPException(422, "a playlist or channel feed needs a link")
         if (body.active_from is None) != (body.active_to is None):
             raise HTTPException(422, "give both hours, or neither for any time")
+        if body.active_from is not None and body.active_from == body.active_to:
+            raise HTTPException(
+                422, "the hours start and end at the same time; leave both out for any time"
+            )
         notes = body.notes.strip() if body.notes else None
         return body.model_copy(update={"location": location, "notes": notes or None})
 
