@@ -9,6 +9,7 @@ applied; the rest are logged and dropped. What the instruction says about the co
 ("start where he talks about X") goes to the planner as notes.
 """
 
+import copy
 import re
 from typing import Literal
 
@@ -159,13 +160,87 @@ def named_language(text: str) -> str | None:
     return next((n for n in LANGUAGES.values() if n.lower() in lowered), None)
 
 
-def seconds(text: str) -> float | None:
-    """A length from words like "30 seconds", "2 minutes", "under a minute"."""
+NUMBER_WORDS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "ninety": 90,
+}  # fmt: skip
+UNITS = {"second": 1, "seconds": 1, "sec": 1, "secs": 1, "s": 1}
+UNITS |= {"minute": 60, "minutes": 60, "min": 60, "mins": 60, "m": 60}
+RANGE = {"and", "to", "or"}
+
+
+def lengths(text: str) -> list[float]:
+    """Every length the words name, in seconds, in order: "between 30 and 50 seconds" is
+    [30, 50], "a minute and a half" [90], "1:30" [90]. A bare number takes the unit of
+    the number its range runs to, or is seconds when no unit is named at all."""
     lowered = text.lower()
-    n = _number(lowered)
-    if "minute" in lowered or re.search(r"\bmin\b", lowered):
-        return (n if n is not None else (0.5 if "half" in lowered else 1.0)) * 60
-    return n
+    clock = [
+        (m.start(), int(m[1]) * 60 + int(m[2])) for m in re.finditer(r"\b(\d+):(\d\d)\b", lowered)
+    ]
+    lowered = re.sub(r"\b\d+:\d\d\b", lambda m: " " * len(m[0]), lowered)
+    tokens = [(m.start(), m[0]) for m in re.finditer(r"\d+(?:\.\d+)?|[a-z]+", lowered)]
+
+    def unit(i: int) -> int | None:
+        if i >= len(tokens) or tokens[i][1] not in UNITS:
+            return None
+        # "45s" and "2m" only when written against the number: a lone "s" or "m" is a word.
+        pos, word = tokens[i]
+        if len(word) == 1 and not lowered[pos - 1 : pos].isdigit():
+            return None
+        return UNITS[word]
+
+    def half(i: int) -> bool:
+        return [t for _, t in tokens[i : i + 3]] == ["and", "a", "half"]
+
+    named: list[tuple[int, float]] = []
+    bare: list[tuple[int, float]] = []  # numbers waiting for the unit their range ends on
+    i = 0
+    while i < len(tokens):
+        pos, word = tokens[i]
+        if word == "half" and i + 1 < len(tokens) and tokens[i + 1][1] in ("a", "an"):
+            amount, i = 0.5, i + 1
+        elif re.fullmatch(r"[\d.]+", word):
+            amount = float(word)
+        elif word in NUMBER_WORDS:
+            amount = NUMBER_WORDS[word]
+        else:
+            if word not in RANGE:
+                bare = []  # a range only runs through "and", "to", "or"
+            i += 1
+            continue
+        if half(i + 1):
+            amount, i = amount + 0.5, i + 3
+        if (factor := unit(i + 1)) is not None:
+            named += [(p, n * factor) for p, n in bare] + [(pos, amount * factor)]
+            bare, i = [], i + 2
+            if half(i):
+                named[-1], i = (pos, named[-1][1] + 0.5 * factor), i + 3
+            continue
+        if word not in ("a", "an"):
+            bare.append((pos, amount))
+        i += 1
+    if not named and not clock:
+        named = [(p, n) for p, n in bare]
+    return [n for _, n in sorted(named + clock)]
+
+
+def seconds(text: str) -> float | None:
+    """The first length the words name, in seconds."""
+    found = lengths(text)
+    return found[0] if found else None
+
+
+def asked_length(request: Request) -> float | None:
+    """The length a min_seconds or max_seconds request asks for: the model's value when
+    the quote names it, else the quote's own number at that end of a range."""
+    named = lengths(request.quote)
+    if not named:
+        return None
+    for value in lengths(request.value):
+        if any(abs(value - n) < 0.01 for n in named):
+            return value
+    return max(named) if request.setting == "max_seconds" else min(named)
 
 
 def normalise(request: Request) -> Request:
@@ -182,7 +257,8 @@ def normalise(request: Request) -> Request:
         elif setting == "look":
             value = quote
         elif setting in ("max_seconds", "min_seconds"):
-            value = f"{seconds(quote):g}" if seconds(quote) else ""
+            n = asked_length(request)
+            value = f"{n:g}" if n else ""
         elif setting == "versions":
             value = f"{_number(quote):g}" if _number(quote) else ""
     return request.model_copy(update={"setting": setting, "value": value})
@@ -222,7 +298,7 @@ def grounded(request: Request, instruction: str) -> str | None:
         return "it doesn't ask for anything to be off"
     if request.setting == "versions" and _number(quote) is None:
         return "no number given"
-    if request.setting in ("max_seconds", "min_seconds") and seconds(quote) is None:
+    if request.setting in ("max_seconds", "min_seconds") and not lengths(quote):
         return "no length given"
     return None
 
@@ -231,15 +307,19 @@ def apply(
     preset: Preset, requests: list[Request], instruction: str
 ) -> tuple[Preset, list[str], list[str]]:
     """The preset with the instruction's grounded requests applied, a line for each, and
-    the lines about what couldn't be applied."""
+    the lines about what couldn't be applied. Each request is applied on its own, so one
+    that can't be (it contradicts another) doesn't take the rest with it."""
     data = preset.model_dump()
     notes: list[str] = []
+    failed: list[str] = []
+    asked: set[str] = set()
 
     def change(path: str, value, note: str) -> None:
         *parents, key = path.split(".")
         target = data
         for p in parents:
             target = target[p]
+        asked.add(path)
         if target[key] != value:
             target[key] = value
             notes.append(f"from your instruction: {note}")
@@ -248,6 +328,7 @@ def apply(
         if (problem := grounded(request, instruction)) is not None:
             notes.append(f"ignored a reading of the instruction ({request.setting}): {problem}")
             continue
+        before, noted, was_asked = copy.deepcopy(data), len(notes), set(asked)
         value = request.value.strip()
         match request.setting:
             case "captions_off":
@@ -284,22 +365,29 @@ def apply(
                 n = int(min(5, max(1, _number(request.quote) or 1)))
                 change("hook.variants", n, f"{n} version(s)")
             case "max_seconds":
-                n = seconds(request.quote)
+                n = asked_length(request)
                 change("max_duration", n, f"at most {n:g} s")
+                # A limit under the preset's own minimum moves that minimum with it.
+                if data["min_duration"] > n and "min_duration" not in asked:
+                    change("min_duration", n, f"minimum lowered to {n:g} s to fit")
             case "min_seconds":
-                n = seconds(request.quote)
+                n = asked_length(request)
                 change("min_duration", n, f"at least {n:g} s")
+                if data["max_duration"] < n and "max_duration" not in asked:
+                    change("max_duration", n, f"maximum raised to {n:g} s to fit")
             case "no_watermark_blur":
                 change("watermarks.blur", False, "watermark blur off")
             case "start_point":
                 change("hook.optimize", False, "the opening stays where you asked it to start")
-    try:
-        updated = Preset.model_validate(data)
-    except ValidationError as exc:
-        reason = exc.errors()[0]["msg"].removeprefix("Value error, ")
-        note = f"couldn't apply the instruction's settings ({reason}); kept the preset"
-        return preset, [note], [note]
-    return updated, notes, []
+        try:
+            Preset.model_validate(data)
+        except ValidationError as exc:
+            reason = exc.errors()[0]["msg"].removeprefix("Value error, ")
+            data, asked = before, was_asked
+            del notes[noted:]
+            failed.append(f'couldn\'t apply "{request.quote}" from your instruction ({reason})')
+            notes.append(failed[-1])
+    return Preset.model_validate(data), notes, failed
 
 
 def start_point(requests: list[Request], instruction: str) -> str | None:
