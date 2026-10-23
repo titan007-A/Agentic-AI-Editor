@@ -29,6 +29,7 @@ text_blocks:
 framing:
   mode: none
   background: "#000000"
+  crop_black_bars: true
   text_gap_above: 0
   text_gap_below: 130
 audio:

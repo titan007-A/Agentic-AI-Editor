@@ -106,3 +106,27 @@ def test_no_shot_is_stretched_to_the_frame():
     chain = shot_chain(tall, 0, (0, 0, 1080, 1920), (1080, 1080), "#000000", None)
     assert chain[0] == "crop=1080:1080:0:200"
     assert "force_original_aspect_ratio=increase" in chain[1]
+
+
+def test_baked_in_bars_are_measured_across_the_clip_not_only_at_its_start(monkeypatch):
+    from agentic_editor.render import compose
+
+    # A dark opening shows only a lit spot; later probes see the whole 558 px picture.
+    found = {0.0: (80, 100, 280, 160), 5.0: (558, 426, 40, 0), 10.0: (558, 426, 40, 0)}
+    monkeypatch.setattr(compose, "detect_black_bars", lambda video, at: found.get(at))
+    assert compose.baked_bars(Path("v.mp4"), 0.0, 20.0, (638, 426)) == (558, 426, 40, 0)
+    monkeypatch.setattr(compose, "detect_black_bars", lambda video, at: (638, 426, 0, 0))
+    assert compose.baked_bars(Path("v.mp4"), 0.0, 20.0, (638, 426)) is None
+
+
+def test_shipped_letterboxed_presets_take_off_baked_in_bars():
+    from agentic_editor.presets import load_presets
+    from agentic_editor.settings import ROOT
+
+    letterboxed = [p for p in load_presets(ROOT / "presets").values() if p.framing.mode == "none"]
+    vocal = [p for p in letterboxed if p.name.startswith("vocal-music")]
+    assert len(vocal) == 4 and all(p.framing.crop_black_bars for p in vocal)
+    italian = next(p for p in vocal if p.name == "vocal-music-it-9x16")
+    edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="none")
+    graph, _ = build_graph(edl, italian, (558, 426), Layers(black_bars=(558, 426, 40, 0)))
+    assert "crop=558:426:40:0" in graph and "color=0xC8A77D" in graph

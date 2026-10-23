@@ -56,6 +56,17 @@ def picture_area(
     return (x0, y0, (x1 - x0) // 2 * 2, (y1 - y0) // 2 * 2)
 
 
+def baked_bars(
+    video: Path, start: float, end: float, size: tuple[int, int]
+) -> tuple[int, int, int, int] | None:
+    """The crop, as width, height, x, y, that takes off the black bars baked into the
+    source, or None when there are none. Measured like picture_area, at several points."""
+    x, y, width, height = picture_area(video, start, end, size)
+    if width <= 0 or height <= 0 or (width >= size[0] - 1 and height >= size[1] - 1):
+        return None
+    return width, height, x, y
+
+
 def timeline_words(edl: EDL, analysis: Analysis):
     words = []
     offset = 0.0
@@ -209,7 +220,8 @@ def render(
     # Bars baked into the source would show against a background taken from the footage.
     crop_bars = preset.framing.crop_black_bars or preset.framing.auto_background
     if crop_bars and edl.crop_mode == "none":
-        layers.black_bars = detect_black_bars(video, edl.clips[0].start)
+        clip = edl.clips[0]
+        layers.black_bars = baked_bars(video, clip.start, clip.end, source)
         if layers.black_bars:
             source = layers.black_bars[:2]
 
