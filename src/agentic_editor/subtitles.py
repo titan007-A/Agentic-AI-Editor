@@ -207,13 +207,25 @@ def lyric_cues(
     words: list[Word],
     max_words: int = LYRIC_WORDS,
     breaths: list[tuple[float, float]] | None = None,
+    fits: Callable[[str], bool] | None = None,
 ) -> list[Cue]:
     """Whole sung lines. A line ends where the singer breathes (the voiced stretches of the
-    isolated vocal, when given, else a pause in the words). A stretch longer than max_words
-    is split where the transcript starts a new line, at a capital or after punctuation,
-    and never leaves a single word on its own."""
+    isolated vocal, when given, else a pause in the words). A stretch longer than max_words,
+    or too wide to `fit` the frame, is split where the transcript starts a new line, at a
+    capital or after punctuation, and never leaves a single word on its own if it can help
+    it."""
+    fits = fits or (lambda line: True)
     if breaths:
-        groups = [[w for w in words if a <= (w.start + w.end) / 2 < b] for a, b in breaths]
+        # Each word goes with the breath it is nearest: one whose timing runs into the
+        # silence after a line, or that is too short to count as voiced, is still sung.
+        groups = [[] for _ in breaths]
+        for word in words:
+            mid = (word.start + word.end) / 2
+            nearest = min(
+                range(len(breaths)),
+                key=lambda i: max(breaths[i][0] - mid, 0.0, mid - breaths[i][1]),
+            )
+            groups[nearest].append(word)
     else:
         groups = []
         for word in words:
@@ -222,8 +234,8 @@ def lyric_cues(
             else:
                 groups.append([word])
     groups = _move_stranded([g for g in groups if g])
-    lines = [line for group in groups if group for line in _split_line(group, max_words)]
-    return [_cue(line) for line in _join_scraps(lines, max_words)]
+    lines = [line for group in groups if group for line in _split_line(group, max_words, fits)]
+    return [_cue(line) for line in _join_scraps(lines, max_words, fits)]
 
 
 def _move_stranded(groups: list[list[Word]], near: float = 2.5) -> list[list[Word]]:
@@ -239,21 +251,28 @@ def _move_stranded(groups: list[list[Word]], near: float = 2.5) -> list[list[Wor
     return groups
 
 
-def _join_scraps(lines: list[list[Word]], max_words: int, near: float = 2.5) -> list[list[Word]]:
+def _join_scraps(
+    lines: list[list[Word]], max_words: int, fits: Callable[[str], bool], near: float = 2.5
+) -> list[list[Word]]:
     """Join a one-word line to a close neighbour: a lone "me" after "save" is one phrase."""
     out: list[list[Word]] = []
     for line in lines:
         if out and (len(line) == 1 or len(out[-1]) == 1):
             gap = line[0].start - out[-1][-1].end
-            if gap < near and len(out[-1]) + len(line) <= max_words + 2:
-                out[-1] = out[-1] + line
+            joined = out[-1] + line
+            if gap < near and len(joined) <= max_words + 2 and fits(_text(joined)):
+                out[-1] = joined
                 continue
         out.append(line)
     return out
 
 
-def _split_line(group: list[Word], max_words: int) -> list[list[Word]]:
-    if len(group) <= max_words:
+def _text(line: list[Word]) -> str:
+    return " ".join(w.text.strip() for w in line)
+
+
+def _split_line(group: list[Word], max_words: int, fits: Callable[[str], bool]) -> list[list[Word]]:
+    if len(group) == 1 or (len(group) <= max_words and fits(_text(group))):
         return [group]
 
     def score(i: int) -> float:
@@ -261,18 +280,14 @@ def _split_line(group: list[Word], max_words: int) -> list[list[Word]]:
         natural = group[i].text.strip()[:1].isupper() or group[i - 1].text.strip()[-1:] in ",.;!?"
         return (0 if natural else 1, abs(i - len(group) / 2))
 
-    candidates = range(2, len(group) - 1)  # both sides keep at least two words
-    cut = min(candidates, key=score) if candidates else max_words
-    return _split_line(group[:cut], max_words) + _split_line(group[cut:], max_words)
+    # Both sides keep at least two words, unless the line is too short for that.
+    candidates = range(2, len(group) - 1) if len(group) >= 4 else range(1, len(group))
+    cut = min(candidates, key=score)
+    return _split_line(group[:cut], max_words, fits) + _split_line(group[cut:], max_words, fits)
 
 
 def _cue(line: list[Word]) -> Cue:
-    return Cue(
-        start=line[0].start,
-        end=line[-1].end,
-        text=" ".join(w.text.strip() for w in line),
-        words=line,
-    )
+    return Cue(start=line[0].start, end=line[-1].end, text=_text(line), words=line)
 
 
 def srt_time(seconds: float) -> str:
@@ -603,6 +618,8 @@ def fit_lines(cues: list[Cue], measure, max_width: float, max_lines: int = 2) ->
                 if measure(" ".join(words[:i])) <= max_width
                 and measure(" ".join(words[i:])) <= max_width
             ]
+            if not fitting:
+                return lines  # a word wider than the frame; the renderer shrinks that caption
             at = min(
                 fitting,
                 key=lambda i: (

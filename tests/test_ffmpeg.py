@@ -32,4 +32,4 @@ def test_audio_only_file():
 
 
 def test_escape_filter_path():
-    assert escape_filter_path("C:\\clips\\it's.ass") == r"C\:/clips/it\'s.ass"
+    assert escape_filter_path("C:\\clips\\it's.ass") == r"C\:/clips/it\'\''s.ass"

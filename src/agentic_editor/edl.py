@@ -30,9 +30,10 @@ class Clip(BaseModel):
 
 
 class Shot(BaseModel):
-    """How one stretch of the reel is framed: a window of the source, at the picture's full
-    height, `width` pixels wide from `x`. At the frame's own aspect it fills the frame;
-    wider, it is scaled down and padded above and below so nothing in it is cut."""
+    """How one stretch of the reel is framed: a window of the source, `width` pixels wide
+    from `x`, at the picture's full height unless `height` is set (from `y`, for a picture
+    taller than the frame). At the frame's own aspect it fills the frame; otherwise it is
+    scaled to fit and padded, so nothing in it is cut or stretched."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -40,6 +41,8 @@ class Shot(BaseModel):
     end: float = Field(gt=0, description="source time in seconds")
     x: int = Field(ge=0)
     width: int = Field(gt=0)
+    y: int = Field(default=0, ge=0)
+    height: int | None = Field(default=None, gt=0)
     follow: bool = False  # the window tracks the subject's head instead of staying put
     reason: str = ""
 

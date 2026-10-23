@@ -74,3 +74,34 @@ def test_retired_splice_settings_in_old_files_are_ignored():
     )
     assert preset.silence.threshold_db == -40
     assert "clip_count" not in preset.model_dump()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"aspect_ratio": "9:0"},
+        {"aspect_ratio": "9:16", "resolution": "1080x00"},
+        {"aspect_ratio": "1:1", "resolution": "9000x9000"},
+        {"audio": {"true_peak_db": 1.0}},
+        {"audio": {"true_peak_db": -30}},
+        {"title_overlay": {"size": 0}},
+        {"title_overlay": {"offset": -10}},
+        {"one_liner": {"offset": 1900}},
+        {"captions": {"margin": 5000}},
+        {"captions": {"font": "NoSuchFont"}},
+        {"captions": {"font": "../fonts/Anton-Regular"}},
+        {"text_blocks": [{"text": "x", "size": 40, "anchor": "top", "offset": 1900}]},
+    ],
+)
+def test_settings_that_cannot_render_are_rejected(overrides):
+    # Each of these used to pass and then crash the render (or put text off the frame),
+    # and the first two raised ZeroDivisionError instead of a validation error.
+    with pytest.raises(ValidationError):
+        Preset.model_validate(minimal(**overrides))
+
+
+def test_a_banner_offset_past_the_frame_is_pulled_back_inside_it():
+    from agentic_editor.render.compose import banner_top
+
+    assert banner_top("top", 1900, 83, 1920, []) == 1920 - 83
+    assert banner_top("top", 300, 2000, 1920, []) == 0

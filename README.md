@@ -235,7 +235,10 @@ it. Logos, music beds, intros and outros are not learned.
 The quickest way to make one by hand is to duplicate an existing preset on the web app's
 Presets page and edit it there; the server validates every save. Editing the YAML by
 hand works too: `uv run aiedit presets` loads and validates all of them. Fonts are
-looked up by file name (without extension) in `fonts/`.
+looked up by file name (without extension) in `fonts/`. Text those fonts can't draw, such
+as Hindi, Japanese, Arabic or emoji, is drawn in the Noto font for its script, downloaded
+into `models/fonts` the first time a reel needs it; a character no font has stops the
+render with an error rather than showing as an empty box.
 
 ## Models
 

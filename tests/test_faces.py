@@ -36,5 +36,8 @@ def test_crop_path_centers_when_no_face_is_ever_seen():
 
 
 def test_command_file_format(tmp_path):
-    out = write_commands([(0.0, 10), (0.2, 12)], "crop@c0", tmp_path / "c0.cmd")
-    assert out.read_text() == "0.000 crop@c0 x 10;\n0.200 crop@c0 x 12;\n"
+    out = write_commands([(0.0, 10), (0.2, 12), (0.4, 12)], "crop@c0", tmp_path / "c0.cmd")
+    # Between samples the window glides at 10 px/s rather than jumping at the next one.
+    assert out.read_text() == (
+        "0.000 crop@c0 x 10+10.000*(t-0.000);\n0.200 crop@c0 x 12;\n0.400 crop@c0 x 12;\n"
+    )

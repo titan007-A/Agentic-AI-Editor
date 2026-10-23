@@ -99,5 +99,9 @@ def extract_audio(src: Path, dest: Path, sample_rate: int = 44100) -> Path:
 
 
 def escape_filter_path(path: Path) -> str:
-    """Escape a path for use as an option value inside a filtergraph."""
-    return str(path).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+    """Escape a path for use as a single-quoted option value inside a filtergraph.
+
+    The value is unescaped twice: the graph's quotes take everything literally, so ':'
+    and "'" are escaped for the filter's own option parser, and a "'" also has to close
+    the quotes, appear escaped, and reopen them."""
+    return str(path).replace("\\", "/").replace(":", r"\:").replace("'", r"\'\''")

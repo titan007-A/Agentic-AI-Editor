@@ -143,3 +143,13 @@ def test_a_long_caption_is_shared_out_instead_of_leaving_a_word_alone():
     fitted = fit_lines([cue], lambda s: 10 * len(s), max_width=200)
     assert len(fitted) == 2
     assert all(len(c.text.replace("\n", " ").split()) >= 3 for c in fitted)
+
+
+def test_a_word_wider_than_the_frame_does_not_stop_the_captions():
+    from agentic_editor.edl import Cue
+    from agentic_editor.subtitles import fit_lines
+
+    cue = Cue(start=0, end=2, text="Die Geschwindigkeitsbegrenzung gilt")
+    out = fit_lines([cue], lambda line: 40.0 * len(line), max_width=950)
+    assert " ".join(c.text.replace("\n", " ") for c in out) == cue.text
+    assert out[0].start == 0 and out[-1].end == 2

@@ -16,7 +16,11 @@ def test_letterbox_pads_with_background_color():
 
 def test_center_crop_keeps_target_aspect():
     chain = frame_chain("center", (1920, 1080), FRAME, "#000000", "c0", None, None)
-    assert chain == ["crop=606:1080:657:0", "scale=1080:1920:flags=lanczos"]
+    assert chain == [
+        "crop=606:1080:657:0",
+        "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos",
+        "crop=1080:1920",
+    ]
 
 
 def test_face_mode_drives_crop_from_command_file():
@@ -40,7 +44,7 @@ def test_video_band_for_letterboxed_landscape_source():
 def test_graph_layers_overlays_in_order():
     edl = EDL(
         clips=[Clip(start=4, end=12)],
-        crop_mode="none",
+        crop_mode="center",
         zooms=[Zoom(time=11, scale=1.2, duration=0.5)],
     )
     layers = Layers(
@@ -86,3 +90,79 @@ def test_an_inset_picture_is_drawn_narrower_and_centred():
     top, bottom = video_band("none", (1920, 1080), FRAME, 0.74)
     assert round(bottom - top) == round(798 * 1080 / 1920)
     assert round(top + bottom) == 1920
+
+
+def test_no_shot_is_stretched_to_the_frame():
+    from agentic_editor.edl import Shot
+    from agentic_editor.render.video import shot_chain
+
+    # A window narrower than the frame's shape is fitted and padded at the sides.
+    narrow = Shot(start=0, end=5, x=0, width=1080)
+    chain = shot_chain(narrow, 0, (0, 0, 1080, 1920), (1080, 1080), "#000000", None)
+    assert chain[0] == "crop=1080:1920:0:0"
+    assert "force_original_aspect_ratio=decrease" in chain[1] and chain[2].startswith("pad=")
+    # A shot with its own height is cropped top and bottom to exactly that window.
+    tall = Shot(start=0, end=5, x=0, width=1080, y=200, height=1080)
+    chain = shot_chain(tall, 0, (0, 0, 1080, 1920), (1080, 1080), "#000000", None)
+    assert chain[0] == "crop=1080:1080:0:200"
+    assert "force_original_aspect_ratio=increase" in chain[1]
+
+
+def test_baked_in_bars_are_measured_across_the_clip_not_only_at_its_start(monkeypatch):
+    from agentic_editor.render import compose
+
+    # A dark opening shows only a lit spot; later probes see the whole 558 px picture.
+    found = {0.0: (80, 100, 280, 160), 5.0: (558, 426, 40, 0), 10.0: (558, 426, 40, 0)}
+    monkeypatch.setattr(compose, "detect_black_bars", lambda video, at: found.get(at))
+    assert compose.baked_bars(Path("v.mp4"), 0.0, 20.0, (638, 426)) == (558, 426, 40, 0)
+    monkeypatch.setattr(compose, "detect_black_bars", lambda video, at: (638, 426, 0, 0))
+    assert compose.baked_bars(Path("v.mp4"), 0.0, 20.0, (638, 426)) is None
+
+
+def test_shipped_letterboxed_presets_take_off_baked_in_bars():
+    from agentic_editor.presets import load_presets
+    from agentic_editor.settings import ROOT
+
+    letterboxed = [p for p in load_presets(ROOT / "presets").values() if p.framing.mode == "none"]
+    vocal = [p for p in letterboxed if p.name.startswith("vocal-music")]
+    assert len(vocal) == 4 and all(p.framing.crop_black_bars for p in vocal)
+    italian = next(p for p in vocal if p.name == "vocal-music-it-9x16")
+    edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="none")
+    graph, _ = build_graph(edl, italian, (558, 426), Layers(black_bars=(558, 426, 40, 0)))
+    assert "crop=558:426:40:0" in graph and "color=0xC8A77D" in graph
+
+
+def test_a_silent_intro_gets_silence_and_joins_the_reel_in_one_graph():
+    from agentic_editor.ffmpeg import MediaInfo
+    from agentic_editor.render.compose import bookend_graph
+
+    silent = MediaInfo(1.5, 1920, 1080, 25, has_audio=False, has_video=True)
+    sound = MediaInfo(2.0, 1080, 1920, 30, has_audio=True, has_video=True)
+    parts, video, audio = bookend_graph(FRAME, 30, [(5, silent)], [(6, sound)], "out", 4)
+    graph = ";".join(parts)
+    assert "[5:a]" not in graph
+    assert "anullsrc=r=48000:cl=stereo,atrim=duration=1.500[ba0]" in graph
+    assert "[bv0][ba0][out][reel_a][bv1][ba1]concat=n=3:v=1:a=1[joined_v][joined_a]" in graph
+    assert (video, audio) == ("joined_v", "joined_a")
+
+
+def test_zooms_never_cut_into_a_picture_shown_whole_to_keep_everything():
+    from agentic_editor.edl import Shot
+
+    zooms = [Zoom(time=1, scale=1.2, duration=0.5), Zoom(time=6, scale=1.2, duration=0.5)]
+    # Letterboxed at the frame's full width: no room at all.
+    edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="none", zooms=zooms)
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(pulses=[3.0], pulse_scale=1.05))
+    assert "between(t" not in graph
+    # An inset picture may grow until it reaches the frame's edges, and no further.
+    inset = VERTICAL.model_copy(
+        update={"framing": VERTICAL.framing.model_copy(update={"picture_width": 0.9})}
+    )
+    graph, _ = build_graph(edl, inset, (1920, 1080), Layers())
+    assert "0.111*between(t,1.000,1.500)" in graph
+    # Smart framing: the cropped shot zooms, the shot widened to keep a banner doesn't.
+    shots = [Shot(start=0, end=5, x=600, width=606), Shot(start=5, end=10, x=0, width=1248)]
+    edl = EDL(clips=[Clip(start=0, end=10)], crop_mode="smart", shots=shots, zooms=zooms)
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(pulses=[4.9], pulse_scale=1.05))
+    assert "0.200*between(t,1.000,1.500)" in graph and "between(t,6.000" not in graph
+    assert "0.050*between(t,4.900,5.000)*(1-(t-4.900)/0.3)" in graph

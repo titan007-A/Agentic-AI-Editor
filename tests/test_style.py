@@ -259,3 +259,12 @@ def test_drafts_learned_at_once_each_measure_their_own_captions(tmp_path, monkey
     for t in threads:
         t.join()
     assert all(name in script for name, script in drawn.items()) and len(drawn) == 2
+
+
+def test_huge_learned_text_still_makes_a_valid_preset():
+    from agentic_editor.style import Measured, fit_font, text_block
+
+    m = Measured(lines=["WOW"], boxes=[(300, 700, 40, 1040)], colour=(255, 255, 255), fill=0.4)
+    fit = fit_font(m, [BOLD])
+    assert fit.size > 300
+    assert text_block(m, fit, (1080, 1920)).size == 300
