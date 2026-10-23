@@ -101,13 +101,14 @@ def run(
 ) -> list[Result]:
     info = ffmpeg.probe(video)
     work = settings.cache_dir / "benchmark"
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
     router = ModelRouter(settings, backends)
     # Timed on an idle machine: a job running meanwhile would share the GPU and the CPU.
     # No job holds the encoder while it waits for the GPU, so taking both can't deadlock.
-    try:
-        with slots.gpu.turn("benchmark"), slots.encoder.turn("benchmark"):
+    with slots.gpu.turn("benchmark"), slots.encoder.turn("benchmark"):
+        # Cleared only once it's our turn: another benchmark may be using it until then.
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        try:
             results = []
             if info.has_audio:
                 audio = ffmpeg.extract_audio(video, work / "audio.wav")
@@ -121,8 +122,8 @@ def run(
                     results.append(time_llm(settings.ollama_url, model))
             results.append(time_render(video, info, preset, backends, work))
             return results
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def report(results: list[Result], source: str, duration: float) -> str:
