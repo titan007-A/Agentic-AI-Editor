@@ -33,7 +33,7 @@ def env(tmp_path, monkeypatch):
     sessions = make_sessionmaker(settings.database)
     calls = []
 
-    def fake_run(source, presets, settings, backends, notes, progress):
+    def fake_run(source, presets, settings, backends, notes, progress, run_id=None):
         calls.append({"source": source, "presets": [p.name for p in presets], "notes": notes})
         progress("download", f"fetching {source}")
         progress("plan", "planning")
@@ -153,7 +153,7 @@ def test_rejects_unknown_presets_and_non_links(env):
 
 
 def test_failed_run_marks_the_job_failed(env):
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise RuntimeError("download blocked")
 
     env.run = broken
@@ -281,7 +281,7 @@ def test_a_feed_moved_somewhere_else_notes_what_is_already_there(env, tmp_path):
 
 
 def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):
-    def doubtful(source, presets, settings, backends, notes, progress):
+    def doubtful(source, presets, settings, backends, notes, progress, run_id):
         result = env_run(source, presets, settings, backends, notes, progress)
         result.outputs[0].confidence, result.outputs[0].doubts = 0.8, ["8s without voice at 18s"]
         return result

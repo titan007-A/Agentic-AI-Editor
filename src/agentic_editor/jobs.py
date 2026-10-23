@@ -83,7 +83,7 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
         if missing:
             raise ValueError(f"unknown preset(s): {', '.join(missing)}")
         presets = [available[name] for name in preset_names]
-        result = run(source, presets, settings, get_backends(), notes, track)
+        result = run(source, presets, settings, get_backends(), notes, track, run_id=job_id)
 
         with Session() as db:
             job = db.get(Job, job_id)

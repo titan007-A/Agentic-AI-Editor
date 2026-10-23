@@ -43,7 +43,7 @@ def test_a_job_that_fails_while_saving_its_outputs_is_marked_failed(tmp_path, mo
     monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
     settings = Settings(presets_dir=ROOT / "presets", media_dir=tmp_path / "media")
 
-    def run(source, presets, settings, backends, notes, progress):
+    def run(source, presets, settings, backends, notes, progress, run_id):
         broken = pipeline.Output("square-1x1", tmp_path / "a.mp4", None, "fake-model")
         return pipeline.Result("A song", [broken])
 

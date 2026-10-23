@@ -6,6 +6,7 @@ Each model is unloaded before the next stage starts."""
 
 import json
 import logging
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -449,14 +450,18 @@ def run(
     backends: Backends,
     notes: str | None = None,
     progress: Progress = lambda stage, message: log.info("%s: %s", stage, message),
+    run_id: str | None = None,
 ) -> Result:
+    """Each run's outputs go to a folder of their own, named by `run_id` (a new one when
+    not given), so a later run of the same video and preset doesn't replace them."""
     progress("download", f"fetching {source_ref}")
     source = resolve_source(source_ref, settings)
     work_dir = settings.cache_dir / file_hash(source.path)
     work_dir.mkdir(parents=True, exist_ok=True)
-    # Two jobs on one video would write the same cache and output files.
+    run_id = run_id or secrets.token_hex(4)
+    # Two jobs on one video would write the same cache files.
     with slots.video(work_dir).turn("edit it", progress):
-        return edit(source, work_dir, presets, settings, backends, notes, progress)
+        return edit(source, work_dir, presets, settings, backends, notes, progress, run_id)
 
 
 def edit(
@@ -467,9 +472,10 @@ def edit(
     backends: Backends,
     notes: str | None,
     progress: Progress,
+    run_id: str,
 ) -> Result:
     progress("analyze", f"analyzing {source.title}")
-    out_dir = settings.media_dir / "outputs" / work_dir.name
+    out_dir = settings.media_dir / "outputs" / work_dir.name / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)

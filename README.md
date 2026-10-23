@@ -78,8 +78,10 @@ uv run aiedit run "https://..." -p vocal-music-9x16 -p vocal-music-es-9x16
 uv run aiedit run ~/Videos/talk.mp4 -p shorts-9x16
 ```
 
-Outputs go to `media/outputs/<source-hash>/<preset>.mp4`, next to the EDL that produced
-them. Analysis results are cached per source file in `cache/`.
+Outputs go to `media/outputs/<source-hash>/<run>/<preset>.mp4`, next to the EDL that
+produced them; every run (a job in the web app, each video of an `aiedit run`) has a folder
+of its own, so running a video again never replaces earlier versions. Analysis results are
+cached per source file in `cache/`.
 
 `-n` (or the notes box in the web app) takes a plain-language instruction:
 
