@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from agentic_editor import jobs, pipeline, style
+from agentic_editor import api, jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
@@ -93,6 +93,24 @@ def test_wrong_password_is_rejected(env):
     env.client.post("/api/logout")
     assert env.client.post("/api/login", json={"password": "nope"}).status_code == 401
     assert env.client.get("/api/me").status_code == 401
+
+
+def test_wrong_passwords_one_after_another_have_to_wait(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    now = [1000.0]
+    env.client.app.state.logins.clock = lambda: now[0]
+    env.client.post("/api/logout")
+    for _ in range(5):
+        assert env.client.post("/api/login", json={"password": "nope"}).status_code == 401
+    # Even the right password waits, or a guesser could tell when it found it.
+    refused = env.client.post("/api/login", json={"password": PASSWORD})
+    assert refused.status_code == 429 and refused.headers["retry-after"] == "30"
+    now[0] += 31
+    assert env.client.post("/api/login", json={"password": "nope"}).status_code == 401
+    now[0] += 31
+    assert env.client.post("/api/login", json={"password": PASSWORD}).status_code == 429
+    now[0] += 30  # twice as long after another wrong one
+    assert env.client.post("/api/login", json={"password": PASSWORD}).status_code == 200
 
 
 def test_usage_notice_is_accepted_once(env):

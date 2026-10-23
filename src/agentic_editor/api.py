@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import signal
@@ -23,7 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from agentic_editor import autopilot, jobs
-from agentic_editor.auth import verify_password
+from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
 from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting, StyleDraft
 from agentic_editor.download import update_ytdlp
@@ -40,6 +41,7 @@ SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
 # How long a shutdown waits for running jobs; any still running are failed at the next start.
 SHUTDOWN_SECONDS = 30
 PILE_LIMIT = 100
+FAILED_LOGIN_DELAY = 1.0
 
 
 class LoginRequest(BaseModel):
@@ -284,11 +286,27 @@ def create_app(
         jobs.process(job.id)
         return job
 
+    logins = app.state.logins = LoginGuard()
+
     @app.post("/api/login")
     async def login(body: LoginRequest, request: Request) -> dict:
-        if not settings.password_hash or not verify_password(body.password, settings.password_hash):
-            await asyncio.sleep(1)
+        client = request.client.host if request.client else ""
+        wait = math.ceil(logins.wait(client))
+        if wait:
+            raise HTTPException(
+                429,
+                f"too many wrong passwords; try again in {wait} s",
+                headers={"Retry-After": str(wait)},
+            )
+        # Counted before the check, so that many guesses sent at once are limited too.
+        logins.failed(client)
+        right = bool(settings.password_hash) and await asyncio.to_thread(
+            verify_password, body.password, settings.password_hash
+        )
+        if not right:
+            await asyncio.sleep(FAILED_LOGIN_DELAY)
             raise HTTPException(401, "wrong password")
+        logins.succeeded(client)
         request.session["user"] = "owner"
         return {"ok": True}
 
