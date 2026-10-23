@@ -51,8 +51,10 @@ scripts/setup-linux.sh
 The script installs a static ffmpeg build with NVENC (Ubuntu's ffmpeg package has none)
 into `~/.local/opt/ffmpeg-nvenc` and points `.env` at it, installs the Python
 environment with the CUDA 12.8 build of PyTorch (needed for RTX 50-series/Blackwell
-GPUs), pulls the Ollama models and prints the detected backends. Build the web app
-once with `(cd web && npm ci && npm run build)` if you want the browser interface.
+GPUs), pulls the Ollama models, downloads the transcription, vocal separation and face
+detection models (`uv run aiedit fetch-models`, about 2.4 GB, logged as it goes) and prints
+the detected backends. Build the web app once with `(cd web && npm ci && npm run build)` if
+you want the browser interface.
 
 ## Setup: macOS on Apple Silicon
 
@@ -63,6 +65,7 @@ cd Agentic-AI-Editor
 cp .env.example .env
 uv sync --extra ml
 ollama pull qwen3.5:9b && ollama pull qwen3.5:4b
+uv run aiedit fetch-models
 uv run aiedit backends
 (cd web && npm ci && npm run build)
 ```

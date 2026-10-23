@@ -91,6 +91,15 @@ def _benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fetch_models(args: argparse.Namespace) -> int:
+    from agentic_editor.router import ModelRouter
+
+    settings = get_settings()
+    ModelRouter(settings, detect(settings)).fetch_models()
+    print("all models are on this machine")
+    return 0
+
+
 def _backends(args: argparse.Namespace) -> int:
     print(detect(get_settings()).describe())
     return 0
@@ -167,6 +176,9 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("backends", help="show the detected backends").set_defaults(
         handler=_backends
     )
+    commands.add_parser(
+        "fetch-models", help="download the transcription, separation and face models"
+    ).set_defaults(handler=_fetch_models)
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
     commands.add_parser("serve", help="run the web app and job worker").set_defaults(handler=_serve)
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(

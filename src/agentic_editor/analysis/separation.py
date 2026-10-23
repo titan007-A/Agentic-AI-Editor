@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from agentic_editor import ffmpeg
+from agentic_editor import ffmpeg, logs
 from agentic_editor.analysis.audio import levels, loudest_window_db
 
 log = logging.getLogger(__name__)
@@ -38,12 +38,24 @@ class VocalTrack:
     instrument_free: bool
 
 
+def fetch_model(model: str, model_dir: Path) -> None:
+    """Download the separation model's files if this machine hasn't got them."""
+    from audio_separator.separator import Separator
+
+    if (model_dir / model).exists():
+        return
+    with logs.download_progress(f"the separation model {model}", model_dir):
+        # info_only leaves the GPU alone: nothing is loaded, only downloaded.
+        Separator(model_file_dir=str(model_dir), info_only=True).download_model_files(model)
+
+
 def run_separator(
     audio: Path, out_dir: Path, model: str, model_dir: Path, require_gpu: bool
 ) -> Stems:
     """Run audio-separator on one file. Meant to run in a child process."""
     from audio_separator.separator import Separator
 
+    fetch_model(model, model_dir)
     started = time.monotonic()
     separator = Separator(
         output_dir=str(out_dir),

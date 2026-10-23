@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from agentic_editor import logs, slots
-from agentic_editor.analysis import separation, transcribe
+from agentic_editor.analysis import faces, separation, transcribe
 from agentic_editor.backends import Backends
 from agentic_editor.llm import OllamaClient
 from agentic_editor.settings import Settings
@@ -67,6 +67,17 @@ class ModelRouter:
                 self.settings.models_dir / "separation",
                 self.backends.accelerator != "cpu",
             )
+
+    def fetch_models(self) -> None:
+        """Download every model a run loads here, so the first run doesn't stop for them.
+        The Ollama models come from `ollama pull`."""
+        s = self.settings
+        if self.backends.transcriber == "mlx":
+            transcribe.fetch_mlx(s.mlx_whisper_model)
+        else:
+            transcribe.fetch_faster_whisper(s.whisper_model, s.models_dir / "whisper")
+        separation.fetch_model(s.separation_model, s.models_dir / "separation")
+        faces.model_file(s.models_dir)
 
     def planner(self) -> OllamaClient:
         """The planning model, holding the GPU while open."""
