@@ -68,3 +68,13 @@ def test_a_look_at_zero_strength_is_left_out():
     layers = Layers(look=look_filters("mono", None), look_strength=0.0)
     graph, _ = build_graph(edl, preset, (1920, 1080), layers)
     assert "hue=s=0" not in graph and "blend" not in graph
+
+
+def test_colour_is_graded_after_the_crop_and_before_the_padding():
+    preset = Preset(name="v", label="v", min_duration=1, max_duration=60)
+    edl = EDL(clips=[Clip(start=0, end=5)], crop_mode="center")
+    layers = Layers(correction=["eq=gamma=1.100"])
+    graph, _ = build_graph(edl, preset, (3840, 2160), layers)
+    # Only the 1214x2160 window is graded, not the 4K frame it is cut from.
+    assert graph.startswith("[0:v]crop=1214:2160:1313:0[c0];[c0]eq=gamma=1.100[g0c]")
+    assert graph.index("eq=gamma") < graph.index("scale=1080:1920")

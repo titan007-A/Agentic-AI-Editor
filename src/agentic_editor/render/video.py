@@ -104,31 +104,47 @@ def frame_chain(
     picture_width: float = 1.0,
 ) -> list[str]:
     """Filters that turn one source clip into a frame-sized clip."""
+    crop, fit = frame_parts(
+        mode, source, frame, background, crop_label, commands, black_bars, picture_width
+    )
+    return crop + fit
+
+
+def frame_parts(
+    mode: CropMode,
+    source: tuple[int, int],
+    frame: tuple[int, int],
+    background: str,
+    crop_label: str,
+    commands: Path | None,
+    black_bars: tuple[int, int, int, int] | None,
+    picture_width: float = 1.0,
+) -> tuple[list[str], list[str]]:
+    """frame_chain in two parts: what cuts the window out, and what fits it to the frame."""
     width, height = frame
     src_w, src_h = source
-    chain = []
+    crop = []
     if black_bars:
         bw, bh, bx, by = black_bars
-        chain.append(f"crop={bw}:{bh}:{bx}:{by}")
+        crop.append(f"crop={bw}:{bh}:{bx}:{by}")
         src_w, src_h = bw, bh
 
     if mode == "none":
-        chain += [
+        return crop, [
             f"scale={_even(width * picture_width)}:{height}"
             ":force_original_aspect_ratio=decrease:flags=lanczos",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
         ]
-        return chain
 
     crop_w, crop_h = crop_size((src_w, src_h), frame)
     x = (src_w - crop_w) // 2
     y = (src_h - crop_h) // 2
     if mode == "face" and commands is not None:
-        chain.append(f"sendcmd=f='{escape_filter_path(commands)}'")
-        chain.append(f"crop@{crop_label}={crop_w}:{crop_h}:{x}:{y}")
+        crop.append(f"sendcmd=f='{escape_filter_path(commands)}'")
+        crop.append(f"crop@{crop_label}={crop_w}:{crop_h}:{x}:{y}")
     else:
-        chain.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
-    return chain + fit_chain((crop_w, crop_h), frame, background)
+        crop.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
+    return crop, fit_chain((crop_w, crop_h), frame, background)
 
 
 def fit_chain(size: tuple[int, int], frame: tuple[int, int], background: str) -> list[str]:
@@ -159,15 +175,27 @@ def shot_chain(
     """Filters that frame one shot: crop its window, at full picture height unless the
     shot has its own, then fill the frame, or, for a window of another shape, fit it and
     pad the rest."""
+    crop, fit = shot_parts(shot, index, content, frame, background, commands)
+    return crop + fit
+
+
+def shot_parts(
+    shot: Shot,
+    index: int,
+    content: tuple[int, int, int, int],
+    frame: tuple[int, int],
+    background: str,
+    commands: Path | None,
+) -> tuple[list[str], list[str]]:
     _, top, _, picture_height = content
     if shot.height:
         top, picture_height = shot.y, shot.height
-    crop = f"{shot.width}:{picture_height}:{shot.x}:{top}"
+    window = f"{shot.width}:{picture_height}:{shot.x}:{top}"
     if shot.follow and commands is not None:
-        chain = [f"sendcmd=f='{escape_filter_path(commands)}'", f"crop@s{index}={crop}"]
+        crop = [f"sendcmd=f='{escape_filter_path(commands)}'", f"crop@s{index}={window}"]
     else:
-        chain = [f"crop={crop}"]
-    return chain + fit_chain((shot.width, picture_height), frame, background)
+        crop = [f"crop={window}"]
+    return crop, fit_chain((shot.width, picture_height), frame, background)
 
 
 def crop_size(source: tuple[int, int], frame: tuple[int, int]) -> tuple[int, int]:
@@ -223,11 +251,24 @@ def build_graph(
     parts = []
     segments = 0
     background = layers.background or preset.framing.background
+
+    def segment(label: str, crop: list[str], fit: list[str]) -> None:
+        # Colour goes on after the crop, so only the pixels that are kept get graded (every
+        # grading filter works pixel by pixel), and before the padding, which keeps its own.
+        nonlocal segments
+        fit = [*fit, "setsar=1", f"fps={preset.fps}"]
+        graded, last = grade_chain(f"c{segments}", segments, layers)
+        if graded:
+            parts.append(f"[{label}]{','.join(crop) or 'null'}[c{segments}]")
+            parts.extend(graded)
+            parts.append(f"[{last}]{','.join(fit)}[v{segments}]")
+        else:
+            parts.append(f"[{label}]{','.join(crop + fit)}[v{segments}]")
+        segments += 1
+
     for i, clip in enumerate(edl.clips):
         blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
         parts += blurred
-        graded, label = grade_chain(label, i, layers)
-        parts += graded
         if edl.crop_mode == "smart" and edl.shots:
             # One continuous clip, framed shot by shot and joined back in order.
             content = layers.content or (0, 0, *source)
@@ -235,20 +276,13 @@ def build_graph(
             parts.append(f"[{label}]split={count}" + "".join(f"[s{k}]" for k in range(count)))
             for k, shot in enumerate(edl.shots):
                 start, end = shot.start - clip.start, shot.end - clip.start
-                chain = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
-                chain += shot_chain(
-                    shot,
-                    k,
-                    content,
-                    frame,
-                    background,
-                    layers.shot_commands.get(k),
+                crop, fit = shot_parts(
+                    shot, k, content, frame, background, layers.shot_commands.get(k)
                 )
-                chain += ["setsar=1", f"fps={preset.fps}"]
-                parts.append(f"[s{k}]{','.join(chain)}[v{segments}]")
-                segments += 1
+                trim = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
+                segment(f"s{k}", trim + crop, fit)
             continue
-        chain = frame_chain(
+        crop, fit = frame_parts(
             edl.crop_mode,
             source,
             frame,
@@ -258,9 +292,7 @@ def build_graph(
             layers.black_bars,
             preset.framing.picture_width,
         )
-        chain += ["setsar=1", f"fps={preset.fps}"]
-        parts.append(f"[{label}]{','.join(chain)}[v{segments}]")
-        segments += 1
+        segment(label, crop, fit)
     joined = "".join(f"[v{i}]" for i in range(segments))
     parts.append(f"{joined}concat=n={segments}:v=1:a=0[base]")
     current = "base"
