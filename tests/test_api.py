@@ -170,6 +170,12 @@ def test_rejects_unknown_presets_and_non_links(env):
     assert env.client.post(jobs_url, json=local_path).status_code == 422
 
 
+def test_a_batch_with_one_bad_source_starts_nothing(env):
+    batch = {"sources": ["https://x.test/a", "not a link"], "presets": ["square-1x1"]}
+    assert env.client.post("/api/jobs", json=batch).status_code == 422
+    assert env.client.get("/api/jobs").json() == [] and env.calls == []
+
+
 def test_failed_run_marks_the_job_failed(env):
     def broken(*args, **kwargs):
         raise RuntimeError("download blocked")

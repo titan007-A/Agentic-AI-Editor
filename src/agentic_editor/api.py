@@ -419,9 +419,11 @@ def create_app(
         unknown = set(body.presets) - presets().keys()
         if unknown:
             raise HTTPException(422, f"unknown preset(s): {', '.join(sorted(unknown))}")
-        created = []
-        for source in dict.fromkeys(s.strip() for s in body.sources if s.strip()):
+        sources = list(dict.fromkeys(s.strip() for s in body.sources if s.strip()))
+        for source in sources:  # all of them before any job starts
             check_source(source)
+        created = []
+        for source in sources:
             title = source if source.startswith("http") else ""
             created.append(
                 enqueue(session, source=source, title=title, presets=body.presets, notes=body.notes)
