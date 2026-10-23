@@ -17,7 +17,9 @@ def setup(level: int = logging.INFO) -> None:
     logging.basicConfig(level=max(level, logging.INFO), format=FORMAT, datefmt="%H:%M:%S")
     logging.getLogger("agentic_editor").setLevel(level)
     # One line per request to Ollama drowns out the pipeline's own progress.
-    logging.getLogger("httpx").setLevel(max(level, logging.WARNING))
+    # httpx2 is the Hugging Face client's copy, one line per file while models download.
+    for name in ("httpx", "httpx2"):
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))
 
 
 def _bytes_in(folder: Path) -> int:
