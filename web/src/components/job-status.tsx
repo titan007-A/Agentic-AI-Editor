@@ -9,7 +9,8 @@ const VARIANT = {
 } as const;
 
 export function JobStatus({ job }: { job: Job }) {
-  const label = job.status === "running" ? job.stage : job.status;
+  const stage = job.stage === "wait" ? "waiting" : job.stage;
+  const label = job.status === "running" ? stage : job.status;
   return <Badge variant={VARIANT[job.status]}>{label}</Badge>;
 }
 

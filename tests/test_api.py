@@ -10,7 +10,7 @@ from agentic_editor import jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
-from agentic_editor.db import make_sessionmaker
+from agentic_editor.db import Event, Job, make_sessionmaker
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.presets import Preset
 from agentic_editor.settings import ROOT, Settings
@@ -121,6 +121,27 @@ def test_progress_streams_as_server_sent_events(env):
     events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
     assert [e.get("stage") for e in events[:-1]] == ["download", "plan", "done", "finished"]
     assert events[-1] == {"status": "done"}
+
+
+def test_a_job_that_waited_for_the_gpu_is_back_at_its_stage(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="https://x.test/v", presets=["square-1x1"]))
+        db.commit()
+    track = jobs.Tracker(Session, "j1", 1)
+
+    def stage():
+        with Session() as db:
+            return db.get(Job, "j1").stage
+
+    track("transcribe", "transcribing")
+    track("wait", "waiting for the GPU to transcribe")
+    assert stage() == "wait"
+    track("resume", "got the GPU after 42s")
+    assert stage() == "transcribe"
+    with Session() as db:
+        logged = db.query(Event).filter_by(job_id="j1").order_by(Event.id).all()
+    assert [(e.stage, e.message) for e in logged][-1] == ("transcribe", "got the GPU after 42s")
 
 
 def test_rejects_unknown_presets_and_non_links(env):
