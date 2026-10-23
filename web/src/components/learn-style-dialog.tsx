@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Upload, X } from "lucide-react";
+import { Loader2, Upload } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -15,7 +15,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { UploadList } from "@/components/upload-list";
 import { usePolling } from "@/hooks/use-polling";
+import { useUploads } from "@/hooks/use-uploads";
 import { api, ApiError, errorText, type Preset, type StyleDraft } from "@/lib/api";
 import { recall, remember } from "@/lib/session-value.mjs";
 
@@ -39,14 +41,15 @@ export function LearnStyleDialog({
   onDraft: (preset: Preset, notes: string[]) => boolean;
 }) {
   const [link, setLink] = useState("");
-  const [upload, setUpload] = useState<{ source: string; name: string } | null>(null);
+  const uploads = useUploads();
+  const upload = uploads.items.at(-1) ?? null;
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<StyleDraft | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const waiting = draft?.status === "queued" || draft?.status === "running";
   const kept = draft?.status === "done" && draft.preset ? draft.preset : null;
-  const source = upload?.source ?? link.trim();
+  const source = upload ? (upload.source ?? "") : link.trim();
   const nameProblem =
     name && !NAME_PATTERN.test(name)
       ? "Use lowercase letters, digits and dashes"
@@ -64,7 +67,7 @@ export function LearnStyleDialog({
     forget();
     onOpenChange(false);
     setLink("");
-    setUpload(null);
+    uploads.clear();
     setName("");
     return true;
   }
@@ -106,19 +109,15 @@ export function LearnStyleDialog({
       });
   }, []);
 
-  async function addFile(files: FileList | null) {
+  function addFile(files: FileList | null) {
     const file = files?.[0];
-    if (!file) return;
-    setBusy(true);
-    try {
-      setUpload(await api.upload(file));
+    if (file) {
+      // One reel at a time: a new file replaces the one before.
+      uploads.clear();
+      uploads.add([file]);
       setLink("");
-    } catch (err) {
-      toast.error(errorText(err));
-    } finally {
-      setBusy(false);
-      if (fileInput.current) fileInput.current.value = "";
     }
+    if (fileInput.current) fileInput.current.value = "";
   }
 
   async function start() {
@@ -194,18 +193,7 @@ export function LearnStyleDialog({
                 >
                   <Upload /> Or upload the video
                 </Button>
-                {upload && (
-                  <span className="flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-xs">
-                    {upload.name}
-                    <button
-                      type="button"
-                      aria-label={`Remove ${upload.name}`}
-                      onClick={() => setUpload(null)}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                )}
+                <UploadList items={uploads.items} onRemove={uploads.remove} />
               </div>
             </div>
             <div className="space-y-2">

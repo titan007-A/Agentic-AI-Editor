@@ -100,6 +100,8 @@ export type SystemInfo = {
   yt_dlp: string;
 };
 
+import { sendFile } from "@/lib/upload.mjs";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -118,15 +120,21 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     init.headers = { "Content-Type": "application/json" };
   }
   const response = await fetch(`/api${path}`, init);
-  if (response.status === 401 && !path.startsWith("/login")) {
+  const data = await response.json().catch(() => null);
+  return settle<T>(path, response.status, response.statusText, data);
+}
+
+function settle<T>(path: string, status: number, statusText: string, data: unknown): T {
+  if (status === 401 && !path.startsWith("/login")) {
     window.location.href = "/login/";
   }
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new ApiError(response.status, data?.detail ?? response.statusText);
+  if (status < 200 || status >= 300) {
+    throw new ApiError(status, (data as { detail?: unknown } | null)?.detail ?? statusText);
   }
   return data as T;
 }
+
+export type UploadOptions = { onProgress?: (fraction: number) => void; signal?: AbortSignal };
 
 export const api = {
   login: (password: string) => request("POST", "/login", { password }),
@@ -161,10 +169,9 @@ export const api = {
   pile: (name: "ready" | "look") => request<Job[]>("GET", `/piles/${name}`),
   verdict: (outputId: number, verdict: Verdict | null) =>
     request<Job>("POST", `/outputs/${outputId}/verdict`, { verdict }),
-  upload: (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return request<{ source: string; name: string }>("POST", "/uploads", form);
+  upload: async (file: File, options: UploadOptions = {}) => {
+    const { status, statusText, body } = await sendFile("/api/uploads", file, options);
+    return settle<{ source: string; name: string }>("/uploads", status, statusText, body);
   },
 };
 
