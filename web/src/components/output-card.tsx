@@ -29,6 +29,7 @@ import {
   type Job,
   type Output,
 } from "@/lib/api";
+import { readiness } from "@/lib/output-status.mjs";
 
 function seconds(value: number) {
   const m = Math.floor(value / 60);
@@ -48,11 +49,12 @@ export function OutputCard({
   const router = useRouter();
   const [notes, setNotes] = useState("");
   const [open, setOpen] = useState(false);
-  // Issues already show as badges below; older outputs have issues but no doubts.
-  const doubts = (output.doubts ?? []).filter((d) => !output.issues.includes(d));
-  const ready = doubts.length === 0 && output.issues.length === 0;
+  const [regenerating, setRegenerating] = useState(false);
+  const { ready, approved, doubts } = readiness(output);
 
   async function regenerate() {
+    if (regenerating) return;
+    setRegenerating(true);
     try {
       const next = await api.regenerate(job.id, output.preset, notes);
       setOpen(false);
@@ -60,6 +62,8 @@ export function OutputCard({
       router.push(`/job/?id=${next.id}`);
     } catch (err) {
       toast.error(errorText(err));
+    } finally {
+      setRegenerating(false);
     }
   }
 
@@ -92,7 +96,12 @@ export function OutputCard({
           <p className="text-sm text-muted-foreground">Hook: {output.edl.hook}</p>
         )}
         {ready ? (
-          <Badge>Ready to post</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>Ready to post</Badge>
+            {approved && doubts.length + output.issues.length > 0 && (
+              <span className="text-xs text-muted-foreground">You said it looks fine</span>
+            )}
+          </div>
         ) : (
           <div className="space-y-1 rounded-md border border-destructive/40 p-2 text-sm">
             <p className="font-medium text-destructive">
@@ -182,7 +191,9 @@ export function OutputCard({
                 />
               </div>
               <DialogFooter>
-                <Button onClick={regenerate}>Regenerate</Button>
+                <Button disabled={regenerating} onClick={regenerate}>
+                  {regenerating ? "Starting..." : "Regenerate"}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
