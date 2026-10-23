@@ -37,6 +37,8 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 NOTICE_KEY = "usage_notice_accepted"
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
 SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
+# How long a shutdown waits for running jobs; any still running are failed at the next start.
+SHUTDOWN_SECONDS = 30
 PILE_LIMIT = 100
 
 
@@ -221,8 +223,12 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         consumer = None
         if start_worker:
+            await asyncio.to_thread(jobs.recover, make_session)
             consumer = jobs.huey.create_consumer(
-                workers=settings.max_concurrent_jobs, worker_type="thread", periodic=False
+                workers=settings.max_concurrent_jobs,
+                worker_type="thread",
+                periodic=False,
+                shutdown_timeout=SHUTDOWN_SECONDS,
             )
             # Consumer.start() installs its own SIGINT/SIGTERM/SIGHUP handlers, which would
             # stop uvicorn from ever seeing a shutdown request. Put uvicorn's back.

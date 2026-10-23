@@ -4,6 +4,7 @@ import logging
 from functools import lru_cache
 
 from huey import SqliteHuey
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import pipeline, style
@@ -22,6 +23,7 @@ STAGE_PROGRESS = {
     "plan": 0.45,
 }
 RENDER_START = 0.55
+INTERRUPTED = "stopped when the server shut down; regenerate to run it again"
 
 _queue_file = get_settings().queue_database
 _queue_file.parent.mkdir(parents=True, exist_ok=True)
@@ -67,20 +69,46 @@ class Tracker:
 
 
 def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline.run) -> None:
-    with Session() as db:
-        job = db.get(Job, job_id)
-        job.status = "running"
-        db.commit()
-        source, preset_names, notes = job.source, list(job.presets), job.notes
-
-    track = Tracker(Session, job_id, len(preset_names))
+    track = Tracker(Session, job_id, 1)
+    # Everything is inside the try, the final write too: a job must never stay "running".
     try:
+        with Session() as db:
+            job = db.get(Job, job_id)
+            job.status = "running"
+            db.commit()
+            source, preset_names, notes = job.source, list(job.presets), job.notes
+
         available = load_presets(settings.presets_dir)
         missing = [name for name in preset_names if name not in available]
         if missing:
             raise ValueError(f"unknown preset(s): {', '.join(missing)}")
         presets = [available[name] for name in preset_names]
         result = run(source, presets, settings, get_backends(), notes, track)
+
+        with Session() as db:
+            job = db.get(Job, job_id)
+            job.title = result.title
+            for out in result.outputs:
+                job.outputs.append(
+                    Output(
+                        preset=out.preset,
+                        path=str(out.path),
+                        thumbnail=str(out.thumbnail) if out.thumbnail else None,
+                        duration=round(out.edl.duration, 2),
+                        title=out.edl.title,
+                        planner=out.planner,
+                        renders=out.renders,
+                        issues=out.issues,
+                        edl=out.edl.model_dump(mode="json"),
+                        confidence=out.confidence,
+                        doubts=out.doubts,
+                    )
+                )
+            job.status, job.stage, job.progress = "done", "done", 1.0
+            db.add(
+                Event(job_id=job_id, stage="finished", message="all presets rendered", progress=1.0)
+            )
+            db.commit()
     except Exception as exc:
         log.exception("job %s failed", job_id)
         with Session() as db:
@@ -88,30 +116,6 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
             db.add(Event(job_id=job_id, stage="failed", message=job.error, progress=track.value))
             db.commit()
-        return
-
-    with Session() as db:
-        job = db.get(Job, job_id)
-        job.title = result.title
-        for out in result.outputs:
-            job.outputs.append(
-                Output(
-                    preset=out.preset,
-                    path=str(out.path),
-                    thumbnail=str(out.thumbnail) if out.thumbnail else None,
-                    duration=round(out.edl.duration, 2),
-                    title=out.edl.title,
-                    planner=out.planner,
-                    renders=out.renders,
-                    issues=out.issues,
-                    edl=out.edl.model_dump(mode="json"),
-                    confidence=out.confidence,
-                    doubts=out.doubts,
-                )
-            )
-        job.status, job.stage, job.progress = "done", "done", 1.0
-        db.add(Event(job_id=job_id, stage="finished", message="all presets rendered", progress=1.0))
-        db.commit()
 
 
 def unused_name(base: str, taken: set[str]) -> str:
@@ -126,11 +130,6 @@ def run_learning(
 ) -> None:
     """Draft a preset from a reference reel. It runs on the job queue, so it never has
     the GPU at the same time as an edit."""
-    with Session() as db:
-        draft = db.get(StyleDraft, draft_id)
-        draft.status = "running"
-        db.commit()
-        source, name = draft.source, draft.name
 
     def progress(stage: str, message: str) -> None:
         with Session() as db:
@@ -138,24 +137,28 @@ def run_learning(
             db.commit()
 
     try:
+        with Session() as db:
+            draft = db.get(StyleDraft, draft_id)
+            draft.status = "running"
+            db.commit()
+            source, name = draft.source, draft.name
+
         learned = learn(source, settings, get_backends(), name, progress)
+        preset = learned.preset
+        if not name:
+            taken = set(load_presets(settings.presets_dir))
+            preset = preset.model_copy(update={"name": unused_name(preset.name, taken)})
+        with Session() as db:
+            draft = db.get(StyleDraft, draft_id)
+            draft.preset, draft.notes = preset.model_dump(mode="json"), learned.notes
+            draft.status, draft.message = "done", "draft ready"
+            db.commit()
     except Exception as exc:
-        log.exception("learning from %s failed", source)
+        log.exception("learning style draft %s failed", draft_id)
         with Session() as db:
             draft = db.get(StyleDraft, draft_id)
             draft.status, draft.error = "failed", f"{type(exc).__name__}: {exc}"
             db.commit()
-        return
-
-    preset = learned.preset
-    if not name:
-        taken = set(load_presets(settings.presets_dir))
-        preset = preset.model_copy(update={"name": unused_name(preset.name, taken)})
-    with Session() as db:
-        draft = db.get(StyleDraft, draft_id)
-        draft.preset, draft.notes = preset.model_dump(mode="json"), learned.notes
-        draft.status, draft.message = "done", "draft ready"
-        db.commit()
 
 
 @huey.task()
@@ -166,3 +169,37 @@ def process(job_id: str) -> None:
 @huey.task()
 def learn_style(draft_id: str) -> None:
     run_learning(draft_id, sessions(), get_settings())
+
+
+PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
+
+
+def recover(Session: sessionmaker) -> None:
+    """Settle what a server that stopped mid-job left behind; run it before the worker
+    starts. The queue drops a task once a worker takes it, so a job or draft still marked
+    running will never finish: it is marked failed. One still queued whose task is gone
+    (it never reached the queue) is queued again."""
+    pending = {(task.name, task.args[0]) for task in huey.pending() if task.args}
+    with Session() as db:
+        for job in db.scalars(select(Job).where(Job.status == "running")).all():
+            job.status, job.error = "failed", INTERRUPTED
+            db.add(Event(job_id=job.id, stage="failed", message=INTERRUPTED, progress=job.progress))
+        for draft in db.scalars(select(StyleDraft).where(StyleDraft.status == "running")).all():
+            draft.status, draft.error = "failed", INTERRUPTED
+        lost_jobs = [
+            job_id
+            for job_id in db.scalars(select(Job.id).where(Job.status == "queued"))
+            if (PROCESS, job_id) not in pending
+        ]
+        lost_drafts = [
+            draft_id
+            for draft_id in db.scalars(select(StyleDraft.id).where(StyleDraft.status == "queued"))
+            if (LEARN, draft_id) not in pending
+        ]
+        db.commit()
+    for job_id in lost_jobs:
+        log.info("queueing job %s again", job_id)
+        process(job_id)
+    for draft_id in lost_drafts:
+        log.info("queueing style draft %s again", draft_id)
+        learn_style(draft_id)
