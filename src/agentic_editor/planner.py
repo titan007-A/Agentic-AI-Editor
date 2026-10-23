@@ -106,9 +106,14 @@ def voiced_regions(analysis: Analysis) -> list[tuple[float, float]]:
         if end - start <= MAX_LINE_SECONDS:
             pieces.append((start, end))
             continue
-        lo, hi = int((start + 3) / hop), int((end - 3) / hop)
-        quietest = min(range(lo, hi), key=lambda i: analysis.energy[i])
-        regions[:0] = [(start, quietest * hop + hop / 2), (quietest * hop + hop / 2, end)]
+        # The audio can end before the video does; past its end there is no level to read.
+        lo, hi = int((start + 3) / hop), min(int((end - 3) / hop), len(analysis.energy))
+        if lo < hi:
+            quietest = min(range(lo, hi), key=lambda i: analysis.energy[i])
+            cut = quietest * hop + hop / 2
+        else:
+            cut = (start + end) / 2
+        regions[:0] = [(start, cut), (cut, end)]
     return pieces
 
 

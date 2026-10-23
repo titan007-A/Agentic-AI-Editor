@@ -224,3 +224,10 @@ def test_a_requested_opening_near_the_end_is_kept_and_flagged(make_analysis):
     edl = trim.apply(edl, analysis, preset)
     assert edl.clips[0].start >= fcc.start - 0.25
     assert edl.doubts and "after the chosen opening" in edl.doubts[0]
+
+
+def test_vocal_lines_past_the_end_of_the_audio_are_still_split(make_analysis):
+    # The video runs 60 s but its audio stops at 40 s, in the middle of a sung line.
+    analysis = make_analysis([], 60.0, [-20.0] * 80, audio_source="vocals", silences=[(0.0, 20.0)])
+    lines = build_lines(analysis)
+    assert lines[-1].end == 60.0 and all(ln.end - ln.start <= 12.0 for ln in lines)
