@@ -111,10 +111,6 @@ of their text if it isn't English.
 "other" for neither.
 - caption_language: the language the captions are written in (English name), or "" if \
 there are none.
-- texts: for each numbered on-screen text above, whether it is about "the page" (a \
-slogan, a follow request, what the page posts: the same on every reel) or about "this \
-video" (its song, artist, person, date, or a number like "Day 28" that changes from reel \
-to reel).
 - style_notes: 2-4 sentences telling an editor which part of a long video to use for a \
 reel like this and where to start and end it, e.g. "Pick the passage where the singer's \
 voice is most impressive, usually the chorus. Start where a sung line begins and end \
@@ -122,9 +118,22 @@ after a note has died away." Write about what to pick and where to cut, not abou
 reel's length, colours, text or layout."""
 
 
-class _Text(BaseModel):
-    number: int
-    about: Literal["the page", "this video"]
+# Asked as slogan or details, with a reason first, the planner model sorts these right; asked
+# whether a text is "about this video", it says yes to everything.
+PER_VIDEO_PROMPT = """Text shown on a short video from a page that posts many videos:
+
+"{text}"
+
+Classify it. "slogan": the page's own words that stay the same on every video it posts, \
+such as what the page is about or a request to follow ("Follow for more", "Raw vocals \
+only"). "details": words about this one video that would be different on the next one, \
+such as its song title, artist, person, place, date, or a counter like "Day 12". First \
+give a short reason, then the kind."""
+
+
+class _Kind(BaseModel):
+    reason: str
+    kind: Literal["slogan", "details"]
 
 
 class _Item(BaseModel):
@@ -143,7 +152,6 @@ class _Described(BaseModel):
     label: str
     content: Literal["singing", "speech", "other"]
     caption_language: str
-    texts: list[_Text]
     style_notes: str
 
 
@@ -732,6 +740,25 @@ def describe(
         return None
 
 
+def per_video(llm: OllamaClient, text: str) -> bool:
+    """Whether a text that stays on screen would differ from video to video. Asked one
+    text at a time: in a longer question the planner model mixes the texts up."""
+    try:
+        reply = llm.chat_json(
+            [{"role": "user", "content": PER_VIDEO_PROMPT.format(text=text)}],
+            _Kind.model_json_schema(),
+            temperature=0.0,
+        )
+        return _Kind.model_validate(reply).kind == "details"
+    except (LLMError, ValueError) as exc:
+        log.warning("could not tell whether %r changes per video: %s", text, exc)
+        return False
+
+
+def quoted(text: str) -> str:
+    return "“" + text.replace("\n", " / ") + "”"
+
+
 def caption_mode(
     caption_texts: list[str], transcript: Transcript, singing: bool, language: str
 ) -> tuple[str, str | None]:
@@ -892,7 +919,7 @@ def learn(
             continue
         agreed = consensus(measured(g), fonts)
         if agreed is None:
-            notes.append(f"Couldn't measure the text {g[0].text!r}; add it by hand if you want it")
+            notes.append(f"Couldn't measure the text {quoted(g[0].text)}; add it by hand")
             continue
         best, fit = agreed
         blocks.append((text_block(best, fit, frame), best, g[0].text))
@@ -911,6 +938,7 @@ def learn(
         described = describe(
             llm, info.duration, scenes, transcript, [b.text for b, _, _ in blocks], caption_texts
         )
+        changing = {i for i, (b, _, _) in enumerate(blocks) if per_video(llm, b.text)}
     singing = described is not None and described.content == "singing"
 
     instrument_free = False
@@ -943,18 +971,16 @@ def learn(
     notes.append(note)
 
     # Text that stays.
-    texts = described.texts if described else []
-    changing = {t.number for t in texts if t.about == "this video"}
     text_blocks = []
     for i, (block, _, read) in enumerate(blocks):
         text_blocks.append(block)
         where = f"{block.offset} px from the {block.anchor}"
         notes.append(
-            f"Text on every video: {block.text!r} ({block.font} {block.size}, {block.color}, "
+            f"Text on every video: {quoted(block.text)} ({block.font} {block.size}, {block.color}, "
             f"{where})"
         )
         if i in changing:
-            notes.append(f"{block.text!r} looks like it changes from video to video: edit it")
+            notes.append(f"{quoted(block.text)} looks like it changes from video to video: edit it")
         kept = clean(read)
         dropped = "".join(dict.fromkeys(c for c in read if c not in kept and not c.isspace()))
         if dropped:
@@ -963,16 +989,17 @@ def learn(
 
     for role, g in found:
         if role == "source":
-            notes.append(f"Left out {g[0].text!r}: it belongs to the video shown, not the style")
+            notes.append(f"Left out {quoted(g[0].text)}: it belongs to the video shown")
         elif role == "handle":
-            notes.append(f"Left out {g[0].text!r}: a username or watermark (those get blurred)")
+            notes.append(f"Left out {quoted(g[0].text)}: a username or watermark (blurred anyway)")
         elif role == "title" and "title_overlay" not in updates:
             agreed = consensus(measured(g), fonts)
             if agreed:
                 updates["title_overlay"] = title_overlay(*agreed, colour)
                 updates["hook"] = Hook(overlay=True)
                 notes.append(
-                    f"Opening title: {g[0].text!r} for the first seconds; each reel gets its own"
+                    f"Opening title: {quoted(g[0].text)} for the first seconds; each reel gets "
+                    "its own"
                 )
 
     # Captions.
