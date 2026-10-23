@@ -47,6 +47,11 @@ class Tracker:
         self.stage = "download"
 
     def __call__(self, stage: str, message: str) -> None:
+        if stage == "title":  # the source's own title, known once it is downloaded
+            with self.Session() as db:
+                db.get(Job, self.job_id).title = message
+                db.commit()
+            return
         # A job that got the GPU or encoder it waited for is back at the stage it was at.
         if stage == "resume":
             stage = self.stage

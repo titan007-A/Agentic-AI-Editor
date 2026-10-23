@@ -52,3 +52,27 @@ def test_a_job_that_fails_while_saving_its_outputs_is_marked_failed(tmp_path, mo
     with Session() as db:
         job = db.get(Job, "j1")
         assert job.status == "failed" and job.error.startswith("AttributeError")
+
+
+def test_a_job_shows_the_sources_title_while_it_runs_and_keeps_its_own_outputs(
+    tmp_path, monkeypatch
+):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="https://x.test/v", title="https://x.test/v", presets=[]))
+        db.commit()
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    settings = Settings(presets_dir=ROOT / "presets", media_dir=tmp_path / "media")
+    seen = {}
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        progress("download", "fetching it")
+        progress("title", "A song")
+        with Session() as db:
+            seen["title"] = db.get(Job, "j1").title
+            seen["events"] = [e.stage for e in db.query(Event).filter_by(job_id="j1")]
+        seen["run_id"] = run_id
+        return pipeline.Result("A song", [])
+
+    jobs.run_job("j1", Session, settings, run)
+    assert seen == {"title": "A song", "events": ["download"], "run_id": "j1"}

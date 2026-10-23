@@ -456,6 +456,7 @@ def run(
     not given), so a later run of the same video and preset doesn't replace them."""
     progress("download", f"fetching {source_ref}")
     source = resolve_source(source_ref, settings)
+    progress("title", source.title)
     work_dir = settings.cache_dir / file_hash(source.path)
     work_dir.mkdir(parents=True, exist_ok=True)
     run_id = run_id or secrets.token_hex(4)

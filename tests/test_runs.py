@@ -42,3 +42,8 @@ def test_each_run_keeps_its_outputs_in_a_folder_of_its_own(started):
     (video,) = started.outputs.iterdir()
     runs = {p.name for p in video.iterdir()}
     assert len(runs) == 3 and "job1" in runs
+
+
+def test_the_title_is_reported_once_the_source_is_found(started):
+    started()
+    assert started.events[:2] == [("download", "fetching talk.mp4"), ("title", "A talk")]
