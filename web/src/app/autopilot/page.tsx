@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Plus, Send, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { FeedCard } from "@/components/feed-card";
@@ -10,7 +10,9 @@ import { OutputCard } from "@/components/output-card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePolling } from "@/hooks/use-polling";
 import { api, errorText, type Feed, type Job, type Verdict } from "@/lib/api";
+import { keepIfSame } from "@/lib/poller.mjs";
 
 type PileName = "ready" | "look";
 
@@ -18,18 +20,14 @@ const REFRESH_MS = 15000;
 
 export default function AutopilotPage() {
   const [counts, setCounts] = useState({ ready: 0, look: 0 });
-  const refreshCounts = useCallback(() => {
-    api
-      .pileCounts()
-      .then(setCounts)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    refreshCounts();
-    const timer = setInterval(refreshCounts, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [refreshCounts]);
+  const refreshCounts = usePolling(
+    () =>
+      api
+        .pileCounts()
+        .then((next) => setCounts((current) => keepIfSame(current, next)))
+        .catch(() => {}),
+    REFRESH_MS,
+  );
 
   return (
     <div className="space-y-4">
@@ -63,18 +61,14 @@ export default function AutopilotPage() {
 function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
   const [jobs, setJobs] = useState<Job[] | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .pile(name)
-      .then(setJobs)
-      .catch((err) => toast.error(errorText(err)));
-  }, [name]);
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [load]);
+  usePolling(
+    () =>
+      api
+        .pile(name)
+        .then((next) => setJobs((current) => keepIfSame(current, next)))
+        .catch((err) => toast.error(errorText(err))),
+    REFRESH_MS,
+  );
 
   async function decide(outputId: number, verdict: Verdict, message: string) {
     try {
@@ -137,18 +131,14 @@ function Feeds() {
   const [feeds, setFeeds] = useState<Feed[] | null>(null);
   const [adding, setAdding] = useState(false);
 
-  const load = useCallback(() => {
-    api
-      .feeds()
-      .then(setFeeds)
-      .catch((err) => toast.error(errorText(err)));
-  }, []);
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [load]);
+  usePolling(
+    () =>
+      api
+        .feeds()
+        .then((next) => setFeeds((current) => keepIfSame(current, next)))
+        .catch((err) => toast.error(errorText(err))),
+    REFRESH_MS,
+  );
 
   const replace = (feed: Feed) =>
     setFeeds((current) => current?.map((f) => (f.id === feed.id ? feed : f)) ?? null);

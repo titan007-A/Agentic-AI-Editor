@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, Upload, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { usePolling } from "@/hooks/use-polling";
 import { api, errorText, type Preset, type StyleDraft } from "@/lib/api";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -49,27 +50,23 @@ export function LearnStyleDialog({
         : null;
 
   const draftId = draft?.id;
-  useEffect(() => {
-    if (!draftId || !waiting) return;
-    const timer = setInterval(async () => {
-      try {
-        const latest = await api.styleDraft(draftId);
-        setDraft(latest);
-        if (latest.status === "done" && latest.preset) {
-          toast.success(`Draft ready: ${latest.preset.label}`);
-          onDraft(latest.preset, latest.notes);
-          onOpenChange(false);
-          setDraft(null);
-          setLink("");
-          setUpload(null);
-          setName("");
-        }
-      } catch {
-        // The next poll tries again.
+  usePolling(
+    async () => {
+      if (!draftId) return;
+      const latest = await api.styleDraft(draftId);
+      setDraft(latest);
+      if (latest.status === "done" && latest.preset) {
+        toast.success(`Draft ready: ${latest.preset.label}`);
+        onDraft(latest.preset, latest.notes);
+        onOpenChange(false);
+        setDraft(null);
+        setLink("");
+        setUpload(null);
+        setName("");
       }
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [draftId, waiting, onDraft, onOpenChange]);
+    },
+    draftId && waiting ? POLL_MS : null,
+  );
 
   async function addFile(files: FileList | null) {
     const file = files?.[0];

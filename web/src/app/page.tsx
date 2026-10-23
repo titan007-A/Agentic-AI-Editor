@@ -1,32 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import { JobList } from "@/components/job-list";
 import { NewJobForm } from "@/components/new-job-form";
+import { usePolling } from "@/hooks/use-polling";
 import { api, type Job } from "@/lib/api";
+import { keepIfSame } from "@/lib/poller.mjs";
+
+// Quick while something is being edited; slower otherwise, so jobs the autopilot or
+// another device starts still show up.
+const BUSY_MS = 3000;
+const IDLE_MS = 15000;
 
 export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
-
-  const refresh = useCallback(() => {
-    api
-      .jobs()
-      .then(setJobs)
-      .catch(() => {});
-  }, []);
-
   const busy = jobs.some((j) => j.status === "queued" || j.status === "running");
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(refresh, 3000);
-    return () => clearInterval(timer);
-  }, [busy, refresh]);
+  const refresh = usePolling(
+    () =>
+      api
+        .jobs()
+        .then((next) => setJobs((current) => keepIfSame(current, next)))
+        .catch(() => {}),
+    busy ? BUSY_MS : IDLE_MS,
+  );
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
