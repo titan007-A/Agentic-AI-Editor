@@ -29,11 +29,12 @@ from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from scipy import ndimage
 
-from agentic_editor import ffmpeg
+from agentic_editor import ffmpeg, slots
 from agentic_editor.analysis import layout
 from agentic_editor.analysis.layout import Box, Line
 from agentic_editor.analyze import SPARSE_WORDS, cached, file_hash, isolate_vocals
 from agentic_editor.backends import Backends
+from agentic_editor.download import Source
 from agentic_editor.edl import Cue
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.presets import (
@@ -856,10 +857,23 @@ def learn(
 
     progress("download", f"fetching {source_ref}")
     source = resolve_source(source_ref, settings)
-    info = ffmpeg.probe(source.path)
     work_dir = settings.cache_dir / file_hash(source.path)
     work_dir.mkdir(parents=True, exist_ok=True)
-    router = ModelRouter(settings, backends)
+    # An edit of the same video would write the same cached audio and transcripts.
+    with slots.video(work_dir).turn("learn from it", progress):
+        return _learn(source, work_dir, settings, backends, name, progress)
+
+
+def _learn(
+    source: Source,
+    work_dir: Path,
+    settings: Settings,
+    backends: Backends,
+    name: str | None,
+    progress: Progress,
+) -> Draft:
+    info = ffmpeg.probe(source.path)
+    router = ModelRouter(settings, backends, progress)
     aspect, frame = target_size(info.width, info.height)
     width, height = frame
     notes: list[str] = []

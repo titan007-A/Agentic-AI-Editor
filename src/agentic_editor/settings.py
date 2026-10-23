@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     llm_model: str = "qwen3.5:9b"
     vision_model: str = "qwen3.5:4b"
 
-    max_concurrent_jobs: int = Field(default=1, ge=1)
+    # Jobs in progress at once. They take turns on the GPU and the encoder, so a second
+    # one uses the GPU while the first encodes.
+    max_concurrent_jobs: int = Field(default=2, ge=1)
 
     host: str = "0.0.0.0"
     port: int = 8000
