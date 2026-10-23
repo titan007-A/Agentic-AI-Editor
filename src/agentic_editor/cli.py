@@ -7,6 +7,8 @@ from agentic_editor.backends import detect
 from agentic_editor.presets import load_presets
 from agentic_editor.settings import get_settings
 
+log = logging.getLogger(__name__)
+
 # A short CC BY 3.0 performance from Wikimedia Commons, also used by the end-to-end test.
 BENCHMARK_SAMPLE = "https://commons.wikimedia.org/wiki/File:Breathe_by_Rockbitch_(circa_2000).webm"
 
@@ -20,8 +22,17 @@ def _run(args: argparse.Namespace) -> int:
         return 2
     backends = detect(settings)
     presets = [available[n] for n in args.preset]
+    failed = 0
     for source in args.source:
-        for output in pipeline.run(source, presets, settings, backends, args.notes).outputs:
+        try:
+            result = pipeline.run(source, presets, settings, backends, args.notes)
+        except Exception as exc:
+            # One video that can't be edited doesn't hold up the rest of the batch.
+            log.debug("editing %s failed", source, exc_info=True)
+            print(f"{source}: failed: {type(exc).__name__}: {exc}")
+            failed += 1
+            continue
+        for output in result.outputs:
             clips = ", ".join(f"{c.start:.2f}-{c.end:.2f}" for c in output.edl.clips)
             print(f"{output.preset}: {output.path}")
             print(
@@ -36,7 +47,7 @@ def _run(args: argparse.Namespace) -> int:
                     print(f"    {doubt}")
             else:
                 print("  ready to post")
-    return 0
+    return 1 if failed else 0
 
 
 def _learn(args: argparse.Namespace) -> int:
@@ -77,6 +88,15 @@ def _benchmark(args: argparse.Namespace) -> int:
     source = pipeline.resolve_source(args.source, settings)
     results = benchmark.run(source.path, presets[args.preset], settings, backends, not args.no_llm)
     print(benchmark.report(results, source.title, ffmpeg.probe(source.path).duration))
+    return 0
+
+
+def _fetch_models(args: argparse.Namespace) -> int:
+    from agentic_editor.router import ModelRouter
+
+    settings = get_settings()
+    ModelRouter(settings, detect(settings)).fetch_models()
+    print("all models are on this machine")
     return 0
 
 
@@ -156,6 +176,9 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("backends", help="show the detected backends").set_defaults(
         handler=_backends
     )
+    commands.add_parser(
+        "fetch-models", help="download the transcription, separation and face models"
+    ).set_defaults(handler=_fetch_models)
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
     commands.add_parser("serve", help="run the web app and job worker").set_defaults(handler=_serve)
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(

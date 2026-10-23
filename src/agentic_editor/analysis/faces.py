@@ -5,6 +5,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from agentic_editor import logs
+
 log = logging.getLogger(__name__)
 
 MODEL_URL = (
@@ -33,9 +35,11 @@ Sample = tuple[float, list[Face]]
 def model_file(models_dir: Path) -> Path:
     path = models_dir / "mediapipe" / "blaze_face_short_range.tflite"
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        log.info("downloading face detection model")
-        urllib.request.urlretrieve(MODEL_URL, path)
+        with logs.download_progress("the face detection model", path.parent):
+            # Under another name until it is whole, so a broken download is never loaded.
+            partial = path.with_suffix(".part")
+            urllib.request.urlretrieve(MODEL_URL, partial)
+            partial.replace(path)
     return path
 
 

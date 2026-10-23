@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux / WSL2 + NVIDIA setup: NVENC-enabled ffmpeg, Python env, Ollama models.
+# Linux / WSL2 + NVIDIA setup: NVENC-enabled ffmpeg, Python env, Ollama and other models.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -35,5 +35,6 @@ uv sync --extra ml
 set -a; source .env; set +a
 ollama pull "${LLM_MODEL:-qwen3.5:9b}"
 ollama pull "${VISION_MODEL:-qwen3.5:4b}"
+uv run aiedit fetch-models
 
 uv run aiedit backends

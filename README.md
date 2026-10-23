@@ -51,8 +51,10 @@ scripts/setup-linux.sh
 The script installs a static ffmpeg build with NVENC (Ubuntu's ffmpeg package has none)
 into `~/.local/opt/ffmpeg-nvenc` and points `.env` at it, installs the Python
 environment with the CUDA 12.8 build of PyTorch (needed for RTX 50-series/Blackwell
-GPUs), pulls the Ollama models and prints the detected backends. Build the web app
-once with `(cd web && npm ci && npm run build)` if you want the browser interface.
+GPUs), pulls the Ollama models, downloads the transcription, vocal separation and face
+detection models (`uv run aiedit fetch-models`, about 2.4 GB, logged as it goes) and prints
+the detected backends. Build the web app once with `(cd web && npm ci && npm run build)` if
+you want the browser interface.
 
 ## Setup: macOS on Apple Silicon
 
@@ -63,6 +65,7 @@ cd Agentic-AI-Editor
 cp .env.example .env
 uv sync --extra ml
 ollama pull qwen3.5:9b && ollama pull qwen3.5:4b
+uv run aiedit fetch-models
 uv run aiedit backends
 (cd web && npm ci && npm run build)
 ```
@@ -78,8 +81,10 @@ uv run aiedit run "https://..." -p vocal-music-9x16 -p vocal-music-es-9x16
 uv run aiedit run ~/Videos/talk.mp4 -p shorts-9x16
 ```
 
-Outputs go to `media/outputs/<source-hash>/<preset>.mp4`, next to the EDL that produced
-them. Analysis results are cached per source file in `cache/`.
+Outputs go to `media/outputs/<source-hash>/<run>/<preset>.mp4`, next to the EDL that
+produced them; every run (a job in the web app, each video of an `aiedit run`) has a folder
+of its own, so running a video again never replaces earlier versions. Analysis results are
+cached per source file in `cache/`.
 
 `-n` (or the notes box in the web app) takes a plain-language instruction:
 

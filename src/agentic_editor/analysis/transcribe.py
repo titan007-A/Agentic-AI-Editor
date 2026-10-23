@@ -6,11 +6,39 @@ import sys
 import time
 from pathlib import Path
 
-from agentic_editor import ffmpeg
+from agentic_editor import ffmpeg, logs
 from agentic_editor.backends import preload_cuda_libraries
 from agentic_editor.transcript import Transcript, Word
 
 log = logging.getLogger(__name__)
+
+
+def fetch_faster_whisper(model: str, download_root: Path) -> str:
+    """The folder of a faster-whisper model, downloaded first if this machine hasn't got
+    it. A model given as a folder is used as it is."""
+    from faster_whisper.utils import download_model
+
+    if Path(model).is_dir():
+        return model
+    try:
+        return download_model(model, local_files_only=True, cache_dir=str(download_root))
+    except FileNotFoundError:
+        pass
+    with logs.download_progress(f"whisper {model}", download_root):
+        return download_model(model, cache_dir=str(download_root))
+
+
+def fetch_mlx(model: str) -> str:
+    """The folder of an mlx-whisper model in the Hugging Face cache, downloaded first if
+    this machine hasn't got it."""
+    from huggingface_hub import constants, snapshot_download
+
+    try:
+        return snapshot_download(model, local_files_only=True)
+    except FileNotFoundError:
+        pass
+    with logs.download_progress(f"whisper {model}", Path(constants.HF_HUB_CACHE)):
+        return snapshot_download(model)
 
 
 def with_faster_whisper(
@@ -21,10 +49,9 @@ def with_faster_whisper(
     if device == "cuda" and sys.platform == "linux":
         preload_cuda_libraries()
     compute_type = "float16" if device == "cuda" else "int8"
+    folder = fetch_faster_whisper(model, download_root)
     started = time.monotonic()
-    whisper = WhisperModel(
-        model, device=device, compute_type=compute_type, download_root=str(download_root)
-    )
+    whisper = WhisperModel(folder, device=device, compute_type=compute_type)
     loaded = time.monotonic()
     # Decoding with our ffmpeg instead of faster-whisper's PyAV path keeps one decoder for
     # the whole pipeline and avoids PyAV API changes.
@@ -59,9 +86,10 @@ def with_faster_whisper(
 def with_mlx(audio: Path, model: str, language: str | None) -> Transcript:
     import mlx_whisper
 
+    folder = fetch_mlx(model)
     started = time.monotonic()
     result = mlx_whisper.transcribe(
-        str(audio), path_or_hf_repo=model, word_timestamps=True, language=language
+        str(audio), path_or_hf_repo=folder, word_timestamps=True, language=language
     )
     words = [
         Word(

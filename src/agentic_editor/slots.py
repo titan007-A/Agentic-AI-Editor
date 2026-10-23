@@ -81,7 +81,13 @@ class Slot:
                 raise
         self._owner, self._depth = threading.get_ident(), times
         if waited:
-            progress("resume", f"got the {self.name} after {time.monotonic() - started:.0f}s")
+            try:
+                progress("resume", f"got the {self.name} after {time.monotonic() - started:.0f}s")
+            except BaseException:
+                # Nothing would ever release it, and every other job would wait for good.
+                self._depth = 1
+                self.release()
+                raise
 
     def release(self) -> None:
         if not self.held():
@@ -117,7 +123,8 @@ _videos_lock = threading.Lock()
 
 
 def video(work_dir: Path) -> Slot:
-    """The slot for one source video, whose cache folder is `work_dir`."""
+    """The slot for one video, by its folder: the cache folder while it is edited, the
+    download folder while it downloads."""
     with _videos_lock:
         if work_dir not in _videos:
             _videos[work_dir] = Slot(f"video {work_dir.name}", lambda: work_dir / "busy.lock")
