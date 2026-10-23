@@ -216,7 +216,16 @@ def lyric_cues(
     it."""
     fits = fits or (lambda line: True)
     if breaths:
-        groups = [[w for w in words if a <= (w.start + w.end) / 2 < b] for a, b in breaths]
+        # Each word goes with the breath it is nearest: one whose timing runs into the
+        # silence after a line, or that is too short to count as voiced, is still sung.
+        groups = [[] for _ in breaths]
+        for word in words:
+            mid = (word.start + word.end) / 2
+            nearest = min(
+                range(len(breaths)),
+                key=lambda i: max(breaths[i][0] - mid, 0.0, mid - breaths[i][1]),
+            )
+            groups[nearest].append(word)
     else:
         groups = []
         for word in words:

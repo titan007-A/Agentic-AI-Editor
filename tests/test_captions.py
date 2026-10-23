@@ -178,3 +178,9 @@ def test_a_shrunk_caption_stays_shrunk_after_the_highlighted_word():
     )
     plain = dialogue(build_ass(cue, CaptionStyle(animation="pop"), FRAME, "Anton"))
     assert r"\fscx112\fscy112" in plain[0] and r"{\r}" in plain[0]
+
+
+def test_a_sung_word_just_past_a_breath_is_still_captioned():
+    sung = words_from("I@0.1-0.3 need@0.4-0.8 you@0.9-1.6 now@1.85-2.3 baby@3.2-3.9 please@4.0-4.6")
+    cues = lyric_cues(sung, breaths=[(0.0, 2.0), (3.0, 5.0)])
+    assert [c.text for c in cues] == ["I need you now", "baby please"]
