@@ -38,10 +38,10 @@ def sessions() -> sessionmaker:
 class Tracker:
     """Turns pipeline progress callbacks into stored events and a rising progress value."""
 
-    def __init__(self, Session: sessionmaker, job_id: str, preset_count: int):
+    def __init__(self, Session: sessionmaker, job_id: str, outputs: int):
         self.Session = Session
         self.job_id = job_id
-        self.preset_count = preset_count
+        self.outputs = outputs  # videos the job is expected to make
         self.finished = 0
         self.value = 0.0
         self.stage = "download"
@@ -57,7 +57,7 @@ class Tracker:
             stage = self.stage
         elif stage != "wait":
             self.stage = stage
-        share = (1 - RENDER_START) / self.preset_count
+        share = (1 - RENDER_START) / self.outputs
         if stage == "done":
             self.finished += 1
             value = RENDER_START + share * self.finished
@@ -88,6 +88,7 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
         if missing:
             raise ValueError(f"unknown preset(s): {', '.join(missing)}")
         presets = [available[name] for name in preset_names]
+        track.outputs = max(1, sum(p.hook.variants for p in presets))
         result = run(source, presets, settings, get_backends(), notes, track, run_id=job_id)
 
         with Session() as db:

@@ -1,4 +1,7 @@
+import shutil
 from types import SimpleNamespace
+
+import pytest
 
 from agentic_editor import jobs, pipeline
 from agentic_editor.backends import Backends
@@ -76,3 +79,27 @@ def test_a_job_shows_the_sources_title_while_it_runs_and_keeps_its_own_outputs(
 
     jobs.run_job("j1", Session, settings, run)
     assert seen == {"title": "A song", "events": ["download"], "run_id": "j1"}
+
+
+def test_progress_has_a_share_for_every_video_a_job_makes(tmp_path, monkeypatch):
+    presets = tmp_path / "presets"
+    shutil.copytree(ROOT / "presets", presets)
+    square = presets / "square-1x1.yaml"
+    square.write_text(square.read_text() + "hook:\n  variants: 2\n")
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="https://x.test/v", presets=["square-1x1", "shorts-9x16"]))
+        db.commit()
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    settings = Settings(presets_dir=presets, media_dir=tmp_path / "media")
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        for name in ("square-1x1", "square-1x1-b", "shorts-9x16"):
+            progress("render", f"rendering {name}")
+            progress("done", f"{name} -> {name}.mp4")
+        return pipeline.Result("A song", [])
+
+    jobs.run_job("j1", Session, settings, run)
+    with Session() as db:
+        done = [e.progress for e in db.query(Event).filter_by(job_id="j1", stage="done")]
+    assert done == pytest.approx([0.55 + 0.15, 0.55 + 0.30, 0.99])
