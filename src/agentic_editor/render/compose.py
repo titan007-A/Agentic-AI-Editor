@@ -1,6 +1,7 @@
 """Runs the render: soundtrack, overlays, captions and the final encode."""
 
 import logging
+import math
 import re
 import time
 from collections.abc import Callable
@@ -227,6 +228,9 @@ def render(
         if layers.black_bars:
             source = layers.black_bars[:2]
 
+    # Banners keep off faces, the picture's own text and the preset's text blocks; captions
+    # keep off those and banners.
+    obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
     if preset.text_blocks:
         band = video_band(edl.crop_mode, source, frame, preset.framing.picture_width)
         placed = []
@@ -240,6 +244,7 @@ def render(
                 text.place(block, text.font_file(settings.fonts_dir, block.font), frame, band, gap)
             )
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
+        obstacles += [(0.0, edl.duration, *block.band) for block in placed]
 
     rows = (
         clear_rows(edl, analysis, preset, layers.content, faces or [], texts or [])
@@ -274,20 +279,23 @@ def render(
         layers.pulses = [t - clip.start for t in times if clip.start <= t < clip.end]
         layers.pulse_scale = sync.pulse_scale
 
-    # Banners keep off faces and the picture's own text; captions keep off those and banners.
-    obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
-
     def banner(
         words: str, font_name: str, size: int, color: str, box: str | None,
         position: str, offset: int, until: float, name: str,
     ) -> int:  # fmt: skip
         font = text.font_file(settings.fonts_dir, font_name)
         wrapped = text.balance(words, font, size, frame[0] - 160)
-        height = round(size * 1.3 * (wrapped.count("\n") + 1))
+        # Placed by the rows it really covers, box included, with `offset` still where the
+        # first line starts.
+        above, below = text.banner_extent(wrapped, font, size, box, frame[0])
+        height = math.ceil(below - above)
+        start = max(0, round(offset + above)) if position == "top" else offset
         taken = [(top, bottom) for _, _, top, bottom in obstacles]
-        top = banner_top(position, offset, height, frame[1], rows, until, taken)
+        top = banner_top(position, start, height, frame[1], rows, until, taken)
         obstacles.append((0.0, until, top, top + height))
-        png = text.draw_banner(wrapped, font, size, color, box, frame, top, work_dir / name)
+        png = text.draw_banner(
+            wrapped, font, size, color, box, frame, round(top - above), work_dir / name
+        )
         return add_input(png)
 
     title = preset.title_overlay

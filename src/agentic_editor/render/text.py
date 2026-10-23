@@ -13,6 +13,7 @@ from agentic_editor.presets import TextBlock
 from agentic_editor.render import fonts
 
 EDGE_MARGIN = 24
+BOX_PAD = 0.35  # of the size, around a banner's text inside its box
 
 
 def font_file(fonts_dir: Path, name: str) -> Path:
@@ -39,6 +40,13 @@ class Placed:
     top: float
     color: str
     line_height: float
+
+    @property
+    def band(self) -> tuple[float, float]:
+        """Rows of the frame the block's ink covers."""
+        spacing = self.line_height / line_height(self.font, self.size, 1.0)
+        ink_top, ink_bottom = ink_extent(self.lines, self.font, self.size, spacing)
+        return self.top + ink_top, self.top + ink_bottom
 
 
 def _font(path: Path, size: int) -> ImageFont.FreeTypeFont:
@@ -149,6 +157,17 @@ def balance(text: str, path: Path, size: int, max_width: int) -> str:
     return " ".join(words[:best]) + "\n" + " ".join(words[best:])
 
 
+def banner_extent(
+    text: str, path: Path, size: int, box: str | None, frame_width: int
+) -> tuple[float, float]:
+    """Top and bottom of what draw_banner draws, box included, relative to its `top`."""
+    lines = text.split("\n")
+    size = fit_width(lines, path, size, 24, frame_width - 160)
+    ink_top, ink_bottom = ink_extent(lines, path, size, 1.0)
+    pad = size * BOX_PAD if box else 0.0
+    return ink_top - pad, ink_bottom + pad
+
+
 def draw_banner(
     text: str,
     path: Path,
@@ -170,7 +189,7 @@ def draw_banner(
     if box:
         ink_top, ink_bottom = ink_extent(lines, path, size, 1.0)
         text_width = max(font.getlength(line) for line in lines)
-        pad = size * 0.35
+        pad = size * BOX_PAD
         canvas.rounded_rectangle(
             (
                 (width - text_width) / 2 - pad,
