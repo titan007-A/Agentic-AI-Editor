@@ -1,4 +1,13 @@
-from agentic_editor.agent import Request, apply, confidence, grounded, interpret, normalise, seconds
+from agentic_editor.agent import (
+    Request,
+    apply,
+    confidence,
+    grounded,
+    interpret,
+    lengths,
+    normalise,
+    seconds,
+)
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.presets import Preset
 
@@ -11,7 +20,7 @@ def ask(setting, quote, value=""):
 
 def test_grounded_requests_change_only_what_they_ask_for():
     text = "Spanish subtitles, warm look, two versions"
-    changed, notes = apply(
+    changed, notes, _ = apply(
         PRESET,
         [
             ask("captions_language", "Spanish subtitles"),
@@ -28,7 +37,7 @@ def test_grounded_requests_change_only_what_they_ask_for():
 
 def test_a_change_the_instruction_never_asked_for_is_dropped():
     text = "Add Spanish subtitles"
-    changed, notes = apply(PRESET, [ask("remove_instruments", "Add Spanish subtitles")], text)
+    changed, notes, _ = apply(PRESET, [ask("remove_instruments", "Add Spanish subtitles")], text)
     assert changed == PRESET
     assert notes == [
         "ignored a reading of the instruction (remove_instruments): its quote isn't about that"
@@ -47,7 +56,7 @@ def test_turning_something_off_needs_words_that_say_so():
 def test_values_left_out_are_read_from_the_quote():
     assert normalise(ask("captions_language", "Add Spanish subtitles")).value == "Spanish"
     assert normalise(ask("captions_off", "hindi subtitles")).setting == "captions_language"
-    changed, _ = apply(PRESET, [ask("look", "black and white")], "black and white please")
+    changed, *_ = apply(PRESET, [ask("look", "black and white")], "black and white please")
     assert changed.grade.look == "mono"
 
 
@@ -57,14 +66,71 @@ def test_lengths_are_read_in_seconds_or_minutes():
     assert seconds("2 minutes max") == 120
 
 
-def test_an_impossible_combination_keeps_the_preset():
-    text = "at least 90 seconds but at most 30 seconds"
-    changed, notes = apply(
+def test_a_change_that_contradicts_another_is_dropped_on_its_own():
+    text = "Spanish subtitles, at least 90 seconds but at most 30 seconds"
+    changed, notes, failed = apply(
         PRESET,
-        [ask("min_seconds", "at least 90 seconds"), ask("max_seconds", "at most 30 seconds")],
+        [
+            ask("captions_language", "Spanish subtitles"),
+            ask("min_seconds", "at least 90 seconds"),
+            ask("max_seconds", "at most 30 seconds"),
+        ],
         text,
     )
-    assert changed == PRESET and notes[0].startswith("couldn't apply")
+    assert changed.captions.language == "Spanish"
+    assert (changed.min_duration, changed.max_duration) == (90, 120)
+    assert failed == [
+        'couldn\'t apply "at most 30 seconds" from your instruction '
+        "(min_duration is longer than max_duration)"
+    ]
+    assert failed[0] in notes
+
+
+def test_a_limit_outside_the_preset_moves_its_other_end():
+    text = "Spanish subtitles, warm look, keep it under 15 seconds"
+    changed, notes, failed = apply(
+        PRESET,
+        [
+            ask("captions_language", "Spanish subtitles", "Spanish"),
+            ask("look", "warm look", "warm"),
+            ask("max_seconds", "under 15 seconds", "15"),
+        ],
+        text,
+    )
+    assert not failed
+    assert (changed.captions.language, changed.grade.look) == ("Spanish", "warm")
+    assert (changed.min_duration, changed.max_duration) == (15, 15)
+    assert "from your instruction: minimum lowered to 15 s to fit" in notes
+    changed, _, failed = apply(
+        PRESET, [ask("min_seconds", "at least 3 minutes")], "at least 3 minutes"
+    )
+    assert not failed and (changed.min_duration, changed.max_duration) == (180, 180)
+
+
+def test_a_range_uses_both_of_its_ends():
+    text = "make it between 30 and 50 seconds"
+    quote = "between 30 and 50 seconds"
+    changed, *_ = apply(
+        PRESET, [ask("min_seconds", quote, "30"), ask("max_seconds", quote, "50")], text
+    )
+    assert (changed.min_duration, changed.max_duration) == (30, 50)
+    # Without the model's values, each end of the range is read from the quote.
+    changed, *_ = apply(PRESET, [ask("max_seconds", quote), ask("min_seconds", quote)], text)
+    assert (changed.min_duration, changed.max_duration) == (30, 50)
+    # A value the quote doesn't name isn't trusted.
+    changed, *_ = apply(PRESET, [ask("max_seconds", "under 40 seconds", "400")], "under 40 seconds")
+    assert changed.max_duration == 40
+
+
+def test_lengths_are_read_from_ranges_halves_and_clock_times():
+    assert lengths("between 30 and 50 seconds") == [30, 50]
+    assert lengths("under a minute and a half") == [90]
+    assert lengths("one and a half minutes") == [90]
+    assert lengths("half a minute") == [30]
+    assert lengths("1:30 tops") == [90]
+    assert lengths("30-45s") == [30, 45]
+    assert lengths("two versions, under 40 seconds") == [40]
+    assert lengths("make it short") == []
 
 
 def test_interpret_sends_the_instruction_and_reads_the_requests():
@@ -86,19 +152,28 @@ def test_a_clean_render_is_fully_confident():
 
 
 def test_problems_lower_confidence_and_say_why():
-    edl = EDL(
-        clips=[Clip(start=0, end=12)],
-        decisions=["translation failed (timeout); showing the speech"],
-    )
+    failed = "translation failed (timeout); showing the speech"
+    edl = EDL(clips=[Clip(start=0, end=12)], decisions=[failed], doubts=[failed])
     score, doubts = confidence(edl, ["loudness: -18.0 LUFS"], "heuristic", PRESET)
     assert score < 0.5
     assert "loudness: -18.0 LUFS" in doubts and "planned without the language model" in doubts
-    assert any("under the 20s minimum" in d for d in doubts)
+    assert any("under the 20s minimum" in d for d in doubts) and failed in doubts
+
+
+def test_words_quoted_in_a_decision_are_not_doubts():
+    edl = EDL(
+        clips=[Clip(start=10, end=35)],
+        decisions=[
+            'found where you asked to start: 10.0s, "the night the deal failed"',
+            "opened 1.2s later, on a stronger line: a confession that he couldn't stop",
+        ],
+    )
+    assert confidence(edl, [], "qwen3.5:9b", PRESET) == (1.0, [])
 
 
 def test_saying_where_to_start_keeps_that_opening():
     text = "start where he talks about the FCC"
-    changed, notes = apply(PRESET, [ask("start_point", text)], text)
+    changed, notes, _ = apply(PRESET, [ask("start_point", text)], text)
     assert changed.hook.optimize is False
     assert notes == ["from your instruction: the opening stays where you asked it to start"]
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from agentic_editor.edl import Cue
-from agentic_editor.llm import LLMError
+from agentic_editor.llm import LLMError, parse
 from agentic_editor.transcript import (
     CLAUSE_END,
     SENTENCE_END,
@@ -396,7 +396,7 @@ def _ask_translation(llm, cues: dict[int, Cue], language: str, notes: str | None
         _Lines.model_json_schema(),
         temperature=0.2,
     )
-    return {e.n: e.text.strip() for e in _Lines.model_validate(reply).lines if e.text.strip()}
+    return {e.n: e.text.strip() for e in parse(_Lines, reply).lines if e.text.strip()}
 
 
 def translate(llm, cues: list[Cue], language: str, notes: str | None) -> list[Cue]:
@@ -521,7 +521,7 @@ def visual_cues(
                 images=[frame],
                 temperature=0.5 + 0.3 * attempt,
             )
-            words = _Line.model_validate(reply).line.strip().strip('"').split()
+            words = parse(_Line, reply).line.strip().strip('"').split()
             caption = " ".join(words[: CAPTION_WORDS + 2])
             if caption and "/" not in caption and not _repeats(caption, written):
                 break
@@ -573,7 +573,7 @@ def one_line(
         images=frames,
         temperature=0.5,
     )
-    words = _Line.model_validate(reply).line.strip().strip('"').split()
+    words = parse(_Line, reply).line.strip().strip('"').split()
     return " ".join(words[:max_words])
 
 

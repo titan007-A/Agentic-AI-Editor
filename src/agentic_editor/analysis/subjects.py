@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from agentic_editor.llm import LLMError
+from agentic_editor.llm import LLMError, parse
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ def find(
                 images=images,
                 temperature=0.0,
             )
-            by_image = {f.image: f.items for f in _Reply.model_validate(reply).frames}
+            by_image = {f.image: f.items for f in parse(_Reply, reply).frames}
         except LLMError as exc:
             # Framing falls back to the face detector for these frames.
             log.warning("no subjects for %d frame(s): %s", len(batch), exc)

@@ -63,13 +63,14 @@ def avoid_dead_air(
         )
         for i in range(0, len(edges), 2)
     ]
-    long_enough = [(a, b) for a, b in sides if b - a >= preset.min_duration]
+    # Side k runs from the end of quiet[k - 1] to the start of quiet[k].
+    long_enough = [k for k, (a, b) in enumerate(sides) if b - a >= preset.min_duration]
     if not preset.hook.optimize:
-        long_enough = long_enough[:1] if long_enough and long_enough[0][0] == start else []
+        long_enough = long_enough[:1] if long_enough and long_enough[0] == 0 else []
     if not long_enough:
         return start, end, None
-    a, b = max(long_enough, key=lambda side: side[1] - side[0])
-    gap = next(q for q in quiet if q[1] <= a + PREROLL or q[0] >= b - DECAY)
+    k = max(long_enough, key=lambda k: sides[k][1] - sides[k][0])
+    (a, b), gap = sides[k], quiet[max(0, k - 1)]
     return a, b, f"kept {a:.1f}-{b:.1f}s, clear of {gap[1] - gap[0]:.0f}s without voice"
 
 
@@ -195,13 +196,21 @@ def snap_to_beat(
         found = [t for t in times if end <= t <= end + reach and t - opening <= max_duration]
         return min(found) if found else None
 
-    new_start = before(rhythm.downbeats, 2 * beat) or before(rhythm.beats, beat) or start
-    new_end = after(rhythm.downbeats, 2 * beat, new_start) or after(rhythm.beats, beat, new_start)
-    new_end = new_end or end
-    if (new_start, new_end) == (start, end):
+    new_start = before(rhythm.downbeats, 2 * beat)
+    if new_start is None:
+        new_start = before(rhythm.beats, beat)
+    # An earlier start must not carry a reel that fits past the maximum.
+    if new_start is None or end - new_start > max(max_duration, end - start):
+        new_start = start
+    new_end = after(rhythm.downbeats, 2 * beat, new_start)
+    if new_end is None:
+        new_end = after(rhythm.beats, beat, new_start)
+    if new_end is None:
+        new_end = end
+    moved = [name for name, a, b in (("start", new_start, start), ("end", new_end, end)) if a != b]
+    if not moved:
         return start, end, None
-    note = f"start and end moved onto the beat ({rhythm.tempo:.0f} BPM)"
-    return new_start, new_end, note
+    return new_start, new_end, f"{' and '.join(moved)} moved onto the beat ({rhythm.tempo:.0f} BPM)"
 
 
 def whole_sentences(
@@ -251,20 +260,30 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
         notes.append(note)
     start, end, moved = whole_sentences(start, end, lines, preset)
     notes += moved
+    doubts = []
     clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
     if clip.duration < preset.min_duration:
-        grown = fit_duration([clip], lines, preset)[0]
+        # Without hook.optimize the opening is the plan's or the editor's, so only the end grows.
+        grown = fit_duration([clip], lines, preset, grow_back=preset.hook.optimize)[0]
         if grown != clip:
             notes.append(f"extended to {grown.start:.1f}-{grown.end:.1f}s with neighbouring lines")
             clip = grown
         if clip.duration < preset.min_duration - 0.5:
-            notes.append(
-                f"only {clip.duration:.1f}s of voiced material; left shorter than the "
+            what = "voiced material" if preset.hook.optimize else "voice after the chosen opening"
+            doubts.append(
+                f"only {clip.duration:.1f}s of {what}; left shorter than the "
                 f"{preset.min_duration:g}s minimum rather than padded with silence"
             )
+            notes.append(doubts[-1])
     if preset.beat_sync.snap_trims:
         start, end, note = snap_to_beat(clip.start, clip.end, analysis.beats, preset.max_duration)
         if note:
             clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
             notes.append(note)
-    return edl.model_copy(update={"clips": [clip], "decisions": [*edl.decisions, *notes]})
+    return edl.model_copy(
+        update={
+            "clips": [clip],
+            "decisions": [*edl.decisions, *notes],
+            "doubts": list(dict.fromkeys([*edl.doubts, *doubts])),
+        }
+    )

@@ -33,7 +33,13 @@ from scipy import ndimage
 from agentic_editor import ffmpeg, slots
 from agentic_editor.analysis import layout
 from agentic_editor.analysis.layout import Box, Line
-from agentic_editor.analyze import SPARSE_WORDS, cached, file_hash, isolate_vocals
+from agentic_editor.analyze import (
+    SPARSE_WORDS,
+    cached,
+    file_hash,
+    isolate_vocals,
+    transcript_file,
+)
 from agentic_editor.backends import Backends
 from agentic_editor.download import Source
 from agentic_editor.edl import Cue
@@ -896,7 +902,7 @@ def _learn(
         progress("transcribe", "listening")
         transcript = Transcript.model_validate(
             cached(
-                work_dir / "transcript-original.json",
+                transcript_file(work_dir, "original", router),
                 lambda: router.transcribe(original).model_dump(),
             )
         )
@@ -965,7 +971,7 @@ def _learn(
         if len(transcript.words) < SPARSE_WORDS * info.duration / 60 and not instrument_free:
             sung = Transcript.model_validate(
                 cached(
-                    work_dir / "transcript-vocals.json",
+                    transcript_file(work_dir, "vocals", router),
                     lambda: router.transcribe(vocals).model_dump(),
                 )
             )

@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL
-from agentic_editor.llm import LLMError
+from agentic_editor.llm import LLMError, parse
 from agentic_editor.planner import Line, build_lines
 from agentic_editor.presets import Preset
-from agentic_editor.trim import PREROLL
+from agentic_editor.trim import PREROLL, snap_to_beat
 
 OPENING = 3.0  # seconds that decide whether someone scrolls on
 LOOKAHEAD = 15.0  # how far into the segment the start may move
@@ -74,7 +74,7 @@ def pick_by_reading(llm, choices: list[Line], notes: str | None) -> tuple[int, s
         _Choice.model_json_schema(),
         temperature=0.0,
     )
-    choice = _Choice.model_validate(reply)
+    choice = parse(_Choice, reply)
     if not 0 <= choice.option < len(choices):
         return 0, ""
     return choice.option, choice.reason.strip()
@@ -98,13 +98,17 @@ def sharpen(llm, edl: EDL, analysis: Analysis, preset: Preset, notes: str | None
         note = f"kept the planned opening; it was the strongest of {len(choices)}"
         return edl.model_copy(update={"decisions": [*edl.decisions, note]})
     clip = edl.clips[0]
-    start = round(max(clip.start, choices[best].start - PREROLL), 3)
+    start, end = round(max(clip.start, choices[best].start - PREROLL), 3), clip.end
     note = f"opened {start - clip.start:.1f}s later, on a stronger line"
     if reason:
         note += f": {reason}"
+    notes = [note]
+    if preset.beat_sync.snap_trims:
+        start, end, snapped = snap_to_beat(start, end, analysis.beats, preset.max_duration)
+        notes += [snapped] if snapped else []
     return edl.model_copy(
         update={
-            "clips": [clip.model_copy(update={"start": start})],
-            "decisions": [*edl.decisions, note],
+            "clips": [clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})],
+            "decisions": [*edl.decisions, *notes],
         }
     )

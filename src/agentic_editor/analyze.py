@@ -4,6 +4,7 @@ cached in the source's work directory, so re-running a video skips straight to p
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -58,6 +59,16 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:20]
 
 
+def transcript_file(work_dir: Path, audio: str, router: ModelRouter) -> Path:
+    """Where the transcript of `audio` is kept. Another whisper model or backend hears it
+    differently, so each keeps its own."""
+    backend = router.backends.transcriber
+    s = router.settings
+    model = s.mlx_whisper_model if backend == "mlx" else s.whisper_model
+    name = re.sub(r"[^\w.-]+", "_", f"{backend}-{model}")
+    return work_dir / f"transcript-{audio}-{name}.json"
+
+
 def cached(path: Path, compute: Callable[[], object], dump=json.dumps, load=json.loads):
     if path.exists():
         return load(path.read_text(encoding="utf-8"))
@@ -94,25 +105,31 @@ def analyze(
         return router.transcribe(timeline_audio).model_dump()
 
     transcript = Transcript.model_validate(
-        cached(work_dir / f"transcript-{audio_source}.json", run_transcription)
+        cached(transcript_file(work_dir, audio_source, router), run_transcription)
     )
-    if audio_source == "original" and len(transcript.words) < SPARSE_WORDS * info.duration / 60:
+    sparse = len(transcript.words) < SPARSE_WORDS * info.duration / 60
+    if audio_source == "original" and sparse:
         # Whisper hears little of singing over a full band; the isolated vocals give the
         # planner and the captions the words. The timing is the same, so they fit as is.
-        vocals, _ = isolate_vocals(original, work_dir, router, progress)
-        sung = Transcript.model_validate(
-            cached(
-                work_dir / "transcript-vocals.json",
-                lambda: router.transcribe(vocals).model_dump(),
+        try:
+            vocals, _ = isolate_vocals(original, work_dir, router, progress)
+        except separation.SeparationFailed as exc:
+            # No voice to isolate (an instrumental, ambience): the full mix's words stand.
+            log.info("no vocals to transcribe on their own: %s", exc)
+        else:
+            sung = Transcript.model_validate(
+                cached(
+                    transcript_file(work_dir, "vocals", router),
+                    lambda: router.transcribe(vocals).model_dump(),
+                )
             )
-        )
-        if len(sung.words) > len(transcript.words):
-            log.info(
-                "using the vocals' %d words; the full mix gave %d",
-                len(sung.words),
-                len(transcript.words),
-            )
-            transcript = sung
+            if len(sung.words) > len(transcript.words):
+                log.info(
+                    "using the vocals' %d words; the full mix gave %d",
+                    len(sung.words),
+                    len(transcript.words),
+                )
+                transcript = sung
 
     def run_scene_detection():
         progress("analyze", "detecting scene changes")
@@ -160,18 +177,30 @@ def isolate_vocals(original: Path, work_dir: Path, router: ModelRouter, progress
     vocals = work_dir / "vocals.wav"
     meta = work_dir / "vocals.json"
     model = router.settings.separation_model
-    if vocals.exists() and meta.exists():
+    if meta.exists():
         stored = json.loads(meta.read_text())
         if stored.get("model") == model:
-            return vocals, stored["instrument_free"]
-        # Separated with another model: redo it, and the transcript that was made from it.
-        (work_dir / "transcript-vocals.json").unlink(missing_ok=True)
+            # The same model on the same audio rejects its stems again; don't spend
+            # minutes of GPU finding that out.
+            if stored.get("failed"):
+                raise separation.SeparationFailed(stored["failed"])
+            if vocals.exists():
+                return vocals, stored["instrument_free"]
+        # Separated with another model: redo it, and the transcripts that were made from it.
+        for made in work_dir.glob("transcript-vocals*.json"):
+            made.unlink()
 
     progress("separate", "isolating vocals")
     stems_dir = work_dir / "stems"
     stems_dir.mkdir(exist_ok=True)
     stems = router.separate_vocals(original, stems_dir)
-    track = separation.accept_stems(original, stems, vocals)
+    try:
+        track = separation.accept_stems(original, stems, vocals)
+    except separation.SeparationFailed as exc:
+        meta.write_text(json.dumps({"failed": str(exc), "model": model}))
+        stems.vocals.unlink(missing_ok=True)
+        stems.instrumental.unlink(missing_ok=True)
+        raise
     meta.write_text(json.dumps({"instrument_free": track.instrument_free, "model": model}))
     return vocals, track.instrument_free
 

@@ -92,10 +92,20 @@ class EDL(BaseModel):
     cues: list[Cue] = []
     one_liner: str = ""
     decisions: list[str] = []
+    # The decisions that say something asked for couldn't be done; they lower confidence.
+    doubts: list[str] = []
 
     @property
     def duration(self) -> float:
         return sum(c.duration for c in self.clips)
+
+    def noted(self, *notes: str, doubt: bool = False) -> "EDL":
+        """A copy with `notes` added to the decisions, and to the doubts when they say
+        something asked for couldn't be done."""
+        update = {"decisions": [*self.decisions, *notes]}
+        if doubt:
+            update["doubts"] = [*self.doubts, *notes]
+        return self.model_copy(update=update)
 
     def to_output_time(self, source_time: float) -> float | None:
         """Map a source timestamp onto the rendered timeline, or None if it was cut."""
@@ -113,10 +123,13 @@ def problems(
     source_duration: float,
     tolerance: float = 0.5,
     allow_long: bool = False,
+    available: float | None = None,
 ) -> list[str]:
     """Rule violations that the planner has to fix; empty when the EDL is usable. With
-    allow_long a segment over the maximum passes, for the trimmer to cut down."""
+    allow_long a segment over the maximum passes, for the trimmer to cut down. When only
+    `available` seconds of material exist, a plan that long is long enough."""
     found = []
+    shortest = preset.min_duration if available is None else min(preset.min_duration, available)
     for i, clip in enumerate(edl.clips):
         if clip.end > source_duration + tolerance:
             found.append(
@@ -124,10 +137,8 @@ def problems(
             )
         if i and clip.start < edl.clips[i - 1].end:
             found.append(f"clip {i} starts before clip {i - 1} ends; clips must be in order")
-    if edl.duration < preset.min_duration - tolerance:
-        found.append(
-            f"total {edl.duration:.1f}s is shorter than the {preset.min_duration:g}s minimum"
-        )
+    if edl.duration < shortest - tolerance:
+        found.append(f"total {edl.duration:.1f}s is shorter than the {shortest:g}s minimum")
     if not allow_long and edl.duration > preset.max_duration + tolerance:
         found.append(
             f"total {edl.duration:.1f}s is longer than the {preset.max_duration:g}s maximum"

@@ -47,6 +47,9 @@ def _run(args: argparse.Namespace) -> int:
                     print(f"    {doubt}")
             else:
                 print("  ready to post")
+        for failure in result.failures:
+            print(f"failed: {failure}")
+            failed += 1
     return 1 if failed else 0
 
 

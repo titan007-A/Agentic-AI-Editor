@@ -111,9 +111,10 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
                     )
                 )
             job.status, job.stage, job.progress = "done", "done", 1.0
-            db.add(
-                Event(job_id=job_id, stage="finished", message="all presets rendered", progress=1.0)
-            )
+            # Some versions made and some not is still a finished job; the rest is in its error.
+            job.error = "; ".join(result.failures) or None
+            message = "all presets rendered" if not result.failures else "rendered, with failures"
+            db.add(Event(job_id=job_id, stage="finished", message=message, progress=1.0))
             db.commit()
     except Exception as exc:
         log.exception("job %s failed", job_id)

@@ -33,20 +33,25 @@ def snap_end(t: float, words: list[Word]) -> float:
     return t
 
 
-def extend_to_silence(t: float, silences: list[tuple[float, float]], limit: float = 2.0) -> float:
+def extend_to_silence(
+    t: float, silences: list[tuple[float, float]], words: list[Word] = (), limit: float = 2.0
+) -> float:
     """Push an end time out to where the audio actually goes quiet, so held notes and
-    trailing breaths aren't clipped."""
+    trailing breaths aren't clipped; but not over the start of what is said next, which
+    would end the reel a few words into a new sentence."""
     for start, end in silences:
         if start <= t < end:
             return t
         if t < start <= t + limit:
+            if any(t <= w.start < start for w in words):
+                return t
             return start + 0.05
     return t
 
 
 def snap_clip(clip: Clip, words: list[Word], silences: list[tuple[float, float]]) -> Clip:
     start = snap_start(clip.start, words)
-    end = extend_to_silence(snap_end(clip.end, words), silences)
+    end = extend_to_silence(snap_end(clip.end, words), silences, words)
     if end <= start:
         return clip
     return clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
