@@ -10,6 +10,14 @@ import { JobStatus, jobLabel } from "@/components/job-status";
 import { OutputCard } from "@/components/output-card";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useJobEvents } from "@/hooks/use-job-events";
 import { api, errorText, type Job } from "@/lib/api";
@@ -18,6 +26,8 @@ function JobDetail() {
   const id = useSearchParams().get("id") ?? "";
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -36,11 +46,15 @@ function JobDetail() {
   const progress = latest?.progress ?? job?.progress ?? 0;
 
   async function remove() {
+    setBusy(true);
     try {
       await api.deleteJob(id);
+      setDeleting(false);
       router.push("/");
     } catch (err) {
       toast.error(errorText(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -65,7 +79,12 @@ function JobDetail() {
         </div>
         <JobStatus job={now} />
         {!active && (
-          <Button variant="ghost" size="icon" onClick={remove} aria-label="Delete job">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setDeleting(true)}
+            aria-label="Delete job"
+          >
             <Trash2 />
           </Button>
         )}
@@ -96,6 +115,23 @@ function JobDetail() {
           <OutputCard key={output.id} job={job} output={output} />
         ))}
       </div>
+
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this job?</DialogTitle>
+            <DialogDescription>
+              {jobLabel(job)} and its {job.outputs.length === 1 ? "video" : "videos"} are removed
+              from the app. This can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="destructive" disabled={busy} onClick={remove}>
+              Delete job
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
