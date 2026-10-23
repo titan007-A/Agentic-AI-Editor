@@ -18,6 +18,7 @@ import math
 import re
 import statistics
 import subprocess
+import tempfile
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -626,19 +627,20 @@ def ass_ink(
     script = ass.build_ass(
         [Cue(start=0, end=2, text="\n".join(lines))], style, frame, font_family(font)
     )
-    work = settings.cache_dir / "style-calibration"
-    work.mkdir(parents=True, exist_ok=True)
-    path = work / "probe.ass"
-    path.write_text(script, encoding="utf-8")
-    raw = subprocess.run(
-        [settings.ffmpeg_bin, "-v", "error", "-f", "lavfi",
-         "-i", f"color=black:s={width}x{height}:d=2", "-ss", "1",
-         "-vf", f"subtitles=filename='{ffmpeg.escape_filter_path(path)}'"
-                f":fontsdir='{ffmpeg.escape_filter_path(settings.fonts_dir)}',format=gray",
-         "-frames:v", "1", "-f", "rawvideo", "-"],
-        capture_output=True,
-        check=True,
-    ).stdout  # fmt: skip
+    settings.cache_dir.mkdir(parents=True, exist_ok=True)
+    # A folder per call: two drafts learned at once would draw each other's probe.
+    with tempfile.TemporaryDirectory(prefix="style-calibration-", dir=settings.cache_dir) as work:
+        path = Path(work) / "probe.ass"
+        path.write_text(script, encoding="utf-8")
+        raw = subprocess.run(
+            [settings.ffmpeg_bin, "-v", "error", "-f", "lavfi",
+             "-i", f"color=black:s={width}x{height}:d=2", "-ss", "1",
+             "-vf", f"subtitles=filename='{ffmpeg.escape_filter_path(path)}'"
+                    f":fontsdir='{ffmpeg.escape_filter_path(settings.fonts_dir)}',format=gray",
+             "-frames:v", "1", "-f", "rawvideo", "-"],
+            capture_output=True,
+            check=True,
+        ).stdout  # fmt: skip
     rows = np.nonzero((np.frombuffer(raw, np.uint8).reshape(height, width) > 128).any(axis=1))[0]
     if not len(rows):
         raise ValueError(f"libass drew nothing with {font.name}")
