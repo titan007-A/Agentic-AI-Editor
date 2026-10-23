@@ -92,10 +92,20 @@ class EDL(BaseModel):
     cues: list[Cue] = []
     one_liner: str = ""
     decisions: list[str] = []
+    # The decisions that say something asked for couldn't be done; they lower confidence.
+    doubts: list[str] = []
 
     @property
     def duration(self) -> float:
         return sum(c.duration for c in self.clips)
+
+    def noted(self, *notes: str, doubt: bool = False) -> "EDL":
+        """A copy with `notes` added to the decisions, and to the doubts when they say
+        something asked for couldn't be done."""
+        update = {"decisions": [*self.decisions, *notes]}
+        if doubt:
+            update["doubts"] = [*self.doubts, *notes]
+        return self.model_copy(update=update)
 
     def to_output_time(self, source_time: float) -> float | None:
         """Map a source timestamp onto the rendered timeline, or None if it was cut."""

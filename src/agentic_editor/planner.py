@@ -420,7 +420,10 @@ def plan_variants(
     edls = _plan_best(llm, lines, analysis, preset, notes, count)
     if start_at:
         note = "couldn't find where you asked to start; planned the strongest segment instead"
-        edls = [e.model_copy(update={"decisions": [note, *e.decisions]}) for e in edls]
+        edls = [
+            e.model_copy(update={"decisions": [note, *e.decisions], "doubts": [note, *e.doubts]})
+            for e in edls
+        ]
     return edls
 
 

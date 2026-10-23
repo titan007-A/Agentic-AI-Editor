@@ -11,7 +11,7 @@ def ask(setting, quote, value=""):
 
 def test_grounded_requests_change_only_what_they_ask_for():
     text = "Spanish subtitles, warm look, two versions"
-    changed, notes = apply(
+    changed, notes, _ = apply(
         PRESET,
         [
             ask("captions_language", "Spanish subtitles"),
@@ -28,7 +28,7 @@ def test_grounded_requests_change_only_what_they_ask_for():
 
 def test_a_change_the_instruction_never_asked_for_is_dropped():
     text = "Add Spanish subtitles"
-    changed, notes = apply(PRESET, [ask("remove_instruments", "Add Spanish subtitles")], text)
+    changed, notes, _ = apply(PRESET, [ask("remove_instruments", "Add Spanish subtitles")], text)
     assert changed == PRESET
     assert notes == [
         "ignored a reading of the instruction (remove_instruments): its quote isn't about that"
@@ -47,7 +47,7 @@ def test_turning_something_off_needs_words_that_say_so():
 def test_values_left_out_are_read_from_the_quote():
     assert normalise(ask("captions_language", "Add Spanish subtitles")).value == "Spanish"
     assert normalise(ask("captions_off", "hindi subtitles")).setting == "captions_language"
-    changed, _ = apply(PRESET, [ask("look", "black and white")], "black and white please")
+    changed, *_ = apply(PRESET, [ask("look", "black and white")], "black and white please")
     assert changed.grade.look == "mono"
 
 
@@ -59,7 +59,7 @@ def test_lengths_are_read_in_seconds_or_minutes():
 
 def test_an_impossible_combination_keeps_the_preset():
     text = "at least 90 seconds but at most 30 seconds"
-    changed, notes = apply(
+    changed, notes, _ = apply(
         PRESET,
         [ask("min_seconds", "at least 90 seconds"), ask("max_seconds", "at most 30 seconds")],
         text,
@@ -86,19 +86,38 @@ def test_a_clean_render_is_fully_confident():
 
 
 def test_problems_lower_confidence_and_say_why():
-    edl = EDL(
-        clips=[Clip(start=0, end=12)],
-        decisions=["translation failed (timeout); showing the speech"],
-    )
+    failed = "translation failed (timeout); showing the speech"
+    edl = EDL(clips=[Clip(start=0, end=12)], decisions=[failed], doubts=[failed])
     score, doubts = confidence(edl, ["loudness: -18.0 LUFS"], "heuristic", PRESET)
     assert score < 0.5
     assert "loudness: -18.0 LUFS" in doubts and "planned without the language model" in doubts
-    assert any("under the 20s minimum" in d for d in doubts)
+    assert any("under the 20s minimum" in d for d in doubts) and failed in doubts
+
+
+def test_words_quoted_in_a_decision_are_not_doubts():
+    edl = EDL(
+        clips=[Clip(start=10, end=35)],
+        decisions=[
+            'found where you asked to start: 10.0s, "the night the deal failed"',
+            "opened 1.2s later, on a stronger line: a confession that he couldn't stop",
+        ],
+    )
+    assert confidence(edl, [], "qwen3.5:9b", PRESET) == (1.0, [])
+
+
+def test_an_impossible_combination_is_a_doubt():
+    text = "at least 90 seconds but at most 30 seconds"
+    _, notes, failed = apply(
+        PRESET,
+        [ask("min_seconds", "at least 90 seconds"), ask("max_seconds", "at most 30 seconds")],
+        text,
+    )
+    assert failed and failed[0] in notes
 
 
 def test_saying_where_to_start_keeps_that_opening():
     text = "start where he talks about the FCC"
-    changed, notes = apply(PRESET, [ask("start_point", text)], text)
+    changed, notes, _ = apply(PRESET, [ask("start_point", text)], text)
     assert changed.hook.optimize is False
     assert notes == ["from your instruction: the opening stays where you asked it to start"]
 

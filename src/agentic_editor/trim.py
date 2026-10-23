@@ -251,6 +251,7 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
         notes.append(note)
     start, end, moved = whole_sentences(start, end, lines, preset)
     notes += moved
+    doubts = []
     clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
     if clip.duration < preset.min_duration:
         grown = fit_duration([clip], lines, preset)[0]
@@ -258,13 +259,20 @@ def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
             notes.append(f"extended to {grown.start:.1f}-{grown.end:.1f}s with neighbouring lines")
             clip = grown
         if clip.duration < preset.min_duration - 0.5:
-            notes.append(
+            doubts.append(
                 f"only {clip.duration:.1f}s of voiced material; left shorter than the "
                 f"{preset.min_duration:g}s minimum rather than padded with silence"
             )
+            notes.append(doubts[-1])
     if preset.beat_sync.snap_trims:
         start, end, note = snap_to_beat(clip.start, clip.end, analysis.beats, preset.max_duration)
         if note:
             clip = clip.model_copy(update={"start": round(start, 3), "end": round(end, 3)})
             notes.append(note)
-    return edl.model_copy(update={"clips": [clip], "decisions": [*edl.decisions, *notes]})
+    return edl.model_copy(
+        update={
+            "clips": [clip],
+            "decisions": [*edl.decisions, *notes],
+            "doubts": list(dict.fromkeys([*edl.doubts, *doubts])),
+        }
+    )

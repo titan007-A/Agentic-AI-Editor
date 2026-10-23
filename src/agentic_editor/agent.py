@@ -227,8 +227,11 @@ def grounded(request: Request, instruction: str) -> str | None:
     return None
 
 
-def apply(preset: Preset, requests: list[Request], instruction: str) -> tuple[Preset, list[str]]:
-    """The preset with the instruction's grounded requests applied, and a line for each."""
+def apply(
+    preset: Preset, requests: list[Request], instruction: str
+) -> tuple[Preset, list[str], list[str]]:
+    """The preset with the instruction's grounded requests applied, a line for each, and
+    the lines about what couldn't be applied."""
     data = preset.model_dump()
     notes: list[str] = []
 
@@ -294,8 +297,9 @@ def apply(preset: Preset, requests: list[Request], instruction: str) -> tuple[Pr
         updated = Preset.model_validate(data)
     except ValidationError as exc:
         reason = exc.errors()[0]["msg"].removeprefix("Value error, ")
-        return preset, [f"couldn't apply the instruction's settings ({reason}); kept the preset"]
-    return updated, notes
+        note = f"couldn't apply the instruction's settings ({reason}); kept the preset"
+        return preset, [note], [note]
+    return updated, notes, []
 
 
 def start_point(requests: list[Request], instruction: str) -> str | None:
@@ -320,8 +324,7 @@ def confidence(
     doubts += [f"{b - a:.0f}s without voice at {a - start:.0f}s" for a, b in dead_air]
     if planner == "heuristic":
         doubts.append("planned without the language model")
-    failures = ("failed", "couldn't", "untranslated", "no vision model", "left shorter")
-    doubts += [d for d in edl.decisions if any(f in d for f in failures)]
+    doubts += edl.doubts
     if edl.duration < preset.min_duration - 0.5:
         doubts.append(f"only {edl.duration:.0f}s long, under the {preset.min_duration:g}s minimum")
     score = 1.0 - 0.3 * len(issues) - 0.2 * (len(doubts) - len(issues))

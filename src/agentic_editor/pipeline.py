@@ -157,6 +157,7 @@ def translated(
         return edl.model_copy(update={"decisions": [*edl.decisions, note]})
     words = compose.timeline_words(edl, analysis)
     update: dict = {}
+    failed = False
     try:
         if analysis.audio_source == "vocals":
             # Sung lines are translated line by line, so the song keeps its lines.
@@ -166,7 +167,7 @@ def translated(
             update["cues"] = subtitles.translate_speech(llm, words, style.language, notes)
         note = f"captions translated into {style.language} ({len(update['cues'])} lines)"
     except (LLMError, httpx.HTTPError) as exc:
-        note = f"translation failed ({exc}); showing the speech"
+        note, failed = f"translation failed ({exc}); showing the speech", True
     # The on-screen hook and title follow the captions into the same language.
     overlays = {k: v for k, v in (("hook", edl.hook), ("title", edl.title)) if v}
     if overlays:
@@ -175,8 +176,8 @@ def translated(
             done = subtitles.translate(llm, wrapped, style.language, notes)
             update |= {k: c.text for k, c in zip(overlays, done, strict=True)}
         except (LLMError, httpx.HTTPError):
-            note += "; hook and title left untranslated"
-    return edl.model_copy(update={**update, "decisions": [*edl.decisions, note]})
+            note, failed = note + "; hook and title left untranslated", True
+    return edl.model_copy(update=update).noted(note, doubt=failed)
 
 
 def written_text(
@@ -195,8 +196,7 @@ def written_text(
     if not (want_cues or want_line):
         return edl
     if vision is None:
-        note = "no vision model to write captions or the one-liner"
-        return edl.model_copy(update={"decisions": [*edl.decisions, note]})
+        return edl.noted("no vision model to write captions or the one-liner", doubt=True)
     clip = edl.clips[0]
     frames_dir = work_dir / "written"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -212,7 +212,7 @@ def written_text(
     said = " ".join(w.text for w in analysis.transcript.between(clip.start, clip.end))
     context = " ".join(said.split()[:120])
     update: dict = {}
-    decisions = list(edl.decisions)
+    decisions, doubts = list(edl.decisions), list(edl.doubts)
     if want_cues:
         count = min(8, max(1, round(clip.duration / subtitles.VISUAL_EVERY)))
         try:
@@ -221,7 +221,8 @@ def written_text(
             )
             decisions.append(f"wrote {len(update['cues'])} caption(s) from the picture")
         except LLMError as exc:
-            decisions.append(f"captions from the picture failed ({exc}); showing the speech")
+            doubts.append(f"captions from the picture failed ({exc}); showing the speech")
+            decisions.append(doubts[-1])
     if want_line:
         line = preset.one_liner
         try:
@@ -231,8 +232,9 @@ def written_text(
             )
             decisions.append(f'one-liner: "{update["one_liner"]}"')
         except LLMError as exc:
-            decisions.append(f"one-liner failed ({exc})")
-    return edl.model_copy(update={**update, "decisions": decisions})
+            doubts.append(f"one-liner failed ({exc})")
+            decisions.append(doubts[-1])
+    return edl.model_copy(update={**update, "decisions": decisions, "doubts": doubts})
 
 
 def recheck_framing(
@@ -490,12 +492,16 @@ def edit(
         for preset in presets:
             progress("plan", f"planning {preset.name}")
             planning_notes = notes_for[preset.name]
+            applied, failed = instructed[preset.name]
             plans[preset.name] = [
                 (
                     translated(
                         llm,
                         edl.model_copy(
-                            update={"decisions": [*instructed[preset.name], *edl.decisions]}
+                            update={
+                                "decisions": [*applied, *edl.decisions],
+                                "doubts": [*failed, *edl.doubts],
+                            }
                         ),
                         for_preset(preset),
                         preset,
@@ -574,10 +580,11 @@ def edit(
 
 def understand(
     router: ModelRouter, presets: list[Preset], notes: str | None, progress: Progress
-) -> tuple[list[Preset], dict[str, list[str]], dict[str, str | None], str | None]:
+) -> tuple[list[Preset], dict[str, tuple[list[str], list[str]]], dict[str, str | None], str | None]:
     """Read the editor's instruction into each preset: the presets to use, what was changed
-    in each, the notes left for the planner, and where the instruction says to start."""
-    decisions: dict[str, list[str]] = {p.name: [] for p in presets}
+    in each (and what couldn't be), the notes left for the planner, and where the
+    instruction says to start."""
+    decisions: dict[str, tuple[list[str], list[str]]] = {p.name: ([], []) for p in presets}
     planning: dict[str, str | None] = {p.name: notes for p in presets}
     if not notes or not notes.strip():
         return presets, decisions, planning, None
@@ -587,10 +594,11 @@ def understand(
             wanted = agent.interpret(llm, notes)
     except (LLMError, httpx.HTTPError) as exc:
         note = f"couldn't read the instruction ({exc}); kept the preset"
-        return presets, {p.name: [note] for p in presets}, planning, None
+        return presets, {p.name: ([note], [note]) for p in presets}, planning, None
     updated = []
     for preset in presets:
-        changed, decisions[preset.name] = agent.apply(preset, wanted.requests, notes)
+        changed, applied, failed = agent.apply(preset, wanted.requests, notes)
+        decisions[preset.name] = (applied, failed)
         # The planner gets what the instruction said about the content; when the model
         # didn't separate that out, it gets the whole instruction rather than nothing.
         if wanted.content_notes.strip():
