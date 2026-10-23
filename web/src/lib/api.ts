@@ -100,6 +100,7 @@ export type SystemInfo = {
   yt_dlp: string;
 };
 
+import { loginPath } from "@/lib/next-path.mjs";
 import { sendFile } from "@/lib/upload.mjs";
 
 export class ApiError extends Error {
@@ -124,10 +125,21 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return settle<T>(path, response.status, response.statusText, data);
 }
 
-function settle<T>(path: string, status: number, statusText: string, data: unknown): T {
-  if (status === 401 && !path.startsWith("/login")) {
-    window.location.href = "/login/";
+let loggingIn = false;
+
+/** Off to the login page, which comes back here afterwards. The returned promise never
+ * settles, so no error flashes up while the page changes. */
+export function toLogin(): Promise<never> {
+  if (!loggingIn) {
+    loggingIn = true;
+    const here = window.location.pathname + window.location.search;
+    window.location.assign(new URL(loginPath(here), window.location.origin));
   }
+  return new Promise<never>(() => {});
+}
+
+async function settle<T>(path: string, status: number, statusText: string, data: unknown) {
+  if (status === 401 && !path.startsWith("/login")) return toLogin();
   if (status < 200 || status >= 300) {
     throw new ApiError(status, (data as { detail?: unknown } | null)?.detail ?? statusText);
   }

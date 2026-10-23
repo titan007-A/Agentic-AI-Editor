@@ -3,7 +3,7 @@
 import { ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { JobStatus, jobLabel } from "@/components/job-status";
@@ -20,28 +20,48 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useJobEvents } from "@/hooks/use-job-events";
-import { api, errorText, type Job } from "@/lib/api";
+import { api, ApiError, errorText, type Job } from "@/lib/api";
 
 function JobDetail() {
   const id = useSearchParams().get("id") ?? "";
   const router = useRouter();
-  const [job, setJob] = useState<Job | null>(null);
+  const [loaded, setLoaded] = useState<Job | null>(null);
+  // Until the job asked for arrives, the one before (after Regenerate) isn't shown.
+  const job = loaded?.id === id ? loaded : null;
+  const wanted = useRef(id);
   const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => {
-    api
-      .job(id)
-      .then(setJob)
-      .catch((err) => toast.error(errorText(err)));
-  }, [id]);
+  useEffect(() => {
+    wanted.current = id;
+  });
+
+  /** Fetches the job and says whether it is still running. With `quietOffline`, a
+   * server that can't be reached counts as running, to be tried again without a word. */
+  const load = useCallback(
+    (quietOffline = false) =>
+      api
+        .job(id)
+        .then((next) => {
+          if (wanted.current !== id) return false;
+          setLoaded(next);
+          return next.status === "queued" || next.status === "running";
+        })
+        .catch((err) => {
+          if (quietOffline && !(err instanceof ApiError)) return true;
+          toast.error(errorText(err));
+          return false;
+        }),
+    [id],
+  );
+  const follow = useCallback(() => load(true), [load]);
 
   useEffect(() => {
     if (id) load();
   }, [id, load]);
 
   const active = job?.status === "queued" || job?.status === "running";
-  const events = useJobEvents(id, active, load);
+  const events = useJobEvents(id, active, follow);
   const latest = events.at(-1);
   const progress = latest?.progress ?? job?.progress ?? 0;
 
