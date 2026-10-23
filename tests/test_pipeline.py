@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -258,3 +259,39 @@ def test_a_render_is_measured_while_the_gpu_is_given_back(make_analysis, monkeyp
     )  # fmt: skip
     assert (renders, issues) == (1, [])
     assert seen == [("probe", True), ("loudness", True)]
+
+
+def test_a_loudness_fix_keeps_the_picture_and_lays_new_sound_under_it(
+    make_analysis, monkeypatch, tmp_path
+):
+    renders, commands, levels = [], [], [Loudness(-18.0, -6.0), Loudness(-14.2, -3.0)]
+
+    def render(*args):
+        renders.append(args[1].audio.loudness_lufs)
+        args[4].write_bytes(b"mp4")
+
+    def run(args):
+        commands.append(args)
+        Path(args[-1]).write_bytes(b"remuxed")
+
+    monkeypatch.setattr(pipeline.compose, "render", render)
+    monkeypatch.setattr(
+        pipeline.ffmpeg, "probe", lambda p: MediaInfo(5.0, 1080, 1920, 30, True, True)
+    )
+    monkeypatch.setattr(pipeline, "measure_loudness", lambda path: levels.pop(0))
+    monkeypatch.setattr(pipeline.ffmpeg, "run", run)
+    monkeypatch.setattr(
+        pipeline.audio, "render_soundtrack", lambda edl, preset, *args: args[-1] / "soundtrack.wav"
+    )
+    preset = Preset(
+        name="t", label="t", min_duration=4, max_duration=8, captions={"enabled": False}
+    )
+    edl = EDL(clips=[Clip(start=0, end=5)], crop_mode="none")
+    dest = tmp_path / "out.mp4"
+    _, count, issues = pipeline.produce(
+        edl, preset, make_analysis(WORDS, 10), tmp_path / "source.mp4", dest,
+        tmp_path / "work", None, None, None, lambda *args: None,
+    )  # fmt: skip
+    assert (count, issues, renders) == (2, [], [-14.0])
+    (remux,) = commands
+    assert remux[remux.index("-c:v") + 1] == "copy" and dest.read_bytes() == b"remuxed"

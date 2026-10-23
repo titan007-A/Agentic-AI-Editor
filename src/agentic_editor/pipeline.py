@@ -34,7 +34,7 @@ from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.planner import overlap, pick_emphasis, plan_variants
 from agentic_editor.presets import Preset
-from agentic_editor.render import compose
+from agentic_editor.render import audio, compose
 from agentic_editor.render.audio import measure_loudness
 from agentic_editor.render.video import crop_size
 from agentic_editor.router import ModelRouter
@@ -431,6 +431,20 @@ def fix(
     return edl, preset, changed
 
 
+def remux_audio(edl: EDL, preset: Preset, analysis: Analysis, dest: Path, work_dir: Path) -> None:
+    """Lay a new soundtrack under a reel already rendered, copying its picture as it is: a
+    new loudness target needs no new encode of the video."""
+    music = compose.asset_path(preset.music.file) if preset.music.file else None
+    track = audio.render_soundtrack(edl, preset, analysis.audio_path, music, work_dir)
+    remuxed = dest.with_name(f".{dest.stem}.remux{dest.suffix}")
+    ffmpeg.run([
+        "-y", "-i", str(dest), "-i", str(track), "-map", "0:v", "-map", "1:a",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-ar", str(audio.SAMPLE_RATE),
+        "-movflags", "+faststart", str(remuxed),
+    ])  # fmt: skip
+    remuxed.replace(dest)
+
+
 def produce(
     edl: EDL,
     preset: Preset,
@@ -451,24 +465,31 @@ def produce(
     tracked: dict[tuple[float, float], list[tuple[float, list[onscreen.Box]]]] = {}
     target = preset
     renders = 1
+    remux = False
     while True:
-        if edl.crop_mode == "smart":
-            edl, commands = smart_framing(
-                edl, target, analysis, video, settings, work_dir, detections, vision
-            )
-        else:
-            commands = face_commands(edl, target, analysis, video, settings, work_dir, detections)
-        clip = edl.clips[0]
-        key = (clip.start, clip.end)
-        if target.captions.enabled and target.captions.avoid_faces and key not in detections:
-            detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
-        face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
-        texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
+        if not remux:
+            if edl.crop_mode == "smart":
+                edl, commands = smart_framing(
+                    edl, target, analysis, video, settings, work_dir, detections, vision
+                )
+            else:
+                commands = face_commands(
+                    edl, target, analysis, video, settings, work_dir, detections
+                )
+            clip = edl.clips[0]
+            key = (clip.start, clip.end)
+            if target.captions.enabled and target.captions.avoid_faces and key not in detections:
+                detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
+            face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
+            texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
         with slots.encoding(vision, progress=progress):
-            compose.render(
-                edl, target, analysis, video, dest, work_dir, settings, backends, commands,
-                face_samples, texts,
-            )  # fmt: skip
+            if remux:
+                remux_audio(edl, target, analysis, dest, work_dir)
+            else:
+                compose.render(
+                    edl, target, analysis, video, dest, work_dir, settings, backends, commands,
+                    face_samples, texts,
+                )  # fmt: skip
             # Measured while another job may have the GPU: these only need the CPU.
             info, loudness = ffmpeg.probe(dest), measure_loudness(dest)
         progress("review", f"checking {preset.name}")
@@ -489,9 +510,16 @@ def produce(
         )
         if not issues or renders > MAX_FIXES:
             return edl, renders, issues
-        edl, target, changed = fix(issues, edl, target, analysis, preset.audio.loudness_lufs)
+        fixed, retargeted, changed = fix(issues, edl, target, analysis, preset.audio.loudness_lufs)
         if not changed:
             return edl, renders, issues
+        # When only the loudness target moved, the picture already rendered stays as it is.
+        remux = (
+            fixed == edl
+            and retargeted.model_copy(update={"audio": target.audio}) == target
+            and not (target.intro or target.outro)
+        )
+        edl, target = fixed, retargeted
         renders += 1
         progress("render", f"re-rendering {preset.name}: {issues[0].detail}")
 
