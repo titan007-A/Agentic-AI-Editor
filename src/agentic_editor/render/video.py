@@ -73,15 +73,16 @@ def grade_chain(label: str, index: int, layers: Layers) -> tuple[list[str], str]
     if layers.correction:
         parts.append(f"[{label}]{','.join(layers.correction)}[g{index}c]")
         label = f"g{index}c"
-    if layers.look:
+    if layers.look and layers.look_strength > 0:
         look = ",".join(layers.look)
         if layers.look_strength >= 1:
             parts.append(f"[{label}]{look}[g{index}l]")
         else:
             parts.append(f"[{label}]split=2[g{index}a][g{index}b]")
             parts.append(f"[g{index}b]{look}[g{index}x]")
+            # blend's normal mode keeps `opacity` of its first input, so the look goes first.
             parts.append(
-                f"[g{index}a][g{index}x]blend=all_mode=normal:"
+                f"[g{index}x][g{index}a]blend=all_mode=normal:"
                 f"all_opacity={layers.look_strength:.2f}[g{index}l]"
             )
         label = f"g{index}l"

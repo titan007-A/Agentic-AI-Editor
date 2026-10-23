@@ -51,3 +51,20 @@ def test_a_look_at_partial_strength_is_mixed_with_the_original():
     assert "[g0b]hue=s=0,eq=contrast=1.1[g0x]" in graph
     assert "blend=all_mode=normal:all_opacity=0.50[g0l]" in graph
     assert graph.index("[g0l]") < graph.index("[v0]")
+
+
+def test_look_strength_is_the_share_of_the_look_not_of_the_original():
+    preset = Preset(name="v", label="v", min_duration=1, max_duration=60)
+    edl = EDL(clips=[Clip(start=0, end=5)], crop_mode="none")
+    layers = Layers(look=look_filters("mono", None), look_strength=0.25)
+    graph, _ = build_graph(edl, preset, (1920, 1080), layers)
+    # blend keeps all_opacity of its first input, which must be the graded copy.
+    assert "[g0x][g0a]blend=all_mode=normal:all_opacity=0.25[g0l]" in graph
+
+
+def test_a_look_at_zero_strength_is_left_out():
+    preset = Preset(name="v", label="v", min_duration=1, max_duration=60)
+    edl = EDL(clips=[Clip(start=0, end=5)], crop_mode="none")
+    layers = Layers(look=look_filters("mono", None), look_strength=0.0)
+    graph, _ = build_graph(edl, preset, (1920, 1080), layers)
+    assert "hue=s=0" not in graph and "blend" not in graph
