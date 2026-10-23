@@ -128,8 +128,24 @@ def frame_chain(
         chain.append(f"crop@{crop_label}={crop_w}:{crop_h}:{x}:{y}")
     else:
         chain.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
-    chain.append(f"scale={width}:{height}:flags=lanczos")
-    return chain
+    return chain + fit_chain((crop_w, crop_h), frame, background)
+
+
+def fit_chain(size: tuple[int, int], frame: tuple[int, int], background: str) -> list[str]:
+    """Scale a window to the frame without stretching it: one at the frame's aspect, give
+    or take the two pixels of rounding to even sizes, fills it and loses that rounding at
+    the edges; any other is fitted inside and padded."""
+    w, h = size
+    width, height = frame
+    if abs(w * height - width * h) <= 2 * max(width, height):
+        return [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos",
+            f"crop={width}:{height}",
+        ]
+    return [
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
+    ]
 
 
 def shot_chain(
@@ -140,22 +156,18 @@ def shot_chain(
     background: str,
     commands: Path | None,
 ) -> list[str]:
-    """Filters that frame one shot: crop its window at full picture height, then fill the
-    frame, or, for a window wider than the frame's aspect, fit it and pad above and below."""
-    width, height = frame
+    """Filters that frame one shot: crop its window, at full picture height unless the
+    shot has its own, then fill the frame, or, for a window of another shape, fit it and
+    pad the rest."""
     _, top, _, picture_height = content
+    if shot.height:
+        top, picture_height = shot.y, shot.height
     crop = f"{shot.width}:{picture_height}:{shot.x}:{top}"
     if shot.follow and commands is not None:
         chain = [f"sendcmd=f='{escape_filter_path(commands)}'", f"crop@s{index}={crop}"]
     else:
         chain = [f"crop={crop}"]
-    if shot.width * height <= width * picture_height + height:  # fills the frame
-        return [*chain, f"scale={width}:{height}:flags=lanczos"]
-    return [
-        *chain,
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos",
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
-    ]
+    return chain + fit_chain((shot.width, picture_height), frame, background)
 
 
 def crop_size(source: tuple[int, int], frame: tuple[int, int]) -> tuple[int, int]:

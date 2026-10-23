@@ -305,8 +305,9 @@ def smart_framing(
     seen = framing.views(samples, face_samples, content, analysis.width)
     if not edl.shots:
         shots = framing.frame_shots(
-            clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size
-        )
+            clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size,
+            analysis.height,
+        )  # fmt: skip
         shots, recheck = recheck_framing(
             shots, times, seen, face_samples, content, width, preset, analysis, video,
             settings, work_dir, vision,

@@ -16,7 +16,11 @@ def test_letterbox_pads_with_background_color():
 
 def test_center_crop_keeps_target_aspect():
     chain = frame_chain("center", (1920, 1080), FRAME, "#000000", "c0", None, None)
-    assert chain == ["crop=606:1080:657:0", "scale=1080:1920:flags=lanczos"]
+    assert chain == [
+        "crop=606:1080:657:0",
+        "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos",
+        "crop=1080:1920",
+    ]
 
 
 def test_face_mode_drives_crop_from_command_file():
@@ -86,3 +90,19 @@ def test_an_inset_picture_is_drawn_narrower_and_centred():
     top, bottom = video_band("none", (1920, 1080), FRAME, 0.74)
     assert round(bottom - top) == round(798 * 1080 / 1920)
     assert round(top + bottom) == 1920
+
+
+def test_no_shot_is_stretched_to_the_frame():
+    from agentic_editor.edl import Shot
+    from agentic_editor.render.video import shot_chain
+
+    # A window narrower than the frame's shape is fitted and padded at the sides.
+    narrow = Shot(start=0, end=5, x=0, width=1080)
+    chain = shot_chain(narrow, 0, (0, 0, 1080, 1920), (1080, 1080), "#000000", None)
+    assert chain[0] == "crop=1080:1920:0:0"
+    assert "force_original_aspect_ratio=decrease" in chain[1] and chain[2].startswith("pad=")
+    # A shot with its own height is cropped top and bottom to exactly that window.
+    tall = Shot(start=0, end=5, x=0, width=1080, y=200, height=1080)
+    chain = shot_chain(tall, 0, (0, 0, 1080, 1920), (1080, 1080), "#000000", None)
+    assert chain[0] == "crop=1080:1080:0:200"
+    assert "force_original_aspect_ratio=increase" in chain[1]
