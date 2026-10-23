@@ -13,6 +13,9 @@ STRIP = 0.02  # of the height: the edge rows the background colour is read from
 SEEN = 0.1  # share of frames a pixel must differ from the background in to be picture
 PICTURE_ROW = 0.3  # share of a row (or column) that must be picture
 INK = 48  # per channel: how far a pixel may be from the text colour and still be text
+FULL_HEIGHT = 0.9  # a picture band taller than this fills the frame
+BLURRED = 0.5  # detail around the picture, against inside it, below which it is a blur
+EDGE = 4.0  # how much stronger than a typical row step a picture's edge is
 
 Box = tuple[float, float, float, float]  # x0, y0, x1, y1 as shares of the frame
 Line = tuple[int, int, int, int]  # top, bottom, left, right in pixels
@@ -42,6 +45,10 @@ NAMED = {
     "maroon": (120, 20, 30),
 }
 PALETTE = np.array(sorted(set(NAMED.values())), np.float32)
+PALETTE_NAMES = [next(n for n, c in NAMED.items() if c == tuple(p)) for p in PALETTE.astype(int)]
+# Dark and grey pixels around letters are outlines, shadows and blending, not a colour of
+# the words.
+NOT_WORDS = {"black", "gray", "silver", "navy", "maroon", "brown"}
 
 
 def sample(
@@ -117,6 +124,27 @@ def picture_box(frames: np.ndarray, colour: tuple[int, int, int] | None) -> Box:
     return (cols[0] / width, rows[0] / height, cols[1] / width, rows[1] / height)
 
 
+def blurred_fill(frames: np.ndarray) -> Box | None:
+    """Where a sharp picture sits on a blurred, enlarged copy of itself, the other common
+    way to fill a tall frame, or None. The picture's top and bottom edges are a hard line
+    across the whole width on the same rows in every frame; and the copy, blurred, has
+    far less fine detail than the picture."""
+    _, height, _, _ = frames.shape
+    grey = frames.astype(np.float32).mean(axis=3)
+    step = np.median(np.abs(np.diff(grey, axis=1)).mean(axis=2), axis=0)
+    half = len(step) // 2
+    top, bottom = int(np.argmax(step[:half])), half + int(np.argmax(step[half:]))
+    floor = EDGE * np.median(step)
+    if min(step[top], step[bottom]) < floor or not 0.2 < (bottom - top) / height < FULL_HEIGHT:
+        return None
+    detail = np.abs(np.diff(grey, axis=2)).mean(axis=(0, 2))
+    inside = detail[top + 1 : bottom + 1].mean()
+    outside = np.concatenate([detail[: top + 1], detail[bottom + 1 :]]).mean()
+    if outside > BLURRED * inside:
+        return None
+    return (0.0, (top + 1) / height, 1.0, (bottom + 1) / height)
+
+
 def saturation(frames: np.ndarray) -> float:
     """Mean distance of each pixel from its own grey, 0 for a black-and-white picture."""
     pixels = frames.astype(np.float32)
@@ -165,6 +193,29 @@ def text_colour(crop: np.ndarray, name: str) -> tuple[int, int, int]:
     # Flat white and black come out a step off after compression; put them back.
     colour = np.where(colour >= 240, 255, np.where(colour <= 12, 0, colour))
     return tuple(int(c) for c in np.round(colour))
+
+
+def _names(pixels: np.ndarray) -> np.ndarray:
+    """Each pixel's nearest named colour, as an index into PALETTE."""
+    flat = pixels.reshape(-1, 3).astype(np.float32)
+    return np.argmin(np.abs(flat[:, None] - PALETTE[None]).sum(axis=2), axis=1)
+
+
+def second_colour(crop: np.ndarray, around: np.ndarray, colour: tuple[int, int, int]) -> str | None:
+    """The name of a second colour words in `crop` are drawn in, besides `colour`: the
+    most common named colour in it after `colour` and the background (the most common
+    in `around`, which has more of the background than the letters' own rows do)."""
+    counts = np.bincount(_names(crop), minlength=len(PALETTE))
+    first = int(np.argmin(np.abs(PALETTE - np.array(colour)).sum(axis=1)))
+    background = int(np.argmax(np.bincount(_names(around), minlength=len(PALETTE))))
+    floor = max(20.0, 0.2 * counts[first])
+    counts[[first, background]] = 0
+    for i in np.argsort(counts)[::-1]:
+        if counts[i] < floor:
+            return None
+        if PALETTE_NAMES[i] not in NOT_WORDS:
+            return PALETTE_NAMES[i]
+    return None
 
 
 def ink(crop: np.ndarray, colour: tuple[int, int, int]) -> np.ndarray:

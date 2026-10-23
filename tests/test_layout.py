@@ -69,3 +69,18 @@ def test_shapes_that_cannot_be_letters_are_dropped():
     mask[20:95, 250:260] = True  # a lamp post, taller than the text
     kept = layout.letters(mask, tallest=30)
     assert kept[50, 55] and not kept[10, 150] and not kept[50, 255]
+
+
+def test_a_picture_on_a_blurred_copy_of_itself_is_found():
+    rng = np.random.default_rng(4)
+    reel = np.zeros((10, H, W, 3), np.uint8)
+    for i in range(10):
+        blur = np.full((H, W, 3), 60 + 10 * i, np.uint8)  # smooth, and changing
+        blur[:, :, 0] += np.linspace(0, 40, W, dtype=np.uint8)
+        reel[i] = blur
+        reel[i, 66:126] = 180 + rng.integers(0, 40, (60, W, 3))  # the sharp picture
+    x0, y0, x1, y1 = layout.blurred_fill(reel)
+    assert (x0, x1) == (0.0, 1.0) and abs(y0 - 66 / H) < 0.01 and abs(y1 - 126 / H) < 0.01
+    assert layout.background(reel) is None
+    sharp = rng.integers(0, 255, (10, H, W, 3)).astype(np.uint8)
+    assert layout.blurred_fill(sharp) is None

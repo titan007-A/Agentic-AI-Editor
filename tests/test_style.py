@@ -127,6 +127,25 @@ def test_the_typical_reading_is_the_one_most_agree_on():
     assert style._typical([40]) == 40
 
 
+def test_caption_colours_are_agreed_not_blended():
+    white, yellow = (255, 255, 255), (255, 222, 0)
+    assert style.agreed_colour([yellow, white, (250, 252, 255)]) == (252, 253, 255)
+    assert style.agreed_colour([white]) == white
+
+
+def test_a_word_in_a_colour_the_model_left_out_is_still_measured():
+    image = Image.new("RGB", FRAME, "black")
+    canvas = ImageDraw.Draw(image)
+    face = ImageFont.truetype(str(ANTON), 80)
+    x = (FRAME[0] - face.getlength("YOU ARE THE SHADOW")) / 2
+    canvas.text((x, 1640), "YOU", font=face, fill=(255, 224, 0))
+    canvas.text((x + face.getlength("YOU "), 1640), "ARE THE SHADOW", font=face, fill="white")
+    m = style.measure(np.asarray(image), Sighting(1, "YOU ARE THE SHADOW",
+                                                   (0.22, 0.86, 0.78, 0.89), "yellow"))  # fmt: skip
+    assert m.colour == (255, 255, 255) and m.other == (255, 224, 0)
+    assert m.boxes[0][3] - m.boxes[0][2] > 500
+
+
 def test_one_bad_reading_does_not_decide_the_font():
     lines = ["Follow us for more iconic raw vocals"]
     good = measured_from(drawn(lines, BOLD, 38, 1450), lines)
@@ -174,6 +193,16 @@ def test_a_highlighted_word_is_not_taken_for_the_caption_colour():
     m = style.measure(np.asarray(image), seen)
     assert m.colour == (255, 255, 255) and m.other == (255, 224, 0)
     assert m.boxes[0][2] < x + 5 and m.boxes[0][3] > FRAME[0] - x - 5  # all of it
+
+
+def test_a_dark_background_is_not_taken_for_an_outline():
+    lines = ["TELL ME FANTASTIC"]
+    on_dark = style.measure(drawn(lines, BOLD, 40, 1500, back=(20, 18, 22)),
+                            sighting(lines[0], 1, 0.78, 0.80))  # fmt: skip
+    assert on_dark.outline is None  # a border there would look the same: can't tell
+    on_bright = style.measure(drawn(lines, BOLD, 40, 1500, back=(150, 190, 230)),
+                              sighting(lines[0], 1, 0.78, 0.80))  # fmt: skip
+    assert on_bright.outline == ((0, 0, 0), 0)  # nothing around the letters: no border
 
 
 def test_the_picture_is_ignored_when_looking_for_text_on_the_padding():

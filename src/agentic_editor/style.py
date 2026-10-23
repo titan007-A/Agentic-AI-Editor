@@ -76,6 +76,8 @@ INSET = 0.86
 COVERAGE = 0.8  # Pillow's ink threshold matching what `layout.ink` counts as ink
 LOUD = -12.0  # LUFS: a reel louder than this sets the preset's loudness target
 MAX_LOUDNESS = -9.0
+PART = 0.6  # of the box's width: text narrower than this is likely only part of it
+DARK = 70  # brightest channel of a background a dark border would vanish into
 
 FORMATS = {(9, 16): (1080, 1920), (4, 5): (1080, 1350), (1, 1): (1080, 1080),
            (16, 9): (1920, 1080)}  # fmt: skip
@@ -334,15 +336,16 @@ def roles(
 
 
 def outline_of(crop: np.ndarray, mask: np.ndarray) -> tuple[tuple[int, int, int], int] | None:
-    """A border drawn around the letters: its colour and width in pixels."""
+    """A border drawn around the letters, as its colour and width in pixels; width 0 when
+    the letters plainly have none. A border is a band unlike what lies beyond it. With no
+    band, a light background means no border, but on a dark one a dark border would look
+    the same, so that can't be told (None)."""
     if mask.sum() < 20:
         return None
-    first = ndimage.binary_dilation(mask, iterations=2) & ~ndimage.binary_dilation(mask)
-    if not first.any():
+    near = ndimage.binary_dilation(mask, iterations=2) & ~ndimage.binary_dilation(mask)
+    if not near.any():
         return None
-    colour = np.median(crop[first].astype(np.int16), axis=0)
-    if np.abs(colour - crop[mask].astype(np.int16).mean(axis=0)).max() < 96:
-        return None  # what surrounds the letters is close to them: no border
+    colour = np.median(crop[near].astype(np.int16), axis=0)
     # The first pixel out blends the letters into the border, so the border is counted
     # from the next one.
     width, grown = 1, ndimage.binary_dilation(mask)
@@ -352,8 +355,13 @@ def outline_of(crop: np.ndarray, mask: np.ndarray) -> tuple[tuple[int, int, int]
         if not ring.any() or np.all(np.abs(crop[ring] - colour) <= 40, axis=1).mean() < 0.6:
             break
         width, grown = step, wider
-    if width < 2:
-        return None
+    beyond = ndimage.binary_dilation(mask, iterations=width + 6) & ~ndimage.binary_dilation(
+        mask, iterations=width + 3
+    )
+    if not beyond.any() or np.all(np.abs(crop[beyond] - colour) <= 40, axis=1).mean() >= 0.6:
+        return None if colour.max() < DARK else ((0, 0, 0), 0)
+    if np.abs(colour - crop[mask].astype(np.int16).mean(axis=0)).max() < 96:
+        return (0, 0, 0), 0  # a band, but too like the letters to be a border
     return tuple(int(c) for c in colour), width
 
 
@@ -408,20 +416,33 @@ def measure(frame: np.ndarray, sighting: Sighting, picture: Box | None = None) -
         candidate = layout.text_colour(window, sighting.other)
         if candidate != colour:
             other = candidate
-    # A word in a second colour is part of the text too.
-    drawn = layout.ink(window, colour) | (layout.ink(window, other) if other else False)
-    # The box's height bounds a letter's, with room for a box drawn too tight.
-    mask = layout.letters(drawn, max(1.5 * (y1 - y0), 0.06) * height)
-    if picture is not None:
-        px0, py0, px1, py1 = picture
-        mask[
-            max(0, round(py0 * height) - top) : max(0, round(py1 * height) - top),
-            max(0, round(px0 * width) - left) : max(0, round(px1 * width) - left),
-        ] = False
     count = len(text.split("\n"))
-    found = best_run(layout.lines(mask), y0 * height - top, y1 * height - top, count)
+
+    def find(colours: list[tuple[int, int, int]]) -> tuple[np.ndarray, list[Line]]:
+        drawn = np.any([layout.ink(window, c) for c in colours], axis=0)
+        # The box's height bounds a letter's, with room for a box drawn too tight.
+        mask = layout.letters(drawn, max(1.5 * (y1 - y0), 0.06) * height)
+        if picture is not None:
+            px0, py0, px1, py1 = picture
+            mask[
+                max(0, round(py0 * height) - top) : max(0, round(py1 * height) - top),
+                max(0, round(px0 * width) - left) : max(0, round(px1 * width) - left),
+            ] = False
+        lines = best_run(layout.lines(mask), y0 * height - top, y1 * height - top, count)
+        return mask, lines
+
+    mask, found = find([colour, other] if other else [colour])
     if not found:
         return None
+    if other is None and max(f[3] - f[2] for f in found) < PART * (x1 - x0) * width:
+        # Only part of the text is in the colour the model named: the rest of its words
+        # are in another, which the model left out (a highlighted word named instead).
+        rows = slice(found[0][0], found[-1][1])
+        cols = slice(round(x0 * width) - left, round(x1 * width) - left)
+        name = layout.second_colour(window[rows, cols], window, colour)
+        if name:
+            other = layout.text_colour(window[rows, cols], name)
+            mask, found = find([colour, other])
     boxes = [(t + top, b + top, a + left, z + left) for t, b, a, z in found]
     fill = float(np.mean([mask[t:b, a:z].mean() for t, b, a, z in found]))
     # Just the lines kept, with room around them for an outline or a box behind.
@@ -534,6 +555,15 @@ def _vote(fits: list[FontFit]) -> Path:
     return max(votes, key=votes.get)
 
 
+def agreed_colour(colours: list[tuple[int, int, int]]) -> tuple[int, int, int]:
+    """The colour most readings agree on. Never a blend: the middle of white and yellow
+    readings is a colour none of them showed."""
+    close = [[c for c in colours if max(abs(a - b) for a, b in zip(c, o, strict=True)) <= 40]
+             for o in colours]  # fmt: skip
+    best = max(close, key=len)
+    return tuple(int(statistics.median(c[i] for c in best)) for i in range(3))
+
+
 def _typical(values: list[float]) -> float:
     """The value most readings agree on: the median of the largest bunch of close values.
     A caption moved off a face, or two lines read as one, stays out of it."""
@@ -644,9 +674,9 @@ def caption_style(
     words = [len(line.split()) for m, _ in fits for line in m.lines]
     letters = [c for m, _ in fits for line in m.lines for c in line if c.isalpha()]
     upper = sum(c.isupper() for c in letters) / max(1, len(letters))
-    colour = tuple(int(statistics.median(m.colour[i] for m, _ in fits)) for i in range(3))
+    colour = agreed_colour([m.colour for m, _ in fits])
     others = [m.other for m, _ in fits if m.other]
-    outlines = [m.outline for m, _ in fits if m.outline]
+    outlines = [m.outline for m, _ in fits if m.outline is not None]
     settings_found = {
         "enabled": True,
         "font": font.stem,
@@ -659,12 +689,14 @@ def caption_style(
         "animation": "highlight" if others else "none",
     }
     if others:
-        settings_found["highlight_color"] = hex_colour(others[0])
-    if len(outlines) * 2 >= len(fits):
-        settings_found["outline_color"] = hex_colour(outlines[0][0])
-        settings_found["outline"] = min(20, statistics.median(o[1] for o in outlines))
-    else:
-        settings_found["outline"] = 0
+        settings_found["highlight_color"] = hex_colour(agreed_colour(others))
+    # Captions whose border couldn't be told keep the default one.
+    if outlines:
+        width = _typical([w for _, w in outlines])
+        settings_found["outline"] = min(20, width) if width >= 1 else 0
+        if width >= 1:
+            colours = [c for c, w in outlines if w >= 1]
+            settings_found["outline_color"] = hex_colour(agreed_colour(colours))
     return settings_found, []
 
 
@@ -802,7 +834,9 @@ def learn(
     frames = layout.sample(source.path, info.duration, LAYOUT_FRAMES, small, settings.ffmpeg_bin)
     colour = layout.background(frames)
     picture = layout.picture_box(frames, colour)
-    padded = colour is not None and picture[3] - picture[1] < FULL
+    blurred = layout.blurred_fill(frames) if colour is None else None
+    picture = blurred or picture
+    padded = blurred is not None or (colour is not None and picture[3] - picture[1] < FULL)
 
     transcript, original = Transcript(), work_dir / "audio.wav"
     if info.has_audio:
@@ -810,9 +844,11 @@ def learn(
             ffmpeg.extract_audio(source.path, original)
         progress("transcribe", "listening")
         transcript = Transcript.model_validate(
-            cached(work_dir / "transcript-original.json",
-                    lambda: router.transcribe(original).model_dump())
-        )  # fmt: skip
+            cached(
+                work_dir / "transcript-original.json",
+                lambda: router.transcribe(original).model_dump(),
+            )
+        )
 
     times = read_times(info.duration, transcript.words)
     progress("read", f"reading the text on {len(times)} frames")
@@ -876,9 +912,11 @@ def learn(
         vocals, instrument_free = isolate_vocals(original, work_dir, router, progress)
         if len(transcript.words) < SPARSE_WORDS * info.duration / 60 and not instrument_free:
             sung = Transcript.model_validate(
-                cached(work_dir / "transcript-vocals.json",
-                        lambda: router.transcribe(vocals).model_dump())
-            )  # fmt: skip
+                cached(
+                    work_dir / "transcript-vocals.json",
+                    lambda: router.transcribe(vocals).model_dump(),
+                )
+            )
             transcript = sung if len(sung.words) > len(transcript.words) else transcript
 
     label = (described.label.strip() if described else "") or f"Learned from {source.title}"
@@ -894,28 +932,9 @@ def learn(
     )
     updates: dict = {}
 
-    # Layout.
-    if padded:
-        share = picture[2] - picture[0]
-        framing = Framing(mode="none", background=hex_colour(colour), crop_black_bars=True)
-        # Text sits this far from the picture, and is moved to keep that gap when a taller
-        # picture comes along.
-        above = [m.bottom for b, m, _ in blocks if b.anchor == "top"]
-        below = [m.top for b, m, _ in blocks if b.anchor == "bottom"]
-        if above:
-            framing.text_gap_above = max(0, round(picture[1] * height - max(above)))
-        if below:
-            framing.text_gap_below = max(0, round(min(below) - picture[3] * height))
-        if share < INSET:
-            framing.picture_width = round(share, 2)
-        updates["framing"] = framing
-        notes.append(
-            f"Layout: the whole picture on a {hex_colour(colour)} background"
-            + (f", {share:.0%} of the frame wide" if share < INSET else "")
-        )
-    else:
-        updates["framing"] = Framing(mode="smart")
-        notes.append("Layout: the picture fills the frame (cropped to fit, keeping faces)")
+    framing, note = framing_for(colour if padded else None, picture, blurred, blocks, height)
+    updates["framing"] = framing
+    notes.append(note)
 
     # Text that stays.
     texts = described.texts if described else []
@@ -944,18 +963,7 @@ def learn(
         elif role == "title" and "title_overlay" not in updates:
             agreed = consensus(measured(g), fonts)
             if agreed:
-                title, fit = agreed
-                box = title.backdrop if title.backdrop and title.backdrop != colour else None
-                # Banners are placed by where their first line starts, above its ink.
-                face = ImageFont.truetype(str(fit.font), round(fit.size))
-                above = _ink_box(face, title.lines[0])[1]
-                updates["title_overlay"] = TitleOverlay(
-                    font=fit.font.stem,
-                    size=round(fit.size / 0.8),  # the hook banner is drawn at 0.8 of this
-                    color=hex_colour(title.colour),
-                    box_color=hex_colour(box) if box else None,
-                    offset=max(0, title.top - above),
-                )
+                updates["title_overlay"] = title_overlay(*agreed, colour)
                 updates["hook"] = Hook(overlay=True)
                 notes.append(
                     f"Opening title: {g[0].text!r} for the first seconds; each reel gets its own"
@@ -969,15 +977,7 @@ def learn(
         caption_settings.update(mode=mode, language=language)
         captions = CaptionStyle(**caption_settings)
         updates["captions"] = captions
-        notes.append(
-            f"Captions: {mode}{f' ({language})' if language else ''}, about "
-            f"{captions.words_per_line} words a line, {captions.font} {captions.size}, "
-            f"{captions.color}"
-            + (f" with the spoken word in {captions.highlight_color}"
-               if captions.animation == "highlight" else "")
-            + f", {captions.position}"
-            + (f" {captions.margin} px from the edge" if captions.position != "middle" else "")
-        )  # fmt: skip
+        notes.append(caption_note(captions))
     else:
         updates["captions"] = CaptionStyle(enabled=False)
         notes.append("Captions: none")
@@ -1016,6 +1016,73 @@ def learn(
     )
     preset = Preset.model_validate({**preset.model_dump(), **_dumped(updates)})
     return Draft(preset, notes)
+
+
+def framing_for(
+    colour: tuple[int, int, int] | None,
+    picture: Box,
+    blurred: Box | None,
+    blocks: list[tuple[TextBlock, Measured, str]],
+    height: int,
+) -> tuple[Framing, str]:
+    """How the picture fills the frame, and a note saying so."""
+    if colour is None and blurred is None:
+        return Framing(mode="smart"), "Layout: the picture fills the frame (cropped to fit)"
+    share = picture[2] - picture[0]
+    framing = Framing(mode="none", crop_black_bars=True)
+    if blurred:
+        # A blurred copy behind the picture isn't drawn here yet; a colour taken from the
+        # footage is the nearest look.
+        framing.auto_background = True
+        around = "a blurred copy of itself (drawn here as a colour taken from the footage)"
+    else:
+        framing.background = hex_colour(colour)
+        around = f"a {hex_colour(colour)} background"
+    # Text sits this far from the picture, and is moved to keep that gap when a taller
+    # picture comes along.
+    above = [m.bottom for b, m, _ in blocks if b.anchor == "top"]
+    below = [m.top for b, m, _ in blocks if b.anchor == "bottom"]
+    if above:
+        framing.text_gap_above = max(0, round(picture[1] * height - max(above)))
+    if below:
+        framing.text_gap_below = max(0, round(min(below) - picture[3] * height))
+    if share < INSET:
+        framing.picture_width = round(share, 2)
+        around += f", {share:.0%} of the frame wide"
+    return framing, f"Layout: the whole picture on {around}"
+
+
+def title_overlay(
+    title: Measured, fit: FontFit, background: tuple[int, int, int] | None
+) -> TitleOverlay:
+    """The hook banner's look from a title seen in the opening seconds."""
+    box = title.backdrop if title.backdrop and title.backdrop != background else None
+    # Banners are placed by where their first line starts, above its ink.
+    face = ImageFont.truetype(str(fit.font), round(fit.size))
+    lead = _ink_box(face, title.lines[0])[1]
+    return TitleOverlay(
+        font=fit.font.stem,
+        size=round(fit.size / 0.8),  # the hook banner is drawn at 0.8 of this
+        color=hex_colour(title.colour),
+        box_color=hex_colour(box) if box else None,
+        offset=max(0, title.top - lead),
+    )
+
+
+def caption_note(captions: CaptionStyle) -> str:
+    language = f" ({captions.language})" if captions.language else ""
+    highlight = (
+        f" with the spoken word in {captions.highlight_color}"
+        if captions.animation == "highlight"
+        else ""
+    )
+    where = captions.position + (
+        f" {captions.margin} px from the edge" if captions.position != "middle" else ""
+    )
+    return (
+        f"Captions: {captions.mode}{language}, about {captions.words_per_line} words a line, "
+        f"{captions.font} {captions.size}, {captions.color}{highlight}, {where}"
+    )
 
 
 def _dumped(updates: dict) -> dict:
