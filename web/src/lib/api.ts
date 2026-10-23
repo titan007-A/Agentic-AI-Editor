@@ -140,6 +140,8 @@ export const api = {
   savePreset: (preset: Preset) => request<Preset>("PUT", `/presets/${preset.name}`, preset),
   deletePreset: (name: string) => request("DELETE", `/presets/${name}`),
   presetYaml: (name: string) => request<{ yaml: string }>("GET", `/presets/${name}/yaml`),
+  presetSchema: () =>
+    request<{ properties: Record<string, { default?: unknown }> }>("GET", "/presets/schema"),
   learnStyle: (source: string, name: string | null) =>
     request<StyleDraft>("POST", "/styles", { source, name }),
   styleDraft: (id: string) => request<StyleDraft>("GET", `/styles/${id}`),
