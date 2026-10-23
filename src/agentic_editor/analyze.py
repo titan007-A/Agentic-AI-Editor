@@ -58,7 +58,7 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:20]
 
 
-def _cached(path: Path, compute: Callable[[], object], dump=json.dumps, load=json.loads):
+def cached(path: Path, compute: Callable[[], object], dump=json.dumps, load=json.loads):
     if path.exists():
         return load(path.read_text(encoding="utf-8"))
     value = compute()
@@ -87,21 +87,21 @@ def analyze(
 
     timeline_audio, instrument_free = original, False
     if audio_source == "vocals":
-        timeline_audio, instrument_free = _vocals(original, work_dir, router, progress)
+        timeline_audio, instrument_free = isolate_vocals(original, work_dir, router, progress)
 
     def run_transcription():
         progress("transcribe", "transcribing")
         return router.transcribe(timeline_audio).model_dump()
 
     transcript = Transcript.model_validate(
-        _cached(work_dir / f"transcript-{audio_source}.json", run_transcription)
+        cached(work_dir / f"transcript-{audio_source}.json", run_transcription)
     )
     if audio_source == "original" and len(transcript.words) < SPARSE_WORDS * info.duration / 60:
         # Whisper hears little of singing over a full band; the isolated vocals give the
         # planner and the captions the words. The timing is the same, so they fit as is.
-        vocals, _ = _vocals(original, work_dir, router, progress)
+        vocals, _ = isolate_vocals(original, work_dir, router, progress)
         sung = Transcript.model_validate(
-            _cached(
+            cached(
                 work_dir / "transcript-vocals.json",
                 lambda: router.transcribe(vocals).model_dump(),
             )
@@ -118,7 +118,7 @@ def analyze(
         progress("analyze", "detecting scene changes")
         return scenes.detect_cuts(video)
 
-    cuts = _cached(work_dir / "scenes.json", run_scene_detection)
+    cuts = cached(work_dir / "scenes.json", run_scene_detection)
 
     def run_watermark_search():
         progress("analyze", "looking for watermarks")
@@ -131,11 +131,11 @@ def analyze(
         progress("analyze", "finding the beat")
         return beats.detect(original).model_dump()
 
-    rhythm = Beats.model_validate(_cached(work_dir / "beats.json", run_beat_tracking))
+    rhythm = Beats.model_validate(cached(work_dir / "beats.json", run_beat_tracking))
 
     marks = [
         Watermark.model_validate(m)
-        for m in _cached(work_dir / "watermarks.json", run_watermark_search)
+        for m in cached(work_dir / "watermarks.json", run_watermark_search)
     ]
     samples = ffmpeg.read_audio(timeline_audio, 16000)
 
@@ -156,14 +156,14 @@ def analyze(
     )
 
 
-def _vocals(original: Path, work_dir: Path, router: ModelRouter, progress: Progress):
+def isolate_vocals(original: Path, work_dir: Path, router: ModelRouter, progress: Progress):
     vocals = work_dir / "vocals.wav"
     meta = work_dir / "vocals.json"
     model = router.settings.separation_model
     if vocals.exists() and meta.exists():
-        cached = json.loads(meta.read_text())
-        if cached.get("model") == model:
-            return vocals, cached["instrument_free"]
+        stored = json.loads(meta.read_text())
+        if stored.get("model") == model:
+            return vocals, stored["instrument_free"]
         # Separated with another model: redo it, and the transcript that was made from it.
         (work_dir / "transcript-vocals.json").unlink(missing_ok=True)
 

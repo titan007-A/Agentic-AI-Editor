@@ -39,6 +39,32 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _learn(args: argparse.Namespace) -> int:
+    import yaml
+
+    from agentic_editor import style
+    from agentic_editor.presets import save_preset
+
+    settings = get_settings()
+    existing = load_presets(settings.presets_dir)
+    if args.save and args.name in existing:
+        print(f"a preset called {args.name} already exists; pick another --name")
+        return 2
+    draft = style.learn(args.source, settings, detect(settings), args.name)
+    print(f"{draft.preset.label} ({draft.preset.name})")
+    for note in draft.notes:
+        print(f"  {note}")
+    if args.save:
+        if draft.preset.name in existing:
+            print(f"a preset called {draft.preset.name} already exists; pick a --name to save")
+            return 2
+        print(f"saved {save_preset(draft.preset, settings.presets_dir)}")
+    else:
+        data = draft.preset.model_dump(mode="json")
+        print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    return 0
+
+
 def _benchmark(args: argparse.Namespace) -> int:
     from agentic_editor import benchmark
 
@@ -114,6 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("-p", "--preset", action="append", required=True)
     run.add_argument("-n", "--notes", help="an instruction in plain words")
     run.set_defaults(handler=_run)
+
+    learn = commands.add_parser("learn", help="draft a preset from a reel with the look you want")
+    learn.add_argument("source", help="the reel: URL or local file")
+    learn.add_argument("--name", help="file name for the preset, e.g. raw-vocals-es")
+    learn.add_argument("--save", action="store_true", help="save it to the presets folder")
+    learn.set_defaults(handler=_learn)
 
     bench = commands.add_parser("benchmark", help="time transcription, separation, LLMs, render")
     bench.add_argument("source", nargs="?", default=BENCHMARK_SAMPLE, help="video URL or file")
