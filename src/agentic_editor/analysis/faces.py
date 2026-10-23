@@ -1,5 +1,6 @@
 """Face detection on sampled frames and the smoothed crop path that follows them."""
 
+import itertools
 import logging
 import urllib.request
 from dataclasses import dataclass
@@ -139,5 +140,15 @@ def crop_path(
 
 
 def write_commands(path: list[tuple[float, int]], target: str, dest: Path) -> Path:
-    dest.write_text("".join(f"{t:.3f} {target} x {x};\n" for t, x in path), encoding="utf-8")
+    """A sendcmd file that moves `target`'s crop along the path. Between two points the
+    left edge is an expression of the frame time, so the window glides from one to the
+    next instead of jumping five times a second."""
+    lines = []
+    for (t, x), (t_next, x_next) in itertools.pairwise(path):
+        rate = (x_next - x) / (t_next - t) if t_next > t else 0.0
+        move = f"{rate:+.3f}*(t-{t:.3f})" if rate else ""
+        lines.append(f"{t:.3f} {target} x {x}{move};\n")
+    if path:
+        lines.append(f"{path[-1][0]:.3f} {target} x {path[-1][1]};\n")
+    dest.write_text("".join(lines), encoding="utf-8")
     return dest
