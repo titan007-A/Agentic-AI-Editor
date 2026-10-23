@@ -566,7 +566,10 @@ def create_app(
     @app.put("/api/feeds/{feed_id}")
     def update_feed(feed_id: int, body: FeedRequest, _: User, session: DB) -> FeedView:
         feed = find_feed(feed_id, session)
-        for key, value in checked_feed(body).model_dump().items():
+        updated = checked_feed(body)
+        if (updated.kind, updated.location) != (feed.kind, feed.location):
+            feed.looked = False  # somewhere new: what is already there is noted first
+        for key, value in updated.model_dump().items():
             setattr(feed, key, value)
         session.commit()
         return feed_view(feed)

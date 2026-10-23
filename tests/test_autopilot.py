@@ -141,3 +141,15 @@ def test_a_feed_that_cant_be_read_says_so(Session):
     assert result == "couldn't read it: no such folder: /gone"
     with Session() as db:
         assert db.get(Feed, feed_id).last_result == result
+
+
+def test_a_first_look_that_fails_still_leaves_what_was_there_alone(Session):
+    feed_id = add_feed(Session)
+    started = []
+
+    def offline(feed):
+        raise OSError("HTTP Error 429: Too Many Requests")
+
+    check(feed_id, Session, started.append, offline, NIGHT)
+    result = check(feed_id, Session, started.append, lambda f: entries("old1", "old2"), NIGHT)
+    assert started == [] and result.startswith("2 video(s) already there")

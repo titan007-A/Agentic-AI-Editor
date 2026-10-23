@@ -118,10 +118,10 @@ def check(
         feed = db.get(Feed, feed_id)
         if feed is None:
             return "no such feed"
-        first = feed.last_checked is None
         # The first look also marks what is already there, whatever the hour, so that
-        # later only what arrives after the feed began counts as new.
-        skipping = first and not feed.include_existing
+        # later only what arrives after the feed began counts as new. A look that failed
+        # to read the feed doesn't count.
+        skipping = not feed.looked and not feed.include_existing
         if not feed.enabled or not (skipping or active(feed, now.hour)):
             return "waiting" if feed.enabled else "off"
         try:
@@ -163,6 +163,7 @@ def check(
             result = f"started {len(started)} new video(s)" + (
                 f", {waiting} waiting" if waiting else ""
             )
+        feed.looked = True
         feed.last_checked, feed.last_result = datetime.now(UTC), result
         db.commit()
     for job_id in started:

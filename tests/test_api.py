@@ -267,6 +267,19 @@ def test_a_folder_feed_edits_what_it_holds_into_the_ready_pile(env, tmp_path):
     assert again["last_result"] == "started 0 new video(s)" and len(env.calls) == 2
 
 
+def test_a_feed_moved_somewhere_else_notes_what_is_already_there(env, tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    for folder in (first, second):
+        folder.mkdir()
+        (folder / "old.mp4").write_bytes(b"x")
+        os.utime(folder / "old.mp4", (1000, 1000))
+    feed = add_folder_feed(env, first).json()
+    body = {"name": "Drafts", "kind": "folder", "location": str(second), "presets": ["square-1x1"]}
+    assert env.client.put(f"/api/feeds/{feed['id']}", json=body).status_code == 200
+    again = env.client.post(f"/api/feeds/{feed['id']}/check").json()
+    assert again["last_result"].startswith("1 video(s) already there") and env.calls == []
+
+
 def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):
     def doubtful(source, presets, settings, backends, notes, progress):
         result = env_run(source, presets, settings, backends, notes, progress)

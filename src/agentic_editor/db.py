@@ -3,7 +3,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint, create_engine, event
+from sqlalchemy import (
+    JSON,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    event,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -100,6 +109,10 @@ class Feed(Base):
     active_to: Mapped[int | None]
     batch: Mapped[int] = mapped_column(default=3)  # videos in progress at once, at most
     include_existing: Mapped[bool] = mapped_column(default=False)
+    # Whether the first look, which notes what is already there, has been made. A new feed
+    # starts without it; feeds saved before this column existed had made it, so the column
+    # is added to them as true.
+    looked: Mapped[bool] = mapped_column(default=False, server_default=text("1"))
     last_checked: Mapped[datetime | None]
     last_result: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
@@ -180,7 +193,9 @@ def add_missing_columns(engine) -> None:
                 if column.name in have:
                     continue
                 literal = "NULL"
-                if column.default is not None:
+                if column.server_default is not None:
+                    literal = column.server_default.arg.text
+                elif column.default is not None:
                     value = column.default.arg
                     # Callable defaults (list, dict) are wrapped to take a context argument.
                     value = value(None) if callable(value) else value
