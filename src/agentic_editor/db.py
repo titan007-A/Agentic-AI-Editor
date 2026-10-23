@@ -9,10 +9,14 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    case,
     create_engine,
     event,
+    func,
+    or_,
     text,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -82,7 +86,7 @@ class Output(Base):
 
     job: Mapped[Job] = relationship(back_populates="outputs")
 
-    @property
+    @hybrid_property
     def pile(self) -> str | None:
         """ready, look (needs a look) or None once posted or dismissed."""
         if self.verdict in ("posted", "dismissed"):
@@ -90,6 +94,19 @@ class Output(Base):
         if self.verdict == "approved" or not (self.doubts or self.issues):
             return "ready"
         return "look"
+
+    @pile.inplace.expression
+    @classmethod
+    def _pile(cls):
+        verdict = func.coalesce(cls.verdict, "")
+        clean = (func.coalesce(func.json_array_length(cls.doubts), 0) == 0) & (
+            func.coalesce(func.json_array_length(cls.issues), 0) == 0
+        )
+        return case(
+            (verdict.in_(("posted", "dismissed")), None),
+            (or_(verdict == "approved", clean), "ready"),
+            else_="look",
+        )
 
 
 class Feed(Base):

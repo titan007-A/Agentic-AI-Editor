@@ -19,8 +19,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from agentic_editor import autopilot, jobs
@@ -452,7 +452,12 @@ def create_app(
 
     @app.get("/api/jobs")
     def list_jobs(_: User, session: DB) -> list[JobView]:
-        rows = session.scalars(select(Job).order_by(Job.created_at.desc()).limit(200))
+        rows = session.scalars(
+            select(Job)
+            .options(selectinload(Job.outputs))
+            .order_by(Job.created_at.desc())
+            .limit(200)
+        )
         return [job_view(j) for j in rows]
 
     @app.get("/api/jobs/{job_id}")
@@ -571,7 +576,8 @@ def create_app(
 
     @app.get("/api/feeds")
     def list_feeds(_: User, session: DB) -> list[FeedView]:
-        return [feed_view(f) for f in session.scalars(select(Feed).order_by(Feed.id))]
+        feeds = select(Feed).options(selectinload(Feed.items).selectinload(FeedItem.job))
+        return [feed_view(f) for f in session.scalars(feeds.order_by(Feed.id))]
 
     @app.post("/api/feeds")
     def create_feed(body: FeedRequest, _: User, session: DB) -> FeedView:
@@ -610,16 +616,21 @@ def create_app(
     @app.get("/api/piles")
     def pile_counts(_: User, session: DB) -> dict[str, int]:
         counts = {"ready": 0, "look": 0}
-        for output in session.scalars(select(Output)):
-            if output.pile:
-                counts[output.pile] += 1
+        rows = session.execute(select(Output.pile, func.count()).group_by(Output.pile))
+        counts.update({pile: n for pile, n in rows if pile})
         return counts
 
     @app.get("/api/piles/{pile}")
     def pile(pile: Literal["ready", "look"], _: User, session: DB) -> list[JobView]:
         """The outputs in a pile, newest first, each with its job."""
-        outputs = session.scalars(select(Output).order_by(Output.id.desc()))
-        return [job_view(o.job, only=o.id) for o in outputs if o.pile == pile][:PILE_LIMIT]
+        outputs = session.scalars(
+            select(Output)
+            .where(Output.pile == pile)
+            .options(selectinload(Output.job).selectinload(Job.outputs))
+            .order_by(Output.id.desc())
+            .limit(PILE_LIMIT)
+        )
+        return [job_view(o.job, only=o.id) for o in outputs]
 
     @app.post("/api/outputs/{output_id}/verdict")
     def verdict(output_id: int, body: VerdictRequest, _: User, session: DB) -> JobView:

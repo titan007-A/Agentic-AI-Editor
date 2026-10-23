@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from agentic_editor import api, jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
-from agentic_editor.db import Event, Job, make_sessionmaker
+from agentic_editor.db import Event, Job, Output, make_sessionmaker
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.presets import Preset
 from agentic_editor.settings import ROOT, Settings
@@ -47,7 +48,7 @@ def env(tmp_path, monkeypatch):
             progress("done", f"{preset.name} -> {path}")
         return pipeline.Result("Sample song", outputs)
 
-    env = SimpleNamespace(calls=calls, settings=settings, run=fake_run)
+    env = SimpleNamespace(calls=calls, settings=settings, run=fake_run, sessions=sessions)
     monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
     monkeypatch.setattr(
         jobs, "process", lambda job_id: jobs.run_job(job_id, sessions, settings, env.run)
@@ -321,6 +322,59 @@ def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):
     assert env.client.get("/api/piles").json() == {"ready": 1, "look": 0}
     env.client.post(f"/api/outputs/{output_id}/verdict", json={"verdict": "posted"})
     assert env.client.get("/api/piles").json() == {"ready": 0, "look": 0}
+
+
+def add_outputs(env, count: int) -> None:
+    with env.sessions() as db:
+        for i in range(count):
+            job = Job(source=f"https://x.test/{i}", presets=["square-1x1"], status="done")
+            db.add(job)
+            db.flush()
+            doubts = ["8s without voice"] if i % 2 else []
+            db.add(Output(job_id=job.id, preset="square-1x1", path=f"/x/{i}.mp4", duration=20,
+                          planner="fake-model", edl={}, doubts=doubts))  # fmt: skip
+        db.commit()
+
+
+def queries(env, url: str) -> int:
+    engine, count = env.sessions.kw["bind"], [0]
+
+    def counted(*args):
+        count[0] += 1
+
+    event.listen(engine, "before_cursor_execute", counted)
+    assert env.client.get(url).status_code == 200
+    event.remove(engine, "before_cursor_execute", counted)
+    return count[0]
+
+
+def test_lists_take_the_same_few_queries_however_long_they_are(env):
+    urls = ["/api/jobs", "/api/piles", "/api/piles/ready", "/api/piles/look", "/api/feeds"]
+    add_outputs(env, 3)
+    few = [queries(env, url) for url in urls]
+    add_outputs(env, 30)
+    assert [queries(env, url) for url in urls] == few
+
+
+def test_the_piles_sort_outputs_as_each_output_says(env):
+    with env.sessions() as db:
+        job = Job(source="https://x.test/v", presets=["square-1x1"], status="done")
+        db.add(job)
+        db.flush()
+        for verdict in (None, "approved", "posted", "dismissed"):
+            for doubts in ([], ["a doubt"]):
+                for issues in ([], ["an issue"]):
+                    db.add(Output(job_id=job.id, preset="square-1x1", path="/x.mp4", duration=1,
+                                  planner="m", edl={}, verdict=verdict, doubts=doubts,
+                                  issues=issues))  # fmt: skip
+        db.commit()
+        outputs = db.query(Output).all()
+        expected = {pile: {o.id for o in outputs if o.pile == pile} for pile in ("ready", "look")}
+    for pile, ids in expected.items():
+        listed = env.client.get(f"/api/piles/{pile}").json()
+        assert {j["outputs"][0]["id"] for j in listed} == ids
+    counts = env.client.get("/api/piles").json()
+    assert counts == {pile: len(ids) for pile, ids in expected.items()}
 
 
 def test_feeds_are_checked_before_they_are_saved(env, tmp_path):
