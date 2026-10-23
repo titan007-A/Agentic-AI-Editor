@@ -4,6 +4,7 @@ cached in the source's work directory, so re-running a video skips straight to p
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -58,6 +59,16 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:20]
 
 
+def transcript_file(work_dir: Path, audio: str, router: ModelRouter) -> Path:
+    """Where the transcript of `audio` is kept. Another whisper model or backend hears it
+    differently, so each keeps its own."""
+    backend = router.backends.transcriber
+    s = router.settings
+    model = s.mlx_whisper_model if backend == "mlx" else s.whisper_model
+    name = re.sub(r"[^\w.-]+", "_", f"{backend}-{model}")
+    return work_dir / f"transcript-{audio}-{name}.json"
+
+
 def cached(path: Path, compute: Callable[[], object], dump=json.dumps, load=json.loads):
     if path.exists():
         return load(path.read_text(encoding="utf-8"))
@@ -94,7 +105,7 @@ def analyze(
         return router.transcribe(timeline_audio).model_dump()
 
     transcript = Transcript.model_validate(
-        cached(work_dir / f"transcript-{audio_source}.json", run_transcription)
+        cached(transcript_file(work_dir, audio_source, router), run_transcription)
     )
     sparse = len(transcript.words) < SPARSE_WORDS * info.duration / 60
     if audio_source == "original" and sparse:
@@ -108,7 +119,7 @@ def analyze(
         else:
             sung = Transcript.model_validate(
                 cached(
-                    work_dir / "transcript-vocals.json",
+                    transcript_file(work_dir, "vocals", router),
                     lambda: router.transcribe(vocals).model_dump(),
                 )
             )
@@ -175,8 +186,9 @@ def isolate_vocals(original: Path, work_dir: Path, router: ModelRouter, progress
                 raise separation.SeparationFailed(stored["failed"])
             if vocals.exists():
                 return vocals, stored["instrument_free"]
-        # Separated with another model: redo it, and the transcript that was made from it.
-        (work_dir / "transcript-vocals.json").unlink(missing_ok=True)
+        # Separated with another model: redo it, and the transcripts that were made from it.
+        for made in work_dir.glob("transcript-vocals*.json"):
+            made.unlink()
 
     progress("separate", "isolating vocals")
     stems_dir = work_dir / "stems"

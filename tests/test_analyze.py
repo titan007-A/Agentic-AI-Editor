@@ -6,7 +6,7 @@ import pytest
 from agentic_editor import analyze, ffmpeg
 from agentic_editor.analysis import beats, scenes, separation, watermarks
 from agentic_editor.analysis.beats import Beats
-from agentic_editor.transcript import Transcript
+from agentic_editor.transcript import Transcript, Word
 
 RATE = 22050
 MUSIC = (0.3 * np.random.default_rng(0).standard_normal(RATE * 60)).astype(np.float32)
@@ -19,7 +19,14 @@ class Router:
         self.words = list(words)
         self.stems = stems
         self.settings = type(
-            "S", (), {"separation_model": "m.ckpt", "whisper_model": model, "ffmpeg_bin": "ffmpeg"}
+            "S",
+            (),
+            {
+                "separation_model": "m.ckpt",
+                "whisper_model": model,
+                "mlx_whisper_model": "mlx/" + model,
+                "ffmpeg_bin": "ffmpeg",
+            },
         )
         self.backends = type("B", (), {"transcriber": transcriber})
         self.transcribed = 0
@@ -68,3 +75,17 @@ def test_a_source_without_a_voice_keeps_the_full_mix_words(offline, tmp_path):
 def test_a_vocal_preset_still_fails_when_there_is_no_voice(offline, tmp_path):
     with pytest.raises(separation.SeparationFailed):
         analyze.analyze(Path("source.mp4"), tmp_path, Router(stems="empty"), "vocals")
+
+
+def test_changing_the_whisper_model_transcribes_again(offline, tmp_path):
+    words = [Word(text=f"w{i}", start=i * 0.5, end=i * 0.5 + 0.4) for i in range(40)]
+    first = Router(words)
+    analyze.analyze(Path("source.mp4"), tmp_path, first, "original")
+    analyze.analyze(Path("source.mp4"), tmp_path, first, "original")
+    assert first.transcribed == 1
+    other = Router(words, model="whisper-b")
+    analyze.analyze(Path("source.mp4"), tmp_path, other, "original")
+    assert other.transcribed == 1
+    elsewhere = Router(words, transcriber="mlx")
+    analyze.analyze(Path("source.mp4"), tmp_path, elsewhere, "original")
+    assert elsewhere.transcribed == 1
