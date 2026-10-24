@@ -51,8 +51,10 @@ scripts/setup-linux.sh
 The script installs a static ffmpeg build with NVENC (Ubuntu's ffmpeg package has none)
 into `~/.local/opt/ffmpeg-nvenc` and points `.env` at it, installs the Python
 environment with the CUDA 12.8 build of PyTorch (needed for RTX 50-series/Blackwell
-GPUs), pulls the Ollama models and prints the detected backends. Build the web app
-once with `(cd web && npm ci && npm run build)` if you want the browser interface.
+GPUs), pulls the Ollama models, downloads the transcription, vocal separation and face
+detection models (`uv run aiedit fetch-models`, about 2.4 GB, logged as it goes) and prints
+the detected backends. Build the web app once with `(cd web && npm ci && npm run build)` if
+you want the browser interface.
 
 ## Setup: macOS on Apple Silicon
 
@@ -63,6 +65,7 @@ cd Agentic-AI-Editor
 cp .env.example .env
 uv sync --extra ml
 ollama pull qwen3.5:9b && ollama pull qwen3.5:4b
+uv run aiedit fetch-models
 uv run aiedit backends
 (cd web && npm ci && npm run build)
 ```
@@ -78,8 +81,10 @@ uv run aiedit run "https://..." -p vocal-music-9x16 -p vocal-music-es-9x16
 uv run aiedit run ~/Videos/talk.mp4 -p shorts-9x16
 ```
 
-Outputs go to `media/outputs/<source-hash>/<preset>.mp4`, next to the EDL that produced
-them. Analysis results are cached per source file in `cache/`.
+Outputs go to `media/outputs/<source-hash>/<run>/<preset>.mp4`, next to the EDL that
+produced them; every run (a job in the web app, each video of an `aiedit run`) has a folder
+of its own, so running a video again never replaces earlier versions. Analysis results are
+cached per source file in `cache/`.
 
 `-n` (or the notes box in the web app) takes a plain-language instruction:
 
@@ -230,7 +235,10 @@ it. Logos, music beds, intros and outros are not learned.
 The quickest way to make one by hand is to duplicate an existing preset on the web app's
 Presets page and edit it there; the server validates every save. Editing the YAML by
 hand works too: `uv run aiedit presets` loads and validates all of them. Fonts are
-looked up by file name (without extension) in `fonts/`.
+looked up by file name (without extension) in `fonts/`. Text those fonts can't draw, such
+as Hindi, Japanese, Arabic or emoji, is drawn in the Noto font for its script, downloaded
+into `models/fonts` the first time a reel needs it; a character no font has stops the
+render with an error rather than showing as an empty box.
 
 ## Models
 
@@ -273,6 +281,11 @@ All settings come from `.env`; see `.env.example`. Any backend can be forced:
 TRANSCRIBE_BACKEND=faster-whisper   # or mlx, cpu
 ENCODER=nvenc                       # or videotoolbox, x264
 ```
+
+Ollama keeps a safety margin when it places a model, so on an 8 GB card it runs part of
+`qwen3.5:9b` on the CPU. `LLM_GPU_LAYERS=99` puts all of it on the GPU, where it fits:
+42 instead of 31 tokens/s on the RTX 5050. If a model ever fails to load that way, the
+editor lets Ollama place it for the rest of the run.
 
 By default the final encode uses libx264 (`slower`, CRF 16) even when a GPU encoder is
 present: measured with VMAF against lossless renders it kept the same quality as the

@@ -68,3 +68,68 @@ def test_captions_ask_libass_for_the_weight_by_its_own_family_name():
     assert font_family(font_file(FONTS, "OpenSans-ExtraBold")) == "Open Sans ExtraBold"
     assert font_family(font_file(FONTS, "OpenSans-Regular")) == "Open Sans"
     assert font_family(font_file(FONTS, "Anton-Regular")) == "Anton"
+
+
+def test_captions_are_measured_at_the_size_libass_draws_them():
+    from agentic_editor.render.text import caption_font
+
+    # libass draws Anton at size 84 about 396 px wide for this line; Pillow's own size 84
+    # is 686 px, which split and shrank captions that fit.
+    width = caption_font(font_file(FONTS, "Anton-Regular"), 84).getlength("THE QUICK BROWN FOX")
+    assert 380 < width < 410
+
+
+def test_a_caption_holding_a_word_too_wide_for_the_frame_is_drawn_smaller():
+    from agentic_editor.edl import Cue
+    from agentic_editor.render.compose import caption_scales
+
+    cues = [Cue(start=0, end=1, text="short"), Cue(start=1, end=2, text="x" * 30)]
+    scales = caption_scales(cues, lambda line: 40.0 * len(line), 950, pop=False)
+    assert scales[0] == 1.0 and 40.0 * 30 * scales[1] <= 950
+
+
+def test_a_banner_reserves_every_row_it_draws_box_included(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    from agentic_editor.render.text import banner_extent, draw_banner
+
+    font = font_file(FONTS, "Anton-Regular")
+    words = "The voice that made\nthe stadium go silent"
+    above, below = banner_extent(words, font, 72, "#000000", 1080)
+    draw_banner(words, font, 72, "#FFFFFF", "#000000", FRAME, 300, tmp_path / "b.png")
+    rows = np.nonzero(np.array(Image.open(tmp_path / "b.png"))[..., 3].any(axis=1))[0]
+    # The old estimate, 1.3 x size per line, ended 41 px above the box's bottom.
+    assert 300 + above - 1 <= rows[0] and rows[-1] <= 300 + below + 1
+    assert below - above > 1.3 * 72 * 2 + 30
+
+
+def test_a_text_block_band_is_where_its_ink_is(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    from agentic_editor.render.text import draw
+
+    placed = place(block(), font_file(FONTS, "OpenSans-ExtraBold"), FRAME, None, None)
+    draw([placed], FRAME, tmp_path / "t.png")
+    rows = np.nonzero(np.array(Image.open(tmp_path / "t.png"))[..., 3].any(axis=1))[0]
+    top, bottom = placed.band
+    assert abs(rows[0] - top) <= 1 and abs(rows[-1] + 1 - bottom) <= 1
+
+
+def test_captions_keep_a_gap_from_overlays():
+    from agentic_editor import subtitles
+    from agentic_editor.edl import Cue
+    from agentic_editor.render.compose import BANNER_GAP, keep_clear
+
+    # A one-liner box at rows 1300-1400 for the first 4 s; a caption 120 px tall that
+    # would sit right on top of it at the bottom margin.
+    blocked = keep_clear([(0.0, 4.0, 1300.0, 1400.0)])
+    assert all(
+        top == 1300 - BANNER_GAP and bottom == 1400 + BANNER_GAP for _, ((top, bottom),) in blocked
+    )
+    cue = Cue(start=0.5, end=2.0, text="ET AINSI")
+    flush = 1920 - 1300  # the margin that puts the caption's bottom edge on the box's top
+    (placed,) = subtitles.place([cue], "bottom", flush, 120, 1920, blocked)
+    band = placed.band(120, 1920)
+    assert band[1] <= 1300 - BANNER_GAP or band[0] >= 1400 + BANNER_GAP

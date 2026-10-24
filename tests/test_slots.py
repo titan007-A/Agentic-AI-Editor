@@ -134,3 +134,28 @@ def test_a_job_that_has_to_wait_says_so_and_says_when_it_goes_on():
         ("wait", "waiting for the GPU to transcribe"),
         ("resume", "got the GPU after 0s"),
     ]
+
+
+def test_a_job_whose_progress_note_fails_after_waiting_lets_the_slot_go():
+    slot, holding, done = Slot("GPU"), threading.Event(), threading.Event()
+
+    def other_job():
+        with slot.turn():
+            holding.set()
+            done.wait(2)
+
+    def tracker(stage, note):
+        if stage == "resume":
+            raise RuntimeError("database is locked")
+
+    threading.Thread(target=other_job).start()
+    holding.wait(2)
+    threading.Timer(0.1, done.set).start()
+    with pytest.raises(RuntimeError), slot.turn("plan", tracker):
+        pass
+    assert slot.held() == 0
+    taken = []
+    thread = threading.Thread(target=lambda: taken.append(slot._lock.acquire(timeout=1)))
+    thread.start()
+    thread.join()
+    assert taken == [True]

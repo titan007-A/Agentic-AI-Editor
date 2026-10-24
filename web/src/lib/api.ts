@@ -100,6 +100,9 @@ export type SystemInfo = {
   yt_dlp: string;
 };
 
+import { loginPath } from "@/lib/next-path.mjs";
+import { sendFile } from "@/lib/upload.mjs";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -118,15 +121,32 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     init.headers = { "Content-Type": "application/json" };
   }
   const response = await fetch(`/api${path}`, init);
-  if (response.status === 401 && !path.startsWith("/login")) {
-    window.location.href = "/login/";
-  }
   const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new ApiError(response.status, data?.detail ?? response.statusText);
+  return settle<T>(path, response.status, response.statusText, data);
+}
+
+let loggingIn = false;
+
+/** Off to the login page, which comes back here afterwards. The returned promise never
+ * settles, so no error flashes up while the page changes. */
+export function toLogin(): Promise<never> {
+  if (!loggingIn) {
+    loggingIn = true;
+    const here = window.location.pathname + window.location.search;
+    window.location.assign(new URL(loginPath(here), window.location.origin));
+  }
+  return new Promise<never>(() => {});
+}
+
+async function settle<T>(path: string, status: number, statusText: string, data: unknown) {
+  if (status === 401 && !path.startsWith("/login")) return toLogin();
+  if (status < 200 || status >= 300) {
+    throw new ApiError(status, (data as { detail?: unknown } | null)?.detail ?? statusText);
   }
   return data as T;
 }
+
+export type UploadOptions = { onProgress?: (fraction: number) => void; signal?: AbortSignal };
 
 export const api = {
   login: (password: string) => request("POST", "/login", { password }),
@@ -140,6 +160,8 @@ export const api = {
   savePreset: (preset: Preset) => request<Preset>("PUT", `/presets/${preset.name}`, preset),
   deletePreset: (name: string) => request("DELETE", `/presets/${name}`),
   presetYaml: (name: string) => request<{ yaml: string }>("GET", `/presets/${name}/yaml`),
+  presetSchema: () =>
+    request<{ properties: Record<string, { default?: unknown }> }>("GET", "/presets/schema"),
   learnStyle: (source: string, name: string | null) =>
     request<StyleDraft>("POST", "/styles", { source, name }),
   styleDraft: (id: string) => request<StyleDraft>("GET", `/styles/${id}`),
@@ -159,10 +181,9 @@ export const api = {
   pile: (name: "ready" | "look") => request<Job[]>("GET", `/piles/${name}`),
   verdict: (outputId: number, verdict: Verdict | null) =>
     request<Job>("POST", `/outputs/${outputId}/verdict`, { verdict }),
-  upload: (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return request<{ source: string; name: string }>("POST", "/uploads", form);
+  upload: async (file: File, options: UploadOptions = {}) => {
+    const { status, statusText, body } = await sendFile("/api/uploads", file, options);
+    return settle<{ source: string; name: string }>("/uploads", status, statusText, body);
   },
 };
 

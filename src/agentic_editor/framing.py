@@ -10,6 +10,9 @@ shot then gets the plainest framing that keeps all of it:
 - fit: it is wider than 9:16, so the window widens to hold it and the picture is padded
   above and below, up to showing the whole frame, rather than cutting anything off.
 
+A picture already narrower than the frame keeps its full width instead and is cropped top
+and bottom around the same things, or shown whole with the sides padded.
+
 A long shot is only split where it changes between fitting and not fitting, which is
 usually a name banner or title animating in or out. Widened shots then share one width,
 and when most of the reel needs widening every shot gets it, so the framing doesn't jump
@@ -31,6 +34,7 @@ MIN_SHOT = 1.0  # seconds; a cut closer than this to another isn't worth reframi
 VIEW_EVERY = 4.0  # seconds between vision samples inside a long shot
 FACE_NEAR = 0.5  # seconds: faces this close to a vision sample count with it
 DROPOUT = 2.0  # seconds: a face the detector lost this briefly is still the same face
+HEADROOM = 0.12  # of a window's height, left above the heads when cropping top and bottom
 
 Content = tuple[int, int, int, int]  # x, y, width, height of the picture, bars excluded
 Span = tuple[float, float]
@@ -50,6 +54,10 @@ def even(value: float) -> int:
 
 def crop_width(content: Content, frame: tuple[int, int]) -> int:
     return even(content[3] * frame[0] / frame[1])
+
+
+def crop_height(content: Content, frame: tuple[int, int]) -> int:
+    return even(content[2] * frame[1] / frame[0])
 
 
 def view_times(clip: Clip, cuts: list[float]) -> list[float]:
@@ -221,11 +229,13 @@ def frame_shots(
     content: Content,
     src_width: int,
     frame: tuple[int, int],
+    src_height: int | None = None,
 ) -> list[Shot]:
     width = crop_width(content, frame)
     if width >= content[2]:
-        # A picture already as narrow as the frame: show all of it.
-        return [Shot(start=clip.start, end=clip.end, x=content[0], width=content[2])]
+        return tall_shots(
+            clip, cuts, samples, faces, content, frame, src_height or content[1] + content[3]
+        )
     seen = views(samples, faces, content, src_width)
     shots: list[Shot] = []
     for start, end in shot_bounds(clip, cuts):
@@ -309,6 +319,63 @@ def harmonize(shots: list[Shot], width: int, content: Content) -> list[Shot]:
             )
         )
     return out
+
+
+def tall_shots(
+    clip: Clip,
+    cuts: list[float],
+    samples: list[tuple[float, list[Subject]]],
+    faces: list[Sample],
+    content: Content,
+    frame: tuple[int, int],
+    src_height: int,
+) -> list[Shot]:
+    """Shots for a picture as narrow as the frame or narrower. One taller than the frame is
+    cropped top and bottom, at its full width, around the heads and must-keep items of each
+    shot; when those don't fit one window the whole picture is shown, padded at the sides."""
+    left, top, picture_width, picture_height = content
+    height = crop_height(content, frame)
+    if height >= picture_height - 1:
+        return [Shot(start=clip.start, end=clip.end, x=left, width=picture_width)]
+    lowest = top + picture_height - height
+    shots = []
+    for start, end in shot_bounds(clip, cuts):
+        rows = [
+            ((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
+            for t, found in faces
+            if start <= t < end
+            for f in found
+        ]
+        rows += [(s.y0, s.y1) for t, found in samples if start <= t < end for s in found if s.keep]
+        rows = [(max(a, top), min(b, top + picture_height)) for a, b in rows if b > top]
+        whole = union(rows)
+        if whole is not None and whole[1] - whole[0] > height:
+            reason = "too tall for the frame; showing the whole picture"
+            shots.append(Shot(start=start, end=end, x=left, width=picture_width, reason=reason))
+            continue
+        if whole is None:
+            y = top + (picture_height - height) / 2
+            reason = "nothing that must stay; centred on the picture"
+        else:
+            # Some room above the heads, as a camera operator would leave.
+            y = max(whole[0] - HEADROOM * height, whole[1] - height)
+            reason = "everything that matters fits the frame's height"
+        y = even(min(max(y, top), lowest))
+        shots.append(Shot(start=start, end=end, x=left, width=picture_width, y=y, height=height,
+                          reason=reason))  # fmt: skip
+    whole_share = sum(s.end - s.start for s in shots if s.height is None) / clip.duration
+    if 0 < whole_share < 1 and whole_share >= UNIFORM:
+        shots = [
+            s.model_copy(
+                update={
+                    "y": 0,
+                    "height": None,
+                    "reason": "the whole picture, as for most of the reel, which is too tall",
+                }
+            )
+            for s in shots
+        ]
+    return shots
 
 
 def _frame_group(
@@ -436,7 +503,6 @@ def box_rows(
     A box is mapped through the shot's window when there are shots, otherwise one `window`
     pixels wide over the whole clip."""
     width, height = frame
-    top, picture_height = picture[1], picture[3]
     rows = []
     for t, found in boxes:
         if not clip.start <= t < clip.end:
@@ -444,6 +510,9 @@ def box_rows(
         shot = next((s for s in shots if s.start <= t < s.end), None)
         span = shot.width if shot else window
         left = shot.x if shot and not shot.follow else None
+        top, picture_height = picture[1], picture[3]
+        if shot and shot.height:
+            top, picture_height = shot.y, shot.height
         scale = min(width / span, height / picture_height)
         offset = (height - picture_height * scale) / 2
         bands = []

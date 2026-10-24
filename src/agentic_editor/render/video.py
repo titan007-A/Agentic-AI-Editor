@@ -1,6 +1,7 @@
 """Builds the ffmpeg video filtergraph for an EDL. Pure string building, so the
 graph can be unit tested without running ffmpeg."""
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -73,15 +74,16 @@ def grade_chain(label: str, index: int, layers: Layers) -> tuple[list[str], str]
     if layers.correction:
         parts.append(f"[{label}]{','.join(layers.correction)}[g{index}c]")
         label = f"g{index}c"
-    if layers.look:
+    if layers.look and layers.look_strength > 0:
         look = ",".join(layers.look)
         if layers.look_strength >= 1:
             parts.append(f"[{label}]{look}[g{index}l]")
         else:
             parts.append(f"[{label}]split=2[g{index}a][g{index}b]")
             parts.append(f"[g{index}b]{look}[g{index}x]")
+            # blend's normal mode keeps `opacity` of its first input, so the look goes first.
             parts.append(
-                f"[g{index}a][g{index}x]blend=all_mode=normal:"
+                f"[g{index}x][g{index}a]blend=all_mode=normal:"
                 f"all_opacity={layers.look_strength:.2f}[g{index}l]"
             )
         label = f"g{index}l"
@@ -103,32 +105,64 @@ def frame_chain(
     picture_width: float = 1.0,
 ) -> list[str]:
     """Filters that turn one source clip into a frame-sized clip."""
+    crop, fit = frame_parts(
+        mode, source, frame, background, crop_label, commands, black_bars, picture_width
+    )
+    return crop + fit
+
+
+def frame_parts(
+    mode: CropMode,
+    source: tuple[int, int],
+    frame: tuple[int, int],
+    background: str,
+    crop_label: str,
+    commands: Path | None,
+    black_bars: tuple[int, int, int, int] | None,
+    picture_width: float = 1.0,
+) -> tuple[list[str], list[str]]:
+    """frame_chain in two parts: what cuts the window out, and what fits it to the frame."""
     width, height = frame
     src_w, src_h = source
-    chain = []
+    crop = []
     if black_bars:
         bw, bh, bx, by = black_bars
-        chain.append(f"crop={bw}:{bh}:{bx}:{by}")
+        crop.append(f"crop={bw}:{bh}:{bx}:{by}")
         src_w, src_h = bw, bh
 
     if mode == "none":
-        chain += [
+        return crop, [
             f"scale={_even(width * picture_width)}:{height}"
             ":force_original_aspect_ratio=decrease:flags=lanczos",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
         ]
-        return chain
 
     crop_w, crop_h = crop_size((src_w, src_h), frame)
     x = (src_w - crop_w) // 2
     y = (src_h - crop_h) // 2
     if mode == "face" and commands is not None:
-        chain.append(f"sendcmd=f='{escape_filter_path(commands)}'")
-        chain.append(f"crop@{crop_label}={crop_w}:{crop_h}:{x}:{y}")
+        crop.append(f"sendcmd=f='{escape_filter_path(commands)}'")
+        crop.append(f"crop@{crop_label}={crop_w}:{crop_h}:{x}:{y}")
     else:
-        chain.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
-    chain.append(f"scale={width}:{height}:flags=lanczos")
-    return chain
+        crop.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
+    return crop, fit_chain((crop_w, crop_h), frame, background)
+
+
+def fit_chain(size: tuple[int, int], frame: tuple[int, int], background: str) -> list[str]:
+    """Scale a window to the frame without stretching it: one at the frame's aspect, give
+    or take the two pixels of rounding to even sizes, fills it and loses that rounding at
+    the edges; any other is fitted inside and padded."""
+    w, h = size
+    width, height = frame
+    if abs(w * height - width * h) <= 2 * max(width, height):
+        return [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos",
+            f"crop={width}:{height}",
+        ]
+    return [
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
+    ]
 
 
 def shot_chain(
@@ -139,22 +173,30 @@ def shot_chain(
     background: str,
     commands: Path | None,
 ) -> list[str]:
-    """Filters that frame one shot: crop its window at full picture height, then fill the
-    frame, or, for a window wider than the frame's aspect, fit it and pad above and below."""
-    width, height = frame
+    """Filters that frame one shot: crop its window, at full picture height unless the
+    shot has its own, then fill the frame, or, for a window of another shape, fit it and
+    pad the rest."""
+    crop, fit = shot_parts(shot, index, content, frame, background, commands)
+    return crop + fit
+
+
+def shot_parts(
+    shot: Shot,
+    index: int,
+    content: tuple[int, int, int, int],
+    frame: tuple[int, int],
+    background: str,
+    commands: Path | None,
+) -> tuple[list[str], list[str]]:
     _, top, _, picture_height = content
-    crop = f"{shot.width}:{picture_height}:{shot.x}:{top}"
+    if shot.height:
+        top, picture_height = shot.y, shot.height
+    window = f"{shot.width}:{picture_height}:{shot.x}:{top}"
     if shot.follow and commands is not None:
-        chain = [f"sendcmd=f='{escape_filter_path(commands)}'", f"crop@s{index}={crop}"]
+        crop = [f"sendcmd=f='{escape_filter_path(commands)}'", f"crop@s{index}={window}"]
     else:
-        chain = [f"crop={crop}"]
-    if shot.width * height <= width * picture_height + height:  # fills the frame
-        return [*chain, f"scale={width}:{height}:flags=lanczos"]
-    return [
-        *chain,
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos",
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
-    ]
+        crop = [f"crop={window}"]
+    return crop, fit_chain((shot.width, picture_height), frame, background)
 
 
 def crop_size(source: tuple[int, int], frame: tuple[int, int]) -> tuple[int, int]:
@@ -173,18 +215,61 @@ def _even(value: float) -> int:
 PULSE_SECONDS = 0.3
 
 
-def zoom_expression(edl: EDL, pulses: list[float] = (), pulse_scale: float = 1.0) -> str | None:
-    """Scale over time: the planner's punch-ins, plus short pulses that ease back out."""
+def zoom_expression(
+    edl: EDL,
+    pulses: list[float] = (),
+    pulse_scale: float = 1.0,
+    room: list[tuple[float, float, float]] | None = None,
+) -> str | None:
+    """Scale over time: the planner's punch-ins, plus short pulses that ease back out.
+    `room` gives reel stretches and the most each may be zoomed (see zoom_room)."""
+    room = room or [(0.0, math.inf, math.inf)]
     terms = []
+
+    def add(start: float, end: float, scale: float, shape: str = "") -> None:
+        for a, b, most in room:
+            low, high = max(start, a), min(end, b)
+            amount = min(scale, most) - 1
+            if high > low and amount >= 0.001:
+                terms.append(f"{amount:.3f}*between(t,{low:.3f},{high:.3f}){shape}")
+
     for t in pulses:
         d = PULSE_SECONDS
-        terms.append(f"{pulse_scale - 1:.3f}*between(t,{t:.3f},{t + d:.3f})*(1-(t-{t:.3f})/{d})")
+        add(t, t + d, pulse_scale, f"*(1-(t-{t:.3f})/{d})")
     for zoom in edl.zooms:
         t = edl.to_output_time(zoom.time)
         if t is None:
             continue
-        terms.append(f"{zoom.scale - 1:.3f}*between(t,{t:.3f},{t + zoom.duration:.3f})")
+        add(t, t + zoom.duration, zoom.scale)
     return "1+" + "+".join(terms) if terms else None
+
+
+def zoom_room(
+    edl: EDL, preset: Preset, source: tuple[int, int], layers: Layers
+) -> list[tuple[float, float, float]]:
+    """How far each stretch of the reel may be zoomed into. A window cropped to fill the
+    frame may be; a picture shown whole, or a window widened so nothing in it is cut, only
+    as far as its padding leaves room before the zoom would cut into it after all."""
+    frame = preset.size
+    width, height = frame
+    if edl.crop_mode == "none":
+        w, h = layers.black_bars[:2] if layers.black_bars else source
+        box = _even(width * preset.framing.picture_width)
+        scale = min(box / w, height / h)
+        return [(0.0, edl.duration, min(width / (w * scale), height / (h * scale)))]
+    if edl.crop_mode != "smart" or not edl.shots:
+        return [(0.0, edl.duration, math.inf)]
+    clip = edl.clips[0]
+    content = layers.content or (0, 0, *source)
+    room = []
+    for shot in edl.shots:
+        w, h = shot.width, shot.height or content[3]
+        most = math.inf
+        if abs(w * height - width * h) > 2 * max(width, height):  # padded, not filling
+            scale = min(width / w, height / h)
+            most = min(width / (w * scale), height / (h * scale))
+        room.append((shot.start - clip.start, shot.end - clip.start, most))
+    return room
 
 
 def video_band(
@@ -210,11 +295,24 @@ def build_graph(
     parts = []
     segments = 0
     background = layers.background or preset.framing.background
+
+    def segment(label: str, crop: list[str], fit: list[str]) -> None:
+        # Colour goes on after the crop, so only the pixels that are kept get graded (every
+        # grading filter works pixel by pixel), and before the padding, which keeps its own.
+        nonlocal segments
+        fit = [*fit, "setsar=1", f"fps={preset.fps}"]
+        graded, last = grade_chain(f"c{segments}", segments, layers)
+        if graded:
+            parts.append(f"[{label}]{','.join(crop) or 'null'}[c{segments}]")
+            parts.extend(graded)
+            parts.append(f"[{last}]{','.join(fit)}[v{segments}]")
+        else:
+            parts.append(f"[{label}]{','.join(crop + fit)}[v{segments}]")
+        segments += 1
+
     for i, clip in enumerate(edl.clips):
         blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
         parts += blurred
-        graded, label = grade_chain(label, i, layers)
-        parts += graded
         if edl.crop_mode == "smart" and edl.shots:
             # One continuous clip, framed shot by shot and joined back in order.
             content = layers.content or (0, 0, *source)
@@ -222,20 +320,13 @@ def build_graph(
             parts.append(f"[{label}]split={count}" + "".join(f"[s{k}]" for k in range(count)))
             for k, shot in enumerate(edl.shots):
                 start, end = shot.start - clip.start, shot.end - clip.start
-                chain = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
-                chain += shot_chain(
-                    shot,
-                    k,
-                    content,
-                    frame,
-                    background,
-                    layers.shot_commands.get(k),
+                crop, fit = shot_parts(
+                    shot, k, content, frame, background, layers.shot_commands.get(k)
                 )
-                chain += ["setsar=1", f"fps={preset.fps}"]
-                parts.append(f"[s{k}]{','.join(chain)}[v{segments}]")
-                segments += 1
+                trim = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
+                segment(f"s{k}", trim + crop, fit)
             continue
-        chain = frame_chain(
+        crop, fit = frame_parts(
             edl.crop_mode,
             source,
             frame,
@@ -245,9 +336,7 @@ def build_graph(
             layers.black_bars,
             preset.framing.picture_width,
         )
-        chain += ["setsar=1", f"fps={preset.fps}"]
-        parts.append(f"[{label}]{','.join(chain)}[v{segments}]")
-        segments += 1
+        segment(label, crop, fit)
     joined = "".join(f"[v{i}]" for i in range(segments))
     parts.append(f"{joined}concat=n={segments}:v=1:a=0[base]")
     current = "base"
@@ -257,7 +346,8 @@ def build_graph(
         parts.append(f"[{current}]{filters}[{label}]")
         current = label
 
-    if (zoom := zoom_expression(edl, layers.pulses, layers.pulse_scale)) is not None:
+    room = zoom_room(edl, preset, source, layers)
+    if (zoom := zoom_expression(edl, layers.pulses, layers.pulse_scale, room)) is not None:
         step(
             f"scale=w='trunc({width}*({zoom})/2)*2':h='trunc({height}*({zoom})/2)*2'"
             f":eval=frame:flags=bicubic,crop={width}:{height}",

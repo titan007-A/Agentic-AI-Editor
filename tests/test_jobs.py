@@ -1,0 +1,105 @@
+import shutil
+from types import SimpleNamespace
+
+import pytest
+
+from agentic_editor import jobs, pipeline
+from agentic_editor.backends import Backends
+from agentic_editor.db import Event, Job, StyleDraft, make_sessionmaker
+from agentic_editor.settings import ROOT, Settings
+
+
+def test_a_restart_fails_what_was_running_and_queues_again_what_was_lost(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add_all([
+            Job(id="running", source="https://x.test/1", presets=["p"], status="running"),
+            Job(id="waiting", source="https://x.test/2", presets=["p"]),
+            Job(id="lost", source="https://x.test/3", presets=["p"]),
+            Job(id="done", source="https://x.test/4", presets=["p"], status="done"),
+            StyleDraft(id="reading", source="https://x.test/5", status="running"),
+            StyleDraft(id="unqueued", source="https://x.test/6"),
+        ])  # fmt: skip
+        db.commit()
+    queue = [SimpleNamespace(name=jobs.PROCESS, args=("waiting",))]
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue))
+    started, learning = [], []
+    monkeypatch.setattr(jobs, "process", started.append)
+    monkeypatch.setattr(jobs, "learn_style", learning.append)
+
+    jobs.recover(Session)
+
+    with Session() as db:
+        assert db.get(Job, "running").status == "failed"
+        assert db.get(Job, "running").error == jobs.INTERRUPTED
+        assert db.query(Event).filter_by(job_id="running", stage="failed").count() == 1
+        assert db.get(StyleDraft, "reading").status == "failed"
+        assert db.get(Job, "done").status == "done"
+    assert started == ["lost"] and learning == ["unqueued"]
+
+
+def test_a_job_that_fails_while_saving_its_outputs_is_marked_failed(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="https://x.test/v", presets=["square-1x1"]))
+        db.commit()
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    settings = Settings(presets_dir=ROOT / "presets", media_dir=tmp_path / "media")
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        broken = pipeline.Output("square-1x1", tmp_path / "a.mp4", None, "fake-model")
+        return pipeline.Result("A song", [broken])
+
+    jobs.run_job("j1", Session, settings, run)
+
+    with Session() as db:
+        job = db.get(Job, "j1")
+        assert job.status == "failed" and job.error.startswith("AttributeError")
+
+
+def test_a_job_shows_the_sources_title_while_it_runs_and_keeps_its_own_outputs(
+    tmp_path, monkeypatch
+):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="https://x.test/v", title="https://x.test/v", presets=[]))
+        db.commit()
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    settings = Settings(presets_dir=ROOT / "presets", media_dir=tmp_path / "media")
+    seen = {}
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        progress("download", "fetching it")
+        progress("title", "A song")
+        with Session() as db:
+            seen["title"] = db.get(Job, "j1").title
+            seen["events"] = [e.stage for e in db.query(Event).filter_by(job_id="j1")]
+        seen["run_id"] = run_id
+        return pipeline.Result("A song", [])
+
+    jobs.run_job("j1", Session, settings, run)
+    assert seen == {"title": "A song", "events": ["download"], "run_id": "j1"}
+
+
+def test_progress_has_a_share_for_every_video_a_job_makes(tmp_path, monkeypatch):
+    presets = tmp_path / "presets"
+    shutil.copytree(ROOT / "presets", presets)
+    square = presets / "square-1x1.yaml"
+    square.write_text(square.read_text() + "hook:\n  variants: 2\n")
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="https://x.test/v", presets=["square-1x1", "shorts-9x16"]))
+        db.commit()
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    settings = Settings(presets_dir=presets, media_dir=tmp_path / "media")
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        for name in ("square-1x1", "square-1x1-b", "shorts-9x16"):
+            progress("render", f"rendering {name}")
+            progress("done", f"{name} -> {name}.mp4")
+        return pipeline.Result("A song", [])
+
+    jobs.run_job("j1", Session, settings, run)
+    with Session() as db:
+        done = [e.progress for e in db.query(Event).filter_by(job_id="j1", stage="done")]
+    assert done == pytest.approx([0.55 + 0.15, 0.55 + 0.30, 0.99])

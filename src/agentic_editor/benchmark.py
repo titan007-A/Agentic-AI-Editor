@@ -55,11 +55,14 @@ def time_separation(
     return result, stems.vocals
 
 
-def time_llm(base_url: str, model: str) -> Result:
+def time_llm(base_url: str, model: str, gpu_layers: int | None = None) -> Result:
     """Generation speed as Ollama measures it, after a warm-up call loads the model."""
     with httpx.Client(timeout=600) as http:
+        options = {} if gpu_layers is None else {"num_gpu": gpu_layers}
         body = {"model": model, "prompt": LLM_PROMPT, "stream": False, "think": False}
-        http.post(f"{base_url}/api/generate", json={**body, "options": {"num_predict": 8}})
+        body["options"] = options
+        warm_up = {**body, "options": {**options, "num_predict": 8}}
+        http.post(f"{base_url}/api/generate", json=warm_up)
         started = time.monotonic()
         response = http.post(f"{base_url}/api/generate", json=body)
         took = time.monotonic() - started
@@ -101,13 +104,14 @@ def run(
 ) -> list[Result]:
     info = ffmpeg.probe(video)
     work = settings.cache_dir / "benchmark"
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
     router = ModelRouter(settings, backends)
     # Timed on an idle machine: a job running meanwhile would share the GPU and the CPU.
     # No job holds the encoder while it waits for the GPU, so taking both can't deadlock.
-    try:
-        with slots.gpu.turn("benchmark"), slots.encoder.turn("benchmark"):
+    with slots.gpu.turn("benchmark"), slots.encoder.turn("benchmark"):
+        # Cleared only once it's our turn: another benchmark may be using it until then.
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        try:
             results = []
             if info.has_audio:
                 audio = ffmpeg.extract_audio(video, work / "audio.wav")
@@ -118,11 +122,11 @@ def run(
                 results.append(separated)
             if llm:
                 for model in dict.fromkeys([settings.llm_model, settings.vision_model]):
-                    results.append(time_llm(settings.ollama_url, model))
+                    results.append(time_llm(settings.ollama_url, model, settings.llm_gpu_layers))
             results.append(time_render(video, info, preset, backends, work))
             return results
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def report(results: list[Result], source: str, duration: float) -> str:

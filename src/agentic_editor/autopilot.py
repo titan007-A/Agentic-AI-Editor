@@ -9,6 +9,7 @@ pile when the agent has doubts about them.
 
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 SETTLING = 60.0  # seconds a file must sit unchanged, so one still being copied is left alone
 LIST_LIMIT = 200  # newest entries read from a playlist or channel
 CHANNEL = re.compile(r"^https?://(www\.|m\.)?youtube\.com/(@[^/?#]+|(channel|c|user)/[^/?#]+)/?$")
+_checking: dict[int, threading.Lock] = {}
+_checking_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -112,16 +115,30 @@ def check(
 ) -> str:
     """Look at one feed and start jobs for videos it hasn't seen. Returns what happened.
     `now` is local time, which the feed's hours are in."""
-    now = now or datetime.now()
+    # The scheduled scan and "check now" may look at one feed at the same time; both
+    # would start the same new videos.
+    with _checking_lock:
+        lock = _checking.setdefault(feed_id, threading.Lock())
+    with lock:
+        return _check(feed_id, Session, start, lister, now or datetime.now())
+
+
+def _check(
+    feed_id: int,
+    Session: sessionmaker,
+    start: Callable[[str], None],
+    lister: Callable[[Feed], list[Entry]],
+    now: datetime,
+) -> str:
     started: list[str] = []
     with Session() as db:
         feed = db.get(Feed, feed_id)
         if feed is None:
             return "no such feed"
-        first = feed.last_checked is None
         # The first look also marks what is already there, whatever the hour, so that
-        # later only what arrives after the feed began counts as new.
-        skipping = first and not feed.include_existing
+        # later only what arrives after the feed began counts as new. A look that failed
+        # to read the feed doesn't count.
+        skipping = not feed.looked and not feed.include_existing
         if not feed.enabled or not (skipping or active(feed, now.hour)):
             return "waiting" if feed.enabled else "off"
         try:
@@ -163,6 +180,7 @@ def check(
             result = f"started {len(started)} new video(s)" + (
                 f", {waiting} waiting" if waiting else ""
             )
+        feed.looked = True
         feed.last_checked, feed.last_result = datetime.now(UTC), result
         db.commit()
     for job_id in started:
@@ -174,5 +192,9 @@ def check_all(Session: sessionmaker, start: Callable[[str], None], **kwargs) -> 
     with Session() as db:
         ids = list(db.scalars(select(Feed.id).where(Feed.enabled)))
     for feed_id in ids:
-        result = check(feed_id, Session, start, **kwargs)
+        try:
+            result = check(feed_id, Session, start, **kwargs)
+        except Exception:
+            log.exception("checking feed %d failed", feed_id)
+            continue
         log.info("feed %d: %s", feed_id, result)

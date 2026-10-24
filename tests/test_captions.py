@@ -156,3 +156,31 @@ def test_a_line_too_wide_for_the_frame_is_split_where_it_reads_well():
     )
     lines = [c.text for c in speech_cues(said, 3, fits=lambda line: len(line) <= 26)]
     assert lines == ["the Federal", "Communications Commission", "in the United States."]
+
+
+def test_a_sung_line_too_wide_for_the_frame_is_split_not_left_to_run_off():
+    sung = words_from(
+        "everybody@0-0.4 wants@0.4-0.7 somebody@0.7-1.1 beautiful@1.1-1.5 tonight@1.5-1.9 "
+        "forever@1.9-2.3 darling@2.3-2.7"
+    )
+    cues = lyric_cues(sung, fits=lambda line: len(line) <= 30)
+    assert all(len(c.text) <= 30 for c in cues) and len(cues) > 1
+    assert " ".join(c.text for c in cues) == " ".join(w.text for w in sung)
+
+
+def test_a_shrunk_caption_stays_shrunk_after_the_highlighted_word():
+    cue = speech_cues(words_from("Geschwindigkeitsbegrenzung@0-1 gilt@1-1.5"), 3)
+    ass = build_ass(cue, CaptionStyle(animation="pop"), FRAME, "Anton", scales=[0.9])
+    events = dialogue(ass)
+    assert events[0].endswith(
+        r"{\fscx90\fscy90}{\1c&H0000E0FF\fscx101\fscy101}GESCHWINDIGKEITSBEGRENZUNG"
+        r"{\r\fscx90\fscy90} GILT"
+    )
+    plain = dialogue(build_ass(cue, CaptionStyle(animation="pop"), FRAME, "Anton"))
+    assert r"\fscx112\fscy112" in plain[0] and r"{\r}" in plain[0]
+
+
+def test_a_sung_word_just_past_a_breath_is_still_captioned():
+    sung = words_from("I@0.1-0.3 need@0.4-0.8 you@0.9-1.6 now@1.85-2.3 baby@3.2-3.9 please@4.0-4.6")
+    cues = lyric_cues(sung, breaths=[(0.0, 2.0), (3.0, 5.0)])
+    assert [c.text for c in cues] == ["I need you now", "baby please"]

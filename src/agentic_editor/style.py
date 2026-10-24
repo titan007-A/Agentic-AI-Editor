@@ -18,6 +18,7 @@ import math
 import re
 import statistics
 import subprocess
+import tempfile
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,7 +33,13 @@ from scipy import ndimage
 from agentic_editor import ffmpeg, slots
 from agentic_editor.analysis import layout
 from agentic_editor.analysis.layout import Box, Line
-from agentic_editor.analyze import SPARSE_WORDS, cached, file_hash, isolate_vocals
+from agentic_editor.analyze import (
+    SPARSE_WORDS,
+    cached,
+    file_hash,
+    isolate_vocals,
+    transcript_file,
+)
 from agentic_editor.backends import Backends
 from agentic_editor.download import Source
 from agentic_editor.edl import Cue
@@ -626,19 +633,20 @@ def ass_ink(
     script = ass.build_ass(
         [Cue(start=0, end=2, text="\n".join(lines))], style, frame, font_family(font)
     )
-    work = settings.cache_dir / "style-calibration"
-    work.mkdir(parents=True, exist_ok=True)
-    path = work / "probe.ass"
-    path.write_text(script, encoding="utf-8")
-    raw = subprocess.run(
-        [settings.ffmpeg_bin, "-v", "error", "-f", "lavfi",
-         "-i", f"color=black:s={width}x{height}:d=2", "-ss", "1",
-         "-vf", f"subtitles=filename='{ffmpeg.escape_filter_path(path)}'"
-                f":fontsdir='{ffmpeg.escape_filter_path(settings.fonts_dir)}',format=gray",
-         "-frames:v", "1", "-f", "rawvideo", "-"],
-        capture_output=True,
-        check=True,
-    ).stdout  # fmt: skip
+    settings.cache_dir.mkdir(parents=True, exist_ok=True)
+    # A folder per call: two drafts learned at once would draw each other's probe.
+    with tempfile.TemporaryDirectory(prefix="style-calibration-", dir=settings.cache_dir) as work:
+        path = Path(work) / "probe.ass"
+        path.write_text(script, encoding="utf-8")
+        raw = subprocess.run(
+            [settings.ffmpeg_bin, "-v", "error", "-f", "lavfi",
+             "-i", f"color=black:s={width}x{height}:d=2", "-ss", "1",
+             "-vf", f"subtitles=filename='{ffmpeg.escape_filter_path(path)}'"
+                    f":fontsdir='{ffmpeg.escape_filter_path(settings.fonts_dir)}',format=gray",
+             "-frames:v", "1", "-f", "rawvideo", "-"],
+            capture_output=True,
+            check=True,
+        ).stdout  # fmt: skip
     rows = np.nonzero((np.frombuffer(raw, np.uint8).reshape(height, width) > 128).any(axis=1))[0]
     if not len(rows):
         raise ValueError(f"libass drew nothing with {font.name}")
@@ -650,7 +658,7 @@ def text_block(m: Measured, fit: FontFit, frame: tuple[int, int]) -> TextBlock:
     top_half = (m.top + m.bottom) / 2 < height / 2
     widest = max(b[3] - b[2] for b in m.boxes)
     lines = split_like(m.lines, [b[3] - b[2] for b in m.boxes], fit.font) or m.lines
-    size = round(fit.size)
+    size = min(300, max(12, round(fit.size)))
     return TextBlock(
         text="\n".join(lines),
         font=fit.font.stem,
@@ -694,13 +702,14 @@ def caption_style(
     colour = agreed_colour([m.colour for m, _ in fits])
     others = [m.other for m, _ in fits if m.other]
     outlines = [m.outline for m, _ in fits if m.outline is not None]
+    size = max(12, min(300, round(_typical(sizes))))
     settings_found = {
         "enabled": True,
         "font": font.stem,
-        "size": max(12, min(300, round(_typical(sizes)))),
+        "size": size,
         "color": hex_colour(colour),
         "position": position,
-        "margin": max(0, round(_typical(margins))) if margins else 0,
+        "margin": min(max(0, round(_typical(margins))), height - size) if margins else 0,
         "words_per_line": max(1, min(12, round(statistics.median(words)))),
         "uppercase": upper >= 0.9,
         "animation": "highlight" if others else "none",
@@ -894,7 +903,7 @@ def _learn(
         progress("transcribe", "listening")
         transcript = Transcript.model_validate(
             cached(
-                work_dir / "transcript-original.json",
+                transcript_file(work_dir, "original", router),
                 lambda: router.transcribe(original).model_dump(),
             )
         )
@@ -963,7 +972,7 @@ def _learn(
         if len(transcript.words) < SPARSE_WORDS * info.duration / 60 and not instrument_free:
             sung = Transcript.model_validate(
                 cached(
-                    work_dir / "transcript-vocals.json",
+                    transcript_file(work_dir, "vocals", router),
                     lambda: router.transcribe(vocals).model_dump(),
                 )
             )
@@ -1011,7 +1020,7 @@ def _learn(
         elif role == "title" and "title_overlay" not in updates:
             agreed = consensus(measured(g), fonts)
             if agreed:
-                updates["title_overlay"] = title_overlay(*agreed, colour)
+                updates["title_overlay"] = title_overlay(*agreed, colour, height)
                 updates["hook"] = Hook(overlay=True)
                 notes.append(
                     f"Opening title: {quoted(g[0].text)} for the first seconds; each reel gets "
@@ -1096,25 +1105,26 @@ def framing_for(
     if below:
         framing.text_gap_below = max(0, round(min(below) - picture[3] * height))
     if share < INSET:
-        framing.picture_width = round(share, 2)
+        framing.picture_width = max(0.3, round(share, 2))
         around += f", {share:.0%} of the frame wide"
     return framing, f"Layout: the whole picture on {around}"
 
 
 def title_overlay(
-    title: Measured, fit: FontFit, background: tuple[int, int, int] | None
+    title: Measured, fit: FontFit, background: tuple[int, int, int] | None, height: int
 ) -> TitleOverlay:
     """The hook banner's look from a title seen in the opening seconds."""
     box = title.backdrop if title.backdrop and title.backdrop != background else None
     # Banners are placed by where their first line starts, above its ink.
     face = ImageFont.truetype(str(fit.font), round(fit.size))
     lead = _ink_box(face, title.lines[0])[1]
+    size = min(300, max(12, round(fit.size / 0.8)))  # the hook banner is drawn at 0.8 of this
     return TitleOverlay(
         font=fit.font.stem,
-        size=round(fit.size / 0.8),  # the hook banner is drawn at 0.8 of this
+        size=size,
         color=hex_colour(title.colour),
         box_color=hex_colour(box) if box else None,
-        offset=max(0, title.top - lead),
+        offset=min(max(0, title.top - lead), height - size),
     )
 
 

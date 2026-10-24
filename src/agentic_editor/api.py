@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import signal
@@ -18,12 +19,12 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from agentic_editor import autopilot, jobs
-from agentic_editor.auth import verify_password
+from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
 from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting, StyleDraft
 from agentic_editor.download import update_ytdlp
@@ -37,7 +38,10 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 NOTICE_KEY = "usage_notice_accepted"
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
 SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
+# How long a shutdown waits for running jobs; any still running are failed at the next start.
+SHUTDOWN_SECONDS = 30
 PILE_LIMIT = 100
+FAILED_LOGIN_DELAY = 1.0
 
 
 class LoginRequest(BaseModel):
@@ -221,8 +225,12 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         consumer = None
         if start_worker:
+            await asyncio.to_thread(jobs.recover, make_session)
             consumer = jobs.huey.create_consumer(
-                workers=settings.max_concurrent_jobs, worker_type="thread", periodic=False
+                workers=settings.max_concurrent_jobs,
+                worker_type="thread",
+                periodic=False,
+                shutdown_timeout=SHUTDOWN_SECONDS,
             )
             # Consumer.start() installs its own SIGINT/SIGTERM/SIGHUP handlers, which would
             # stop uvicorn from ever seeing a shutdown request. Put uvicorn's back.
@@ -278,11 +286,27 @@ def create_app(
         jobs.process(job.id)
         return job
 
+    logins = app.state.logins = LoginGuard()
+
     @app.post("/api/login")
     async def login(body: LoginRequest, request: Request) -> dict:
-        if not settings.password_hash or not verify_password(body.password, settings.password_hash):
-            await asyncio.sleep(1)
+        client = request.client.host if request.client else ""
+        wait = math.ceil(logins.wait(client))
+        if wait:
+            raise HTTPException(
+                429,
+                f"too many wrong passwords; try again in {wait} s",
+                headers={"Retry-After": str(wait)},
+            )
+        # Counted before the check, so that many guesses sent at once are limited too.
+        logins.failed(client)
+        right = bool(settings.password_hash) and await asyncio.to_thread(
+            verify_password, body.password, settings.password_hash
+        )
+        if not right:
+            await asyncio.sleep(FAILED_LOGIN_DELAY)
             raise HTTPException(401, "wrong password")
+        logins.succeeded(client)
         request.session["user"] = "owner"
         return {"ok": True}
 
@@ -395,9 +419,11 @@ def create_app(
         unknown = set(body.presets) - presets().keys()
         if unknown:
             raise HTTPException(422, f"unknown preset(s): {', '.join(sorted(unknown))}")
-        created = []
-        for source in dict.fromkeys(s.strip() for s in body.sources if s.strip()):
+        sources = list(dict.fromkeys(s.strip() for s in body.sources if s.strip()))
+        for source in sources:  # all of them before any job starts
             check_source(source)
+        created = []
+        for source in sources:
             title = source if source.startswith("http") else ""
             created.append(
                 enqueue(session, source=source, title=title, presets=body.presets, notes=body.notes)
@@ -426,7 +452,12 @@ def create_app(
 
     @app.get("/api/jobs")
     def list_jobs(_: User, session: DB) -> list[JobView]:
-        rows = session.scalars(select(Job).order_by(Job.created_at.desc()).limit(200))
+        rows = session.scalars(
+            select(Job)
+            .options(selectinload(Job.outputs))
+            .order_by(Job.created_at.desc())
+            .limit(200)
+        )
         return [job_view(j) for j in rows]
 
     @app.get("/api/jobs/{job_id}")
@@ -540,12 +571,17 @@ def create_app(
             raise HTTPException(422, "a playlist or channel feed needs a link")
         if (body.active_from is None) != (body.active_to is None):
             raise HTTPException(422, "give both hours, or neither for any time")
+        if body.active_from is not None and body.active_from == body.active_to:
+            raise HTTPException(
+                422, "the hours start and end at the same time; leave both out for any time"
+            )
         notes = body.notes.strip() if body.notes else None
         return body.model_copy(update={"location": location, "notes": notes or None})
 
     @app.get("/api/feeds")
     def list_feeds(_: User, session: DB) -> list[FeedView]:
-        return [feed_view(f) for f in session.scalars(select(Feed).order_by(Feed.id))]
+        feeds = select(Feed).options(selectinload(Feed.items).selectinload(FeedItem.job))
+        return [feed_view(f) for f in session.scalars(feeds.order_by(Feed.id))]
 
     @app.post("/api/feeds")
     def create_feed(body: FeedRequest, _: User, session: DB) -> FeedView:
@@ -560,7 +596,10 @@ def create_app(
     @app.put("/api/feeds/{feed_id}")
     def update_feed(feed_id: int, body: FeedRequest, _: User, session: DB) -> FeedView:
         feed = find_feed(feed_id, session)
-        for key, value in checked_feed(body).model_dump().items():
+        updated = checked_feed(body)
+        if (updated.kind, updated.location) != (feed.kind, feed.location):
+            feed.looked = False  # somewhere new: what is already there is noted first
+        for key, value in updated.model_dump().items():
             setattr(feed, key, value)
         session.commit()
         return feed_view(feed)
@@ -581,16 +620,21 @@ def create_app(
     @app.get("/api/piles")
     def pile_counts(_: User, session: DB) -> dict[str, int]:
         counts = {"ready": 0, "look": 0}
-        for output in session.scalars(select(Output)):
-            if output.pile:
-                counts[output.pile] += 1
+        rows = session.execute(select(Output.pile, func.count()).group_by(Output.pile))
+        counts.update({pile: n for pile, n in rows if pile})
         return counts
 
     @app.get("/api/piles/{pile}")
     def pile(pile: Literal["ready", "look"], _: User, session: DB) -> list[JobView]:
         """The outputs in a pile, newest first, each with its job."""
-        outputs = session.scalars(select(Output).order_by(Output.id.desc()))
-        return [job_view(o.job, only=o.id) for o in outputs if o.pile == pile][:PILE_LIMIT]
+        outputs = session.scalars(
+            select(Output)
+            .where(Output.pile == pile)
+            .options(selectinload(Output.job).selectinload(Job.outputs))
+            .order_by(Output.id.desc())
+            .limit(PILE_LIMIT)
+        )
+        return [job_view(o.job, only=o.id) for o in outputs]
 
     @app.post("/api/outputs/{output_id}/verdict")
     def verdict(output_id: int, body: VerdictRequest, _: User, session: DB) -> JobView:

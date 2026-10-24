@@ -84,6 +84,25 @@ def test_a_picture_already_vertical_is_shown_whole():
     assert (shot.x, shot.width) == (0, 1080)
 
 
+def test_a_portrait_picture_in_a_square_frame_is_cropped_top_and_bottom_not_squashed():
+    head = (10.5, [Face(cx=0.5, cy=0.3, width=0.2, height=0.12, score=0.9)])
+    (shot,) = frame_shots(CLIP, [], [], [head], (0, 0, 1080, 1920), 1080, (1080, 1080), 1920)
+    assert (shot.x, shot.width, shot.height) == (0, 1080, 1080)
+    # The head (rows 380-714 with its hair) sits inside, with some room above it.
+    assert shot.y <= 380 and shot.y + 1080 >= 714 and shot.y > 0
+
+
+def test_a_taller_phone_picture_is_cropped_to_the_frame_height():
+    (shot,) = frame_shots(CLIP, [], [], [], (0, 0, 1080, 2400), 1080, FRAME, 2400)
+    assert (shot.width, shot.height, shot.y) == (1080, 1920, 240)
+
+
+def test_heads_too_far_apart_vertically_show_the_whole_tall_picture():
+    faces = [(10.5, [Face(cx=0.5, cy=y, width=0.2, height=0.1, score=0.9) for y in (0.1, 0.9)])]
+    (shot,) = frame_shots(CLIP, [], [], faces, (0, 0, 1080, 1920), 1080, (1080, 1080), 1920)
+    assert shot.height is None and "whole picture" in shot.reason
+
+
 def test_black_bars_are_left_out_of_the_window():
     pillarboxed = (240, 0, 1440, 1080)
     (shot,) = frame([(10.5, [])], faces=[face_at(10.5, 300)], content=pillarboxed)

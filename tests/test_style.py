@@ -1,10 +1,14 @@
+import re
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from agentic_editor import style
 from agentic_editor.analysis import layout
+from agentic_editor.settings import Settings
 from agentic_editor.style import Measured, Sighting
 from agentic_editor.transcript import Transcript, Word
 
@@ -227,3 +231,40 @@ def test_captions_are_speech_lyrics_translated_or_written():
         "Spanish",
     )
     assert style.caption_mode(["A quiet street"], Transcript(), False, "English")[0] == "visual"
+
+
+def test_drafts_learned_at_once_each_measure_their_own_captions(tmp_path, monkeypatch):
+    settings = Settings(cache_dir=tmp_path / "cache")
+    font = sorted(settings.fonts_dir.glob("*.ttf"))[0]
+    both = threading.Barrier(2, timeout=5)
+    drawn = {}
+
+    def libass(cmd, **kwargs):
+        script = Path(re.search(r"filename='([^']+)'", " ".join(cmd)).group(1))
+        both.wait()  # both drafts have written their probe before either is drawn
+        drawn[threading.current_thread().name] = script.read_text(encoding="utf-8")
+        frame = np.zeros((1920, 1080), np.uint8)
+        frame[100:200] = 255
+        return SimpleNamespace(stdout=frame.tobytes())
+
+    monkeypatch.setattr(style.subprocess, "run", libass)
+    threads = [
+        threading.Thread(
+            target=style.ass_ink, args=([name], font, "bottom", (1080, 1920), settings), name=name
+        )
+        for name in ("first caption", "second caption")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(name in script for name, script in drawn.items()) and len(drawn) == 2
+
+
+def test_huge_learned_text_still_makes_a_valid_preset():
+    from agentic_editor.style import Measured, fit_font, text_block
+
+    m = Measured(lines=["WOW"], boxes=[(300, 700, 40, 1040)], colour=(255, 255, 255), fill=0.4)
+    fit = fit_font(m, [BOLD])
+    assert fit.size > 300
+    assert text_block(m, fit, (1080, 1920)).size == 300

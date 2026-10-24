@@ -1,4 +1,4 @@
-"""Client for models served by Ollama through its OpenAI-compatible API."""
+"""Client for models served by Ollama through its own chat API."""
 
 import base64
 import json
@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 log = logging.getLogger(__name__)
 
@@ -15,13 +16,33 @@ class LLMError(RuntimeError):
     pass
 
 
+def parse[M: BaseModel](model: type[M], reply: object) -> M:
+    """A reply as `model`. A reply outside the schema's limits (a score of 11, a box with
+    three corners) raises LLMError like any other bad answer, so callers' fallbacks apply."""
+    try:
+        return model.model_validate(reply)
+    except ValidationError as exc:
+        raise LLMError(f"reply doesn't fit {model.__name__}: {exc.errors()[0]['msg']}") from exc
+
+
 class OllamaClient:
     """A model served by Ollama. Used as a context manager, it holds `slot` (the GPU)
     while open and unloads the model when closed."""
 
-    def __init__(self, base_url: str, model: str, timeout: float = 600, slot=None, progress=None):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout: float = 600,
+        slot=None,
+        progress=None,
+        gpu_layers: int | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        # Layers to put on the GPU; None leaves it to Ollama, which keeps a margin and so
+        # can split a model that would fit across the CPU too, at about two thirds the speed.
+        self.gpu_layers = gpu_layers
         self.http = httpx.Client(timeout=timeout)
         self.last_tokens_per_second: float | None = None
         self.slot = slot
@@ -54,29 +75,47 @@ class OllamaClient:
         body = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "reply", "schema": schema, "strict": True},
-            },
+            "format": schema,
+            "stream": False,
             # Planning needs short, structured answers; the hidden reasoning pass only
             # costs time and VRAM on the small models.
-            "reasoning_effort": "none",
+            "think": False,
+            "options": {"temperature": temperature},
         }
         # Small models now and then stop mid-answer; one more try nearly always lands.
         for attempt in range(2):
+            if self.gpu_layers is not None:
+                body["options"]["num_gpu"] = self.gpu_layers
             started = time.monotonic()
-            response = self.http.post(f"{self.base_url}/v1/chat/completions", json=body)
+            try:
+                response = self.http.post(f"{self.base_url}/api/chat", json=body)
+            except httpx.HTTPError as exc:
+                # A timeout or a restarted server is one more failed answer to fall back from.
+                raise LLMError(f"{self.model} could not be reached: {exc!r}") from exc
+            if response.status_code != 200 and self.gpu_layers is not None:
+                # Something else holds GPU memory right now: let Ollama place it instead.
+                log.warning(
+                    "%s didn't load with %d GPU layers (%s); letting Ollama decide",
+                    self.model, self.gpu_layers, response.text[:200],
+                )  # fmt: skip
+                self.gpu_layers = None
+                body["options"].pop("num_gpu", None)
+                response = self.http.post(f"{self.base_url}/api/chat", json=body)
             if response.status_code != 200:
                 raise LLMError(
                     f"{self.model} returned {response.status_code}: {response.text[:500]}"
                 )
-            data = response.json()
+            try:
+                data = response.json()
+                content = data["message"].get("content") or ""
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+                raise LLMError(
+                    f"{self.model} sent an unexpected reply: {response.text[:300]}"
+                ) from exc
             elapsed = time.monotonic() - started
-            tokens = data.get("usage", {}).get("completion_tokens", 0)
+            tokens = data.get("eval_count", 0)
             self.last_tokens_per_second = tokens / elapsed if elapsed else None
             log.debug("%s: %d tokens in %.1fs", self.model, tokens, elapsed)
-            content = data["choices"][0]["message"].get("content") or ""
             try:
                 return json.loads(content)
             except json.JSONDecodeError as exc:
@@ -96,10 +135,4 @@ class OllamaClient:
 
 
 def _with_images(message: dict, images: list[Path]) -> dict:
-    parts = [{"type": "text", "text": message["content"]}]
-    for path in images:
-        encoded = base64.b64encode(path.read_bytes()).decode()
-        parts.append(
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
-        )
-    return {**message, "content": parts}
+    return {**message, "images": [base64.b64encode(p.read_bytes()).decode() for p in images]}

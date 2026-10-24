@@ -41,7 +41,19 @@ def test_end_extends_to_where_audio_goes_quiet():
     assert extend_to_silence(4.5, [(4.0, 5.0)]) == 4.5
 
 
+def test_end_is_not_pushed_into_the_next_sentence():
+    words = words_from("end.@9.6-9.95 and@10.75-10.95 the@10.95-11.15 next@11.15-11.6")
+    assert extend_to_silence(10.25, [(12.2, 12.9)], words) == 10.25
+    assert extend_to_silence(10.0, [(10.5, 11.0)], words) == 10.55
+
+
 def test_clean_edl_snaps_the_segment_to_word_boundaries():
     edl = EDL(clips=[Clip(start=1.6, end=2.5)])
     cleaned = clean_edl(edl, WORDS, silences=[])
     assert (cleaned.clips[0].start, cleaned.clips[0].end) == (1.35, 3.1)
+
+
+def test_a_cleaned_end_stays_before_the_next_sentence():
+    words = words_from("so@8.0-8.4 it.@8.4-9.95 and@10.75-10.95 the@10.95-11.15")
+    cleaned = clean_edl(EDL(clips=[Clip(start=8.0, end=9.95)]), words, silences=[(12.2, 12.9)])
+    assert cleaned.clips[0].end < 10.75

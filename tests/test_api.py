@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
-from agentic_editor import jobs, pipeline, style
+from agentic_editor import api, jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
-from agentic_editor.db import Event, Job, make_sessionmaker
+from agentic_editor.db import Event, Job, Output, make_sessionmaker
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.presets import Preset
 from agentic_editor.settings import ROOT, Settings
@@ -33,7 +34,7 @@ def env(tmp_path, monkeypatch):
     sessions = make_sessionmaker(settings.database)
     calls = []
 
-    def fake_run(source, presets, settings, backends, notes, progress):
+    def fake_run(source, presets, settings, backends, notes, progress, run_id=None):
         calls.append({"source": source, "presets": [p.name for p in presets], "notes": notes})
         progress("download", f"fetching {source}")
         progress("plan", "planning")
@@ -47,7 +48,7 @@ def env(tmp_path, monkeypatch):
             progress("done", f"{preset.name} -> {path}")
         return pipeline.Result("Sample song", outputs)
 
-    env = SimpleNamespace(calls=calls, settings=settings, run=fake_run)
+    env = SimpleNamespace(calls=calls, settings=settings, run=fake_run, sessions=sessions)
     monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
     monkeypatch.setattr(
         jobs, "process", lambda job_id: jobs.run_job(job_id, sessions, settings, env.run)
@@ -93,6 +94,24 @@ def test_wrong_password_is_rejected(env):
     env.client.post("/api/logout")
     assert env.client.post("/api/login", json={"password": "nope"}).status_code == 401
     assert env.client.get("/api/me").status_code == 401
+
+
+def test_wrong_passwords_one_after_another_have_to_wait(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    now = [1000.0]
+    env.client.app.state.logins.clock = lambda: now[0]
+    env.client.post("/api/logout")
+    for _ in range(5):
+        assert env.client.post("/api/login", json={"password": "nope"}).status_code == 401
+    # Even the right password waits, or a guesser could tell when it found it.
+    refused = env.client.post("/api/login", json={"password": PASSWORD})
+    assert refused.status_code == 429 and refused.headers["retry-after"] == "30"
+    now[0] += 31
+    assert env.client.post("/api/login", json={"password": "nope"}).status_code == 401
+    now[0] += 31
+    assert env.client.post("/api/login", json={"password": PASSWORD}).status_code == 429
+    now[0] += 30  # twice as long after another wrong one
+    assert env.client.post("/api/login", json={"password": PASSWORD}).status_code == 200
 
 
 def test_usage_notice_is_accepted_once(env):
@@ -152,8 +171,14 @@ def test_rejects_unknown_presets_and_non_links(env):
     assert env.client.post(jobs_url, json=local_path).status_code == 422
 
 
+def test_a_batch_with_one_bad_source_starts_nothing(env):
+    batch = {"sources": ["https://x.test/a", "not a link"], "presets": ["square-1x1"]}
+    assert env.client.post("/api/jobs", json=batch).status_code == 422
+    assert env.client.get("/api/jobs").json() == [] and env.calls == []
+
+
 def test_failed_run_marks_the_job_failed(env):
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise RuntimeError("download blocked")
 
     env.run = broken
@@ -267,8 +292,21 @@ def test_a_folder_feed_edits_what_it_holds_into_the_ready_pile(env, tmp_path):
     assert again["last_result"] == "started 0 new video(s)" and len(env.calls) == 2
 
 
+def test_a_feed_moved_somewhere_else_notes_what_is_already_there(env, tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    for folder in (first, second):
+        folder.mkdir()
+        (folder / "old.mp4").write_bytes(b"x")
+        os.utime(folder / "old.mp4", (1000, 1000))
+    feed = add_folder_feed(env, first).json()
+    body = {"name": "Drafts", "kind": "folder", "location": str(second), "presets": ["square-1x1"]}
+    assert env.client.put(f"/api/feeds/{feed['id']}", json=body).status_code == 200
+    again = env.client.post(f"/api/feeds/{feed['id']}/check").json()
+    assert again["last_result"].startswith("1 video(s) already there") and env.calls == []
+
+
 def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):
-    def doubtful(source, presets, settings, backends, notes, progress):
+    def doubtful(source, presets, settings, backends, notes, progress, run_id):
         result = env_run(source, presets, settings, backends, notes, progress)
         result.outputs[0].confidence, result.outputs[0].doubts = 0.8, ["8s without voice at 18s"]
         return result
@@ -286,11 +324,65 @@ def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):
     assert env.client.get("/api/piles").json() == {"ready": 0, "look": 0}
 
 
+def add_outputs(env, count: int) -> None:
+    with env.sessions() as db:
+        for i in range(count):
+            job = Job(source=f"https://x.test/{i}", presets=["square-1x1"], status="done")
+            db.add(job)
+            db.flush()
+            doubts = ["8s without voice"] if i % 2 else []
+            db.add(Output(job_id=job.id, preset="square-1x1", path=f"/x/{i}.mp4", duration=20,
+                          planner="fake-model", edl={}, doubts=doubts))  # fmt: skip
+        db.commit()
+
+
+def queries(env, url: str) -> int:
+    engine, count = env.sessions.kw["bind"], [0]
+
+    def counted(*args):
+        count[0] += 1
+
+    event.listen(engine, "before_cursor_execute", counted)
+    assert env.client.get(url).status_code == 200
+    event.remove(engine, "before_cursor_execute", counted)
+    return count[0]
+
+
+def test_lists_take_the_same_few_queries_however_long_they_are(env):
+    urls = ["/api/jobs", "/api/piles", "/api/piles/ready", "/api/piles/look", "/api/feeds"]
+    add_outputs(env, 3)
+    few = [queries(env, url) for url in urls]
+    add_outputs(env, 30)
+    assert [queries(env, url) for url in urls] == few
+
+
+def test_the_piles_sort_outputs_as_each_output_says(env):
+    with env.sessions() as db:
+        job = Job(source="https://x.test/v", presets=["square-1x1"], status="done")
+        db.add(job)
+        db.flush()
+        for verdict in (None, "approved", "posted", "dismissed"):
+            for doubts in ([], ["a doubt"]):
+                for issues in ([], ["an issue"]):
+                    db.add(Output(job_id=job.id, preset="square-1x1", path="/x.mp4", duration=1,
+                                  planner="m", edl={}, verdict=verdict, doubts=doubts,
+                                  issues=issues))  # fmt: skip
+        db.commit()
+        outputs = db.query(Output).all()
+        expected = {pile: {o.id for o in outputs if o.pile == pile} for pile in ("ready", "look")}
+    for pile, ids in expected.items():
+        listed = env.client.get(f"/api/piles/{pile}").json()
+        assert {j["outputs"][0]["id"] for j in listed} == ids
+    counts = env.client.get("/api/piles").json()
+    assert counts == {pile: len(ids) for pile, ids in expected.items()}
+
+
 def test_feeds_are_checked_before_they_are_saved(env, tmp_path):
     assert add_folder_feed(env, tmp_path / "missing").status_code == 422
     link = {"name": "x", "kind": "link", "location": "not a link", "presets": ["square-1x1"]}
     assert env.client.post("/api/feeds", json=link).status_code == 422
     assert add_folder_feed(env, tmp_path, active_from=23).status_code == 422
+    assert add_folder_feed(env, tmp_path, active_from=7, active_to=7).status_code == 422
     assert add_folder_feed(env, tmp_path, presets=["nope"]).status_code == 422
 
 
@@ -317,3 +409,18 @@ def test_a_reel_that_cannot_be_learned_from_says_why(env):
     bad_name = {"source": "https://x.test/r", "name": "Not A Name"}
     assert env.client.post("/api/styles", json=bad_name).status_code == 422
     assert env.client.get("/api/styles/nope").status_code == 404
+
+
+def test_a_job_with_some_versions_failed_is_done_and_says_which(env):
+    made = env.run
+
+    def partly(*args, run_id=None):
+        result = made(*args)
+        result.failures.append("vocal-music-9x16: RuntimeError: encoder crashed")
+        return result
+
+    env.run = partly
+    created = start(env.client, presets=["square-1x1"])
+    job = env.client.get(f"/api/jobs/{created[0]['id']}").json()
+    assert job["status"] == "done" and len(job["outputs"]) == 1
+    assert job["error"] == "vocal-music-9x16: RuntimeError: encoder crashed"

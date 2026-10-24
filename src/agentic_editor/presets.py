@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -13,6 +14,20 @@ from pydantic import (
 )
 
 Color = Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
+
+
+def _installed(name: str) -> str:
+    from agentic_editor.settings import get_settings
+
+    folder = get_settings().fonts_dir
+    if folder.is_dir() and not any((folder / f"{name}{ext}").exists() for ext in (".ttf", ".otf")):
+        raise ValueError(f"font '{name}' is not in the fonts folder")
+    return name
+
+
+FontName = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$"), AfterValidator(_installed)
+]
 Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]
 
 
@@ -28,7 +43,7 @@ class CaptionStyle(Strict):
     language: str | None = Field(default=None, description="target language for translated")
     avoid_faces: bool = True  # also keeps them off text already in the picture
     export_srt: bool = True
-    font: str = "Anton-Regular"
+    font: FontName = "Anton-Regular"
     size: int = Field(default=84, ge=12, le=300)
     color: Color = "#FFFFFF"
     highlight_color: Color = "#FFE000"
@@ -45,7 +60,7 @@ class OneLiner(Strict):
     """A single line the vision model writes about the video, burned in."""
 
     enabled: bool = False
-    font: str = "OpenSans-ExtraBold"
+    font: FontName = "OpenSans-ExtraBold"
     size: int = Field(default=64, ge=12, le=300)
     color: Color = "#FFFFFF"
     box_color: Color | None = "#000000"
@@ -60,7 +75,7 @@ class TextBlock(Strict):
     """A fixed piece of text drawn on every frame, such as a series tagline."""
 
     text: str
-    font: str = "OpenSans-ExtraBold"
+    font: FontName = "OpenSans-ExtraBold"
     size: int = Field(ge=12, le=300)
     min_size: int = Field(default=28, ge=8)
     color: Color = "#FFFFFF"
@@ -75,11 +90,11 @@ class TextBlock(Strict):
 
 class TitleOverlay(Strict):
     enabled: bool = False
-    font: str = "Anton-Regular"
-    size: int = 72
+    font: FontName = "Anton-Regular"
+    size: int = Field(default=72, ge=12, le=300)
     color: Color = "#FFFFFF"
     box_color: Color | None = "#000000"
-    offset: int = 300
+    offset: int = Field(default=300, ge=0, description="px from the top of the frame")
     duration: float = Field(default=3.0, gt=0)
 
 
@@ -97,12 +112,12 @@ class Logo(Strict):
     position: Corner = "top-right"
     opacity: float = Field(default=0.85, ge=0, le=1)
     width: int = Field(default=160, ge=16)
-    margin: int = 48
+    margin: int = Field(default=48, ge=0)
 
 
 class Music(Strict):
     file: str | None = None
-    volume_db: float = Field(default=-20, le=0)
+    volume_db: float = Field(default=-20, ge=-60, le=0)
     ducking: bool = True
 
 
@@ -146,9 +161,10 @@ class Watermarks(Strict):
 
 class Audio(Strict):
     source: Literal["original", "vocals"] = "original"
-    highpass_hz: int = Field(default=0, ge=0)
-    loudness_lufs: float = -14.0
-    true_peak_db: float = -1.5
+    highpass_hz: int = Field(default=0, ge=0, le=2000)
+    loudness_lufs: float = Field(default=-14.0, ge=-40, le=-5)
+    # The limiter can't hold peaks above 0 dB or below -24 dB.
+    true_peak_db: float = Field(default=-1.5, ge=-20, le=0)
     fade_in: float = Field(default=0.03, ge=0)
     fade_out: float = Field(default=0.25, ge=0)
 
@@ -165,7 +181,7 @@ class BeatSync(Strict):
 class Silence(Strict):
     """What counts as silence, used to trim a silent start or end; never to cut inside."""
 
-    threshold_db: float = -35.0
+    threshold_db: float = Field(default=-35.0, le=0)
     min_duration: float = Field(default=0.4, gt=0)
 
 
@@ -194,7 +210,7 @@ class Preset(Strict):
     watermarks: Watermarks = Watermarks()
     grade: Grade = Grade()
     audio: Audio = Audio()
-    bitrate_mbps: float = Field(default=12.0, gt=0)
+    bitrate_mbps: float = Field(default=12.0, gt=0, le=100)
     style_notes: str = ""
 
     @model_validator(mode="before")
@@ -214,8 +230,17 @@ class Preset(Strict):
     @field_validator("resolution")
     @classmethod
     def _resolution_format(cls, value: str) -> str:
-        if not re.fullmatch(r"\d{2,5}x\d{2,5}", value):
+        if not re.fullmatch(r"[1-9]\d{1,3}x[1-9]\d{1,3}", value):
             raise ValueError("resolution must look like 1080x1920")
+        if any(not 16 <= int(side) <= 4096 for side in value.split("x")):
+            raise ValueError("resolution must be between 16 and 4096 px on each side")
+        return value
+
+    @field_validator("aspect_ratio")
+    @classmethod
+    def _aspect_format(cls, value: str) -> str:
+        if not re.fullmatch(r"[1-9]\d*:[1-9]\d*", value):
+            raise ValueError("aspect_ratio must look like 9:16")
         return value
 
     @model_validator(mode="after")
@@ -228,6 +253,15 @@ class Preset(Strict):
         num, _, den = self.aspect_ratio.partition(":")
         if abs(w / h - float(num) / float(den)) > 0.01:
             raise ValueError(f"resolution {self.resolution} does not match {self.aspect_ratio}")
+        captions = self.captions
+        if captions.position != "middle" and captions.margin + captions.size > h:
+            raise ValueError(f"captions.margin {captions.margin} puts the captions off the frame")
+        for name, overlay in (("title_overlay", self.title_overlay), ("one_liner", self.one_liner)):
+            if overlay.offset + overlay.size > h:
+                raise ValueError(f"{name}.offset {overlay.offset} puts it off the frame")
+        for block in self.text_blocks:
+            if block.offset > h or (block.anchor == "top" and block.offset + block.size > h):
+                raise ValueError(f"text block offset {block.offset} puts it off the frame")
         return self
 
     @property

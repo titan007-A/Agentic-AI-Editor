@@ -3,44 +3,78 @@
 import { ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { JobStatus, jobLabel } from "@/components/job-status";
 import { OutputCard } from "@/components/output-card";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useJobEvents } from "@/hooks/use-job-events";
-import { api, errorText, type Job } from "@/lib/api";
+import { api, ApiError, errorText, type Job } from "@/lib/api";
 
 function JobDetail() {
   const id = useSearchParams().get("id") ?? "";
   const router = useRouter();
-  const [job, setJob] = useState<Job | null>(null);
+  const [loaded, setLoaded] = useState<Job | null>(null);
+  // Until the job asked for arrives, the one before (after Regenerate) isn't shown.
+  const job = loaded?.id === id ? loaded : null;
+  const wanted = useRef(id);
+  const [deleting, setDeleting] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => {
-    api
-      .job(id)
-      .then(setJob)
-      .catch((err) => toast.error(errorText(err)));
-  }, [id]);
+  useEffect(() => {
+    wanted.current = id;
+  });
+
+  /** Fetches the job and says whether it is still running. With `quietOffline`, a
+   * server that can't be reached counts as running, to be tried again without a word. */
+  const load = useCallback(
+    (quietOffline = false) =>
+      api
+        .job(id)
+        .then((next) => {
+          if (wanted.current !== id) return false;
+          setLoaded(next);
+          return next.status === "queued" || next.status === "running";
+        })
+        .catch((err) => {
+          if (quietOffline && !(err instanceof ApiError)) return true;
+          toast.error(errorText(err));
+          return false;
+        }),
+    [id],
+  );
+  const follow = useCallback(() => load(true), [load]);
 
   useEffect(() => {
     if (id) load();
   }, [id, load]);
 
   const active = job?.status === "queued" || job?.status === "running";
-  const events = useJobEvents(id, active, load);
+  const events = useJobEvents(id, active, follow);
   const latest = events.at(-1);
   const progress = latest?.progress ?? job?.progress ?? 0;
 
   async function remove() {
+    setBusy(true);
     try {
       await api.deleteJob(id);
+      setDeleting(false);
       router.push("/");
     } catch (err) {
       toast.error(errorText(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -65,7 +99,12 @@ function JobDetail() {
         </div>
         <JobStatus job={now} />
         {!active && (
-          <Button variant="ghost" size="icon" onClick={remove} aria-label="Delete job">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setDeleting(true)}
+            aria-label="Delete job"
+          >
             <Trash2 />
           </Button>
         )}
@@ -96,6 +135,23 @@ function JobDetail() {
           <OutputCard key={output.id} job={job} output={output} />
         ))}
       </div>
+
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this job?</DialogTitle>
+            <DialogDescription>
+              {jobLabel(job)} and its {job.outputs.length === 1 ? "video" : "videos"} are removed
+              from the app. This can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="destructive" disabled={busy} onClick={remove}>
+              Delete job
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

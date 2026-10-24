@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL, CaptionOverrides, Clip, Zoom, problems
-from agentic_editor.llm import LLMError, OllamaClient
+from agentic_editor.llm import LLMError, OllamaClient, parse
 from agentic_editor.presets import Preset
 from agentic_editor.silence import long_silences
 from agentic_editor.transcript import Word, ends_sentence, gap, phrases, split_phrase
@@ -106,9 +106,14 @@ def voiced_regions(analysis: Analysis) -> list[tuple[float, float]]:
         if end - start <= MAX_LINE_SECONDS:
             pieces.append((start, end))
             continue
-        lo, hi = int((start + 3) / hop), int((end - 3) / hop)
-        quietest = min(range(lo, hi), key=lambda i: analysis.energy[i])
-        regions[:0] = [(start, quietest * hop + hop / 2), (quietest * hop + hop / 2, end)]
+        # The audio can end before the video does; past its end there is no level to read.
+        lo, hi = int((start + 3) / hop), min(int((end - 3) / hop), len(analysis.energy))
+        if lo < hi:
+            quietest = min(range(lo, hi), key=lambda i: analysis.energy[i])
+            cut = quietest * hop + hop / 2
+        else:
+            cut = (start + end) / 2
+        regions[:0] = [(start, cut), (cut, end)]
     return pieces
 
 
@@ -205,18 +210,24 @@ def propose(
         f"seconds. Score hook, completeness and peak from 0 to 10 and give a one-line reason."
         + _editor_notes(notes)
     )
-    reply = llm.chat_json(
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-        CandidateList.model_json_schema(),
-    )
     first, last = chunk[0].index, chunk[-1].index
-    valid = []
-    for candidate in CandidateList.model_validate(reply).candidates:
-        if first <= candidate.start_line <= candidate.end_line <= last:
-            valid.append(candidate)
-        else:
-            log.debug("dropping out-of-range candidate %s", candidate)
-    return valid
+    # The model now and then answers a short transcript with no candidates at all; asked
+    # again and told to pick the best there is, it nearly always does.
+    for insist in ("", "\n\nPropose at least one segment, the best these lines allow."):
+        reply = llm.chat_json(
+            [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt + insist}],
+            CandidateList.model_json_schema(),
+        )
+        valid = []
+        for candidate in parse(CandidateList, reply).candidates:
+            if first <= candidate.start_line <= candidate.end_line <= last:
+                valid.append(candidate)
+            else:
+                log.debug("dropping out-of-range candidate %s", candidate)
+        if valid:
+            return valid
+        log.debug("no usable candidates for lines %d-%d", first, last)
+    return []
 
 
 def _describe_candidates(candidates: list[Candidate], lines: list[Line]) -> str:
@@ -231,10 +242,14 @@ def _describe_candidates(candidates: list[Candidate], lines: list[Line]) -> str:
     return "\n".join(rows)
 
 
-def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[Clip]:
-    """Grow a short plan a whole line at a time, at its start or end, until it reaches the
-    preset's minimum. Lines only cover voiced stretches, so growing never adds a silent
-    head or tail. Plans that run long are trimmed by trim.apply, which picks the window.
+def fit_duration(
+    clips: list[Clip], lines: list[Line], preset: Preset, grow_back: bool = True
+) -> list[Clip]:
+    """Grow a short plan a whole line at a time, at its start or end (only its end without
+    grow_back, when the opening was chosen on purpose), until it reaches the preset's
+    minimum, never past its maximum. Lines only cover voiced stretches, so growing never
+    adds a silent head or tail. Plans that run long are trimmed by trim.apply, which picks
+    the window.
 
     Small models are poor at arithmetic, so a plan that is a few seconds off is
     corrected here rather than sent back for another attempt."""
@@ -246,6 +261,14 @@ def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[C
     while total() < preset.min_duration:
         after = next((ln for ln in lines if ln.start >= clips[-1].end - 1e-6), None)
         before = next((ln for ln in reversed(lines) if ln.end <= clips[0].start + 1e-6), None)
+        if not grow_back:
+            before = None
+        # A line that would carry the plan past the maximum is left out, even if that
+        # leaves the plan short: a reel ends after a whole line, never inside one.
+        if after is not None and after.end - clips[0].start > preset.max_duration:
+            after = None
+        if before is not None and clips[-1].end - before.start > preset.max_duration:
+            before = None
         # Grow toward whichever neighbour is closer, so a plan doesn't swallow a long
         # stretch of nothing when there is material right on the other side.
         gap_after = after.start - clips[-1].end if after else float("inf")
@@ -259,7 +282,13 @@ def fit_duration(clips: list[Clip], lines: list[Line], preset: Preset) -> list[C
     return clips
 
 
-def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], preset: Preset) -> EDL:
+def to_edl(
+    plan: FinalPlan,
+    candidates: list[Candidate],
+    lines: list[Line],
+    preset: Preset,
+    keep_start: bool = False,
+) -> EDL:
     if not 0 <= plan.candidate < len(candidates):
         raise ValueError(f"C{plan.candidate} is not one of the candidates")
     c = candidates[plan.candidate]
@@ -269,7 +298,7 @@ def to_edl(plan: FinalPlan, candidates: list[Candidate], lines: list[Line], pres
         reason=plan.reason,
         score=round((c.hook + c.completeness + c.peak) / 30, 2),
     )
-    chosen = fit_duration([clip], lines, preset)
+    chosen = fit_duration([clip], lines, preset, grow_back=not keep_start)
 
     position = (
         plan.caption_position if plan.caption_position in ("top", "middle", "bottom") else None
@@ -290,7 +319,14 @@ def finalize(
     preset: Preset,
     analysis: Analysis,
     notes: str | None,
+    keep_start: bool = False,
 ) -> EDL:
+    """The plan from the candidate the model picks. With keep_start the plan opens where
+    its candidate does, the moment the editor asked to start on."""
+    # A short source, or the stretch after a requested opening, may hold less than the
+    # preset's minimum; a plan using all of it is as long as it can be.
+    opening = lines[candidates[0].start_line].start if keep_start else lines[0].start
+    available = lines[-1].end - opening
     prompt = (
         f"{_brief(preset, analysis)}\n\n"
         f"Candidate segments:\n{_describe_candidates(candidates, lines)}\n\n"
@@ -305,8 +341,8 @@ def finalize(
     for attempt in range(MAX_RETRIES + 1):
         reply = llm.chat_json(messages, schema)
         try:
-            edl = to_edl(FinalPlan.model_validate(reply), candidates, lines, preset)
-            found = problems(edl, preset, analysis.duration, allow_long=True)
+            edl = to_edl(FinalPlan.model_validate(reply), candidates, lines, preset, keep_start)
+            found = problems(edl, preset, analysis.duration, allow_long=True, available=available)
         except (ValidationError, ValueError) as exc:
             found = [str(exc)]
         if not found:
@@ -350,7 +386,7 @@ def find_start(llm: OllamaClient, lines: list[Line], asked: str) -> tuple[Line, 
             _Start.model_json_schema(),
             temperature=0.0,
         )
-        found = _Start.model_validate(reply)
+        found = parse(_Start, reply)
         here = {ln.index: ln for ln in chunk}
         line = here.get(found.line)
         if line is None or not _plain(found.words):
@@ -383,7 +419,7 @@ def plan_with_llm(
     return plan_variants(llm, analysis, preset, notes, count=1)[0]
 
 
-def _overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
+def overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Share of the shorter span that the other one covers."""
     shared = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
     return shared / max(1e-6, min(a[1] - a[0], b[1] - b[0]))
@@ -409,18 +445,16 @@ def plan_variants(
             line, words = found
             reason = f'starts where you asked ("{start_at}"): "{words}"'
             candidate = from_line(line, lines, preset, reason)
-            edl = finalize(llm, [candidate], lines, preset, analysis, notes)
+            edl = finalize(llm, [candidate], lines, preset, analysis, notes, keep_start=True)
             note = f'found where you asked to start: {line.start:.1f}s, "{words}"'
-            edls = [edl.model_copy(update={"decisions": [note]})]
-            if preset.zoom_punch_ins:
-                edls = [
-                    e.model_copy(update={"zooms": pick_emphasis(llm, e, analysis)}) for e in edls
-                ]
-            return edls
+            return [edl.model_copy(update={"decisions": [note]})]
     edls = _plan_best(llm, lines, analysis, preset, notes, count)
     if start_at:
         note = "couldn't find where you asked to start; planned the strongest segment instead"
-        edls = [e.model_copy(update={"decisions": [note, *e.decisions]}) for e in edls]
+        edls = [
+            e.model_copy(update={"decisions": [note, *e.decisions], "doubts": [note, *e.doubts]})
+            for e in edls
+        ]
     return edls
 
 
@@ -456,15 +490,13 @@ def _plan_best(
         if len(edls) >= count:
             break
         span = (lines[other.start_line].start, lines[other.end_line].end)
-        if any(_overlap(span, (e.clips[0].start, e.clips[0].end)) > 0.5 for e in edls):
+        if any(overlap(span, (e.clips[0].start, e.clips[0].end)) > 0.5 for e in edls):
             continue
         try:
             edl = finalize(llm, [other], lines, preset, analysis, notes)
         except LLMError:
             continue
         edls.append(edl.model_copy(update={"variant": len(edls)}))
-    if preset.zoom_punch_ins:
-        edls = [e.model_copy(update={"zooms": pick_emphasis(llm, e, analysis)}) for e in edls]
     return edls
 
 
@@ -473,7 +505,8 @@ def _normalize(word: str) -> str:
 
 
 def pick_emphasis(llm: OllamaClient, edl: EDL, analysis: Analysis, limit: int = 3) -> list[Zoom]:
-    """Ask for the words worth a punch-in, then find them in the chosen clips."""
+    """Ask for the words worth a punch-in, then find them in the chosen clips. Asked of the
+    trimmed plan, so the words are ones the reel keeps."""
     words = [w for clip in edl.clips for w in analysis.transcript.between(clip.start, clip.end)]
     if not words:
         return []
@@ -493,7 +526,7 @@ def pick_emphasis(llm: OllamaClient, edl: EDL, analysis: Analysis, limit: int = 
         Emphasis.model_json_schema(),
     )
     zooms, used = [], set()
-    for target in Emphasis.model_validate(reply).words[:limit]:
+    for target in parse(Emphasis, reply).words[:limit]:
         match = next(
             (w for w in words if _normalize(w.text) == _normalize(target) and w.start not in used),
             None,

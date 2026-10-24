@@ -6,6 +6,7 @@ Each model is unloaded before the next stage starts."""
 
 import json
 import logging
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,7 @@ import httpx
 from agentic_editor import (
     agent,
     download,
+    ffmpeg,
     framing,
     hooks,
     review,
@@ -28,12 +30,13 @@ from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
 from agentic_editor.cuts import clean_edl
-from agentic_editor.edl import EDL, Cue, Shot
+from agentic_editor.edl import EDL, Clip, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
-from agentic_editor.planner import plan_variants
+from agentic_editor.planner import overlap, pick_emphasis, plan_variants
 from agentic_editor.presets import Preset
-from agentic_editor.render import compose
+from agentic_editor.render import audio, compose
+from agentic_editor.render.audio import measure_loudness
 from agentic_editor.render.video import crop_size
 from agentic_editor.router import ModelRouter
 from agentic_editor.settings import Settings
@@ -42,6 +45,8 @@ log = logging.getLogger(__name__)
 
 Progress = Callable[[str, str], None]
 MAX_FIXES = 2
+# Without the vision model to tell, only a box this share of the frame can be an overlay.
+UNCHECKED_AREA = 0.05
 UPLOAD_PREFIX = "upload:"
 
 
@@ -62,6 +67,8 @@ class Output:
 class Result:
     title: str
     outputs: list[Output]
+    # One line per preset or version that couldn't be made; the others still are.
+    failures: list[str] = field(default_factory=list)
 
 
 def is_url(value: str) -> bool:
@@ -84,19 +91,38 @@ def plan(
     start_at: str | None = None,
 ) -> list[tuple[EDL, str]]:
     """Plan each version with the LLM, falling back to the energy heuristic if it can't
-    deliver; then choose each one's opening and trim it to the preset."""
+    deliver; then trim each one to the preset and choose its opening inside what it keeps.
+    A version that trims down onto one already made is left out."""
     try:
         edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants, start_at)
         planner = llm.model
     except (LLMError, httpx.HTTPError) as exc:
         log.warning("%s: LLM planning failed (%s), using the energy heuristic", preset.name, exc)
         edls, planner = [plan_by_energy(analysis, preset)], "heuristic"
-    planned = []
+    planned: list[tuple[EDL, str]] = []
     for edl in edls:
         edl = clean_edl(edl, analysis.transcript.words, analysis.silences)
+        edl = trim.apply(edl, analysis, preset)
         edl = hooks.sharpen(llm, edl, analysis, preset, notes)
-        planned.append((trim.apply(edl, analysis, preset), planner))
+        span = (edl.clips[0].start, edl.clips[0].end)
+        if any(overlap(span, (e.clips[0].start, e.clips[0].end)) > 0.5 for e, _ in planned):
+            log.info("%s: a version trimmed down onto one already planned; left out", preset.name)
+            continue
+        if preset.zoom_punch_ins and planner != "heuristic":
+            try:
+                edl = edl.model_copy(update={"zooms": pick_emphasis(llm, edl, analysis)})
+            except LLMError as exc:
+                edl = edl.noted(f"no punch-in zooms ({exc})")
+        planned.append((edl.model_copy(update={"variant": len(planned)}), planner))
     return planned
+
+
+def needs_faces(edl: EDL, preset: Preset, analysis: Analysis) -> bool:
+    """Whether making this plan looks for faces: to frame it, or to keep captions off them."""
+    if edl.crop_mode == "smart" or (preset.captions.enabled and preset.captions.avoid_faces):
+        return True
+    source = (analysis.width, analysis.height)
+    return edl.crop_mode == "face" and crop_size(source, preset.size)[0] < source[0]
 
 
 def face_commands(
@@ -157,6 +183,7 @@ def translated(
         return edl.model_copy(update={"decisions": [*edl.decisions, note]})
     words = compose.timeline_words(edl, analysis)
     update: dict = {}
+    failed = False
     try:
         if analysis.audio_source == "vocals":
             # Sung lines are translated line by line, so the song keeps its lines.
@@ -166,7 +193,7 @@ def translated(
             update["cues"] = subtitles.translate_speech(llm, words, style.language, notes)
         note = f"captions translated into {style.language} ({len(update['cues'])} lines)"
     except (LLMError, httpx.HTTPError) as exc:
-        note = f"translation failed ({exc}); showing the speech"
+        note, failed = f"translation failed ({exc}); showing the speech", True
     # The on-screen hook and title follow the captions into the same language.
     overlays = {k: v for k, v in (("hook", edl.hook), ("title", edl.title)) if v}
     if overlays:
@@ -175,8 +202,8 @@ def translated(
             done = subtitles.translate(llm, wrapped, style.language, notes)
             update |= {k: c.text for k, c in zip(overlays, done, strict=True)}
         except (LLMError, httpx.HTTPError):
-            note += "; hook and title left untranslated"
-    return edl.model_copy(update={**update, "decisions": [*edl.decisions, note]})
+            note, failed = note + "; hook and title left untranslated", True
+    return edl.model_copy(update=update).noted(note, doubt=failed)
 
 
 def written_text(
@@ -195,8 +222,7 @@ def written_text(
     if not (want_cues or want_line):
         return edl
     if vision is None:
-        note = "no vision model to write captions or the one-liner"
-        return edl.model_copy(update={"decisions": [*edl.decisions, note]})
+        return edl.noted("no vision model to write captions or the one-liner", doubt=True)
     clip = edl.clips[0]
     frames_dir = work_dir / "written"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -212,7 +238,7 @@ def written_text(
     said = " ".join(w.text for w in analysis.transcript.between(clip.start, clip.end))
     context = " ".join(said.split()[:120])
     update: dict = {}
-    decisions = list(edl.decisions)
+    decisions, doubts = list(edl.decisions), list(edl.doubts)
     if want_cues:
         count = min(8, max(1, round(clip.duration / subtitles.VISUAL_EVERY)))
         try:
@@ -221,7 +247,8 @@ def written_text(
             )
             decisions.append(f"wrote {len(update['cues'])} caption(s) from the picture")
         except LLMError as exc:
-            decisions.append(f"captions from the picture failed ({exc}); showing the speech")
+            doubts.append(f"captions from the picture failed ({exc}); showing the speech")
+            decisions.append(doubts[-1])
     if want_line:
         line = preset.one_liner
         try:
@@ -231,8 +258,9 @@ def written_text(
             )
             decisions.append(f'one-liner: "{update["one_liner"]}"')
         except LLMError as exc:
-            decisions.append(f"one-liner failed ({exc})")
-    return edl.model_copy(update={**update, "decisions": decisions})
+            doubts.append(f"one-liner failed ({exc})")
+            decisions.append(doubts[-1])
+    return edl.model_copy(update={**update, "decisions": decisions, "doubts": doubts})
 
 
 def recheck_framing(
@@ -305,8 +333,9 @@ def smart_framing(
     seen = framing.views(samples, face_samples, content, analysis.width)
     if not edl.shots:
         shots = framing.frame_shots(
-            clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size
-        )
+            clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size,
+            analysis.height,
+        )  # fmt: skip
         shots, recheck = recheck_framing(
             shots, times, seen, face_samples, content, width, preset, analysis, video,
             settings, work_dir, vision,
@@ -355,6 +384,29 @@ def onscreen_text(
     return tracked[key]
 
 
+def moved(edl: EDL, old: Clip) -> EDL:
+    """The plan after its clip moved from `old`: the shots and the picture area are worked
+    out again for the new stretch, and the models' captions, timed on the reel, shift with
+    its start and drop what fell outside."""
+    clip = edl.clips[0]
+    shift = clip.start - old.start
+
+    def shifted(cue: Cue) -> Cue:
+        words = [
+            w.model_copy(update={"start": w.start - shift, "end": w.end - shift}) for w in cue.words
+        ]
+        return cue.model_copy(
+            update={
+                "start": round(max(0.0, cue.start - shift), 3),
+                "end": round(min(clip.duration, cue.end - shift), 3),
+                "words": [w for w in words if w.end > 0 and w.start < clip.duration],
+            }
+        )
+
+    cues = [shifted(c) for c in edl.cues if c.end - shift > 0 and c.start - shift < clip.duration]
+    return edl.model_copy(update={"shots": [], "picture": None, "cues": cues})
+
+
 def fix(
     issues: list[review.Issue], edl: EDL, preset: Preset, analysis: Analysis, loudness_goal: float
 ) -> tuple[EDL, Preset, bool]:
@@ -364,7 +416,7 @@ def fix(
         if issue.kind == "duration":
             trimmed = trim.apply(edl, analysis, preset)
             if trimmed.clips != edl.clips:
-                edl, changed = trimmed, True
+                edl, changed = moved(trimmed, edl.clips[0]), True
         elif issue.kind == "loudness" and issue.measured is not None:
             # Aim off-target by the error just measured, which covers what the final
             # encode shifts.
@@ -383,6 +435,20 @@ def fix(
     return edl, preset, changed
 
 
+def remux_audio(edl: EDL, preset: Preset, analysis: Analysis, dest: Path, work_dir: Path) -> None:
+    """Lay a new soundtrack under a reel already rendered, copying its picture as it is: a
+    new loudness target needs no new encode of the video."""
+    music = compose.asset_path(preset.music.file) if preset.music.file else None
+    track = audio.render_soundtrack(edl, preset, analysis.audio_path, music, work_dir)
+    remuxed = dest.with_name(f".{dest.stem}.remux{dest.suffix}")
+    ffmpeg.run([
+        "-y", "-i", str(dest), "-i", str(track), "-map", "0:v", "-map", "1:a",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-ar", str(audio.SAMPLE_RATE),
+        "-movflags", "+faststart", str(remuxed),
+    ])  # fmt: skip
+    remuxed.replace(dest)
+
+
 def produce(
     edl: EDL,
     preset: Preset,
@@ -394,31 +460,42 @@ def produce(
     backends: Backends,
     vision: OllamaClient | None,
     progress: Progress,
+    detections: dict[tuple[float, float], list[faces.Sample]] | None = None,
 ) -> tuple[EDL, int, list[review.Issue]]:
-    """Render, review, fix and re-render up to MAX_FIXES times."""
+    """Render, review, fix and re-render up to MAX_FIXES times. `detections` are the faces
+    already found, by clip."""
     work_dir.mkdir(parents=True, exist_ok=True)
-    detections: dict[tuple[float, float], list[faces.Sample]] = {}
+    detections = {} if detections is None else detections
     tracked: dict[tuple[float, float], list[tuple[float, list[onscreen.Box]]]] = {}
     target = preset
     renders = 1
+    remux = False
     while True:
-        if edl.crop_mode == "smart":
-            edl, commands = smart_framing(
-                edl, target, analysis, video, settings, work_dir, detections, vision
-            )
-        else:
-            commands = face_commands(edl, target, analysis, video, settings, work_dir, detections)
-        clip = edl.clips[0]
-        key = (clip.start, clip.end)
-        if target.captions.enabled and target.captions.avoid_faces and key not in detections:
-            detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
-        face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
-        texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
+        if not remux:
+            if edl.crop_mode == "smart":
+                edl, commands = smart_framing(
+                    edl, target, analysis, video, settings, work_dir, detections, vision
+                )
+            else:
+                commands = face_commands(
+                    edl, target, analysis, video, settings, work_dir, detections
+                )
+            clip = edl.clips[0]
+            key = (clip.start, clip.end)
+            if target.captions.enabled and target.captions.avoid_faces and key not in detections:
+                detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
+            face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
+            texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
         with slots.encoding(vision, progress=progress):
-            compose.render(
-                edl, target, analysis, video, dest, work_dir, settings, backends, commands,
-                face_samples, texts,
-            )  # fmt: skip
+            if remux:
+                remux_audio(edl, target, analysis, dest, work_dir)
+            else:
+                compose.render(
+                    edl, target, analysis, video, dest, work_dir, settings, backends, commands,
+                    face_samples, texts,
+                )  # fmt: skip
+            # Measured while another job may have the GPU: these only need the CPU.
+            info, loudness = ffmpeg.probe(dest), measure_loudness(dest)
         progress("review", f"checking {preset.name}")
         # Caption timing is checked against the spoken words, so only for captions of them.
         spoken = target.captions.enabled and target.captions.mode in ("speech", "lyrics")
@@ -432,12 +509,21 @@ def produce(
             compose.timeline_words(edl, analysis),
             vision,
             work_dir,
+            info=info,
+            loudness=loudness,
         )
         if not issues or renders > MAX_FIXES:
             return edl, renders, issues
-        edl, target, changed = fix(issues, edl, target, analysis, preset.audio.loudness_lufs)
+        fixed, retargeted, changed = fix(issues, edl, target, analysis, preset.audio.loudness_lufs)
         if not changed:
             return edl, renders, issues
+        # When only the loudness target moved, the picture already rendered stays as it is.
+        remux = (
+            fixed == edl
+            and retargeted.model_copy(update={"audio": target.audio}) == target
+            and not (target.intro or target.outro)
+        )
+        edl, target = fixed, retargeted
         renders += 1
         progress("render", f"re-rendering {preset.name}: {issues[0].detail}")
 
@@ -449,14 +535,19 @@ def run(
     backends: Backends,
     notes: str | None = None,
     progress: Progress = lambda stage, message: log.info("%s: %s", stage, message),
+    run_id: str | None = None,
 ) -> Result:
+    """Each run's outputs go to a folder of their own, named by `run_id` (a new one when
+    not given), so a later run of the same video and preset doesn't replace them."""
     progress("download", f"fetching {source_ref}")
     source = resolve_source(source_ref, settings)
+    progress("title", source.title)
     work_dir = settings.cache_dir / file_hash(source.path)
     work_dir.mkdir(parents=True, exist_ok=True)
-    # Two jobs on one video would write the same cache and output files.
+    run_id = run_id or secrets.token_hex(4)
+    # Two jobs on one video would write the same cache files.
     with slots.video(work_dir).turn("edit it", progress):
-        return edit(source, work_dir, presets, settings, backends, notes, progress)
+        return edit(source, work_dir, presets, settings, backends, notes, progress, run_id)
 
 
 def edit(
@@ -467,117 +558,184 @@ def edit(
     backends: Backends,
     notes: str | None,
     progress: Progress,
+    run_id: str,
 ) -> Result:
     progress("analyze", f"analyzing {source.title}")
-    out_dir = settings.media_dir / "outputs" / work_dir.name
+    out_dir = settings.media_dir / "outputs" / work_dir.name / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
+    failures: list[str] = []
+    errors: list[Exception] = []
+
+    def failed(what: str, exc: Exception) -> None:
+        log.exception("%s failed", what)
+        failures.append(f"{what}: {type(exc).__name__}: {exc}")
+        errors.append(exc)
 
     analyses: dict[str, Analysis] = {}
-    for preset in presets:
-        if preset.audio.source not in analyses:
-            analyses[preset.audio.source] = analyze(
-                source.path, work_dir, router, preset.audio.source, progress
-            )
+    for kind in dict.fromkeys(p.audio.source for p in presets):
+        try:
+            analyses[kind] = analyze(source.path, work_dir, router, kind, progress)
+        except Exception as exc:
+            # Vocals that can't be isolated sink the presets that need them, not the others.
+            failed(", ".join(p.name for p in presets if p.audio.source == kind), exc)
+    if not analyses:
+        raise errors[0]  # the video itself can't be read: say why, not where it broke later
+    presets = [p for p in presets if p.audio.source in analyses]
+
+    silenced: dict[tuple[str, float, float], Analysis] = {}
 
     def for_preset(preset: Preset) -> Analysis:
-        base = analyses[preset.audio.source]
-        return with_silences(base, preset.silence.threshold_db, preset.silence.min_duration)
+        """The analysis with silences as this preset counts them, each way found once."""
+        key = (preset.audio.source, preset.silence.threshold_db, preset.silence.min_duration)
+        if key not in silenced:
+            silenced[key] = with_silences(analyses[key[0]], *key[1:])
+        return silenced[key]
+
+    # Silences are read from the audio before the planner takes the GPU.
+    for preset in list(presets):
+        try:
+            for_preset(preset)
+        except Exception as exc:
+            failed(preset.name, exc)
+            presets.remove(preset)
 
     plans = {}
     with router.planner() as llm:
         for preset in presets:
             progress("plan", f"planning {preset.name}")
             planning_notes = notes_for[preset.name]
-            plans[preset.name] = [
-                (
-                    translated(
-                        llm,
-                        edl.model_copy(
-                            update={"decisions": [*instructed[preset.name], *edl.decisions]}
+            applied, missed = instructed[preset.name]
+            try:
+                plans[preset.name] = [
+                    (
+                        translated(
+                            llm,
+                            edl.model_copy(
+                                update={
+                                    "decisions": [*applied, *edl.decisions],
+                                    "doubts": [*missed, *edl.doubts],
+                                }
+                            ),
+                            for_preset(preset),
+                            preset,
+                            planning_notes,
                         ),
-                        for_preset(preset),
-                        preset,
-                        planning_notes,
-                    ),
-                    planner,
-                )
-                for edl, planner in plan(llm, for_preset(preset), preset, planning_notes, start_at)
-            ]
+                        planner,
+                    )
+                    for edl, planner in plan(
+                        llm, for_preset(preset), preset, planning_notes, start_at
+                    )
+                ]
+            except Exception as exc:
+                failed(preset.name, exc)
+
+    # Faces and the picture's black bars need only the CPU, so they are found before the
+    # vision model takes the GPU. One that fails here is tried again by the render.
+    detections: dict[tuple[float, float], list[faces.Sample]] = {}
+    for preset in presets:
+        analysis, prepared = for_preset(preset), []
+        for edl, planner in plans.get(preset.name, []):
+            clip = edl.clips[0]
+            key = (clip.start, clip.end)
+            try:
+                if key not in detections and needs_faces(edl, preset, analysis):
+                    detections[key] = faces.detect(
+                        source.path, clip.start, clip.end, settings.models_dir
+                    )
+                if edl.crop_mode == "smart" and edl.picture is None:
+                    size = (analysis.width, analysis.height)
+                    picture = compose.picture_area(source.path, clip.start, clip.end, size)
+                    edl = edl.model_copy(update={"picture": picture})
+            except Exception as exc:
+                log.warning("%s: faces or picture area left for the render: %s", preset.name, exc)
+            prepared.append((edl, planner))
+        plans[preset.name] = prepared
 
     outputs = []
     with router.vision() as vision:
         reviewer = vision if _reachable(vision) else None
-        candidates = next(iter(analyses.values())).watermarks
+        first = next(iter(analyses.values()))
         marks = confirmed_watermarks(
-            candidates, reviewer, source.path, settings, work_dir, progress
-        )
-        for preset, (edl, planner) in [(p, v) for p in presets for v in plans[p.name]]:
+            first.watermarks, reviewer, source.path, settings, work_dir, progress,
+            (first.width, first.height),
+        )  # fmt: skip
+        for preset, (edl, planner) in [(p, v) for p in presets for v in plans.get(p.name, [])]:
             analysis = for_preset(preset).model_copy(update={"watermarks": marks})
             name = preset.name + (f"-{'abcde'[edl.variant]}" if edl.variant else "")
             dest = out_dir / f"{name}.mp4"
             render_dir = work_dir / "render" / name
-            edl = written_text(
-                reviewer,
-                edl,
-                analysis,
-                preset,
-                source.path,
-                settings,
-                render_dir,
-                notes_for[preset.name],
-            )
-            progress("render", f"rendering {name}")
-            edl, renders, issues = produce(
-                edl,
-                preset,
-                analysis,
-                source.path,
-                dest,
-                render_dir,
-                settings,
-                backends,
-                reviewer,
-                progress,
-            )
-            thumbnail = None
-            if reviewer is not None:
-                try:
-                    thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
-                except LLMError as exc:
-                    log.warning("no thumbnail for %s: %s", preset.name, exc)
-            (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
-            unresolved = [f"{i.kind}: {i.detail}" for i in issues]
-            clip = edl.clips[0]
-            quiet = silence.long_silences(clip.start, clip.end, analysis)
-            score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
-            outputs.append(
-                Output(
-                    preset.name,
-                    dest,
+            try:
+                edl = written_text(
+                    reviewer,
                     edl,
-                    planner,
-                    thumbnail,
-                    renders,
-                    unresolved,
-                    score,
-                    doubts,
+                    analysis,
+                    preset,
+                    source.path,
+                    settings,
+                    render_dir,
+                    notes_for[preset.name],
                 )
-            )
-            progress("done", f"{name} -> {dest}")
+                progress("render", f"rendering {name}")
+                edl, renders, issues = produce(
+                    edl,
+                    preset,
+                    analysis,
+                    source.path,
+                    dest,
+                    render_dir,
+                    settings,
+                    backends,
+                    reviewer,
+                    progress,
+                    detections,
+                )
+                thumbnail = None
+                if reviewer is not None:
+                    try:
+                        thumbnail = review.pick_thumbnail(reviewer, dest, edl.duration, render_dir)
+                    except LLMError as exc:
+                        log.warning("no thumbnail for %s: %s", preset.name, exc)
+                (out_dir / f"{name}.edl.json").write_text(edl.model_dump_json(indent=2))
+                unresolved = [f"{i.kind}: {i.detail}" for i in issues]
+                clip = edl.clips[0]
+                quiet = silence.long_silences(clip.start, clip.end, analysis)
+                score, doubts = agent.confidence(edl, unresolved, planner, preset, quiet)
+                outputs.append(
+                    Output(
+                        preset.name,
+                        dest,
+                        edl,
+                        planner,
+                        thumbnail,
+                        renders,
+                        unresolved,
+                        score,
+                        doubts,
+                    )
+                )
+                progress("done", f"{name} -> {dest}")
+            except Exception as exc:
+                # One version that can't be made doesn't lose the ones already rendered.
+                failed(name, exc)
 
+    if errors and not outputs:
+        if len(errors) == 1:
+            raise errors[0]
+        raise RuntimeError("; ".join(failures)) from errors[-1]
     meta = {"title": source.title, "url": source.url, "notes": notes}
     (out_dir / "source.json").write_text(json.dumps(meta))
-    return Result(source.title, outputs)
+    return Result(source.title, outputs, failures)
 
 
 def understand(
     router: ModelRouter, presets: list[Preset], notes: str | None, progress: Progress
-) -> tuple[list[Preset], dict[str, list[str]], dict[str, str | None], str | None]:
+) -> tuple[list[Preset], dict[str, tuple[list[str], list[str]]], dict[str, str | None], str | None]:
     """Read the editor's instruction into each preset: the presets to use, what was changed
-    in each, the notes left for the planner, and where the instruction says to start."""
-    decisions: dict[str, list[str]] = {p.name: [] for p in presets}
+    in each (and what couldn't be), the notes left for the planner, and where the
+    instruction says to start."""
+    decisions: dict[str, tuple[list[str], list[str]]] = {p.name: ([], []) for p in presets}
     planning: dict[str, str | None] = {p.name: notes for p in presets}
     if not notes or not notes.strip():
         return presets, decisions, planning, None
@@ -587,10 +745,11 @@ def understand(
             wanted = agent.interpret(llm, notes)
     except (LLMError, httpx.HTTPError) as exc:
         note = f"couldn't read the instruction ({exc}); kept the preset"
-        return presets, {p.name: [note] for p in presets}, planning, None
+        return presets, {p.name: ([note], [note]) for p in presets}, planning, None
     updated = []
     for preset in presets:
-        changed, decisions[preset.name] = agent.apply(preset, wanted.requests, notes)
+        changed, applied, failed = agent.apply(preset, wanted.requests, notes)
+        decisions[preset.name] = (applied, failed)
         # The planner gets what the instruction said about the content; when the model
         # didn't separate that out, it gets the whole instruction rather than nothing.
         if wanted.content_notes.strip():
@@ -606,15 +765,24 @@ def confirmed_watermarks(
     settings: Settings,
     work_dir: Path,
     progress: Progress,
+    frame: tuple[int, int],
 ) -> list[Watermark]:
-    """Candidates the vision model agrees are overlays. Without it every candidate is
-    blurred: a smudge on some scenery is a smaller miss than a watermark left in."""
+    """Candidates the vision model agrees are overlays. Without it every candidate the
+    size of an overlay is blurred: a smudge on some scenery is a smaller miss than a
+    watermark left in, but a blur over half the picture is no smaller."""
     if not candidates:
         return []
     if vision is None:
-        log.warning("no vision model; blurring %d unconfirmed watermark(s)", len(candidates))
-        return candidates
-    cache = work_dir / f"watermarks-{vision.model.replace(':', '_').replace('/', '_')}.json"
+        small = [
+            m for m in candidates if m.width * m.height <= UNCHECKED_AREA * frame[0] * frame[1]
+        ]
+        log.warning(
+            "no vision model; blurring %d of %d unconfirmed watermark(s)",
+            len(small), len(candidates),
+        )  # fmt: skip
+        return small
+    model = vision.model.replace(":", "_").replace("/", "_")
+    cache = work_dir / f"watermarks-v{watermarks.VERSION}-{model}.json"
     if cache.exists():
         checked = [Watermark.model_validate(m) for m in json.loads(cache.read_text())]
     else:

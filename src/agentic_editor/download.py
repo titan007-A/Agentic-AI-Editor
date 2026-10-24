@@ -1,12 +1,15 @@
+import hashlib
 import json
 import logging
 import re
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from agentic_editor import slots
 from agentic_editor.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -41,35 +44,60 @@ def _ytdlp_options(dest: Path) -> dict:
     return options
 
 
+def _saved(dest: Path) -> Source | None:
+    meta_file = dest / "source.json"
+    if not meta_file.exists():
+        return None
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta["path"] = Path(meta["path"])
+    return Source(**meta) if meta["path"].exists() else None
+
+
+def _link_file(url: str, sources_dir: Path) -> Path:
+    """Where the folder a link was downloaded to is noted."""
+    return sources_dir / "links" / f"{hashlib.sha256(url.encode()).hexdigest()[:20]}.txt"
+
+
 def fetch(url: str, sources_dir: Path) -> Source:
-    """Download a video at the best available quality. A URL that was already
-    downloaded is not fetched again."""
+    """Download a video at the best available quality. A video that was already
+    downloaded is not fetched again, and a link used before isn't looked up on the site
+    again, so it still works once the site is unreachable or the video is gone."""
+    link = _link_file(url, sources_dir)
+    if link.exists():
+        source = _saved(sources_dir / link.read_text(encoding="utf-8").strip())
+        if source is not None:
+            log.info("already downloaded: %s", source.title)
+            return source
+
     from yt_dlp import YoutubeDL
 
     with YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True}) as ydl:
         info = ydl.extract_info(url, download=False)
     key = _slug(f"{info.get('extractor_key', 'web')}-{info.get('id') or url}")
     dest = sources_dir / key
-    meta_file = dest / "source.json"
-    if meta_file.exists():
-        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        meta["path"] = Path(meta["path"])
-        if meta["path"].exists():
-            log.info("already downloaded: %s", meta["title"])
-            return Source(**meta)
-
     dest.mkdir(parents=True, exist_ok=True)
-    with YoutubeDL(_ytdlp_options(dest)) as ydl:
-        info = ydl.extract_info(url, download=True)
-    path = next(p for p in dest.iterdir() if p.stem == "source" and p.suffix != ".json")
-    source = Source(
-        path=path,
-        title=info.get("title") or key,
-        uploader=info.get("uploader") or "",
-        url=url,
-        description=(info.get("description") or "")[:1000],
-    )
-    meta_file.write_text(json.dumps({**asdict(source), "path": str(path)}), encoding="utf-8")
+    # Two jobs given the same video would download it into the same files at once.
+    with slots.video(dest).turn("download"):
+        source = _saved(dest)
+        if source is not None:
+            log.info("already downloaded: %s", source.title)
+        else:
+            with YoutubeDL(_ytdlp_options(dest)) as ydl:
+                info = ydl.extract_info(url, download=True)
+            path = next(p for p in dest.iterdir() if p.stem == "source" and p.suffix != ".json")
+            source = Source(
+                path=path,
+                title=info.get("title") or key,
+                uploader=info.get("uploader") or "",
+                url=url,
+                description=(info.get("description") or "")[:1000],
+            )
+            meta = json.dumps({**asdict(source), "path": str(path)})
+            (dest / "source.json").write_text(meta, encoding="utf-8")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    partial = link.with_suffix(f".{threading.get_ident()}.part")
+    partial.write_text(key, encoding="utf-8")
+    partial.replace(link)
     return source
 
 
