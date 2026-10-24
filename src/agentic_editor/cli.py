@@ -153,6 +153,24 @@ def _hash_password(args: argparse.Namespace) -> int:
     return 0
 
 
+def _relocate(args: argparse.Namespace) -> int:
+    from agentic_editor.db import make_sessionmaker
+    from agentic_editor.relocate import relocate
+    from agentic_editor.settings import ROOT
+
+    settings = get_settings()
+    moved = relocate(
+        make_sessionmaker(settings.database), settings.media_dir, args.old_root, str(ROOT)
+    )
+    print(
+        f"moved {moved.outputs} video(s), {moved.sources} source(s) and "
+        f"{moved.feed_items} feed item(s) from {args.old_root} to {ROOT}"
+    )
+    for folder in moved.missing_folders:
+        print(f"folder feed with no folder here, point it at one on this machine: {folder}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aiedit", description="Local agentic video editor")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -187,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
         handler=_hash_password
     )
+    move = commands.add_parser(
+        "relocate", help="after copying the media folder from another machine, fix its paths"
+    )
+    move.add_argument("old_root", help="where the repository was on the old machine")
+    move.set_defaults(handler=_relocate)
 
     args = parser.parse_args(argv)
     logs.setup(logging.DEBUG if args.verbose else logging.INFO)
