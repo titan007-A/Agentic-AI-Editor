@@ -1,5 +1,7 @@
 import argparse
 import logging
+import os
+import subprocess
 import sys
 
 from agentic_editor import ffmpeg, logs, pipeline
@@ -130,6 +132,10 @@ def _serve(args: argparse.Namespace) -> int:
     if not settings.secret_key:
         print("SECRET_KEY is not set; logins will not survive a restart.")
     get_backends()
+    if sys.platform == "darwin":
+        # Holds off sleep while on power, for as long as this process runs, so jobs and
+        # overnight autopilot runs aren't cut short. The display may still sleep.
+        subprocess.Popen(["/usr/bin/caffeinate", "-s", "-w", str(os.getpid())])
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_config=None)
     return 0
 
