@@ -282,6 +282,11 @@ TRANSCRIBE_BACKEND=faster-whisper   # or mlx, cpu
 ENCODER=nvenc                       # or videotoolbox, x264
 ```
 
+Ollama keeps a safety margin when it places a model, so on an 8 GB card it runs part of
+`qwen3.5:9b` on the CPU. `LLM_GPU_LAYERS=99` puts all of it on the GPU, where it fits:
+42 instead of 31 tokens/s on the RTX 5050. If a model ever fails to load that way, the
+editor lets Ollama place it for the rest of the run.
+
 By default the final encode uses libx264 (`slower`, CRF 16) even when a GPU encoder is
 present: measured with VMAF against lossless renders it kept the same quality as the
 NVENC settings it replaced in 30-57% less space. Forcing `ENCODER=nvenc` or

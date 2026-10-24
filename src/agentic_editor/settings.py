@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     ollama_url: str = "http://127.0.0.1:11434"
     llm_model: str = "qwen3.5:9b"
     vision_model: str = "qwen3.5:4b"
+    # Model layers Ollama puts on the GPU (99: all). Unset, Ollama decides and on an 8 GB
+    # card runs part of the 9b planner on the CPU at about two thirds the speed.
+    llm_gpu_layers: int | None = Field(default=None, ge=0)
 
     # Jobs in progress at once. They take turns on the GPU and the encoder, so a second
     # one uses the GPU while the first encodes.

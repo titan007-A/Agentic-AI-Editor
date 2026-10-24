@@ -102,6 +102,7 @@ class ModelRouter:
             self.settings.llm_model,
             slot=slots.gpu,
             progress=self.progress,
+            gpu_layers=self.settings.llm_gpu_layers,
         )
 
     def vision(self) -> OllamaClient:
@@ -111,4 +112,5 @@ class ModelRouter:
             self.settings.vision_model,
             slot=slots.gpu,
             progress=self.progress,
+            gpu_layers=self.settings.llm_gpu_layers,
         )

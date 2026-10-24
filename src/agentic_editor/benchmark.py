@@ -55,11 +55,14 @@ def time_separation(
     return result, stems.vocals
 
 
-def time_llm(base_url: str, model: str) -> Result:
+def time_llm(base_url: str, model: str, gpu_layers: int | None = None) -> Result:
     """Generation speed as Ollama measures it, after a warm-up call loads the model."""
     with httpx.Client(timeout=600) as http:
+        options = {} if gpu_layers is None else {"num_gpu": gpu_layers}
         body = {"model": model, "prompt": LLM_PROMPT, "stream": False, "think": False}
-        http.post(f"{base_url}/api/generate", json={**body, "options": {"num_predict": 8}})
+        body["options"] = options
+        warm_up = {**body, "options": {**options, "num_predict": 8}}
+        http.post(f"{base_url}/api/generate", json=warm_up)
         started = time.monotonic()
         response = http.post(f"{base_url}/api/generate", json=body)
         took = time.monotonic() - started
@@ -119,7 +122,7 @@ def run(
                 results.append(separated)
             if llm:
                 for model in dict.fromkeys([settings.llm_model, settings.vision_model]):
-                    results.append(time_llm(settings.ollama_url, model))
+                    results.append(time_llm(settings.ollama_url, model, settings.llm_gpu_layers))
             results.append(time_render(video, info, preset, backends, work))
             return results
         finally:
