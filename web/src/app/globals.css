@@ -295,6 +295,15 @@ body::before {
     min-width: 44px;
   }
 
+  /* Tabs too: the list is sized by its triggers instead of its fixed compact height. */
+  [data-slot="tabs-list"] {
+    height: auto;
+  }
+
+  [data-slot="tabs-trigger"] {
+    min-height: 44px;
+  }
+
   /* Keeps titles clear of the dialog's close button, which grows too. */
   [data-slot="dialog-header"] {
     padding-right: 2.5rem;
