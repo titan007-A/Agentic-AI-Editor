@@ -58,20 +58,44 @@ you want the browser interface.
 
 ## Setup: macOS on Apple Silicon
 
+Requirements: [Homebrew](https://brew.sh).
+
 ```
-brew install ffmpeg uv ollama
 git clone https://github.com/titan007-A/Agentic-AI-Editor.git
 cd Agentic-AI-Editor
-cp .env.example .env
-uv sync --extra ml
-ollama pull qwen3.5:9b && ollama pull qwen3.5:4b
-uv run aiedit fetch-models
-uv run aiedit backends
-(cd web && npm ci && npm run build)
+scripts/setup-macos.sh
+uv run aiedit hash-password        # put the two lines it prints in .env
+scripts/macos-service.sh install   # run the editor in the background from every login
 ```
 
-On macOS the platform layer transcribes with mlx-whisper; `ENCODER=videotoolbox` trades
-larger files for much faster encodes.
+The setup script installs ffmpeg, uv, Node and Ollama (as a Homebrew service, so the models
+are served from every login), the Python environment with mlx-whisper for transcription,
+the Ollama models and the other model weights, and builds the web app. On macOS
+`ENCODER=videotoolbox` trades larger files for much faster encodes.
+
+`macos-service.sh` installs a launchd agent that starts the server at login, restarts it if
+it stops and logs to `~/Library/Logs/agentic-editor/server.log`; `status`, `restart`,
+`logs` and `uninstall` do what they say. While the server runs on power it keeps the Mac
+from going to sleep (the display may still turn off), so jobs and overnight autopilot runs
+finish. A MacBook with its lid closed sleeps anyway unless it is plugged in with a display
+attached. The first start asks whether to accept incoming connections; allow it, then
+phones and other computers on the network open `http://<mac name>.local:8000`.
+
+### Moving to a Mac
+
+To make a Mac the editor's home, set it up as above (without starting the service yet),
+turn on Remote Login on the Mac (System Settings, General, Sharing), and run this on the
+machine the editor lives on now:
+
+```
+scripts/move-to-mac.sh you@your-mac.local
+```
+
+It copies the jobs, finished videos, downloaded sources, uploads, presets, assets and fonts,
+and the login settings, then rewrites the stored paths for the Mac
+(`aiedit relocate`). Analysis caches and model weights are not copied: the Mac makes its
+own. Autopilot folder feeds still point at folders on the old machine; edit them to a
+folder on the Mac. Then start the service on the Mac.
 
 ## Usage
 
