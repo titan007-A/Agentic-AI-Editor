@@ -91,9 +91,16 @@ def test_plans_from_candidates_and_maps_lines_to_times(make_analysis):
 
 
 def test_out_of_range_candidates_are_dropped(make_analysis):
-    llm = FakeLLM(candidates((3, 99)), final(0))
+    llm = FakeLLM(candidates((3, 99)), candidates((4, 99)))
     with pytest.raises(LLMError, match="no usable segments"):
         plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
+
+
+def test_an_empty_answer_is_asked_again(make_analysis):
+    llm = FakeLLM({"candidates": []}, candidates((1, 3)), final(0), {"words": []})
+    edl = plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
+    assert edl.clips[0].start == 4.0
+    assert "at least one segment" in llm.prompts[1][-1]["content"]
 
 
 def test_rule_violations_are_fed_back_and_retried(make_analysis):

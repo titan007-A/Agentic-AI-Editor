@@ -210,18 +210,24 @@ def propose(
         f"seconds. Score hook, completeness and peak from 0 to 10 and give a one-line reason."
         + _editor_notes(notes)
     )
-    reply = llm.chat_json(
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-        CandidateList.model_json_schema(),
-    )
     first, last = chunk[0].index, chunk[-1].index
-    valid = []
-    for candidate in parse(CandidateList, reply).candidates:
-        if first <= candidate.start_line <= candidate.end_line <= last:
-            valid.append(candidate)
-        else:
-            log.debug("dropping out-of-range candidate %s", candidate)
-    return valid
+    # The model now and then answers a short transcript with no candidates at all; asked
+    # again and told to pick the best there is, it nearly always does.
+    for insist in ("", "\n\nPropose at least one segment, the best these lines allow."):
+        reply = llm.chat_json(
+            [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt + insist}],
+            CandidateList.model_json_schema(),
+        )
+        valid = []
+        for candidate in parse(CandidateList, reply).candidates:
+            if first <= candidate.start_line <= candidate.end_line <= last:
+                valid.append(candidate)
+            else:
+                log.debug("dropping out-of-range candidate %s", candidate)
+        if valid:
+            return valid
+        log.debug("no usable candidates for lines %d-%d", first, last)
+    return []
 
 
 def _describe_candidates(candidates: list[Candidate], lines: list[Line]) -> str:
