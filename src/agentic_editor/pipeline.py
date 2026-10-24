@@ -12,7 +12,17 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import agent, download, framing, hooks, review, silence, subtitles, trim
+from agentic_editor import (
+    agent,
+    download,
+    framing,
+    hooks,
+    review,
+    silence,
+    slots,
+    subtitles,
+    trim,
+)
 from agentic_editor.analysis import faces, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -404,10 +414,11 @@ def produce(
             detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
         face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
         texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
-        compose.render(
-            edl, target, analysis, video, dest, work_dir, settings, backends, commands,
-            face_samples, texts,
-        )  # fmt: skip
+        with slots.encoding(vision, progress=progress):
+            compose.render(
+                edl, target, analysis, video, dest, work_dir, settings, backends, commands,
+                face_samples, texts,
+            )  # fmt: skip
         progress("review", f"checking {preset.name}")
         # Caption timing is checked against the spoken words, so only for captions of them.
         spoken = target.captions.enabled and target.captions.mode in ("speech", "lyrics")
@@ -441,11 +452,26 @@ def run(
 ) -> Result:
     progress("download", f"fetching {source_ref}")
     source = resolve_source(source_ref, settings)
-    progress("analyze", f"analyzing {source.title}")
     work_dir = settings.cache_dir / file_hash(source.path)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    # Two jobs on one video would write the same cache and output files.
+    with slots.video(work_dir).turn("edit it", progress):
+        return edit(source, work_dir, presets, settings, backends, notes, progress)
+
+
+def edit(
+    source: download.Source,
+    work_dir: Path,
+    presets: list[Preset],
+    settings: Settings,
+    backends: Backends,
+    notes: str | None,
+    progress: Progress,
+) -> Result:
+    progress("analyze", f"analyzing {source.title}")
     out_dir = settings.media_dir / "outputs" / work_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
-    router = ModelRouter(settings, backends)
+    router = ModelRouter(settings, backends, progress)
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
 
     analyses: dict[str, Analysis] = {}

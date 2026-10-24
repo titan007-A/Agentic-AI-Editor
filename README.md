@@ -125,9 +125,13 @@ New-NetFirewallRule -DisplayName "Agentic AI Editor" -Direction Inbound -Protoco
 
 `serve` runs the API, the job worker and the built frontend in one process on
 `HOST:PORT` (default `0.0.0.0:8000`), so any device on the network can reach it. Jobs
-are queued in SQLite through Huey and run one at a time unless `MAX_CONCURRENT_JOBS`
-is raised. Each pasted link becomes its own job; progress streams to the browser over
-server-sent events.
+are queued in SQLite through Huey, two in progress at once (`MAX_CONCURRENT_JOBS`). They
+take turns on the GPU and on the encoder: every model fits on the card only on its own,
+and two encodes would only share the CPU. A job gives the GPU up while it encodes, so the
+next one transcribes, separates and plans meanwhile instead of waiting for the whole
+edit. The turns are file locks too, so a command-line run started while the server is
+busy waits its turn rather than running out of GPU memory. Each pasted link becomes its
+own job; progress streams to the browser over server-sent events.
 
 Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source

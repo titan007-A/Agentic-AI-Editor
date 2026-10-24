@@ -45,6 +45,8 @@ function JobDetail() {
   }
 
   if (!job) return <p className="text-sm text-muted-foreground">Loading...</p>;
+  // The job is fetched once; while it runs, the latest event says where it is now.
+  const now = active && latest ? { ...job, status: "running" as const, stage: latest.stage } : job;
 
   return (
     <div className="space-y-6">
@@ -61,7 +63,7 @@ function JobDetail() {
           <p className="truncate text-xs text-muted-foreground">{job.source}</p>
           {job.notes && <p className="text-sm">Notes: {job.notes}</p>}
         </div>
-        <JobStatus job={job} />
+        <JobStatus job={now} />
         {!active && (
           <Button variant="ghost" size="icon" onClick={remove} aria-label="Delete job">
             <Trash2 />

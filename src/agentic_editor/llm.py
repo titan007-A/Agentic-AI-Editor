@@ -16,18 +16,29 @@ class LLMError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, base_url: str, model: str, timeout: float = 600):
+    """A model served by Ollama. Used as a context manager, it holds `slot` (the GPU)
+    while open and unloads the model when closed."""
+
+    def __init__(self, base_url: str, model: str, timeout: float = 600, slot=None, progress=None):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.http = httpx.Client(timeout=timeout)
         self.last_tokens_per_second: float | None = None
+        self.slot = slot
+        self.progress = progress
 
     def __enter__(self) -> "OllamaClient":
+        if self.slot is not None:
+            self.slot.acquire(f"run {self.model}", progress=self.progress)
         return self
 
     def __exit__(self, *exc) -> None:
-        self.unload()
-        self.http.close()
+        try:
+            self.unload()
+            self.http.close()
+        finally:
+            if self.slot is not None:
+                self.slot.release()
 
     def chat_json(
         self,

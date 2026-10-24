@@ -42,8 +42,14 @@ class Tracker:
         self.preset_count = preset_count
         self.finished = 0
         self.value = 0.0
+        self.stage = "download"
 
     def __call__(self, stage: str, message: str) -> None:
+        # A job that got the GPU or encoder it waited for is back at the stage it was at.
+        if stage == "resume":
+            stage = self.stage
+        elif stage != "wait":
+            self.stage = stage
         share = (1 - RENDER_START) / self.preset_count
         if stage == "done":
             self.finished += 1

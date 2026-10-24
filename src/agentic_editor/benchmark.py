@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-from agentic_editor import ffmpeg
+from agentic_editor import ffmpeg, slots
 from agentic_editor.backends import Backends, encoder_args
 from agentic_editor.presets import Preset
 from agentic_editor.router import ModelRouter
@@ -104,20 +104,23 @@ def run(
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     router = ModelRouter(settings, backends)
+    # Timed on an idle machine: a job running meanwhile would share the GPU and the CPU.
+    # No job holds the encoder while it waits for the GPU, so taking both can't deadlock.
     try:
-        results = []
-        if info.has_audio:
-            audio = ffmpeg.extract_audio(video, work / "audio.wav")
-            separated, vocals = time_separation(router, audio, info.duration, work)
-            # Whisper's voice activity filter drops most of a full music mix, so time it on
-            # the isolated vocals, the way the vocal presets use it.
-            results.append(time_transcription(router, vocals, info.duration))
-            results.append(separated)
-        if llm:
-            for model in dict.fromkeys([settings.llm_model, settings.vision_model]):
-                results.append(time_llm(settings.ollama_url, model))
-        results.append(time_render(video, info, preset, backends, work))
-        return results
+        with slots.gpu.turn("benchmark"), slots.encoder.turn("benchmark"):
+            results = []
+            if info.has_audio:
+                audio = ffmpeg.extract_audio(video, work / "audio.wav")
+                separated, vocals = time_separation(router, audio, info.duration, work)
+                # Whisper's voice activity filter drops most of a full music mix, so time it
+                # on the isolated vocals, the way the vocal presets use it.
+                results.append(time_transcription(router, vocals, info.duration))
+                results.append(separated)
+            if llm:
+                for model in dict.fromkeys([settings.llm_model, settings.vision_model]):
+                    results.append(time_llm(settings.ollama_url, model))
+            results.append(time_render(video, info, preset, backends, work))
+            return results
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
