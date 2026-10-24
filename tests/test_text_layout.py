@@ -115,3 +115,21 @@ def test_a_text_block_band_is_where_its_ink_is(tmp_path):
     rows = np.nonzero(np.array(Image.open(tmp_path / "t.png"))[..., 3].any(axis=1))[0]
     top, bottom = placed.band
     assert abs(rows[0] - top) <= 1 and abs(rows[-1] + 1 - bottom) <= 1
+
+
+def test_captions_keep_a_gap_from_overlays():
+    from agentic_editor import subtitles
+    from agentic_editor.edl import Cue
+    from agentic_editor.render.compose import BANNER_GAP, keep_clear
+
+    # A one-liner box at rows 1300-1400 for the first 4 s; a caption 120 px tall that
+    # would sit right on top of it at the bottom margin.
+    blocked = keep_clear([(0.0, 4.0, 1300.0, 1400.0)])
+    assert all(
+        top == 1300 - BANNER_GAP and bottom == 1400 + BANNER_GAP for _, ((top, bottom),) in blocked
+    )
+    cue = Cue(start=0.5, end=2.0, text="ET AINSI")
+    flush = 1920 - 1300  # the margin that puts the caption's bottom edge on the box's top
+    (placed,) = subtitles.place([cue], "bottom", flush, 120, 1920, blocked)
+    band = placed.band(120, 1920)
+    assert band[1] <= 1300 - BANNER_GAP or band[0] >= 1400 + BANNER_GAP

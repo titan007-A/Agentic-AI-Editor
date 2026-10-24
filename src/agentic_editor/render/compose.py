@@ -21,6 +21,7 @@ from agentic_editor.settings import ROOT, Settings
 
 log = logging.getLogger(__name__)
 _CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
+BANNER_GAP = 24  # px between a banner and anything else drawn on the frame
 
 
 def asset_path(name: str) -> Path:
@@ -123,6 +124,18 @@ def caption_scales(
     return scales
 
 
+def keep_clear(
+    obstacles: list[tuple[float, float, float, float]],
+) -> list[tuple[float, list[tuple[float, float]]]]:
+    """Rows captions must stay off, every half second, for overlays shown from start to
+    end: each band widened by a banner's gap, so a caption never sits flush on a box."""
+    return [
+        (start + k * 0.5, [(top - BANNER_GAP, bottom + BANNER_GAP)])
+        for start, end, top, bottom in obstacles
+        for k in range(int((end - start) / 0.5) + 1)
+    ]
+
+
 def banner_top(
     position: str,
     offset: int,
@@ -135,7 +148,7 @@ def banner_top(
     """Top edge for a banner: its usual position if faces stay clear of it, else the other
     end of the frame, else stacked beside a banner already there. `taken` are the bands of
     banners placed before this one, which it must not cover."""
-    gap = 24
+    gap = BANNER_GAP
     near = offset if position == "top" else frame_height - offset - height
     far = frame_height - offset - height if position == "top" else offset
     options = [near, far]
@@ -345,11 +358,7 @@ def render(
         position = overrides.position or style.position
         placements = None
         if style.avoid_faces and (rows or obstacles):
-            blocked = rows + [
-                (start + k * 0.5, [(top, bottom)])
-                for start, end, top, bottom in obstacles
-                for k in range(int((end - start) / 0.5) + 1)
-            ]
+            blocked = rows + keep_clear(obstacles)
             lines = max((c.text.count("\n") + 1 for c in cues), default=1)
             height = round(style.size * 1.25 * lines + 2 * style.outline)
             placements = subtitles.place(cues, position, style.margin, height, frame[1], blocked)
