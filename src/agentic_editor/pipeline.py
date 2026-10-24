@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 
 Progress = Callable[[str, str], None]
 MAX_FIXES = 2
+# Without the vision model to tell, only a box this share of the frame can be an overlay.
+UNCHECKED_AREA = 0.05
 UPLOAD_PREFIX = "upload:"
 
 
@@ -654,10 +656,11 @@ def edit(
     outputs = []
     with router.vision() as vision:
         reviewer = vision if _reachable(vision) else None
-        candidates = next(iter(analyses.values())).watermarks
+        first = next(iter(analyses.values()))
         marks = confirmed_watermarks(
-            candidates, reviewer, source.path, settings, work_dir, progress
-        )
+            first.watermarks, reviewer, source.path, settings, work_dir, progress,
+            (first.width, first.height),
+        )  # fmt: skip
         for preset, (edl, planner) in [(p, v) for p in presets for v in plans.get(p.name, [])]:
             analysis = for_preset(preset).model_copy(update={"watermarks": marks})
             name = preset.name + (f"-{'abcde'[edl.variant]}" if edl.variant else "")
@@ -762,15 +765,24 @@ def confirmed_watermarks(
     settings: Settings,
     work_dir: Path,
     progress: Progress,
+    frame: tuple[int, int],
 ) -> list[Watermark]:
-    """Candidates the vision model agrees are overlays. Without it every candidate is
-    blurred: a smudge on some scenery is a smaller miss than a watermark left in."""
+    """Candidates the vision model agrees are overlays. Without it every candidate the
+    size of an overlay is blurred: a smudge on some scenery is a smaller miss than a
+    watermark left in, but a blur over half the picture is no smaller."""
     if not candidates:
         return []
     if vision is None:
-        log.warning("no vision model; blurring %d unconfirmed watermark(s)", len(candidates))
-        return candidates
-    cache = work_dir / f"watermarks-{vision.model.replace(':', '_').replace('/', '_')}.json"
+        small = [
+            m for m in candidates if m.width * m.height <= UNCHECKED_AREA * frame[0] * frame[1]
+        ]
+        log.warning(
+            "no vision model; blurring %d of %d unconfirmed watermark(s)",
+            len(small), len(candidates),
+        )  # fmt: skip
+        return small
+    model = vision.model.replace(":", "_").replace("/", "_")
+    cache = work_dir / f"watermarks-v{watermarks.VERSION}-{model}.json"
     if cache.exists():
         checked = [Watermark.model_validate(m) for m in json.loads(cache.read_text())]
     else:

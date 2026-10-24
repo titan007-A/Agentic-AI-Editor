@@ -295,3 +295,29 @@ def test_a_loudness_fix_keeps_the_picture_and_lays_new_sound_under_it(
     assert (count, issues, renders) == (2, [], [-14.0])
     (remux,) = commands
     assert remux[remux.index("-c:v") + 1] == "copy" and dest.read_bytes() == b"remuxed"
+
+
+def test_a_video_that_cant_be_analysed_fails_with_the_reason(make_analysis, monkeypatch, tmp_path):
+    def no_audio(*args):
+        raise ValueError("clip.mp4 has no audio track")
+
+    presets = [Preset(name="a", label="a", min_duration=4, max_duration=8)]
+    monkeypatch.setattr(pipeline, "ModelRouter", lambda *args: Offline())
+    monkeypatch.setattr(pipeline, "analyze", no_audio)
+    settings = type("S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path})
+    source = download.Source(path=tmp_path / "clip.mp4", title="Clip")
+    with pytest.raises(ValueError, match="has no audio track"):
+        pipeline.edit(
+            source, tmp_path / "cache", presets, settings, None, None, lambda *a: None, "r"
+        )
+
+
+def test_without_the_vision_model_only_overlay_sized_boxes_are_blurred(tmp_path):
+    from agentic_editor.analysis.watermarks import Watermark
+
+    handle = Watermark(x=1700, y=40, width=180, height=60, spans=[(0, 9)], windows=9)
+    shirt = Watermark(x=800, y=500, width=600, height=500, spans=[(0, 9)], windows=9)
+    kept = pipeline.confirmed_watermarks(
+        [handle, shirt], None, tmp_path / "v.mp4", None, tmp_path, lambda *a: None, (1920, 1080)
+    )
+    assert kept == [handle]

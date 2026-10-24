@@ -37,8 +37,29 @@ def test_follows_a_logo_that_jumps_corners():
 
     found = sorted(find(jumping, (1920, 1080), 24.0), key=lambda m: m.y)
     assert len(found) == 2
-    assert found[0].spans == [(0.0, 12.0)]
-    assert found[1].spans == [(12.0, 24.0)]
+    # Spans may run a little past the jump, never short of it: a blur held a moment too
+    # long is better than a mark left showing.
+    (a0, a1), (b0, b1) = found[0].spans[0], found[1].spans[0]
+    assert len(found[0].spans) == len(found[1].spans) == 1
+    assert a0 == 0.0 and 12.0 <= a1 <= 14.0
+    assert 10.0 <= b0 <= 12.0 and b1 == 24.0
+
+
+def test_follows_a_mark_that_jumps_every_five_seconds():
+    # Off the 4 s window grid, so no fixed window ever saw one place for its whole length.
+    def jumping():
+        return frames(45, lambda t: (10, 20) if t % 10 < 5 else (120, 380))
+
+    found = sorted(find(jumping, (1920, 1080), 45.0), key=lambda m: m.y)
+    assert len(found) == 2
+    top, side = found
+    for start in (0, 10, 20, 30, 40):
+        assert any(a <= start and start + 5 <= b for a, b in top.spans), (start, top.spans)
+        assert not any(a <= start + 7 <= b for a, b in top.spans)
+    for start in (5, 15, 25, 35):
+        assert any(a <= start and start + 5 <= b for a, b in side.spans), (start, side.spans)
+    # The vision model is shown a moment when the mark is really there.
+    assert top.seen_at % 10 < 5 and side.seen_at % 10 >= 5
 
 
 def test_a_still_shot_says_nothing():
@@ -50,4 +71,6 @@ def test_moving_picture_without_overlay_has_no_candidates():
 
 
 def test_spans_bridge_a_single_missing_window():
-    assert spans([0, 1, 3, 4, 8], 4.0, 40.0) == [(0.0, 20.0), (32.0, 36.0)]
+    assert spans([0, 4, 12, 16, 32], 4.0, 40.0) == [(0.0, 20.0), (32.0, 36.0)]
+    assert spans([0, 1, 2, 4, 5, 9], 4.0, 40.0, step=1.0) == [(0.0, 13.0)]
+    assert spans([0, 0.5, 2.5, 6.0], 1.5, 40.0, step=0.5) == [(0.0, 4.0), (6.0, 7.5)]

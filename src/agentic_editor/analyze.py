@@ -152,7 +152,7 @@ def analyze(
 
     marks = [
         Watermark.model_validate(m)
-        for m in cached(work_dir / "watermarks.json", run_watermark_search)
+        for m in cached(work_dir / f"watermarks-v{watermarks.VERSION}.json", run_watermark_search)
     ]
     samples = ffmpeg.read_audio(timeline_audio, 16000)
 
