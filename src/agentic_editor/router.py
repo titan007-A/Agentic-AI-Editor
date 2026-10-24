@@ -4,8 +4,12 @@ Swap models through .env (WHISPER_MODEL, LLM_MODEL, VISION_MODEL, SEPARATION_MOD
 pipeline code only talks to this interface.
 """
 
+import ctypes
 import logging
 import multiprocessing
+import os
+import signal
+import sys
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -17,6 +21,18 @@ from agentic_editor.llm import OllamaClient
 from agentic_editor.settings import Settings
 from agentic_editor.transcript import Transcript
 
+PR_SET_PDEATHSIG = 1
+
+
+def _start_child(level: int) -> None:
+    logs.setup(level)
+    if sys.platform == "linux":
+        # Killed with its parent: a worker left behind keeps its model on the GPU without
+        # holding the GPU's turn, and the next job runs out of memory.
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+        if os.getppid() == 1:
+            os._exit(1)  # the parent was already gone before the line above took effect
+
 
 def in_child_process[T](fn: Callable[..., T], *args) -> T:
     """Run fn in a fresh process so any GPU memory it grabs is freed when it exits."""
@@ -24,7 +40,7 @@ def in_child_process[T](fn: Callable[..., T], *args) -> T:
     with ProcessPoolExecutor(
         max_workers=1,
         mp_context=ctx,
-        initializer=logs.setup,
+        initializer=_start_child,
         initargs=(logging.getLogger().level,),
     ) as pool:
         return pool.submit(fn, *args).result()
