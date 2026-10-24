@@ -23,6 +23,30 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest -q
 
+  # The Mac build with its models' packages (MLX Whisper, the separator, MediaPipe, PyTorch
+  # on Metal). On demand, like the macOS job above.
+  macos-ml:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: brew install ffmpeg
+      - run: uv sync --locked --extra ml
+      - name: Model packages import
+        run: |
+          uv run python -c "
+          import mlx_whisper, audio_separator, mediapipe, torch
+          print('torch', torch.__version__, 'mps', torch.backends.mps.is_available())
+          "
+      - run: uv run aiedit backends
+      - run: uv run pytest -q
+      - name: Hardware encoder
+        run: |
+          ffmpeg -hide_banner -v error -f lavfi -i testsrc2=size=1080x1920:rate=30 -t 2 \
+            -c:v h264_videotoolbox -b:v 8M -y /tmp/vt.mp4
+          ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 /tmp/vt.mp4
+
   web:
     runs-on: ubuntu-latest
     defaults:
