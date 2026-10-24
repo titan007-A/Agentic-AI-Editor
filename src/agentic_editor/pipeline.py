@@ -578,6 +578,8 @@ def edit(
         except Exception as exc:
             # Vocals that can't be isolated sink the presets that need them, not the others.
             failed(", ".join(p.name for p in presets if p.audio.source == kind), exc)
+    if not analyses:
+        raise errors[0]  # the video itself can't be read: say why, not where it broke later
     presets = [p for p in presets if p.audio.source in analyses]
 
     silenced: dict[tuple[str, float, float], Analysis] = {}
