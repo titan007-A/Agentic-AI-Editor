@@ -111,8 +111,25 @@ def test_rule_violations_are_fed_back_and_retried(make_analysis):
     assert "C7 is not one of the candidates" in feedback
 
 
+def test_a_pick_of_no_candidate_falls_back_to_the_best_scored_one(make_analysis):
+    llm = FakeLLM(candidates((1, 3)), final(-1), final(-1), final(-1), {"words": []})
+    edl = plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
+    assert edl.clips[0].start == 4.0 and edl.hook == "Nobody saw this coming"
+
+
+def test_only_real_candidates_can_be_picked(make_analysis):
+    class Recording(FakeLLM):
+        def chat_json(self, messages, schema, **kwargs):
+            self.schemas = [*getattr(self, "schemas", []), schema]
+            return super().chat_json(messages, schema, **kwargs)
+
+    llm = Recording(candidates((1, 3), (2, 4)), final(1), {"words": []})
+    plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
+    assert llm.schemas[1]["properties"]["candidate"]["enum"] == [0, 1]
+
+
 def test_gives_up_after_two_retries(make_analysis):
-    llm = FakeLLM(candidates((1, 2)), final(5), final(5), final(5))
+    llm = FakeLLM(candidates((1, 2)), {"pick": 0}, {"pick": 0}, {"pick": 0})
     with pytest.raises(LLMError, match="no valid plan"):
         plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
 

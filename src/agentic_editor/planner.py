@@ -338,10 +338,14 @@ def finalize(
     )
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     schema = FinalPlan.model_json_schema()
+    # Only the numbers of real candidates can be decoded; the model has answered C-1.
+    schema["properties"]["candidate"]["enum"] = list(range(len(candidates)))
+    picked: FinalPlan | None = None
     for attempt in range(MAX_RETRIES + 1):
         reply = llm.chat_json(messages, schema)
         try:
-            edl = to_edl(FinalPlan.model_validate(reply), candidates, lines, preset, keep_start)
+            picked = FinalPlan.model_validate(reply)
+            edl = to_edl(picked, candidates, lines, preset, keep_start)
             found = problems(edl, preset, analysis.duration, allow_long=True, available=available)
         except (ValidationError, ValueError) as exc:
             found = [str(exc)]
@@ -357,6 +361,14 @@ def finalize(
                 + "\nFix it and answer again with the complete JSON.",
             },
         ]
+    if picked is not None and not 0 <= picked.candidate < len(candidates):
+        # Still no real pick: the candidates come ranked by the model's own scores, so its
+        # first is a better plan than the energy heuristic's.
+        fallback = picked.model_copy(update={"candidate": 0})
+        edl = to_edl(fallback, candidates, lines, preset, keep_start)
+        if not problems(edl, preset, analysis.duration, allow_long=True, available=available):
+            log.info("no candidate picked; using the best-scored one")
+            return edl
     raise LLMError(f"no valid plan after {MAX_RETRIES} retries: {'; '.join(found)}")
 
 
