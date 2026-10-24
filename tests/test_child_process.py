@@ -45,3 +45,42 @@ def test_a_model_worker_dies_with_its_parent(tmp_path):
         assert not alive
     finally:
         parent.kill()
+
+
+def test_without_a_death_signal_a_worker_still_notices_its_parent_is_gone(tmp_path):
+    # What macOS relies on. The worker is a grandchild here so its parent can be killed.
+    pid_file = tmp_path / "worker.pid"
+    worker = (
+        "import os, time\n"
+        "from pathlib import Path\n"
+        "from agentic_editor.router import exit_with\n"
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "exit_with(os.getppid(), every=0.05)\n"
+        "time.sleep(60)\n"
+    )
+    parent_script = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {worker!r}])\n"
+        "time.sleep(60)\n"
+    )
+    root = Path(__file__).resolve().parent.parent
+    parent = subprocess.Popen([sys.executable, "-c", parent_script], cwd=root)
+    try:
+        for _ in range(200):
+            if pid_file.exists() and pid_file.read_text():
+                break
+            time.sleep(0.05)
+        child = int(pid_file.read_text())
+        parent.send_signal(signal.SIGKILL)
+        parent.wait()
+        for _ in range(100):
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(child, signal.SIGKILL)
+            raise AssertionError("the worker outlived its parent")
+    finally:
+        parent.kill()

@@ -10,6 +10,8 @@ import multiprocessing
 import os
 import signal
 import sys
+import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -24,14 +26,29 @@ from agentic_editor.transcript import Transcript
 PR_SET_PDEATHSIG = 1
 
 
+def exit_with(parent: int, every: float = 1.0) -> None:
+    """End this process soon after `parent` is gone, for systems without a parent-death
+    signal (macOS): an orphan is handed to another parent, so its parent id changes."""
+
+    def watch() -> None:
+        while os.getppid() == parent:
+            time.sleep(every)
+        os._exit(1)
+
+    threading.Thread(target=watch, name="exit-with-parent", daemon=True).start()
+
+
 def _start_child(level: int) -> None:
     logs.setup(level)
+    # Killed with its parent: a worker left behind keeps its model in GPU memory without
+    # holding the GPU's turn, and the next job runs out of memory.
     if sys.platform == "linux":
-        # Killed with its parent: a worker left behind keeps its model on the GPU without
-        # holding the GPU's turn, and the next job runs out of memory.
+        parent = os.getppid()
         ctypes.CDLL("libc.so.6", use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
-        if os.getppid() == 1:
+        if os.getppid() != parent:
             os._exit(1)  # the parent was already gone before the line above took effect
+    else:
+        exit_with(os.getppid())
 
 
 def in_child_process[T](fn: Callable[..., T], *args) -> T:

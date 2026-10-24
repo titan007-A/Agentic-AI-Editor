@@ -1,5 +1,7 @@
 import argparse
 import logging
+import os
+import subprocess
 import sys
 
 from agentic_editor import ffmpeg, logs, pipeline
@@ -130,6 +132,10 @@ def _serve(args: argparse.Namespace) -> int:
     if not settings.secret_key:
         print("SECRET_KEY is not set; logins will not survive a restart.")
     get_backends()
+    if sys.platform == "darwin":
+        # Holds off sleep while on power, for as long as this process runs, so jobs and
+        # overnight autopilot runs aren't cut short. The display may still sleep.
+        subprocess.Popen(["/usr/bin/caffeinate", "-s", "-w", str(os.getpid())])
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_config=None)
     return 0
 
@@ -150,6 +156,24 @@ def _hash_password(args: argparse.Namespace) -> int:
     print("Add these lines to .env:")
     print(f"PASSWORD_HASH='{hash_password(password)}'")
     print(f"SECRET_KEY='{secrets.token_hex(32)}'")
+    return 0
+
+
+def _relocate(args: argparse.Namespace) -> int:
+    from agentic_editor.db import make_sessionmaker
+    from agentic_editor.relocate import relocate
+    from agentic_editor.settings import ROOT
+
+    settings = get_settings()
+    moved = relocate(
+        make_sessionmaker(settings.database), settings.media_dir, args.old_root, str(ROOT)
+    )
+    print(
+        f"moved {moved.outputs} video(s), {moved.sources} source(s) and "
+        f"{moved.feed_items} feed item(s) from {args.old_root} to {ROOT}"
+    )
+    for folder in moved.missing_folders:
+        print(f"folder feed with no folder here, point it at one on this machine: {folder}")
     return 0
 
 
@@ -187,6 +211,11 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
         handler=_hash_password
     )
+    move = commands.add_parser(
+        "relocate", help="after copying the media folder from another machine, fix its paths"
+    )
+    move.add_argument("old_root", help="where the repository was on the old machine")
+    move.set_defaults(handler=_relocate)
 
     args = parser.parse_args(argv)
     logs.setup(logging.DEBUG if args.verbose else logging.INFO)
