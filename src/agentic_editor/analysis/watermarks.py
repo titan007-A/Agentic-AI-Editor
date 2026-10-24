@@ -187,9 +187,13 @@ def merge_touching(tracks: list[_Track], max_area: float, gap: int = 6) -> list[
     for t in sorted(tracks, key=lambda t: t.box):
         for m in merged:
             a, b = m.box, t.box
+            # Words of one line sit a space apart, which is wider than `gap` for big text.
+            rows = min(a[3], b[3]) - max(a[1], b[1])
+            same_line = rows >= 0.5 * min(a[3] - a[1], b[3] - b[1])
+            across = max(gap, round(0.8 * min(a[3] - a[1], b[3] - b[1]))) if same_line else gap
             near = (
-                a[0] - gap <= b[2]
-                and b[0] - gap <= a[2]
+                a[0] - across <= b[2]
+                and b[0] - across <= a[2]
                 and a[1] - gap <= b[3]
                 and b[1] - gap <= a[3]
             )
@@ -276,12 +280,12 @@ def find(
     needed = round(window_seconds / step) + 1
     min_windows = needed if len(window_boxes) >= needed else 1
     frame_area = sample_width * sample_height
-    kept = [
+    # Pieces are joined first: a word that only some windows saw still belongs to its line.
+    tracks = [
         t
-        for t in track(window_boxes, MAX_AREA * frame_area)
+        for t in merge_touching(track(window_boxes, MAX_AREA * frame_area), MAX_AREA * frame_area)
         if len(t.windows) >= min_windows and near_edge(t.box, sample_width, sample_height)
     ]
-    tracks = merge_touching(kept, MAX_AREA * frame_area)
     if not tracks:
         return []
 
