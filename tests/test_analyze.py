@@ -77,6 +77,17 @@ def test_a_vocal_preset_still_fails_when_there_is_no_voice(offline, tmp_path):
         analyze.analyze(Path("source.mp4"), tmp_path, Router(stems="empty"), "vocals")
 
 
+def test_a_rejection_made_by_earlier_checks_is_tried_again(offline, tmp_path):
+    (tmp_path / "vocals.json").write_text('{"failed": "old checks", "model": "m.ckpt"}')
+    router = Router(stems="empty")
+    with pytest.raises(separation.SeparationFailed, match="quieter"):
+        analyze.analyze(Path("source.mp4"), tmp_path, router, "vocals")
+    assert router.separated == 1
+    with pytest.raises(separation.SeparationFailed):
+        analyze.analyze(Path("source.mp4"), tmp_path, router, "vocals")
+    assert router.separated == 1
+
+
 def test_changing_the_whisper_model_transcribes_again(offline, tmp_path):
     words = [Word(text=f"w{i}", start=i * 0.5, end=i * 0.5 + 0.4) for i in range(40)]
     first = Router(words)

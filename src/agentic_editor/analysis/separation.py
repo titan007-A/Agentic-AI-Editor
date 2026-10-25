@@ -20,6 +20,8 @@ INSTRUMENT_FREE_RMS_MARGIN_DB = 20.0
 INSTRUMENT_FREE_LOUDEST_MARGIN_DB = 8.0
 MIN_FINGERPRINT_CORRELATION = 0.20
 FINGERPRINT_SECONDS = 15
+# Stored with a rejection; raise it when the checks change so earlier rejections are retried.
+CHECKS_VERSION = 2
 MAX_VOLUME_DROP_DB = 30.0
 
 
