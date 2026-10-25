@@ -35,6 +35,13 @@ def test_a_reply_without_a_message_is_a_model_error():
         llm.chat_json([{"role": "user", "content": "hi"}], {})
 
 
+def test_an_mlx_build_names_the_build_to_use_instead():
+    refusal = {"error": "structured output is unavailable"}
+    llm = client(lambda request: httpx.Response(501, json=refusal))
+    with pytest.raises(LLMError, match="q4_K_M"):
+        llm.chat_json([{"role": "user", "content": "hi"}], {})
+
+
 def test_a_server_gone_mid_job_keeps_the_planned_opening(make_analysis):
     def refuse(request):
         raise httpx.ConnectError("connection refused", request=request)

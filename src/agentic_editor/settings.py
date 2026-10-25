@@ -31,8 +31,10 @@ class Settings(BaseSettings):
     separation_model: str = "vocals_mel_band_roformer.ckpt"
 
     ollama_url: str = "http://127.0.0.1:11434"
-    llm_model: str = "qwen3.5:9b"
-    vision_model: str = "qwen3.5:4b"
+    # Named by build: on Apple Silicon the bare tags fetch MLX builds, which Ollama can't
+    # hold to a JSON schema, and every answer here is one.
+    llm_model: str = "qwen3.5:9b-q4_K_M"
+    vision_model: str = "qwen3.5:4b-q4_K_M"
     # Model layers Ollama puts on the GPU (99: all). Unset, Ollama decides and on an 8 GB
     # card runs part of the 9b planner on the CPU at about two thirds the speed.
     llm_gpu_layers: int | None = Field(default=None, ge=0)

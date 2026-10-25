@@ -101,6 +101,11 @@ class OllamaClient:
                 self.gpu_layers = None
                 body["options"].pop("num_gpu", None)
                 response = self.http.post(f"{self.base_url}/api/chat", json=body)
+            if "structured output is unavailable" in response.text:
+                raise LLMError(
+                    f"{self.model} can't answer to a JSON schema (an MLX build); use a GGUF "
+                    "build such as qwen3.5:9b-q4_K_M"
+                )
             if response.status_code != 200:
                 raise LLMError(
                     f"{self.model} returned {response.status_code}: {response.text[:500]}"

@@ -180,9 +180,9 @@ def isolate_vocals(original: Path, work_dir: Path, router: ModelRouter, progress
     if meta.exists():
         stored = json.loads(meta.read_text())
         if stored.get("model") == model:
-            # The same model on the same audio rejects its stems again; don't spend
-            # minutes of GPU finding that out.
-            if stored.get("failed"):
+            # The same model and checks on the same audio reject its stems again; don't
+            # spend minutes of GPU finding that out.
+            if stored.get("failed") and stored.get("checks") == separation.CHECKS_VERSION:
                 raise separation.SeparationFailed(stored["failed"])
             if vocals.exists():
                 return vocals, stored["instrument_free"]
@@ -197,7 +197,9 @@ def isolate_vocals(original: Path, work_dir: Path, router: ModelRouter, progress
     try:
         track = separation.accept_stems(original, stems, vocals)
     except separation.SeparationFailed as exc:
-        meta.write_text(json.dumps({"failed": str(exc), "model": model}))
+        meta.write_text(
+            json.dumps({"failed": str(exc), "model": model, "checks": separation.CHECKS_VERSION})
+        )
         stems.vocals.unlink(missing_ok=True)
         stems.instrumental.unlink(missing_ok=True)
         raise

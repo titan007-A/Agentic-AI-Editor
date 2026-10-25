@@ -33,8 +33,8 @@ sed -i "s|^FFMPEG_BIN=.*|FFMPEG_BIN=$FFMPEG_DIR/bin/ffmpeg|; s|^FFPROBE_BIN=.*|F
 uv sync --extra ml
 
 set -a; source .env; set +a
-ollama pull "${LLM_MODEL:-qwen3.5:9b}"
-ollama pull "${VISION_MODEL:-qwen3.5:4b}"
+ollama pull "${LLM_MODEL:-qwen3.5:9b-q4_K_M}"
+ollama pull "${VISION_MODEL:-qwen3.5:4b-q4_K_M}"
 uv run aiedit fetch-models
 
 uv run aiedit backends
