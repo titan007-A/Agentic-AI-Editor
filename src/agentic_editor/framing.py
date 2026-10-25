@@ -378,6 +378,89 @@ def tall_shots(
     return shots
 
 
+EDGE_TEXT = 0.35  # of the picture's height: text this near its top or bottom is cut off
+TEXT_MARGIN = 6  # px of picture kept clear of text that is cut off
+
+
+def band_shots(
+    clip: Clip,
+    cuts: list[float],
+    samples: list[tuple[float, list[Subject]]],
+    faces: list[Sample],
+    content: Content,
+    rows: int,
+    src_height: int,
+    texts: list[tuple[int, int]] = (),
+) -> list[Shot]:
+    """Shots for a picture shown across the frame's whole width in a band of `rows` source
+    rows' height, between a preset's text. Never cropped at the sides: a picture taller
+    than the band loses its top and bottom, around the heads and must-keep items of each
+    shot. Text the picture brings with it near its top or bottom edge (lyrics, a channel
+    name) is cut off too, unless a head is in the way; `texts` are such text rows the
+    caller found some other way, such as watermarks."""
+    left, top, picture_width, picture_height = content
+    found = [(s.y0, s.y1) for _, items in samples for s in items if s.kind == "text"] + list(texts)
+    heads_all = [
+        ((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
+        for _, seen in faces
+        for f in seen
+    ] + [(s.y0, s.y1) for _, items in samples for s in items if s.kind == "head"]
+    lo, hi = top, top + picture_height
+    for y0, y1 in found:
+        if any(a < y1 and b > y0 for a, b in heads_all):
+            continue
+        if y1 <= top + EDGE_TEXT * picture_height:
+            lo = max(lo, y1 + TEXT_MARGIN)
+        elif y0 >= top + (1 - EDGE_TEXT) * picture_height:
+            hi = min(hi, y0 - TEXT_MARGIN)
+    if hi - lo < picture_height / 2:  # text all over: keep the picture, the text stays
+        lo, hi = top, top + picture_height
+    height = even(min(rows, hi - lo))
+    if height >= picture_height - 1:
+        return [
+            Shot(start=clip.start, end=clip.end, x=left, width=picture_width, y=top,
+                 height=picture_height, reason="the whole picture fits")
+        ]  # fmt: skip
+    shots = []
+    for start, end in shot_bounds(clip, cuts):
+        heads = [
+            ((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
+            for t, seen in faces
+            if start <= t < end
+            for f in seen
+        ] + [
+            (s.y0, s.y1)
+            for t, items in samples
+            if start <= t < end
+            for s in items
+            if s.kind == "head"
+        ]
+        keep = heads + [
+            (s.y0, s.y1)
+            for t, items in samples
+            if start <= t < end
+            for s in items
+            if s.keep and s.kind not in ("head", "text")
+        ]
+        heads = [(max(a, lo), min(b, hi)) for a, b in heads if b > lo and a < hi]
+        keep = [(max(a, lo), min(b, hi)) for a, b in keep if b > lo and a < hi]
+        # Everything that must stay if it fits, else the heads alone, else the top of them.
+        whole = union(keep)
+        if whole is None or whole[1] - whole[0] > height:
+            whole = union(heads)
+        if whole is None:
+            y = lo + (hi - lo - height) / 2
+            reason = "nothing that must stay; the middle of the picture"
+        else:
+            # Some room above the heads, as a camera operator would leave.
+            y = min(whole[0], max(whole[0] - HEADROOM * height, whole[1] - height))
+            reason = "the picture's top and bottom cut around what matters"
+        y = even(min(max(y, lo), hi - height))
+        shots.append(Shot(start=start, end=end, x=left, width=picture_width, y=y, height=height,
+                          reason=reason))  # fmt: skip
+    return shots
+
+
 def _frame_group(
     group: list[View],
     start: float,
@@ -464,6 +547,7 @@ def screen_rows(
     src_size: tuple[int, int],
     frame: tuple[int, int],
     window: int,
+    band: tuple[int, int] | None = None,
 ) -> list[tuple[float, list[Span]]]:
     """The rows of the output frame each visible face covers, at reel times.
 
@@ -485,7 +569,7 @@ def screen_rows(
         )
         for t, found in faces
     ]
-    return box_rows(boxes, clip, shots, picture, src_size, frame, window)
+    return box_rows(boxes, clip, shots, picture, src_size, frame, window, band)
 
 
 def box_rows(
@@ -496,6 +580,7 @@ def box_rows(
     src_size: tuple[int, int],
     frame: tuple[int, int],
     window: int,
+    band: tuple[int, int] | None = None,
 ) -> list[tuple[float, list[Span]]]:
     """The rows of the output frame each box (x0, y0, x1, y1 in source pixels) covers, at
     reel times, for the boxes the framing of the moment shows any of.
@@ -513,8 +598,9 @@ def box_rows(
         top, picture_height = picture[1], picture[3]
         if shot and shot.height:
             top, picture_height = shot.y, shot.height
-        scale = min(width / span, height / picture_height)
-        offset = (height - picture_height * scale) / 2
+        band_top, band_bottom = band or (0, height)
+        scale = min(width / span, (band_bottom - band_top) / picture_height)
+        offset = band_top + (band_bottom - band_top - picture_height * scale) / 2
         bands = []
         for x0, y0, x1, y1 in found:
             if left is not None and (x1 < left or x0 > left + span):

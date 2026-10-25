@@ -308,6 +308,58 @@ def recheck_framing(
     return framing.harmonize(updated, width, content), [note]
 
 
+def band_framing(
+    edl: EDL,
+    preset: Preset,
+    analysis: Analysis,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    detections: dict[tuple[float, float], list[faces.Sample]],
+    vision: OllamaClient | None,
+) -> EDL:
+    """Cut a picture shown whole to fit the band between the preset's text, at the frame's
+    full width: top and bottom go, around the faces, and with them any text the picture
+    brings along its edges."""
+    if not preset.text_blocks:
+        return edl.model_copy(update={"shots": []})
+    face = compose.text_face(settings, compose.text_language(preset, analysis))
+    band = compose.picture_band(preset, face)
+    if band is None:
+        return edl.model_copy(update={"shots": []})
+    clip = edl.clips[0]
+    key = (clip.start, clip.end)
+    size = (analysis.width, analysis.height)
+    picture = (0, 0, *size)
+    if preset.framing.crop_black_bars or preset.framing.auto_background:
+        picture = compose.picture_area(video, clip.start, clip.end, size)
+    if key not in detections:
+        detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
+    face_samples = [(clip.start + t, found) for t, found in detections[key]]
+    times = framing.view_times(clip, analysis.scenes)
+    samples = subject_samples(vision, video, times, analysis, settings, work_dir)
+    marks = [(m.y, m.y + m.height) for m in analysis.watermarks]
+    rows = compose.band_rows(preset, band, picture[2])
+    shots = framing.band_shots(
+        clip, analysis.scenes, samples, face_samples, picture, rows, analysis.height, marks
+    )
+    cut = sorted({s.height for s in shots if s.height and s.height < picture[3]})
+    note = (
+        f"cut the picture's top and bottom to {', '.join(map(str, cut))} of its "
+        f"{picture[3]} rows, at its full width, to fit between the text"
+        if cut
+        else "the whole picture fits between the text"
+    )
+    decisions = [
+        d
+        for d in edl.decisions
+        if not d.startswith(("cut the picture's", "the whole picture fits"))
+    ]
+    return edl.model_copy(
+        update={"shots": shots, "picture": picture, "decisions": [*decisions, note]}
+    )
+
+
 def smart_framing(
     edl: EDL,
     preset: Preset,
@@ -476,6 +528,11 @@ def produce(
                 edl, commands = smart_framing(
                     edl, target, analysis, video, settings, work_dir, detections, vision
                 )
+            elif edl.crop_mode == "none":
+                edl = band_framing(
+                    edl, target, analysis, video, settings, work_dir, detections, vision
+                )
+                commands = {}
             else:
                 commands = face_commands(
                     edl, target, analysis, video, settings, work_dir, detections
