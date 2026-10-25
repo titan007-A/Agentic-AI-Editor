@@ -26,9 +26,11 @@ class Settings(BaseSettings):
 
     whisper_model: str = "large-v3-turbo"
     mlx_whisper_model: str = "mlx-community/whisper-large-v3-turbo"
-    # MelBand Roformer by Kimberley Jensen: 11.9 dB median vocal SDR on MUSDB18 against
-    # 8.5 for UVR-MDX-NET-Voc_FT, and faster. Any audio-separator model name works.
-    separation_model: str = "vocals_mel_band_roformer.ckpt"
+    # UVR-MDX-NET-Voc_FT, run twice per chunk (denoise) with 0.75 overlap: the owner's
+    # earlier tool, whose vocals sound better to them than the MelBand Roformer's, which
+    # scores higher on MUSDB18 (11.9 dB median vocal SDR against 8.5). Any
+    # audio-separator model name works.
+    separation_model: str = "UVR-MDX-NET-Voc_FT.onnx"
 
     ollama_url: str = "http://127.0.0.1:11434"
     # Named by build: on Apple Silicon the bare tags fetch MLX builds, which Ollama can't
