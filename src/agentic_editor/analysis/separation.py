@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 INSTRUMENT_FREE_RMS_MARGIN_DB = 20.0
 INSTRUMENT_FREE_LOUDEST_MARGIN_DB = 8.0
 MIN_FINGERPRINT_CORRELATION = 0.20
+FINGERPRINT_SECONDS = 15
 MAX_VOLUME_DROP_DB = 30.0
 
 
@@ -123,17 +124,34 @@ def is_instrument_free(source: np.ndarray, instrumental: np.ndarray, sample_rate
     )
 
 
+def loudest_stretch(samples: np.ndarray, sample_rate: int, seconds: int) -> int:
+    """First sample of the `seconds`-long stretch with the most energy, on whole seconds."""
+    count = len(samples) // sample_rate
+    width = min(seconds, count)
+    if width == 0:
+        return 0
+    per_second = np.square(
+        samples[: count * sample_rate].reshape(count, sample_rate), dtype=np.float64
+    ).sum(axis=1)
+    return int(np.argmax(np.convolve(per_second, np.ones(width), "valid"))) * sample_rate
+
+
 def fingerprint_correlation(source: np.ndarray, vocals: np.ndarray, sample_rate: int) -> float:
-    """Pearson correlation of MFCCs 1-12, which ignores overall loudness."""
+    """Pearson correlation of MFCCs 1-12, which ignores overall loudness, over the
+    stretch where the vocals are loudest."""
     import librosa
 
-    n = min(len(source), len(vocals), sample_rate * 15)
+    n = min(len(source), len(vocals))
     if n == 0:
         return 0.0
+    # Songs often open on an instrumental intro, where the vocal stem is near silence and
+    # its MFCCs are noise: compared there, a good separation passes or fails at random.
+    start = loudest_stretch(vocals[:n], sample_rate, FINGERPRINT_SECONDS)
+    end = min(n, start + sample_rate * FINGERPRINT_SECONDS)
     # Coefficient 0 is frame energy; leaving it in lets two unrelated tracks with
     # similar loudness envelopes look alike.
-    a = librosa.feature.mfcc(y=source[:n], sr=sample_rate, n_mfcc=13)[1:].ravel()
-    b = librosa.feature.mfcc(y=vocals[:n], sr=sample_rate, n_mfcc=13)[1:].ravel()
+    a = librosa.feature.mfcc(y=source[start:end], sr=sample_rate, n_mfcc=13)[1:].ravel()
+    b = librosa.feature.mfcc(y=vocals[start:end], sr=sample_rate, n_mfcc=13)[1:].ravel()
     return float(np.corrcoef(a, b)[0, 1])
 
 
