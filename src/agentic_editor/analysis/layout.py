@@ -12,6 +12,9 @@ SOLID = 0.9  # share of the top and bottom edges that must be one colour for a p
 STRIP = 0.02  # of the height: the edge rows the background colour is read from
 SEEN = 0.1  # share of frames a pixel must differ from the background in to be picture
 PICTURE_ROW = 0.3  # share of a row (or column) that must be picture
+STILL = 6.0  # grey levels a pixel spreads over the reel by below which it never moved
+TEXT_ROW = 0.8  # share of a row unlike the background past which it is picture, still or not
+MOVING_ROW = 0.02  # share of a row that has to move for a patchy row to count as picture
 INK = 48  # per channel: how far a pixel may be from the text colour and still be text
 FULL_HEIGHT = 0.9  # a picture band taller than this fills the frame
 BLURRED = 0.5  # detail around the picture, against inside it, below which it is a blur
@@ -52,12 +55,18 @@ NOT_WORDS = {"black", "gray", "silver", "navy", "maroon", "brown"}
 
 
 def sample(
-    video: Path, duration: float, count: int, size: tuple[int, int], ffmpeg_bin: str
+    video: Path,
+    duration: float,
+    count: int,
+    size: tuple[int, int],
+    ffmpeg_bin: str,
+    start: float = 0.0,
 ) -> np.ndarray:
-    """`count` frames spread over the video, as RGB arrays of `size`."""
+    """`count` frames spread over `duration` seconds from `start`, as RGB arrays of `size`."""
     width, height = size
     raw = subprocess.run(
-        [ffmpeg_bin, "-v", "error", "-i", str(video),
+        [ffmpeg_bin, "-v", "error", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
+         "-i", str(video),
          "-vf", f"fps={count / duration:.6f},scale={width}:{height}:flags=area",
          "-pix_fmt", "rgb24", "-f", "rawvideo", "-"],
         capture_output=True,
@@ -108,13 +117,26 @@ def _longest_run(on: np.ndarray, gap: int) -> tuple[int, int] | None:
 def picture_box(frames: np.ndarray, colour: tuple[int, int, int] | None) -> Box:
     """Where the picture sits. A pixel is picture if it differs from the background in
     enough frames; across a whole reel even a dark stage lights up now and then, while
-    padding never does. Text on the padding covers too little of its rows to count."""
+    padding never does.
+
+    Text on the padding, a repost's caption above the picture, can cover half its rows,
+    as much as a dark stage does of its own. But it never moves, and it leaves background
+    between its letters, so a row like that only counts as picture if something in it
+    moves."""
     if colour is None:
         return (0.0, 0.0, 1.0, 1.0)
     _, height, width, _ = frames.shape
     differs = np.any(np.abs(frames.astype(np.int16) - colour) > TOLERANCE, axis=3)
     picture = differs.mean(axis=0) > SEEN
-    rows = _longest_run(picture.mean(axis=1) > PICTURE_ROW, gap=max(1, height // 100))
+    # Shares of the picture's own columns, so a still row of a narrow picture is as full
+    # as one of a wide picture.
+    across = _longest_run(picture.mean(axis=0) > PICTURE_ROW, gap=max(1, width // 100))
+    left, right = across or (0, width)
+    share = picture[:, left:right].mean(axis=1)
+    still = frames.astype(np.float32).mean(axis=3).std(axis=0) <= STILL
+    moving = (~still[:, left:right]).mean(axis=1)
+    is_picture = (share > TEXT_ROW) | ((share > PICTURE_ROW) & (moving > MOVING_ROW))
+    rows = _longest_run(is_picture, gap=max(1, height // 100))
     if rows is None:
         return (0.0, 0.0, 1.0, 1.0)
     cols = _longest_run(

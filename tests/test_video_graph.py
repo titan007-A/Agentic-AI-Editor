@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 from agentic_editor.analysis.watermarks import Watermark
@@ -113,6 +114,7 @@ def test_baked_in_bars_are_measured_across_the_clip_not_only_at_its_start(monkey
 
     # A dark opening shows only a lit spot; later probes see the whole 558 px picture.
     found = {0.0: (80, 100, 280, 160), 5.0: (558, 426, 40, 0), 10.0: (558, 426, 40, 0)}
+    monkeypatch.setattr(compose, "padded_picture", lambda *args: None)
     monkeypatch.setattr(compose, "detect_black_bars", lambda video, at: found.get(at))
     assert compose.baked_bars(Path("v.mp4"), 0.0, 20.0, (638, 426)) == (558, 426, 40, 0)
     monkeypatch.setattr(compose, "detect_black_bars", lambda video, at: (638, 426, 0, 0))
@@ -166,3 +168,42 @@ def test_zooms_never_cut_into_a_picture_shown_whole_to_keep_everything():
     graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(pulses=[4.9], pulse_scale=1.05))
     assert "0.200*between(t,1.000,1.500)" in graph and "between(t,6.000" not in graph
     assert "0.050*between(t,4.900,5.000)*(1-(t-4.900)/0.3)" in graph
+
+
+def test_only_watermarks_on_the_kept_picture_are_blurred():
+    from agentic_editor.analysis.watermarks import Watermark
+    from agentic_editor.render.compose import on_picture
+
+    def mark(x, y, w, h):
+        return Watermark(x=x, y=y, width=w, height=h, spans=[(0, 10)], windows=5)
+
+    repost_caption = mark(32, 344, 1006, 228)  # on the padding above the picture
+    handle = mark(102, 648, 184, 68)
+    edge = mark(28, 1368, 702, 40)  # the picture's bottom edge at 1392, which never moves
+    padded = mark(880, 520, 200, 100)  # its padding runs a few px past the picture
+    kept = on_picture([repost_caption, handle, edge, padded], (0, 526, 1080, 866))
+    assert [(m.x, m.y, m.width, m.height) for m in kept] == [
+        (102, 648, 184, 68),
+        (880, 526, 200, 94),
+    ]
+    assert on_picture([handle], None) == [handle]
+
+
+def test_a_whole_picture_shrinks_to_leave_the_text_where_the_preset_puts_it():
+    import types
+
+    from agentic_editor.presets import load_presets
+    from agentic_editor.render.compose import MIN_PICTURE_SHARE, text_room
+    from agentic_editor.settings import ROOT
+
+    preset = load_presets(ROOT / "presets")["vocal-music-it-9x16"]  # gaps 0 above, 100 below
+    # Text at its own places: ink in rows 340-480 at the top and from 1450 at the bottom.
+    placed = [types.SimpleNamespace(band=(340, 480)), types.SimpleNamespace(band=(1450, 1550))]
+    frame = (1080, 1920)
+    # Centred, the picture may reach 1350 below, so 390 rows each side of the middle.
+    assert text_room(preset, placed, frame, (1080, 866)) == 780
+    # A wide picture already fits between, so it keeps the whole width.
+    assert text_room(preset, placed, frame, (1920, 1080)) is None
+    # A tall one is shrunk no narrower than the floor; the text moves for the rest.
+    floor = 1080 * MIN_PICTURE_SHARE * 1298 / 964
+    assert text_room(preset, placed, frame, (964, 1298)) == math.ceil(floor / 2) * 2

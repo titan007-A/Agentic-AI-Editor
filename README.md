@@ -272,7 +272,7 @@ render with an error rather than showing as an empty box.
 | Planning the edit | `LLM_MODEL` | `qwen3.5:9b-q4_K_M` (Ollama) |
 | Checking frames, thumbnails | `VISION_MODEL` | `qwen3.5:4b-q4_K_M` (Ollama) |
 | Transcription | `WHISPER_MODEL` / `MLX_WHISPER_MODEL` | `large-v3-turbo` |
-| Vocal isolation | `SEPARATION_MODEL` | `vocals_mel_band_roformer.ckpt` |
+| Vocal isolation | `SEPARATION_MODEL` | `UVR-MDX-NET-Voc_FT.onnx` |
 
 To try another model, pull it (`ollama pull <name>`) or pick one from
 `uv run audio-separator --list_models`, set it in `.env`, and run the benchmark and the
@@ -318,9 +318,12 @@ present: measured with VMAF against lossless renders it kept the same quality as
 NVENC settings it replaced in 30-57% less space. Forcing `ENCODER=nvenc` or
 `videotoolbox` is several times faster for larger files.
 
-Vocals are isolated with the MelBand Roformer vocal model (`SEPARATION_MODEL`); on the
-MUSDB18 test excerpts it scored 11.9 dB median vocal SDR against 8.5 dB for the older
-UVR-MDX-NET-Voc_FT, in less time.
+Vocals are isolated with UVR-MDX-NET-Voc_FT (`SEPARATION_MODEL`), run the way the
+owner's earlier reel tool ran it: each chunk twice, once phase-inverted, averaged
+(denoise), with 0.75 overlap between chunks. The MelBand Roformer vocal model
+(`vocals_mel_band_roformer.ckpt`) scores higher on the MUSDB18 test excerpts, 11.9 dB
+median vocal SDR against 8.5 dB, and is faster, but its vocals sounded worse on real reels.
+Only the MDX models read the denoise and overlap settings.
 
 ## Development
 

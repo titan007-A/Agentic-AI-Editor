@@ -8,8 +8,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agentic_editor import ffmpeg, framing, subtitles
-from agentic_editor.analysis import onscreen
+from agentic_editor.analysis import layout, onscreen
 from agentic_editor.analysis.faces import Sample
+from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis
 from agentic_editor.backends import Backends, encoder_args
 from agentic_editor.edl import EDL, Cue
@@ -17,11 +18,16 @@ from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
 from agentic_editor.render.video import Layers, build_graph, crop_size, video_band
-from agentic_editor.settings import ROOT, Settings
+from agentic_editor.settings import ROOT, Settings, get_settings
 
 log = logging.getLogger(__name__)
 _CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 BANNER_GAP = 24  # px between a banner and anything else drawn on the frame
+LAYOUT_FRAMES = 24  # frames the picture's place in a padded layout is read from
+LAYOUT_WIDTH = 540  # px they are read at; half a 1080 frame, so edges land within 2 px
+# The narrowest, as a share of the frame width, a picture shown whole is made to keep the
+# preset's text where the preset puts it; past that the text moves out of its way instead.
+MIN_PICTURE_SHARE = 0.55
 
 
 def asset_path(name: str) -> Path:
@@ -39,11 +45,38 @@ def detect_black_bars(video: Path, start: float) -> tuple[int, int, int, int] | 
     return tuple(int(v) for v in matches[-1]) if matches else None
 
 
+def padded_picture(
+    video: Path, start: float, end: float, size: tuple[int, int]
+) -> tuple[int, int, int, int] | None:
+    """Where the picture sits in a padded layout, such as a repost with its caption on
+    the padding above, as x, y, width, height; None when the frame isn't padded."""
+    small = (LAYOUT_WIDTH, round(LAYOUT_WIDTH * size[1] / size[0] / 2) * 2)
+    frames = layout.sample(
+        video, end - start, LAYOUT_FRAMES, small, get_settings().ffmpeg_bin, start=start
+    )
+    colour = layout.background(frames)
+    if len(frames) == 0 or colour is None:
+        return None
+    x0, y0, x1, y1 = layout.picture_box(frames, colour)
+    # Rounded inwards, so no row of the padding is left along an edge.
+    left, top = math.ceil(x0 * size[0] / 2) * 2, math.ceil(y0 * size[1] / 2) * 2
+    right, bottom = math.floor(x1 * size[0] / 2) * 2, math.floor(y1 * size[1] / 2) * 2
+    if (right - left) * (bottom - top) < 0.1 * size[0] * size[1]:
+        return None
+    return left, top, right - left, bottom - top
+
+
 def picture_area(
     video: Path, start: float, end: float, size: tuple[int, int], probes: int = 4
 ) -> tuple[int, int, int, int]:
-    """The part of the frame that holds picture, as x, y, width, height. Bars are measured
-    at a few points and the widest picture kept, so a dark scene isn't taken for a bar."""
+    """The part of the frame that holds picture, as x, y, width, height.
+
+    A frame padded with one colour, text on the padding or not, is read for where its
+    picture moves. Otherwise bars are measured at a few points and the widest picture
+    kept, so a dark scene isn't taken for a bar."""
+    padded = padded_picture(video, start, end, size)
+    if padded is not None:
+        return padded
     found = []
     for i in range(probes):
         at = start + (end - start) * i / probes
@@ -67,6 +100,55 @@ def baked_bars(
     if width <= 0 or height <= 0 or (width >= size[0] - 1 and height >= size[1] - 1):
         return None
     return width, height, x, y
+
+
+def on_picture(
+    marks: list[Watermark], picture: tuple[int, int, int, int] | None
+) -> list[Watermark]:
+    """The watermarks inside the picture that is kept, cut to its edges. Text on a repost's
+    padding is found like any overlay, and so is the picture's own straight edge; cropping
+    the picture out already removes the one, and a blur on the other only smudges the
+    picture. A real mark sits on the picture."""
+    if picture is None:
+        return marks
+    left, top, width, height = picture
+    kept = []
+    for mark in marks:
+        x0, y0 = max(mark.x, left), max(mark.y, top)
+        x1 = min(mark.x + mark.width, left + width)
+        y1 = min(mark.y + mark.height, top + height)
+        if x1 <= x0 or y1 <= y0 or (x1 - x0) * (y1 - y0) < 0.9 * mark.width * mark.height:
+            continue
+        x0, y0 = math.ceil(x0 / 2) * 2, math.ceil(y0 / 2) * 2
+        kept.append(
+            mark.model_copy(
+                update={"x": x0, "y": y0, "width": (x1 - x0) // 2 * 2, "height": (y1 - y0) // 2 * 2}
+            )
+        )
+    return kept
+
+
+def text_room(
+    preset: Preset, placed: list[text.Placed], frame: tuple[int, int], source: tuple[int, int]
+) -> int | None:
+    """Rows a picture shown whole may take, centred in the frame, so that each text block
+    stays where the preset puts it with its gap to the picture; None when the text leaves
+    the picture all the rows it would take anyway."""
+    width, height = frame
+    middle = height / 2
+    half = middle
+    gaps = preset.framing
+    for block, at in zip(preset.text_blocks, placed, strict=True):
+        top, bottom = at.band
+        if block.anchor == "top" and gaps.text_gap_above is not None:
+            half = min(half, middle - bottom - gaps.text_gap_above)
+        elif block.anchor == "bottom" and gaps.text_gap_below is not None:
+            half = min(half, top - gaps.text_gap_below - middle)
+    shown = min(height, width * preset.framing.picture_width * source[1] / source[0])
+    if 2 * half >= shown:
+        return None
+    smallest = width * MIN_PICTURE_SHARE * source[1] / source[0]
+    return max(math.floor(half) * 2, math.ceil(min(smallest, shown) / 2) * 2)
 
 
 def timeline_words(edl: EDL, analysis: Analysis):
@@ -176,18 +258,22 @@ def clear_rows(
     content: tuple[int, int, int, int] | None,
     faces: list[Sample],
     texts: list[tuple[float, list[onscreen.Box]]] = (),
+    picture_height: int | None = None,
 ) -> list[tuple[float, list[tuple[float, float]]]]:
     """The rows of the output frame to keep captions and banners off, at reel times:
     faces, and text burnt into the picture while it is on screen."""
     source = (analysis.width, analysis.height)
     picture = content or (0, 0, *source)
     shots = edl.shots if edl.crop_mode == "smart" else []
-    # An inset picture is drawn smaller, as if a wider window were fitted to the frame.
-    window = (
-        source[0] / preset.framing.picture_width
-        if edl.crop_mode == "none"
-        else crop_size(source, preset.size)[0]
-    )
+    window = crop_size(source, preset.size)[0]
+    if edl.crop_mode == "none":
+        # A picture shown whole is drawn smaller, as if a wider window were fitted.
+        width, height = preset.size
+        scale = min(
+            width * preset.framing.picture_width / picture[2],
+            (picture_height or height) / picture[3],
+        )
+        window = round(width / scale)
     clip = edl.clips[0]
     return framing.screen_rows(
         faces, clip, shots, picture, source, preset.size, window
@@ -225,8 +311,6 @@ def render(
         layers.shot_commands = crop_commands or {}
     else:
         layers.crop_commands = crop_commands or {}
-    if preset.watermarks.blur:
-        layers.watermarks = analysis.watermarks
 
     def add_input(path: Path) -> int:
         inputs.extend(["-i", str(path)])
@@ -240,6 +324,10 @@ def render(
         layers.black_bars = baked_bars(video, clip.start, clip.end, source)
         if layers.black_bars:
             source = layers.black_bars[:2]
+    if preset.watermarks.blur:
+        bars = layers.black_bars
+        picture = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
+        layers.watermarks = on_picture(analysis.watermarks, picture)
 
     # Text a bundled font can't draw gets a Noto font for its script.
     font_folder = settings.models_dir / "fonts"
@@ -254,20 +342,32 @@ def render(
     # keep off those and banners.
     obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
     if preset.text_blocks:
-        band = video_band(edl.crop_mode, source, frame, preset.framing.picture_width)
-        placed = []
-        for block in preset.text_blocks:
-            gap = (
-                preset.framing.text_gap_above
-                if block.anchor == "top"
-                else preset.framing.text_gap_below
-            )
-            placed.append(text.place(block, face(block.font, block.text), frame, band, gap))
+        gaps = [
+            preset.framing.text_gap_above if b.anchor == "top" else preset.framing.text_gap_below
+            for b in preset.text_blocks
+        ]
+        faces_of = [face(b.font, b.text) for b in preset.text_blocks]
+        if edl.crop_mode == "none":
+            # The text where the preset puts it, and the picture made to fit between.
+            free = [
+                text.place(b, f, frame, None, gap)
+                for b, f, gap in zip(preset.text_blocks, faces_of, gaps, strict=True)
+            ]
+            layers.picture_height = text_room(preset, free, frame, source)
+        band = video_band(
+            edl.crop_mode, source, frame, preset.framing.picture_width, layers.picture_height
+        )
+        placed = [
+            text.place(b, f, frame, band, gap)
+            for b, f, gap in zip(preset.text_blocks, faces_of, gaps, strict=True)
+        ]
         layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
         obstacles += [(0.0, edl.duration, *block.band) for block in placed]
 
+    bars = layers.black_bars
+    shown = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
     rows = (
-        clear_rows(edl, analysis, preset, layers.content, faces or [], texts or [])
+        clear_rows(edl, analysis, preset, shown, faces or [], texts or [], layers.picture_height)
         if faces or texts
         else []
     )

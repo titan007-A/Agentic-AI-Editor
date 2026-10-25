@@ -254,3 +254,19 @@ def test_vocal_lines_past_the_end_of_the_audio_are_still_split(make_analysis):
     analysis = make_analysis([], 60.0, [-20.0] * 80, audio_source="vocals", silences=[(0.0, 20.0)])
     lines = build_lines(analysis)
     assert lines[-1].end == 60.0 and all(ln.end - ln.start <= 12.0 for ln in lines)
+
+
+def test_a_vocal_stem_that_never_falls_silent_is_planned_from_its_sound(make_analysis):
+    from agentic_editor.planner import build_lines
+
+    # Call and response with a crowd: voice all the way, a few words in the transcript.
+    words = [
+        Word(text=t, start=7.8 + 0.2 * i, end=7.95 + 0.2 * i)
+        for i, t in enumerate(["all", "over", "the", "world"])
+    ]
+    energy = [-20.0] * 60
+    energy[30] = -45.0  # the quietest moment, at 15 s
+    analysis = make_analysis(words, 30.0, energy, audio_source="vocals", silences=[])
+    lines = build_lines(analysis)
+    assert lines[0].start == 0.0 and lines[-1].end == 30.0
+    assert sum(ln.end - ln.start for ln in lines) == 30.0

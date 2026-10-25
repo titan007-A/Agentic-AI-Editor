@@ -27,7 +27,7 @@ WINDOW_STEP = 1.0  # seconds between window starts
 # fraction of a second of each jump.
 PRESENCE_SECONDS = 1.5
 # Bump when detection changes, so cached candidates from the old detector aren't reused.
-VERSION = 2
+VERSION = 3
 
 EDGE_LEVEL = 28  # gray-level step that counts as an edge
 PERSISTENT_SHARE = 0.9  # of a window's frames an edge has to be in
@@ -323,7 +323,9 @@ def find(
         x0, y0, x1, y1 = (round(v * scale) for v in t.box)
         # Padding follows the shorter side, the text height for a handle: padded by its
         # length, it takes in so much scene that the vision model no longer sees an overlay.
-        pad = max(6, round(min(0.4 * min(x1 - x0, y1 - y0), 0.03 * source_size[0])))
+        # The found box already runs past the letters, so a quarter of it covers their
+        # anti-aliased edges without blurring a band of scene around a small handle.
+        pad = max(6, round(min(0.25 * min(x1 - x0, y1 - y0), 0.03 * source_size[0])))
         x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
         x1, y1 = min(source_size[0], x1 + pad), min(source_size[1], y1 + pad)
         found.append(
