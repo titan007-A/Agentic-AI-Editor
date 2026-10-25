@@ -121,7 +121,9 @@ def build_lines(analysis: Analysis, max_words: int = 24) -> list[Line]:
     """Numbered planning units: spoken phrases, or for a vocal stem, every stretch where
     the singer is audible, since sung passages often have no transcribable words."""
     words = analysis.transcript.words
-    if analysis.audio_source == "vocals" and analysis.silences:
+    # A stem with no silence at all is one long voiced stretch (a crowd singing along, a
+    # held "ay-oh"), not a cue to plan from its few transcribable words.
+    if analysis.audio_source == "vocals":
         spans = [
             (start, end, [w for w in words if start <= (w.start + w.end) / 2 < end], True, True)
             for start, end in voiced_regions(analysis)

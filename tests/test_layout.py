@@ -34,6 +34,22 @@ def test_a_dark_stretch_of_the_picture_still_counts_once_it_lights_up():
     assert abs(y0 - 0.3) < 0.02
 
 
+def test_a_repost_caption_right_above_the_picture_is_left_out():
+    reel = padded_reel()
+    reel[:, 44:58, 11:97:2] = 255  # bold caption lines touching the picture's top edge
+    _, y0, _, _ = layout.picture_box(reel, (0, 0, 0))
+    assert abs(y0 - 0.3) < 0.02
+
+
+def test_a_still_shot_on_a_narrow_picture_is_still_picture():
+    reel = padded_reel()
+    reel[:, 58:134, 40:68] = np.random.default_rng(3).integers(30, 255, (76, 28, 3))
+    reel[:, :, :40] = 0
+    reel[:, :, 68:] = 0  # a narrow picture that never moves
+    _, y0, _, y1 = layout.picture_box(reel, (0, 0, 0))
+    assert abs(y0 - 0.3) < 0.02 and abs(y1 - 0.7) < 0.02
+
+
 def test_no_padding_means_the_picture_fills_the_frame():
     assert layout.picture_box(padded_reel(), None) == (0.0, 0.0, 1.0, 1.0)
 

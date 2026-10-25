@@ -33,6 +33,8 @@ class Layers:
     fonts_dir: Path | None = None
     crop_commands: dict[int, Path] = field(default_factory=dict)
     black_bars: tuple[int, int, int, int] | None = None
+    # Rows a picture shown whole may take, centred, to leave the preset's text in place.
+    picture_height: int | None = None
     watermarks: list[Watermark] = field(default_factory=list)
     # Smart framing: the picture's area without black bars, and a follow path per shot.
     content: tuple[int, int, int, int] | None = None
@@ -103,11 +105,13 @@ def frame_chain(
     commands: Path | None,
     black_bars: tuple[int, int, int, int] | None,
     picture_width: float = 1.0,
+    picture_height: int | None = None,
 ) -> list[str]:
     """Filters that turn one source clip into a frame-sized clip."""
     crop, fit = frame_parts(
-        mode, source, frame, background, crop_label, commands, black_bars, picture_width
-    )
+        mode, source, frame, background, crop_label, commands, black_bars, picture_width,
+        picture_height,
+    )  # fmt: skip
     return crop + fit
 
 
@@ -120,6 +124,7 @@ def frame_parts(
     commands: Path | None,
     black_bars: tuple[int, int, int, int] | None,
     picture_width: float = 1.0,
+    picture_height: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """frame_chain in two parts: what cuts the window out, and what fits it to the frame."""
     width, height = frame
@@ -132,7 +137,7 @@ def frame_parts(
 
     if mode == "none":
         return crop, [
-            f"scale={_even(width * picture_width)}:{height}"
+            f"scale={_even(width * picture_width)}:{picture_height or height}"
             ":force_original_aspect_ratio=decrease:flags=lanczos",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={ffmpeg_color(background)}",
         ]
@@ -255,7 +260,7 @@ def zoom_room(
     if edl.crop_mode == "none":
         w, h = layers.black_bars[:2] if layers.black_bars else source
         box = _even(width * preset.framing.picture_width)
-        scale = min(box / w, height / h)
+        scale = min(box / w, (layers.picture_height or height) / h)
         return [(0.0, edl.duration, min(width / (w * scale), height / (h * scale)))]
     if edl.crop_mode != "smart" or not edl.shots:
         return [(0.0, edl.duration, math.inf)]
@@ -273,13 +278,17 @@ def zoom_room(
 
 
 def video_band(
-    mode: CropMode, source: tuple[int, int], frame: tuple[int, int], picture_width: float = 1.0
+    mode: CropMode,
+    source: tuple[int, int],
+    frame: tuple[int, int],
+    picture_width: float = 1.0,
+    picture_height: int | None = None,
 ) -> tuple[float, float] | None:
     """Rows of the frame covered by the picture when it is letterboxed, else None."""
     if mode != "none":
         return None
     width, height = frame
-    scaled = min(height, _even(width * picture_width) * source[1] / source[0])
+    scaled = min(picture_height or height, _even(width * picture_width) * source[1] / source[0])
     if scaled >= height - 1:
         return None
     top = (height - scaled) / 2
@@ -335,6 +344,7 @@ def build_graph(
             layers.crop_commands.get(i),
             layers.black_bars,
             preset.framing.picture_width,
+            layers.picture_height,
         )
         segment(label, crop, fit)
     joined = "".join(f"[v{i}]" for i in range(segments))
