@@ -13,14 +13,16 @@ command -v brew >/dev/null || {
     exit 1
 }
 
-# Homebrew's ffmpeg has VideoToolbox, libx264 and libass; node builds the web app.
-brew install ffmpeg uv ollama node
+# Homebrew's plain ffmpeg is built without libass, which captions and titles need;
+# ffmpeg-full has it, with VideoToolbox and libx264. node builds the web app.
+brew install ffmpeg-full uv ollama node
 # Ollama as a login service, so the models are there whenever the editor is.
 brew services start ollama
 
 [ -f .env ] || cp .env.example .env
-prefix="$(brew --prefix)"
-# launchd starts the editor without Homebrew on its PATH, so ffmpeg is named in full.
+# ffmpeg-full is keg-only, off the PATH; launchd starts the editor without Homebrew on its
+# PATH anyway, so ffmpeg is named in full.
+prefix="$(brew --prefix ffmpeg-full)"
 sed -i '' "s|^FFMPEG_BIN=.*|FFMPEG_BIN=$prefix/bin/ffmpeg|; s|^FFPROBE_BIN=.*|FFPROBE_BIN=$prefix/bin/ffprobe|" .env
 
 uv sync --extra ml

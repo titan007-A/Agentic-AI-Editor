@@ -100,6 +100,16 @@ def encoder_works(encoder_name: str, ffmpeg_bin: str) -> bool:
     return result.returncode == 0
 
 
+def has_filter(name: str, ffmpeg_bin: str) -> bool:
+    try:
+        result = subprocess.run(
+            [ffmpeg_bin, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return any(line.split()[1:2] == [name] for line in result.stdout.splitlines())
+
+
 def pick_transcriber(requested: str, apple_silicon: bool, cuda_devices: int, has_mlx: bool):
     if requested != "auto":
         return requested
@@ -123,6 +133,14 @@ def detect(settings: Settings) -> Backends:
         raise RuntimeError("TRANSCRIBE_BACKEND=mlx but mlx-whisper is not installed")
     if transcriber == "cpu":
         log.warning("no GPU transcription backend available, whisper will run on the CPU")
+
+    # Found out at startup rather than in the middle of the first job with captions.
+    if not has_filter("subtitles", settings.ffmpeg_bin):
+        hint = " (on macOS: brew install ffmpeg-full)" if sys.platform == "darwin" else ""
+        raise RuntimeError(
+            f"{settings.ffmpeg_bin} has no subtitles filter, which captions and titles need; "
+            f"use an ffmpeg built with libass{hint}"
+        )
 
     codec = settings.video_codec
     if settings.encoder == "auto":
