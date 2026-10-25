@@ -1,4 +1,7 @@
+import importlib.util
+
 import numpy as np
+import pytest
 
 from agentic_editor.analysis.separation import (
     MIN_FINGERPRINT_CORRELATION,
@@ -37,6 +40,12 @@ def test_single_click_in_an_empty_stem_is_ignored():
     assert is_instrument_free(mix, residue, RATE)
 
 
+# The MFCCs come from librosa, which only the ml extra installs.
+needs_librosa = pytest.mark.skipif(
+    importlib.util.find_spec("librosa") is None, reason="librosa is in the ml extra"
+)
+
+
 def sung_notes(seconds: int) -> np.ndarray:
     """A voice-like line: a new harmonic note every half second."""
     t = np.arange(RATE // 2) / RATE
@@ -47,6 +56,7 @@ def sung_notes(seconds: int) -> np.ndarray:
     return (0.2 * np.concatenate(notes)).astype(np.float32)
 
 
+@needs_librosa
 def test_vocals_after_an_instrumental_intro_are_compared_where_they_sing():
     intro = rng.normal(0, 0.1, RATE * 18).astype(np.float32)
     voice = sung_notes(20)
@@ -56,6 +66,7 @@ def test_vocals_after_an_instrumental_intro_are_compared_where_they_sing():
     assert fingerprint_correlation(source, vocals, RATE) >= MIN_FINGERPRINT_CORRELATION
 
 
+@needs_librosa
 def test_a_stem_of_noise_still_fails():
     source = sung_notes(30) + rng.normal(0, 0.02, RATE * 30).astype(np.float32)
     noise = rng.normal(0, 0.1, RATE * 30).astype(np.float32)
