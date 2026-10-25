@@ -33,8 +33,8 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
-ollama pull "${LLM_MODEL:-qwen3.5:9b}"
-ollama pull "${VISION_MODEL:-qwen3.5:4b}"
+ollama pull "${LLM_MODEL:-qwen3.5:9b-q4_K_M}"
+ollama pull "${VISION_MODEL:-qwen3.5:4b-q4_K_M}"
 uv run aiedit fetch-models
 
 (cd web && npm ci && npm run build)

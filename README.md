@@ -268,15 +268,16 @@ render with an error rather than showing as an empty box.
 
 | Job | Setting | Default |
 | --- | --- | --- |
-| Planning the edit | `LLM_MODEL` | `qwen3.5:9b` (Ollama) |
-| Checking frames, thumbnails | `VISION_MODEL` | `qwen3.5:4b` (Ollama) |
+| Planning the edit | `LLM_MODEL` | `qwen3.5:9b-q4_K_M` (Ollama) |
+| Checking frames, thumbnails | `VISION_MODEL` | `qwen3.5:4b-q4_K_M` (Ollama) |
 | Transcription | `WHISPER_MODEL` / `MLX_WHISPER_MODEL` | `large-v3-turbo` |
 | Vocal isolation | `SEPARATION_MODEL` | `vocals_mel_band_roformer.ckpt` |
 
 To try another model, pull it (`ollama pull <name>`) or pick one from
 `uv run audio-separator --list_models`, set it in `.env`, and run the benchmark and the
 end-to-end test. The Ollama models must support JSON-schema output, and the vision model
-must accept images. Changing the separation model re-separates cached sources the next
+must accept images. On Apple Silicon a bare tag such as `qwen3.5:9b` fetches an MLX build,
+which can't: name the GGUF build (`qwen3.5:9b-q4_K_M`). Changing the separation model re-separates cached sources the next
 time they are used. A new kind of model belongs in `router.py`, which is the only place
 that maps jobs to models.
 
