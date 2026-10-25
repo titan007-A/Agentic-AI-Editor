@@ -68,7 +68,8 @@ uv run aiedit hash-password        # put the two lines it prints in .env
 scripts/macos-service.sh install   # run the editor in the background from every login
 ```
 
-The setup script installs ffmpeg, uv, Node and Ollama (as a Homebrew service, so the models
+The setup script installs ffmpeg (Homebrew's `ffmpeg-full`: the plain `ffmpeg` has no
+libass, which captions need), uv, Node and Ollama (as a Homebrew service, so the models
 are served from every login), the Python environment with mlx-whisper for transcription,
 the Ollama models and the other model weights, and builds the web app. On macOS
 `ENCODER=videotoolbox` trades larger files for much faster encodes.
