@@ -135,7 +135,7 @@ def analyze(
         progress("analyze", "detecting scene changes")
         return scenes.detect_cuts(video)
 
-    cuts = cached(work_dir / "scenes.json", run_scene_detection)
+    cuts = cached(work_dir / "scenes-v2.json", run_scene_detection)
 
     def run_watermark_search():
         progress("analyze", "looking for watermarks")

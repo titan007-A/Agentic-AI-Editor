@@ -254,3 +254,45 @@ def test_text_across_a_face_is_left_rather_than_cutting_the_face():
     samples = [(5.0, [_text(1700, 1760)])]
     shots = band_shots(clip, [], samples, singer, (0, 0, 1080, 1920), 1920, 1920)
     assert shots[0].height == 1920  # nothing to take off: the text is on the face
+
+
+def test_a_missed_cut_splits_the_window_where_the_face_moves():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    # One "shot" (the cut between two close-ups wasn't found): a face high, then low.
+    face = [
+        (t, [Face(cx=0.5, cy=0.25 if t < 5 else 0.75, width=0.4, height=0.2, score=0.9)])
+        for t in (0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5)
+    ]
+    shots = band_shots(clip, [], [], face, (0, 0, 1080, 1920), 900, 1920)
+    assert len(shots) == 2 and abs(shots[0].end - 5.0) < 1e-6
+    for shot, cy in zip(shots, (0.25, 0.75), strict=True):
+        face_top, face_bottom = (cy - 0.11) * 1920, (cy + 0.11) * 1920
+        assert shot.y <= face_top and shot.y + shot.height >= face_bottom
+
+
+def test_a_close_up_too_big_with_its_hair_keeps_the_face_whole():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    # Hair to chin is 1.45 face heights: 1114 rows, more than the band's 900.
+    big = [(5.0, [Face(cx=0.5, cy=0.45, width=0.6, height=0.4, score=0.9)])]
+    shot = band_shots(clip, [], [], big, (0, 0, 1080, 1920), 900, 1920)[0]
+    eyes_to_chin = ((0.45 - 0.2) * 1920, (0.45 + 0.2) * 1920)
+    assert shot.y <= eyes_to_chin[0] and shot.y + shot.height >= eyes_to_chin[1]
+
+
+def test_a_face_that_only_wobbles_keeps_one_steady_window():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    wobble = [0.45, 0.47, 0.43, 0.46, 0.44, 0.77, 0.45, 0.48, 0.44, 0.46]  # one stray sighting
+    face = [
+        (0.5 + i, [Face(cx=0.5, cy=cy, width=0.5, height=0.42, score=0.9)])
+        for i, cy in enumerate(wobble)
+    ]
+    shots = band_shots(clip, [], [], face, (0, 0, 1080, 1920), 982, 1920)
+    assert len(shots) == 1
+    middle = shots[0].y + 491
+    assert abs(middle - 0.455 * 1920) < 0.02 * 1920
