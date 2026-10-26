@@ -22,6 +22,8 @@ between sizes at each cut.
 import itertools
 from dataclasses import dataclass
 
+import numpy as np
+
 from agentic_editor.analysis.faces import Sample, smooth
 from agentic_editor.analysis.subjects import Subject
 from agentic_editor.edl import Clip, Shot
@@ -379,6 +381,8 @@ def tall_shots(
 
 
 EDGE_TEXT = 0.35  # of the picture's height: text this near its top or bottom is cut off
+JUMP = 0.33  # of a band window's height: how far the main face jumps at a cut the detector missed
+MIN_RUN = 1.0  # seconds: no window is held for less, so the picture doesn't twitch
 TEXT_MARGIN = 6  # px of picture kept clear of text that is cut off
 
 
@@ -421,34 +425,42 @@ def band_shots(
             Shot(start=clip.start, end=clip.end, x=left, width=picture_width, y=top,
                  height=picture_height, reason="the whole picture fits")
         ]  # fmt: skip
-    shots = []
-    for start, end in shot_bounds(clip, cuts):
-        heads = [
-            ((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
+
+    def head_rows(t0: float, t1: float, core: bool = False) -> list[tuple[float, float]]:
+        """Rows the heads cover in [t0, t1): hair to chin, or only the face itself."""
+        above, below = (0.55, 0.55) if core else (0.85, 0.6)
+        rows_ = [
+            ((f.cy - above * f.height) * src_height, (f.cy + below * f.height) * src_height)
             for t, seen in faces
-            if start <= t < end
+            if t0 <= t < t1
             for f in seen
         ] + [
-            (s.y0, s.y1)
-            for t, items in samples
-            if start <= t < end
-            for s in items
-            if s.kind == "head"
+            (s.y0, s.y1) for t, items in samples if t0 <= t < t1 for s in items if s.kind == "head"
         ]
+        return [(max(a, lo), min(b, hi)) for a, b in rows_ if b > lo and a < hi]
+
+    def frame(start: float, end: float) -> Shot:
+        heads = head_rows(start, end)
         keep = heads + [
-            (s.y0, s.y1)
+            (max(s.y0, lo), min(s.y1, hi))
             for t, items in samples
             if start <= t < end
             for s in items
-            if s.keep and s.kind not in ("head", "text")
+            if s.keep and s.kind not in ("head", "text") and s.y1 > lo and s.y0 < hi
         ]
-        heads = [(max(a, lo), min(b, hi)) for a, b in heads if b > lo and a < hi]
-        keep = [(max(a, lo), min(b, hi)) for a, b in keep if b > lo and a < hi]
-        # Everything that must stay if it fits, else the heads alone, else the top of them.
+        # Everything that must stay if it fits, else the heads alone, else the faces.
         whole = union(keep)
         if whole is None or whole[1] - whole[0] > height:
             whole = union(heads)
-        if whole is None:
+        if whole is not None and whole[1] - whole[0] > height:
+            # A close-up too big for the band with its hair: the main singer's face in the
+            # middle, where it mostly is, so a passing face or a stray detection doesn't
+            # pull the window off it.
+            centres = main_faces(start, end)
+            middle = float(np.median(centres)) if centres else (whole[0] + whole[1]) / 2
+            y = middle - height / 2
+            reason = "a close-up: the face in the middle"
+        elif whole is None:
             y = lo + (hi - lo - height) / 2
             reason = "nothing that must stay; the middle of the picture"
         else:
@@ -456,8 +468,44 @@ def band_shots(
             y = min(whole[0], max(whole[0] - HEADROOM * height, whole[1] - height))
             reason = "the picture's top and bottom cut around what matters"
         y = even(min(max(y, lo), hi - height))
-        shots.append(Shot(start=start, end=end, x=left, width=picture_width, y=y, height=height,
-                          reason=reason))  # fmt: skip
+        return Shot(start=start, end=end, x=left, width=picture_width, y=y, height=height,
+                    reason=reason)  # fmt: skip
+
+    def main_faces(t0: float, t1: float) -> list[float]:
+        """The middle row of the biggest face, the main singer's, in each sample."""
+        return [
+            max(seen, key=lambda f: f.area).cy * src_height
+            for t, seen in faces
+            if t0 <= t < t1 and seen
+        ]
+
+    def face_runs(start: float, end: float) -> list[tuple[float, float]]:
+        """The shot split where the main face jumps and stays: a cut the detector missed.
+        A face that only drifts, or one stray sighting, keeps the shot whole."""
+        track = sorted(
+            (t, max(seen, key=lambda f: f.area).cy * src_height)
+            for t, seen in faces
+            if start <= t < end and seen
+        )
+        runs, run_start, run = [], start, []
+        for i, (t, centre) in enumerate(track):
+            moved = run and abs(centre - float(np.median(run))) > JUMP * height
+            stays = i + 1 < len(track) and abs(track[i + 1][1] - centre) <= JUMP * height
+            split = (track[i - 1][0] + t) / 2 if i else t
+            if moved and stays and split - run_start >= MIN_RUN and end - split >= MIN_RUN:
+                runs.append((run_start, split))
+                run_start, run = split, []
+            run.append(centre)
+        runs.append((run_start, end))
+        return runs
+
+    shots = []
+    for start, end in shot_bounds(clip, cuts):
+        heads = union(head_rows(start, end))
+        if heads is not None and heads[1] - heads[0] > height:
+            shots += [frame(a, b) for a, b in face_runs(start, end)]
+        else:
+            shots.append(frame(start, end))
     return shots
 
 
