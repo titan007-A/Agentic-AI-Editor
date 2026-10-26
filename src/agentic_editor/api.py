@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
@@ -545,11 +546,29 @@ def create_app(
         )
 
     @app.get("/api/outputs/{output_id}/thumbnail")
-    def thumbnail(output_id: int, _: User, session: DB) -> FileResponse:
+    def thumbnail(
+        output_id: int,
+        _: User,
+        session: DB,
+        width: Annotated[int | None, Query(ge=120, le=1080)] = None,
+    ) -> FileResponse:
+        """The thumbnail, or a copy `width` px wide for a card, made once. Through a relay
+        a dozen full 1080x1920 images is what makes a long list slow to appear, and asking
+        again on every refresh only to hear they haven't changed costs a round trip each."""
         output = find_output(output_id, session)
         if not output.thumbnail:
             raise HTTPException(404, "no thumbnail")
-        return FileResponse(output.thumbnail, media_type="image/jpeg")
+        path = Path(output.thumbnail)
+        if width:
+            small = path.with_name(f"{path.stem}-{width}w.jpg")
+            if not small.exists() or small.stat().st_mtime < path.stat().st_mtime:
+                with Image.open(path) as image:
+                    image.thumbnail((width, 4 * width))
+                    image.convert("RGB").save(small, quality=82)
+            path = small
+        return FileResponse(
+            path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"}
+        )
 
     def find_feed(feed_id: int, session: Session) -> Feed:
         feed = session.get(Feed, feed_id)

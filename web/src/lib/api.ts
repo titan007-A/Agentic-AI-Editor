@@ -190,7 +190,8 @@ export const api = {
 export const videoUrl = (output: Output, download = false) =>
   `/api/outputs/${output.id}/video${download ? "?download=true" : ""}`;
 
-export const thumbnailUrl = (output: Output) => `/api/outputs/${output.id}/thumbnail`;
+export const thumbnailUrl = (output: Output, width?: number) =>
+  `/api/outputs/${output.id}/thumbnail${width ? `?width=${width}` : ""}`;
 
 export const subtitlesUrl = (output: Output) => `/api/outputs/${output.id}/subtitles`;
 

@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -251,6 +252,24 @@ def test_rendered_video_downloads_with_a_readable_name(env):
     response = env.client.get(f"/api/outputs/{output_id}/video?download=true")
     assert response.content == b"fake video"
     assert 'filename="Sample-song-square-1x1.mp4"' in response.headers["content-disposition"]
+
+
+def test_cards_get_a_small_thumbnail_and_downloads_the_full_one(env):
+    from PIL import Image
+
+    job_id = start(env.client)[0]["id"]
+    output_id = env.client.get(f"/api/jobs/{job_id}").json()["outputs"][0]["id"]
+    full = env.settings.media_dir / "square-1x1.jpg"
+    Image.new("RGB", (1080, 1920), "tan").save(full)
+    with env.sessions() as db:
+        db.get(Output, output_id).thumbnail = str(full)
+        db.commit()
+    small = env.client.get(f"/api/outputs/{output_id}/thumbnail?width=480")
+    assert Image.open(io.BytesIO(small.content)).size == (480, 853)
+    assert "max-age" in small.headers["cache-control"]
+    whole = env.client.get(f"/api/outputs/{output_id}/thumbnail")
+    assert Image.open(io.BytesIO(whole.content)).size == (1080, 1920)
+    assert env.client.get(f"/api/outputs/{output_id}/thumbnail?width=5000").status_code == 422
 
 
 def test_subtitles_download_next_to_the_video(env):

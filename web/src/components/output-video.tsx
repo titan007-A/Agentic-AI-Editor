@@ -42,7 +42,7 @@ export function OutputVideo({ output }: { output: Output }) {
         >
           {output.has_thumbnail && (
             <Image
-              src={thumbnailUrl(output)}
+              src={thumbnailUrl(output, 480)}
               alt=""
               fill
               unoptimized
