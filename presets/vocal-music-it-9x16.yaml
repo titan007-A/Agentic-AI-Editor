@@ -17,21 +17,23 @@ text_blocks:
     size: 58
     color: "#000000"
     anchor: top
-    offset: 340
+    offset: 240
     max_shrink: 0.9
   - text: "Se non ci segui adesso,\nti perderai i prossimi video"
-    font: OpenSans-ExtraBold
+    font: OpenSans-SemiBold
     size: 52
     color: "#000000"
     anchor: bottom
-    offset: 470
+    offset: 480
     max_shrink: 0.5
 framing:
   mode: none
   background: "#C8A77D"
   crop_black_bars: true
-  text_gap_above: 0
-  text_gap_below: 100
+  text_gap_above: 56
+  text_gap_below: 28
+  corner_radius: 16
+  corner_color: "#000000"
 audio:
   source: vocals
   highpass_hz: 60

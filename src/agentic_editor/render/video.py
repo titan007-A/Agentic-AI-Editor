@@ -294,6 +294,23 @@ def zoom_room(
     return room
 
 
+def picture_rect(
+    size: tuple[int, int],
+    frame: tuple[int, int],
+    picture_width: float = 1.0,
+    band: tuple[int, int] | None = None,
+) -> tuple[int, int, int, int]:
+    """Where a picture of `size` shown whole lands in the frame, x0, y0, x1, y1, as
+    band_fit places it."""
+    width, height = frame
+    top, bottom = band or (0, height)
+    box_w, box_h = _even(width * picture_width), bottom - top
+    scale = min(box_w / size[0], box_h / size[1])
+    w, h = round(size[0] * scale / 2) * 2, round(size[1] * scale / 2) * 2
+    x0, y0 = (width - w) // 2, top + (box_h - h) // 2
+    return x0, y0, x0 + w, y0 + h
+
+
 def video_band(
     mode: CropMode,
     source: tuple[int, int],

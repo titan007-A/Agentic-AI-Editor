@@ -195,11 +195,12 @@ def test_the_picture_goes_between_the_text_where_the_preset_puts_it():
     from agentic_editor.render.video import band_fit
     from agentic_editor.settings import ROOT, get_settings
 
-    preset = load_presets(ROOT / "presets")["vocal-music-it-9x16"]  # gaps 0 above, 100 below
+    preset = load_presets(ROOT / "presets")["vocal-music-it-9x16"]
     face = compose.text_face(get_settings(), "it")
     top, bottom = compose.picture_band(preset, face)
+    above, below = preset.framing.text_gap_above, preset.framing.text_gap_below
     placed = [text.place(b, face(b.font, b.text), preset.size, None, 0) for b in preset.text_blocks]
-    assert top >= placed[0].band[1] and bottom <= placed[1].band[0] - 100
+    assert top >= placed[0].band[1] + above and bottom <= placed[1].band[0] - below
     # The whole width: a 9:16 picture keeps the band's rows, a wide one is shown whole.
     assert compose.band_rows(preset, (top, bottom), 1080) == bottom - top
     fit = band_fit(preset.size, "#C8A77D", 1.0, (top, bottom))

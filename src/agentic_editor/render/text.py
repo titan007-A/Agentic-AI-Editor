@@ -188,9 +188,27 @@ def place(
     return Placed(lines, face, size, top, block.color, line_height(face, size, block.line_spacing))
 
 
-def draw(placed: list[Placed], frame: tuple[int, int], dest: Path) -> Path:
+Corners = tuple[tuple[int, int, int, int], int, str]  # picture x0, y0, x1, y1; radius; colour
+
+
+def draw(
+    placed: list[Placed], frame: tuple[int, int], dest: Path, corners: Corners | None = None
+) -> Path:
+    """The preset's text on a transparent frame, and the corners that round off the
+    picture under it: drawn here, the overlay that is laid over every frame anyway does
+    it at no cost."""
     width, _ = frame
     image = Image.new("RGBA", frame, (0, 0, 0, 0))
+    if corners:
+        (x0, y0, x1, y1), radius, colour = corners
+        # Drawn four times over and scaled down, so the curve is smooth.
+        scale = 4
+        mask = Image.new("L", ((x1 - x0) * scale, (y1 - y0) * scale), 255)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, mask.width - 1, mask.height - 1), radius=radius * scale, fill=0
+        )
+        mask = mask.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+        image.paste(Image.new("RGBA", mask.size, colour), (x0, y0), mask)
     canvas = ImageDraw.Draw(image)
     for block in placed:
         for i, line in enumerate(block.lines):

@@ -17,7 +17,13 @@ from agentic_editor.edl import EDL, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
-from agentic_editor.render.video import Layers, build_graph, crop_size, video_band
+from agentic_editor.render.video import (
+    Layers,
+    build_graph,
+    crop_size,
+    picture_rect,
+    video_band,
+)
 from agentic_editor.settings import ROOT, Settings, get_settings
 
 log = logging.getLogger(__name__)
@@ -371,8 +377,9 @@ def render(
             text.place(b, face(b.font, b.text), frame, band, gap)
             for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
         ]
-        layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
         obstacles += [(0.0, edl.duration, *block.band) for block in placed]
+    else:
+        placed = []
 
     bars = layers.black_bars
     shown = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
@@ -397,6 +404,17 @@ def render(
             text_colours = [b.color for b in preset.text_blocks] or [preset.captions.color]
             dark = all(grade.is_dark(c) for c in text_colours)
             layers.background = grade.background(measured, dark)
+    corners = None
+    if edl.crop_mode == "none" and preset.framing.corner_radius:
+        shown_size = source
+        if edl.shots:
+            shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
+        rect = picture_rect(shown_size, frame, preset.framing.picture_width, layers.picture_band)
+        fill = preset.framing.corner_color or layers.background or preset.framing.background
+        corners = (rect, preset.framing.corner_radius, fill)
+    if placed or corners:
+        layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png", corners))
+
     if colour.look != "none" or colour.lut:
         lut = asset_path(colour.lut) if colour.lut else None
         layers.look = grade.look_filters(colour.look, lut)
