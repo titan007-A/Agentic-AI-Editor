@@ -13,6 +13,14 @@ def nap(pid_file: str) -> None:
     time.sleep(60)
 
 
+def running(pid: int) -> bool:
+    """Alive and not a zombie. The process can go between looking and reading its stat."""
+    try:
+        return "Z" not in Path(f"/proc/{pid}/stat").read_text().split()[2]
+    except OSError:
+        return False
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="parent-death signal is Linux only")
 def test_a_model_worker_dies_with_its_parent(tmp_path):
     pid_file = tmp_path / "child.pid"
@@ -32,17 +40,10 @@ def test_a_model_worker_dies_with_its_parent(tmp_path):
         parent.send_signal(signal.SIGKILL)
         parent.wait()
         for _ in range(100):
-            if (
-                not Path(f"/proc/{child}").exists()
-                or "Z" in Path(f"/proc/{child}/stat").read_text().split()[2]
-            ):
+            if not running(child):
                 break
             time.sleep(0.05)
-        alive = (
-            Path(f"/proc/{child}").exists()
-            and "Z" not in Path(f"/proc/{child}/stat").read_text().split()[2]
-        )
-        assert not alive
+        assert not running(child)
     finally:
         parent.kill()
 
