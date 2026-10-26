@@ -133,3 +133,18 @@ def test_captions_keep_a_gap_from_overlays():
     (placed,) = subtitles.place([cue], "bottom", flush, 120, 1920, blocked)
     band = placed.band(120, 1920)
     assert band[1] <= 1300 - BANNER_GAP or band[0] >= 1400 + BANNER_GAP
+
+
+def test_the_overlay_rounds_off_the_corners_of_the_picture(tmp_path):
+    from PIL import Image
+
+    from agentic_editor.render import text
+
+    rect = (0, 400, 1080, 1400)
+    path = text.draw([], (1080, 1920), tmp_path / "t.png", (rect, 16, "#000000"))
+    image = Image.open(path)
+    assert image.getpixel((0, 400)) == (0, 0, 0, 255)  # the corner itself is filled
+    assert image.getpixel((1079, 1399)) == (0, 0, 0, 255)
+    assert image.getpixel((16, 416))[3] == 0  # inside the curve the picture shows
+    assert image.getpixel((540, 400))[3] == 0  # along the edge, too
+    assert image.getpixel((540, 200))[3] == 0  # and nothing off the picture is touched

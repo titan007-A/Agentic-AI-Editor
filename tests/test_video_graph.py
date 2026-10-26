@@ -1,9 +1,9 @@
-import math
 from pathlib import Path
 
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.edl import EDL, Clip, Zoom
 from agentic_editor.presets import Preset
+from agentic_editor.render import text
 from agentic_editor.render.video import Layers, build_graph, frame_chain, video_band
 
 VERTICAL = Preset(name="v", label="v", min_duration=1, max_duration=60)
@@ -189,21 +189,20 @@ def test_only_watermarks_on_the_kept_picture_are_blurred():
     assert on_picture([handle], None) == [handle]
 
 
-def test_a_whole_picture_shrinks_to_leave_the_text_where_the_preset_puts_it():
-    import types
-
+def test_the_picture_goes_between_the_text_where_the_preset_puts_it():
     from agentic_editor.presets import load_presets
-    from agentic_editor.render.compose import MIN_PICTURE_SHARE, text_room
-    from agentic_editor.settings import ROOT
+    from agentic_editor.render import compose
+    from agentic_editor.render.video import band_fit
+    from agentic_editor.settings import ROOT, get_settings
 
-    preset = load_presets(ROOT / "presets")["vocal-music-it-9x16"]  # gaps 0 above, 100 below
-    # Text at its own places: ink in rows 340-480 at the top and from 1450 at the bottom.
-    placed = [types.SimpleNamespace(band=(340, 480)), types.SimpleNamespace(band=(1450, 1550))]
-    frame = (1080, 1920)
-    # Centred, the picture may reach 1350 below, so 390 rows each side of the middle.
-    assert text_room(preset, placed, frame, (1080, 866)) == 780
-    # A wide picture already fits between, so it keeps the whole width.
-    assert text_room(preset, placed, frame, (1920, 1080)) is None
-    # A tall one is shrunk no narrower than the floor; the text moves for the rest.
-    floor = 1080 * MIN_PICTURE_SHARE * 1298 / 964
-    assert text_room(preset, placed, frame, (964, 1298)) == math.ceil(floor / 2) * 2
+    preset = load_presets(ROOT / "presets")["vocal-music-it-9x16"]
+    face = compose.text_face(get_settings(), "it")
+    top, bottom = compose.picture_band(preset, face)
+    above, below = preset.framing.text_gap_above, preset.framing.text_gap_below
+    placed = [text.place(b, face(b.font, b.text), preset.size, None, 0) for b in preset.text_blocks]
+    assert top >= placed[0].band[1] + above and bottom <= placed[1].band[0] - below
+    # The whole width: a 9:16 picture keeps the band's rows, a wide one is shown whole.
+    assert compose.band_rows(preset, (top, bottom), 1080) == bottom - top
+    fit = band_fit(preset.size, "#C8A77D", 1.0, (top, bottom))
+    assert fit[0].startswith(f"scale=1080:{bottom - top}:")
+    assert f":(ow-iw)/2:{top}+({bottom - top}-ih)/2:" in fit[1]

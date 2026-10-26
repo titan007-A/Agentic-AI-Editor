@@ -216,3 +216,41 @@ def test_a_sliver_of_a_head_past_the_edge_is_not_a_cut():
     # A 560 px head span in a 606 px following crop that lags by 20 px.
     assert crossing([(500.0, 1060.0)], 520, 606) == []
     assert crossing([(500.0, 1060.0)], 600, 606) == [(500.0, 1060.0)]
+
+
+def _text(y0: int, y1: int) -> Subject:
+    return Subject(kind="text", label="lyrics", x0=100, y0=y0, x1=980, y1=y1, keep=False)
+
+
+def test_a_full_picture_loses_its_top_and_bottom_around_the_face():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    singer = [(5.0, [Face(cx=0.5, cy=0.3, width=0.3, height=0.1, score=0.9)])]  # rows 413-768
+    shots = band_shots(clip, [], [], singer, (0, 0, 1080, 1920), 870, 1920)
+    assert [(s.x, s.width, s.height) for s in shots] == [(0, 1080, 870)]
+    # Room above the head, and the whole head in.
+    assert shots[0].y <= 413 - 100 and shots[0].y + 870 >= 768
+
+
+def test_lyrics_along_the_bottom_of_the_picture_are_cut_off():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    singer = [(5.0, [Face(cx=0.5, cy=0.5, width=0.2, height=0.15, score=0.9)])]
+    # A 1080x866 repost picture from row 526, its lyrics at rows 1290-1340.
+    samples = [(5.0, [_text(1290, 1340)])]
+    picture = (0, 526, 1080, 866)
+    shots = band_shots(clip, [], samples, singer, picture, 900, 1920)
+    assert shots[0].y + shots[0].height <= 1290 - 6
+    assert shots[0].width == 1080
+
+
+def test_text_across_a_face_is_left_rather_than_cutting_the_face():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    singer = [(5.0, [Face(cx=0.5, cy=0.9, width=0.2, height=0.05, score=0.9)])]  # rows 1646-1814
+    samples = [(5.0, [_text(1700, 1760)])]
+    shots = band_shots(clip, [], samples, singer, (0, 0, 1080, 1920), 1920, 1920)
+    assert shots[0].height == 1920  # nothing to take off: the text is on the face

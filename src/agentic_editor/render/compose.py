@@ -17,7 +17,13 @@ from agentic_editor.edl import EDL, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
-from agentic_editor.render.video import Layers, build_graph, crop_size, video_band
+from agentic_editor.render.video import (
+    Layers,
+    build_graph,
+    crop_size,
+    picture_rect,
+    video_band,
+)
 from agentic_editor.settings import ROOT, Settings, get_settings
 
 log = logging.getLogger(__name__)
@@ -25,9 +31,6 @@ _CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 BANNER_GAP = 24  # px between a banner and anything else drawn on the frame
 LAYOUT_FRAMES = 24  # frames the picture's place in a padded layout is read from
 LAYOUT_WIDTH = 540  # px they are read at; half a 1080 frame, so edges land within 2 px
-# The narrowest, as a share of the frame width, a picture shown whole is made to keep the
-# preset's text where the preset puts it; past that the text moves out of its way instead.
-MIN_PICTURE_SHARE = 0.55
 
 
 def asset_path(name: str) -> Path:
@@ -128,27 +131,53 @@ def on_picture(
     return kept
 
 
-def text_room(
-    preset: Preset, placed: list[text.Placed], frame: tuple[int, int], source: tuple[int, int]
-) -> int | None:
-    """Rows a picture shown whole may take, centred in the frame, so that each text block
-    stays where the preset puts it with its gap to the picture; None when the text leaves
-    the picture all the rows it would take anyway."""
-    width, height = frame
-    middle = height / 2
-    half = middle
-    gaps = preset.framing
-    for block, at in zip(preset.text_blocks, placed, strict=True):
-        top, bottom = at.band
-        if block.anchor == "top" and gaps.text_gap_above is not None:
-            half = min(half, middle - bottom - gaps.text_gap_above)
-        elif block.anchor == "bottom" and gaps.text_gap_below is not None:
-            half = min(half, top - gaps.text_gap_below - middle)
-    shown = min(height, width * preset.framing.picture_width * source[1] / source[0])
-    if 2 * half >= shown:
+def text_face(settings: Settings, language: str | None) -> Callable[..., text.Face]:
+    """Faces for text in this language: a bundled font, with a Noto font for any script
+    the bundled one can't draw."""
+    font_folder = settings.models_dir / "fonts"
+
+    def face(name: str, *texts: str) -> text.Face:
+        primary = text.font_file(settings.fonts_dir, name)
+        return text.Face(fonts.chain(primary, texts, font_folder, language))
+
+    return face
+
+
+def text_language(preset: Preset, analysis: Analysis) -> str | None:
+    translated = preset.captions.mode == "translated" and preset.captions.language
+    return preset.captions.language if translated else analysis.transcript.language
+
+
+def text_gaps(preset: Preset) -> list[int | None]:
+    return [
+        preset.framing.text_gap_above if b.anchor == "top" else preset.framing.text_gap_below
+        for b in preset.text_blocks
+    ]
+
+
+def picture_band(preset: Preset, face: Callable[..., text.Face]) -> tuple[int, int] | None:
+    """Rows of the frame a picture shown whole goes in: between the preset's text blocks,
+    each left where the preset puts it with its gap to the picture. None when no block
+    limits the picture."""
+    frame = preset.size
+    top, bottom = 0, frame[1]
+    for block, gap in zip(preset.text_blocks, text_gaps(preset), strict=True):
+        if gap is None:
+            continue
+        ink_top, ink_bottom = text.place(block, face(block.font, block.text), frame, None, gap).band
+        if block.anchor == "top":
+            top = max(top, math.ceil(ink_bottom + gap))
+        else:
+            bottom = min(bottom, math.floor(ink_top - gap))
+    if (top, bottom) == (0, frame[1]) or bottom - top < frame[1] // 4:
         return None
-    smallest = width * MIN_PICTURE_SHARE * source[1] / source[0]
-    return max(math.floor(half) * 2, math.ceil(min(smallest, shown) / 2) * 2)
+    return math.ceil(top / 2) * 2, bottom // 2 * 2
+
+
+def band_rows(preset: Preset, band: tuple[int, int], picture_width: int) -> int:
+    """Source rows of a picture `picture_width` wide that fill `band` at the frame's width."""
+    shown = preset.size[0] * preset.framing.picture_width
+    return round((band[1] - band[0]) * picture_width / shown)
 
 
 def timeline_words(edl: EDL, analysis: Analysis):
@@ -258,26 +287,23 @@ def clear_rows(
     content: tuple[int, int, int, int] | None,
     faces: list[Sample],
     texts: list[tuple[float, list[onscreen.Box]]] = (),
-    picture_height: int | None = None,
+    band: tuple[int, int] | None = None,
 ) -> list[tuple[float, list[tuple[float, float]]]]:
     """The rows of the output frame to keep captions and banners off, at reel times:
     faces, and text burnt into the picture while it is on screen."""
     source = (analysis.width, analysis.height)
     picture = content or (0, 0, *source)
-    shots = edl.shots if edl.crop_mode == "smart" else []
+    shots = edl.shots
     window = crop_size(source, preset.size)[0]
+    frame = preset.size
     if edl.crop_mode == "none":
-        # A picture shown whole is drawn smaller, as if a wider window were fitted.
-        width, height = preset.size
-        scale = min(
-            width * preset.framing.picture_width / picture[2],
-            (picture_height or height) / picture[3],
-        )
-        window = round(width / scale)
+        # A picture shown whole: its windows are drawn as wide as the picture is let be.
+        frame = (round(frame[0] * preset.framing.picture_width), frame[1])
+        window = picture[2]
     clip = edl.clips[0]
     return framing.screen_rows(
-        faces, clip, shots, picture, source, preset.size, window
-    ) + framing.box_rows(list(texts), clip, shots, picture, source, preset.size, window)
+        faces, clip, shots, picture, source, frame, window, band
+    ) + framing.box_rows(list(texts), clip, shots, picture, source, frame, window, band)
 
 
 def render(
@@ -331,43 +357,34 @@ def render(
 
     # Text a bundled font can't draw gets a Noto font for its script.
     font_folder = settings.models_dir / "fonts"
-    translated = preset.captions.mode == "translated" and preset.captions.language
-    language = preset.captions.language if translated else analysis.transcript.language
-
-    def face(name: str, *texts: str) -> text.Face:
-        primary = text.font_file(settings.fonts_dir, name)
-        return text.Face(fonts.chain(primary, texts, font_folder, language))
+    language = text_language(preset, analysis)
+    face = text_face(settings, language)
 
     # Banners keep off faces, the picture's own text and the preset's text blocks; captions
     # keep off those and banners.
     obstacles: list[tuple[float, float, float, float]] = []  # reel start, end, top, bottom
+    if edl.crop_mode == "none":
+        # The text where the preset puts it, the picture between at the frame's width.
+        layers.picture_band = picture_band(preset, face)
     if preset.text_blocks:
-        gaps = [
-            preset.framing.text_gap_above if b.anchor == "top" else preset.framing.text_gap_below
-            for b in preset.text_blocks
-        ]
-        faces_of = [face(b.font, b.text) for b in preset.text_blocks]
-        if edl.crop_mode == "none":
-            # The text where the preset puts it, and the picture made to fit between.
-            free = [
-                text.place(b, f, frame, None, gap)
-                for b, f, gap in zip(preset.text_blocks, faces_of, gaps, strict=True)
-            ]
-            layers.picture_height = text_room(preset, free, frame, source)
+        shown_size = source
+        if edl.crop_mode == "none" and edl.shots:
+            shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
         band = video_band(
-            edl.crop_mode, source, frame, preset.framing.picture_width, layers.picture_height
+            edl.crop_mode, shown_size, frame, preset.framing.picture_width, layers.picture_band
         )
         placed = [
-            text.place(b, f, frame, band, gap)
-            for b, f, gap in zip(preset.text_blocks, faces_of, gaps, strict=True)
+            text.place(b, face(b.font, b.text), frame, band, gap)
+            for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
         ]
-        layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png"))
         obstacles += [(0.0, edl.duration, *block.band) for block in placed]
+    else:
+        placed = []
 
     bars = layers.black_bars
     shown = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
     rows = (
-        clear_rows(edl, analysis, preset, shown, faces or [], texts or [], layers.picture_height)
+        clear_rows(edl, analysis, preset, shown, faces or [], texts or [], layers.picture_band)
         if faces or texts
         else []
     )
@@ -387,6 +404,17 @@ def render(
             text_colours = [b.color for b in preset.text_blocks] or [preset.captions.color]
             dark = all(grade.is_dark(c) for c in text_colours)
             layers.background = grade.background(measured, dark)
+    corners = None
+    if edl.crop_mode == "none" and preset.framing.corner_radius:
+        shown_size = source
+        if edl.shots:
+            shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
+        rect = picture_rect(shown_size, frame, preset.framing.picture_width, layers.picture_band)
+        fill = preset.framing.corner_color or layers.background or preset.framing.background
+        corners = (rect, preset.framing.corner_radius, fill)
+    if placed or corners:
+        layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png", corners))
+
     if colour.look != "none" or colour.lut:
         lut = asset_path(colour.lut) if colour.lut else None
         layers.look = grade.look_filters(colour.look, lut)

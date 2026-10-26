@@ -137,6 +137,10 @@ class Framing(Strict):
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     text_gap_above: int | None = 0
     text_gap_below: int | None = 130
+    # Rounded corners on a picture shown whole, filled with corner_color (the background
+    # when unset).
+    corner_radius: int = Field(default=0, ge=0, le=200)
+    corner_color: Color | None = None
 
 
 class Grade(Strict):
