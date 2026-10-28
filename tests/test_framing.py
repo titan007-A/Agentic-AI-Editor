@@ -242,7 +242,7 @@ def test_lyrics_along_the_bottom_of_the_picture_are_cut_off():
     samples = [(5.0, [_text(1290, 1340)])]
     picture = (0, 526, 1080, 866)
     shots = band_shots(clip, [], samples, singer, picture, 900, 1920)
-    assert shots[0].y + shots[0].height <= 1290 - 6
+    assert shots[0].y + shots[0].height <= 1290 - 0.025 * 866
     assert shots[0].width == 1080
 
 

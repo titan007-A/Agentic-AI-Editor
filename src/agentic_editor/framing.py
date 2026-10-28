@@ -392,7 +392,9 @@ MIN_RUN = 1.0  # seconds: no window is held for less, so the picture doesn't twi
 FACE_TOLERANCE = 0.15
 # ...for at least this long; a briefer moment isn't worth moving the picture for.
 BRIEF = 2.0
-TEXT_MARGIN = 6  # px of picture kept clear of text that is cut off
+# Of the picture's height, kept clear of text that is cut off: the vision model's boxes are
+# often a few dozen rows short of the letters, which then peek in at the window's edge.
+TEXT_MARGIN = 0.025
 
 
 def band_shots(
@@ -423,9 +425,9 @@ def band_shots(
         if any(a < y1 and b > y0 for a, b in heads_all):
             continue
         if y1 <= top + EDGE_TEXT * picture_height:
-            lo = max(lo, y1 + TEXT_MARGIN)
+            lo = max(lo, y1 + TEXT_MARGIN * picture_height)
         elif y0 >= top + (1 - EDGE_TEXT) * picture_height:
-            hi = min(hi, y0 - TEXT_MARGIN)
+            hi = min(hi, y0 - TEXT_MARGIN * picture_height)
     if hi - lo < picture_height / 2:  # text all over: keep the picture, the text stays
         lo, hi = top, top + picture_height
     height = even(min(rows, hi - lo))
