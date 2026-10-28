@@ -134,7 +134,8 @@ class OllamaClient:
             try:
                 return json.loads(content)
             except json.JSONDecodeError as exc:
-                if attempt:
+                # An answer cut off at the length cap comes out the same way when asked again.
+                if attempt or data.get("done_reason") == "length":
                     raise LLMError(f"{self.model} did not return JSON: {content[:300]}") from exc
                 log.info("%s returned broken JSON, asking again", self.model)
         raise AssertionError("unreachable")
