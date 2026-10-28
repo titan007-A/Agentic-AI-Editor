@@ -17,7 +17,7 @@ text_blocks:
     size: 58
     color: "#FFFFFF"
     anchor: top
-    offset: 240
+    offset: 170
     max_shrink: 0.9
   - text: Follow us for more iconic raw vocals
     font: OpenSans-SemiBold

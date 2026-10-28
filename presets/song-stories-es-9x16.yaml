@@ -17,7 +17,7 @@ text_blocks:
     size: 50
     color: "#FFFFFF"
     anchor: top
-    offset: 344
+    offset: 254
     max_width: 820
     max_shrink: 0.8
   - text: "AQUÍ MOSTRAMOS CÓMO SE\nCREARON LAS CANCIONES"
@@ -25,7 +25,7 @@ text_blocks:
     size: 50
     color: "#FFFFFF"
     anchor: bottom
-    offset: 526
+    offset: 480
     max_shrink: 0.8
 headline:
   hint: >-
@@ -52,8 +52,8 @@ framing:
   mode: none
   background: "#000000"
   crop_black_bars: true
-  text_gap_above: 36
-  text_gap_below: 34
+  text_gap_above: 56
+  text_gap_below: 28
 audio:
   source: original
   highpass_hz: 0
