@@ -1,5 +1,5 @@
 """The post's caption, written by the local planning model from what Wikipedia and Wikidata
-say about the song, and checked before anyone sees it.
+say about the song (or another topic a person names), and checked before anyone sees it.
 
 Accuracy comes from the sources, not the model's memory: the model is told to use only the
 articles and facts it is given, every name and number in what it writes must appear in them
@@ -47,12 +47,35 @@ PROPERTIES = {
     "P495": "country of origin",
     "P577": "publication date",
 }
+# For a topic that isn't a song: a person, a place, an event, a film, a thing.
+TOPIC_PROPERTIES = {
+    "P31": "instance of",
+    "P17": "country",
+    "P131": "located in",
+    "P27": "country of citizenship",
+    "P106": "occupation",
+    "P569": "date of birth",
+    "P19": "place of birth",
+    "P570": "date of death",
+    "P571": "inception",
+    "P580": "start time",
+    "P582": "end time",
+    "P585": "point in time",
+}
+DATES = {"P569", "P570", "P571", "P577", "P580", "P582", "P585"}
 STYLE = (
     "three paragraphs, 150 to 220 words in all. The first sets up the song, the artist and "
     "the year with a striking fact; the second goes into how it was written or recorded, a "
     "twist, a dispute or a technical detail; the third is about its legacy today and ends "
     "on a reflective note. Two to four fitting emojis spread through the text, not bunched "
     "at the end. Natural, storytelling prose. No hashtags and no call to follow or like."
+)
+TOPIC_STYLE = (
+    "three paragraphs, 150 to 220 words in all. The first sets up the subject with a "
+    "striking fact; the second goes into a lesser-known detail, a twist or how it came "
+    "about; the third is about why it still matters and ends on a reflective note. Two to "
+    "four fitting emojis spread through the text, not bunched at the end. Natural, "
+    "storytelling prose. No hashtags and no call to follow or like."
 )
 
 
@@ -210,15 +233,18 @@ def _date(value: dict) -> str:
     return time[:4] if precision <= 9 else time[:7] if precision == 10 else time[:10]
 
 
-def facts(http: httpx.Client, item: str, language: str) -> list[str]:
-    """What Wikidata states about the song: performer, writers, producer, album, date."""
+def facts(
+    http: httpx.Client, item: str, language: str, properties: dict[str, str] = PROPERTIES
+) -> list[str]:
+    """What Wikidata states about the item: for a song its performer, writers, producer,
+    album and date."""
 
     def entities(ids: list[str], props: str) -> dict:
         return _entities(http, ids, props, language)
 
     claims = entities([item], "claims").get(item, {}).get("claims", {})
     values: dict[str, list] = {}
-    for prop in PROPERTIES:
+    for prop in properties:
         for claim in claims.get(prop, []):
             value = claim.get("mainsnak", {}).get("datavalue", {}).get("value")
             if value is not None:
@@ -234,9 +260,9 @@ def facts(http: httpx.Client, item: str, language: str) -> list[str]:
             if label:
                 labels[qid] = label["value"]
     lines = []
-    for prop, name in PROPERTIES.items():
+    for prop, name in properties.items():
         shown = [
-            _date(v) if prop == "P577" else labels.get(v.get("id", ""), "")
+            _date(v) if prop in DATES else labels.get(v.get("id", ""), "")
             for v in values.get(prop, [])
         ]
         shown = list(dict.fromkeys(s for s in shown if s))
@@ -272,6 +298,68 @@ def gather(song: str, artist: str, language: str, cache: Path, transport=None) -
                 break
     if not sources.articles:
         raise CaptionError(f"Wikipedia has no article on “{song}” by {artist or 'its artist'}")
+    cache.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"articles": [asdict(a) for a in sources.articles],
+                                "facts": sources.facts}), encoding="utf-8")  # fmt: skip
+    return sources
+
+
+def topic_article(http: httpx.Client, language: str, topic: str):
+    """The Wikipedia article in `language` the topic names, with its Wikidata id: the
+    search hit whose title is closest to it, never a disambiguation page."""
+    found = _wiki(http, language, action="query", list="search", srlimit=5, srsearch=topic)
+    wanted = plain(topic)
+    titles = [hit["title"] for hit in found.get("query", {}).get("search", [])]
+
+    def closeness(title: str) -> int:
+        name = plain(title)
+        if name == wanted or name.startswith(wanted + " ("):
+            return 0
+        return 1 if all(word in name for word in wanted.split()) else 2
+
+    for title in sorted(titles, key=closeness):
+        pages = _wiki(http, language, action="query", prop="extracts|pageprops|info",
+                      explaintext=1, inprop="url", ppprop="wikibase_item|disambiguation",
+                      redirects=1, titles=title)["query"]["pages"]  # fmt: skip
+        page = pages[0] if pages else {}
+        props = page.get("pageprops", {})
+        text = page.get("extract") or ""
+        if "disambiguation" in props or not text:
+            continue
+        # The lead and the sections in order: for a topic, every section may matter.
+        flat = re.sub(r"\n(==+) ([^=\n]+) \1\n", r"\n\n\2:\n", text).strip()[:ARTICLE_CHARS]
+        found = Article(title=page["title"], url=page.get("fullurl", ""), text=flat)
+        return found, props.get("wikibase_item", "")
+    return None
+
+
+def gather_topic(topic: str, language: str, cache: Path, transport=None) -> Sources:
+    """The topic's article in the caption's language and in English, and its Wikidata
+    facts, kept on disk like a song's."""
+    key = re.sub(r"[^a-z0-9]+", "-", plain(f"topic {topic} {language}")).strip("-")[:100]
+    path = cache / f"{key}.json"
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return Sources([Article(**a) for a in data["articles"]], data["facts"])
+    sources = Sources()
+    item = ""
+    client = httpx.Client(
+        timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True, transport=transport
+    )
+    with client as http:
+        for lang in dict.fromkeys([language, "en"]):
+            hit = topic_article(http, lang, topic)
+            if hit is None:
+                continue
+            found, qid = hit
+            if item and qid != item:
+                continue  # the other language's article is about something else
+            if qid and not item:
+                sources.facts = facts(http, qid, language, TOPIC_PROPERTIES)
+            sources.articles.append(found)
+            item = item or qid
+    if not sources.articles:
+        raise CaptionError(f"Wikipedia has no article on “{topic}”")
     cache.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"articles": [asdict(a) for a in sources.articles],
                                 "facts": sources.facts}), encoding="utf-8")  # fmt: skip
@@ -402,22 +490,29 @@ def write(
     headline: str = "",
     style: str = "",
     words: tuple[int, int] = (150, 220),
+    topic: str = "",
 ) -> Written:
-    """The caption, checked, and asked again once with what was wrong."""
+    """The caption, checked, and asked again once with what was wrong. About `topic` when
+    one is given, else about the song."""
     named = LANGUAGES.get(language, language)
+    style = style or (TOPIC_STYLE if topic else STYLE)
+    subject = topic or f"the song “{song}” by {artist}"
     prompt = (
-        f"Write the caption of an Instagram reel about the song “{song}” by {artist}, in "
-        f"{named}. The reel's headline: {headline or '(none)'}.\n\n{_sources_block(sources)}\n\n"
-        f"Write it as {style or STYLE} Aim for {words[0]}-{words[1]} words. Use only what "
+        f"Write the caption of an Instagram reel about {subject}, in {named}. The reel's "
+        f"headline: {headline or '(none)'}.\n\n{_sources_block(sources)}\n\n"
+        f"Write it as {style} Aim for {words[0]}-{words[1]} words. Use only what "
         "the facts and articles above state: every name, date, number, place and event must "
         "come from them. Leave out anything they don't say, even if you believe it is true; "
-        "a plainer caption is better than an invented detail. If the headline says the reel "
-        "is another version of the song or a scene from a film, say so, and don't present it "
-        "as the original recording."
+        "a plainer caption is better than an invented detail."
     )
+    if not topic:
+        prompt += (
+            " If the headline says the reel is another version of the song or a scene from a "
+            "film, say so, and don't present it as the original recording."
+        )
     messages = [{"role": "user", "content": prompt}]
     text = _write(llm, messages)
-    emojis = "emoji" in (style or STYLE).casefold()
+    emojis = "emoji" in style.casefold()
     wrong = problems(text, sources, llm, words, headline, emojis)
     if wrong:
         messages += [

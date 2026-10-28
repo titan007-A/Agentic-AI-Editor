@@ -142,3 +142,59 @@ def test_the_cache_file_is_plain_json(tmp_path):
     assert (
         json.loads(saved.read_text())["articles"][0]["title"] == "Harder, Better, Faster, Stronger"
     )
+
+
+def topics(request: httpx.Request) -> httpx.Response:
+    """Wikipedia and Wikidata for a topic whose first search hit is a disambiguation page."""
+    params = dict(request.url.params)
+    if request.url.host == "www.wikidata.org":
+        ids = params["ids"].split("|")
+        if params["props"] == "claims":
+            claims = {
+                "P17": [{"mainsnak": {"datavalue": {"value": {"id": "Q878"}}}}],
+                "P571": [{"mainsnak": {"datavalue": {"value": {"time": "+2004-01-06T00:00:00Z",
+                                                               "precision": 11}}}}],
+            }  # fmt: skip
+            return httpx.Response(200, json={"entities": {ids[0]: {"claims": claims}}})
+        labels = {i: {"labels": {"en": {"value": "United Arab Emirates"}}} for i in ids}
+        return httpx.Response(200, json={"entities": labels})
+    if params.get("list") == "search":
+        hits = [{"title": "Burj (disambiguation)"}, {"title": "Burj Khalifa"}]
+        return httpx.Response(200, json={"query": {"search": hits}})
+    title = params["titles"]
+    if "disambiguation" in title:
+        page = {
+            "title": title,
+            "extract": "Burj may refer to:",
+            "pageprops": {"disambiguation": ""},
+        }
+    else:
+        text = (
+            "The Burj Khalifa is a skyscraper in Dubai.\n\n== Construction ==\nWork began in 2004."
+        )
+        page = {"title": title, "fullurl": f"https://en.wikipedia.org/wiki/{title}",
+                "extract": text, "pageprops": {"wikibase_item": "Q12495"}}  # fmt: skip
+    return httpx.Response(200, json={"query": {"pages": [page]}})
+
+
+def test_a_topic_is_written_from_its_article_not_a_disambiguation_page(tmp_path):
+    sources = caption.gather_topic("Burj Khalifa", "en", tmp_path, httpx.MockTransport(topics))
+    (article,) = sources.articles
+    assert article.title == "Burj Khalifa" and "Construction:\nWork began in 2004." in article.text
+    assert sources.facts == ["country: United Arab Emirates", "inception: 2004-01-06"]
+
+
+def test_a_topic_wikipedia_doesnt_cover_writes_no_caption(tmp_path):
+    def nothing(request):
+        return httpx.Response(200, json={"query": {"search": []}})
+
+    with pytest.raises(caption.CaptionError, match="no article on “Nowhere”"):
+        caption.gather_topic("Nowhere", "it", tmp_path, httpx.MockTransport(nothing))
+
+
+def test_a_topic_caption_is_asked_for_about_the_topic():
+    fixed = ["Billie Jean de Michael Jackson salió en 1983 en Thriller 🎵 🎤."]
+    llm = Writer([fixed], "Billie Jean is a song by Michael Jackson released in 1983")
+    caption.write(llm, "", "", SOURCES, "es", words=(5, 40), topic="Thriller (album)")
+    prompt = llm.asked[0][0]["content"]
+    assert "about Thriller (album), in Spanish" in prompt and "the song" not in prompt

@@ -164,23 +164,32 @@ def run_caption(output_id: int, Session: sessionmaker, settings: Settings, route
             decisions = output.edl.get("decisions", [])
             path = Path(output.path)
             named = output.caption_song, output.caption_artist
+            topic = output.caption_topic
         headline = next((d.split(": ", 1)[1] for d in decisions if d.startswith("headline ")), "")
         title, description = source_text(path, settings.media_dir)
+        cache = settings.cache_dir / "captions"
+        words = (wanted.min_words, wanted.max_words)
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         with router.planner() as llm:
             llm.context = caption.CONTEXT
-            song, artist = (
-                named if named[0] else (caption.identify(llm, title, description, headline))
-            )
-            with Session() as db:
-                output = db.get(Output, output_id)
-                output.caption_song, output.caption_artist = song, artist
-                db.commit()
-            sources = caption.gather(song, artist, wanted.language, settings.cache_dir / "captions")
-            written = caption.write(
-                llm, song, artist, sources, wanted.language, headline, wanted.style,
-                (wanted.min_words, wanted.max_words),
-            )  # fmt: skip
+            if topic:
+                # The preset's style is written for songs; a topic gets the general one.
+                sources = caption.gather_topic(topic, wanted.language, cache)
+                written = caption.write(
+                    llm, "", "", sources, wanted.language, headline, words=words, topic=topic
+                )
+            else:
+                song, artist = (
+                    named if named[0] else (caption.identify(llm, title, description, headline))
+                )
+                with Session() as db:
+                    output = db.get(Output, output_id)
+                    output.caption_song, output.caption_artist = song, artist
+                    db.commit()
+                sources = caption.gather(song, artist, wanted.language, cache)
+                written = caption.write(
+                    llm, song, artist, sources, wanted.language, headline, wanted.style, words
+                )
         with Session() as db:
             output = db.get(Output, output_id)
             output.caption, output.caption_sources = written.text, written.sources

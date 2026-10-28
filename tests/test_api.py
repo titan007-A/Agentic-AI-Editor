@@ -612,7 +612,7 @@ def fake_captions(monkeypatch, env, fail=False):
     monkeypatch.setattr(
         caption,
         "write",
-        lambda *args: caption.Written(
+        lambda *args, **kwargs: caption.Written(
             "Un éxito de 1982 🎵", [{"title": "Felicità", "url": "u"}], []
         ),
     )
@@ -699,3 +699,26 @@ def test_the_song_the_model_found_is_shown(env, monkeypatch):
         "Felicità",
         "Al Bano & Romina Power",
     )
+
+
+def test_a_topic_instead_of_a_song(env, monkeypatch):
+    from agentic_editor import caption
+
+    fake_captions(monkeypatch, env, fail=True)
+    asked = []
+    monkeypatch.setattr(
+        caption, "gather_topic", lambda topic, *args: asked.append(topic) or caption.Sources()
+    )
+    (job,) = start(env.client)
+    output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
+    both = {"song": "Piano Man", "artist": "Billy Joel", "topic": "Burj Khalifa"}
+    assert env.client.post(f"/api/outputs/{output_id}/caption", json=both).status_code == 422
+    env.client.post(f"/api/outputs/{output_id}/caption", json={"topic": "Burj Khalifa"})
+    output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
+    assert output["caption_status"] == "done" and asked == ["Burj Khalifa"]
+    assert output["caption_topic"] == "Burj Khalifa" and output["caption_song"] == ""
+    # Naming a song again turns it back into a song's caption.
+    song = {"song": "Piano Man", "artist": "Billy Joel"}
+    env.client.post(f"/api/outputs/{output_id}/caption", json=song)
+    output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
+    assert output["caption_topic"] == "" and output["caption_song"] == "Piano Man"
