@@ -52,3 +52,6 @@ style_notes: >-
   Start exactly where a sung line begins, preferably the first line of a section, and end
   after a line has finished and the note has died away. Never start or stop in the middle
   of a lyric line.
+post_caption:
+  enabled: true
+  language: en
