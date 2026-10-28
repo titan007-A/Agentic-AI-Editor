@@ -65,8 +65,9 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
     setFields((current) => ({ ...current, [key]: value }));
   }
 
+  // One preset a feed, as for a job: choosing one replaces the one chosen before.
   function togglePreset(name: string, on: boolean) {
-    set("presets", on ? [...fields.presets, name] : fields.presets.filter((n) => n !== name));
+    set("presets", on ? [name] : []);
   }
 
   async function submit(event: React.FormEvent) {
@@ -126,7 +127,7 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
       </div>
 
       <fieldset className="space-y-2">
-        <legend className="mb-2 text-sm font-medium">Presets</legend>
+        <legend className="mb-2 text-sm font-medium">Preset (one)</legend>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {presets.map((p) => (
             <label

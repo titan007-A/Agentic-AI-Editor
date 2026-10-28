@@ -37,8 +37,9 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
     ...uploads.sources,
   ];
 
+  // One preset a job: choosing one replaces the one chosen before.
   function toggle(name: string, on: boolean) {
-    setChosen((current) => (on ? [...current, name] : current.filter((n) => n !== name)));
+    setChosen(on ? [name] : []);
   }
 
   function addFiles(files: FileList | null) {
@@ -101,7 +102,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
           </div>
 
           <fieldset className="space-y-2">
-            <legend className="mb-2 text-sm font-medium">Presets</legend>
+            <legend className="mb-2 text-sm font-medium">Preset (one)</legend>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {presets.map((p) => (
                 <label

@@ -130,14 +130,14 @@ def test_usage_notice_is_accepted_once(env):
 
 def test_batch_creates_one_job_per_link_and_records_outputs(env):
     links = ["https://example.com/a", "https://example.com/b", "https://example.com/a"]
-    created = start(env.client, links, ["vocal-music-9x16", "square-1x1"])
+    created = start(env.client, links, ["vocal-music-9x16"])
     assert len(created) == 2
     assert [c["source"] for c in env.calls] == ["https://example.com/a", "https://example.com/b"]
 
     job = env.client.get(f"/api/jobs/{created[0]['id']}").json()
     assert job["status"] == "done" and job["progress"] == 1.0
     assert job["title"] == "Sample song"
-    assert [o["preset"] for o in job["outputs"]] == ["vocal-music-9x16", "square-1x1"]
+    assert [o["preset"] for o in job["outputs"]] == ["vocal-music-9x16"]
     assert job["outputs"][0]["planner"] == "fake-model"
 
 
@@ -560,3 +560,15 @@ def test_only_the_admin_watches_a_folder_on_the_computer(env, tmp_path):
     _, riya = employee(env)
     feed = {"name": "mine", "kind": "folder", "location": str(tmp_path), "presets": ["square-1x1"]}
     assert riya.post("/api/feeds", json=feed).status_code == 403
+
+
+def test_a_job_or_feed_takes_one_preset(env):
+    body = {"sources": ["https://x.test/v"], "presets": ["square-1x1", "shorts-9x16"]}
+    assert env.client.post("/api/jobs", json=body).status_code == 422
+    feed = {
+        "name": "two",
+        "kind": "link",
+        "location": "https://x.test/c",
+        "presets": ["square-1x1", "shorts-9x16"],
+    }
+    assert env.client.post("/api/feeds", json=feed).status_code == 422
