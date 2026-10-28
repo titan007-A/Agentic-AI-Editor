@@ -53,3 +53,33 @@ def test_a_reel_that_names_the_song_is_titled_by_it():
     assert names.reel_title("07. Felicità (2) — Al Bano & Romina Power") == (
         "Felicità - Al Bano & Romina Power"
     )
+
+
+def stories(text: str):
+    preset = load_presets(ROOT / "presets")["voicehq-9x16"]
+    block = preset.text_blocks[1].model_copy(update={"text": text})
+    return preset.model_copy(update={"text_blocks": [preset.text_blocks[0], block]})
+
+
+def test_the_year_comes_from_the_video_s_name():
+    preset = stories("{song} ({year}) – {artist}")
+    filled = names.fill(preset, "Perdóname (1980) - Camilo Sesto")
+    assert filled.text_blocks[1].text == "Perdóname (1980) – Camilo Sesto"
+    # The notes win over the name, and without either the reel says how to give it.
+    given = names.fill(preset, "Perdóname (1980) - Camilo Sesto", {"year": "1981"})
+    assert given.text_blocks[1].text == "Perdóname (1981) – Camilo Sesto"
+    with pytest.raises(names.MissingField, match=r"'year: \.\.\.'.*Song \(1980\) - Artist"):
+        names.fill(preset, "Perdóname - Camilo Sesto")
+
+
+def test_the_preset_s_own_words_come_from_lines_in_the_notes():
+    preset = stories("Día {day} : Canción : {song_number}")
+    assert names.fields(preset) == {"day", "song_number"}
+    notes = "start where she sings the chorus\nDay: 103\nsong number: 5"
+    given, rest = names.from_notes(notes, names.fields(preset))
+    assert given == {"day": "103", "song_number": "5"}
+    assert rest == "start where she sings the chorus"
+    filled = names.fill(preset, "IMG_5071", given)
+    assert filled.text_blocks[1].text == "Día 103 : Canción : 5"
+    with pytest.raises(names.MissingField, match=r"'song number: \.\.\.'"):
+        names.fill(preset, "IMG_5071", {"day": "103"})
