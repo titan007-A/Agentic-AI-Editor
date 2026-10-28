@@ -21,18 +21,30 @@ reachable() {
 }
 
 check() {
-    "$TS" funnel status 2>/dev/null | grep -q "Funnel on" || return 0  # not in use
-    local host ip
+    # Read whole first: with pipefail, grep -q quitting early fails the pipe (SIGPIPE).
+    local status
+    status="$("$TS" funnel status 2>/dev/null)"
+    grep -q "Funnel on" <<<"$status" || return 0  # not in use
+    local host ips ip down=()
     host="$("$TS" status --self --json | /usr/bin/python3 -c \
         'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
-    ip="$(curl -s -m 10 -H 'accept: application/dns-json' \
+    # Every address the name has: a visitor's browser may be given any of them, and after a
+    # network change one relay can stay stuck while the other works.
+    ips="$(curl -s -m 10 -H 'accept: application/dns-json' \
         "https://cloudflare-dns.com/dns-query?name=$host&type=A" | /usr/bin/python3 -c \
-        'import json, sys; a = [x["data"] for x in json.load(sys.stdin).get("Answer", []) if x["type"] == 1]; print(a[0] if a else "")')"
-    [ -n "$ip" ] || return 0  # offline, or DNS is down: nothing Funnel can fix
-    reachable "$host" "$ip" && return 0
+        'import json, sys; print(" ".join(x["data"] for x in json.load(sys.stdin).get("Answer", []) if x["type"] == 1))')"
+    [ -n "$ips" ] || return 0  # offline, or DNS is down: nothing Funnel can fix
+    for ip in $ips; do
+        reachable "$host" "$ip" || down+=("$ip")
+    done
+    [ ${#down[@]} -eq 0 ] && return 0
     sleep 30
-    reachable "$host" "$ip" && return 0
-    echo "$(date '+%F %T') $host does not answer from the internet; restarting Funnel"
+    local still=()
+    for ip in "${down[@]}"; do
+        reachable "$host" "$ip" || still+=("$ip")
+    done
+    [ ${#still[@]} -eq 0 ] && return 0
+    echo "$(date '+%F %T') $host does not answer from the internet via ${still[*]}; restarting Funnel"
     "$TS" funnel --https=443 off
     "$TS" funnel --bg "$PORT"
 }
