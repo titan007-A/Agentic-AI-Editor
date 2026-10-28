@@ -87,8 +87,34 @@ class Face:
         baseline = y + self.metrics(size)[0]
         for piece, path in self.runs(text):
             font = _font(path, size)
-            canvas.text((x, baseline), piece, font=font, fill=fill, anchor="ls")
+            color = path.with_name(fonts.COLOR_EMOJI)
+            if path.stem.startswith("NotoEmoji") and color.exists() and piece.strip():
+                _color_emoji(canvas, color, font.getbbox(piece, anchor="ls"), x, baseline, piece)
+            else:
+                canvas.text((x, baseline), piece, font=font, fill=fill, anchor="ls")
             x += font.getlength(piece)
+
+
+def _color_emoji(
+    canvas: ImageDraw.ImageDraw,
+    font: Path,
+    box: tuple[float, float, float, float],
+    x: float,
+    baseline: float,
+    piece: str,
+) -> None:
+    """Emoji in colour over the box the outline font gives them, so the layout measured
+    with the outline font holds."""
+    big = _font(font, fonts.COLOR_EMOJI_SIZE)
+    left, top, right, bottom = big.getbbox(piece.strip())
+    art = Image.new("RGBA", (round(right - left), round(bottom - top)), (0, 0, 0, 0))
+    ImageDraw.Draw(art).text((-left, -top), piece.strip(), font=big, embedded_color=True)
+    height = max(1, round(box[3] - box[1]))
+    width = max(1, round(art.width * height / art.height))
+    art = art.resize((width, height), Image.Resampling.LANCZOS)
+    middle = x + (box[0] + box[2]) / 2
+    image = canvas._image  # the image the canvas draws on
+    image.alpha_composite(art, (round(middle - width / 2), round(baseline + box[1])))
 
 
 def face_of(font: "Face | Path") -> Face:

@@ -1,5 +1,8 @@
 """A song and its artist from a video's name, "Song - Artist", for presets whose text
-names them with {song} and {artist}. The rules are the owner's earlier reel tool's."""
+names them with {song} and {artist}. The rules are the owner's earlier reel tool's.
+
+Other words in braces are the preset's own, filled per reel: {year} from a "(1980)" in the
+video's name, and any of them, {day} say, from a line "day: 103" in the job's notes."""
 
 import re
 
@@ -9,6 +12,10 @@ from agentic_editor.presets import Preset
 # isn't split in the middle.
 SEPARATORS = ("—", "–", " - ", " -", "- ", "-")
 PLACEHOLDERS = ("{song}", "{artist}")
+FIELD = re.compile(r"\{(\w+)\}")
+# Filled elsewhere: the song and artist from the name, the headline by headline.py.
+OWN = {"song", "artist", "headline"}
+YEAR = re.compile(r"[(\[][^)\]]*?\b((?:19|20)\d{2})\b[^)\]]*[)\]]")
 
 # A bracketed group with a digit in it, "(2)", "(Live 1982)", "[2011 Remaster]": a second
 # copy or a release note, not part of the name. "(feat. Adam Levine)" stays.
@@ -20,6 +27,10 @@ EDGE_PUNCTUATION = " \t-_,;:|/\\"
 
 class UnnamedSong(ValueError):
     """The video's name doesn't say which song and artist it is."""
+
+
+class MissingField(ValueError):
+    """Nothing gives a value for one of the preset's own words in braces."""
 
 
 def strip_numbers(name: str) -> str:
@@ -55,15 +66,61 @@ def reel_title(title: str) -> str:
     return f"{song} - {artist}"
 
 
-def fill(preset: Preset, title: str) -> Preset:
-    """The preset with {song} and {artist} in its text replaced from the video's name."""
-    if not names_song(preset):
+def fields(preset: Preset) -> set[str]:
+    """The preset's own words in braces: {year}, {day}, not {song} or {headline}."""
+    return {f for block in preset.text_blocks for f in FIELD.findall(block.text)} - OWN
+
+
+def _key(name: str) -> str:
+    return re.escape(name).replace("_", "[ _]")
+
+
+def from_notes(notes: str | None, wanted: set[str]) -> tuple[dict[str, str], str | None]:
+    """Values the notes give for `wanted` fields, one "name: value" line each, and the notes
+    without those lines, so the instruction reader doesn't take them for an instruction."""
+    if not notes or not wanted:
+        return {}, notes
+    given = {}
+    for name in sorted(wanted):
+        line = re.compile(rf"^\s*{_key(name)}\s*:\s*(.+?)\s*$", re.I | re.M)
+        if match := line.search(notes):
+            given[name] = match.group(1)
+            notes = notes[: match.start()] + notes[match.end() :]
+    return given, notes.strip() or None
+
+
+def year_of(title: str) -> str | None:
+    match = YEAR.search(title)
+    return match.group(1) if match else None
+
+
+def fill(preset: Preset, title: str, given: dict[str, str] | None = None) -> Preset:
+    """The preset with {song} and {artist} in its text replaced from the video's name, and
+    its own fields from `given` (the notes) or, for {year}, the name."""
+    own = fields(preset)
+    if not names_song(preset) and not own:
         return preset
-    song, artist = song_and_artist(title)
-    blocks = [
-        block.model_copy(
-            update={"text": block.text.replace("{song}", song).replace("{artist}", artist)}
+    values = dict(given or {})
+    if "year" in own and "year" not in values and (year := year_of(title)):
+        values["year"] = year
+    if names_song(preset):
+        values["song"], values["artist"] = song_and_artist(title)
+    if missing := sorted(own - values.keys()):
+        hint = (
+            " or put the year in the video's name, 'Song (1980) - Artist'"
+            if (missing == ["year"])
+            else ""
         )
-        for block in preset.text_blocks
-    ]
+        raise MissingField(
+            "nothing gives "
+            + ", ".join(f"{{{m}}}" for m in missing)
+            + ": add a line for each to the notes, like "
+            + ", ".join(f"'{m.replace('_', ' ')}: ...'" for m in missing)
+            + hint
+        )
+
+    def filled(text: str) -> str:
+        return FIELD.sub(lambda m: values.get(m.group(1), m.group(0)), text)
+
+    blocks = [block.model_copy(update={"text": filled(block.text)}) for block in preset.text_blocks]
     return preset.model_copy(update={"text_blocks": blocks})

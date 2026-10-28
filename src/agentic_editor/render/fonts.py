@@ -31,6 +31,13 @@ CJK_URL = (
 EMOJI_URL = (
     "https://raw.githubusercontent.com/google/fonts/main/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
 )
+# The emoji in colour, as people know them from their phones, drawn where the outline font
+# placed each one. Its bitmaps come in a single size.
+COLOR_EMOJI_URL = (
+    "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/2D/fonts/NotoColorEmoji.ttf"
+)
+COLOR_EMOJI = "NotoColorEmoji.ttf"
+COLOR_EMOJI_SIZE = 109
 
 # Unicode blocks and the Noto font for each. "CJK" is settled by the language.
 SCRIPTS = [
@@ -282,7 +289,27 @@ def chain(
     if unresolved:
         shown = ", ".join(f"{c!r} (U+{ord(c):04X})" for c in unresolved[:8])
         raise MissingGlyphs(f"no font can draw {shown}")
+    if any(f.stem.startswith("NotoEmoji") for f in fonts):
+        colored(folder)
     return fonts
+
+
+def colored(folder: Path) -> Path | None:
+    """The colour emoji font, fetched the first time; without it the emoji are drawn as
+    outlines in the text's colour."""
+    dest = folder / COLOR_EMOJI
+    if not dest.exists():
+        log.info("downloading the colour emoji font")
+        partial = dest.with_name(f".{dest.name}.{os.getpid()}")
+        try:
+            _download(COLOR_EMOJI_URL, partial)
+            ImageFont.truetype(str(partial), COLOR_EMOJI_SIZE)
+            os.replace(partial, dest)
+        except OSError as exc:
+            partial.unlink(missing_ok=True)
+            log.warning("no colour emoji, drawing them as outlines: %s", exc)
+            return None
+    return dest
 
 
 def runs(text: str, fonts: list[Path]) -> list[tuple[str, Path]]:

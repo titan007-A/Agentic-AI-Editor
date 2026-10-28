@@ -105,3 +105,12 @@ def test_overlays_draw_with_the_fallback_font_not_empty_boxes(tmp_path):
     assert boxes.shape != letters.shape or not np.array_equal(boxes, letters)
     # The letters are Open Sans's own, not Anton's empty boxes.
     assert np.array_equal(letters, drawn(Face([BOLD])))
+
+
+def test_without_the_colour_emoji_font_emoji_are_drawn_as_outlines(monkeypatch, tmp_path):
+    def offline(url, dest):
+        raise OSError("no network")
+
+    monkeypatch.setattr(fonts, "_download", offline)
+    assert fonts.colored(tmp_path) is None
+    assert not (tmp_path / fonts.COLOR_EMOJI).exists()

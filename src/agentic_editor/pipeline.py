@@ -634,6 +634,7 @@ def edit(
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
     given_headline, notes = headline.from_notes(notes)
+    given, notes = names.from_notes(notes, set().union(*(names.fields(p) for p in presets)))
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
     failures: list[str] = []
     errors: list[Exception] = []
@@ -644,14 +645,14 @@ def edit(
         errors.append(exc)
 
     # A preset that names the song and artist takes them from the video's name, and so
-    # does its reel's title.
+    # does its reel's title; its own fields come from the notes or the name.
     named, titled = [], {}
     for preset in presets:
         try:
             if names.names_song(preset):
                 titled[preset.name] = names.reel_title(source.title)
-            named.append(names.fill(preset, source.title))
-        except names.UnnamedSong as exc:
+            named.append(names.fill(preset, source.title, given))
+        except (names.UnnamedSong, names.MissingField) as exc:
             failed(preset.name, exc)
     presets = named
     if any(headline.wanted(p) for p in presets):
