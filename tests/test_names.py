@@ -44,3 +44,12 @@ def test_the_voicehq_preset_names_the_song_and_artist():
 def test_a_preset_without_the_names_doesnt_need_them():
     preset = load_presets(ROOT / "presets")["vocal-music-it-9x16"]
     assert names.fill(preset, "IMG_4379") is preset
+
+
+def test_a_reel_that_names_the_song_is_titled_by_it():
+    preset = load_presets(ROOT / "presets")["voicehq-9x16"]
+    assert names.names_song(preset)
+    assert not names.names_song(load_presets(ROOT / "presets")["vocal-music-it-9x16"])
+    assert names.reel_title("07. Felicità (2) — Al Bano & Romina Power") == (
+        "Felicità - Al Bano & Romina Power"
+    )

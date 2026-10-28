@@ -631,10 +631,13 @@ def edit(
         failures.append(f"{what}: {type(exc).__name__}: {exc}")
         errors.append(exc)
 
-    # A preset that names the song and artist takes them from the video's name.
-    named = []
+    # A preset that names the song and artist takes them from the video's name, and so
+    # does its reel's title.
+    named, titled = [], {}
     for preset in presets:
         try:
+            if names.names_song(preset):
+                titled[preset.name] = names.reel_title(source.title)
             named.append(names.fill(preset, source.title))
         except names.UnnamedSong as exc:
             failed(preset.name, exc)
@@ -699,6 +702,9 @@ def edit(
                 ]
             except Exception as exc:
                 failed(preset.name, exc)
+
+    for name, title in titled.items():
+        plans[name] = [(e.model_copy(update={"title": title}), p) for e, p in plans.get(name, [])]
 
     # Faces and the picture's black bars need only the CPU, so they are found before the
     # vision model takes the GPU. One that fails here is tried again by the render.

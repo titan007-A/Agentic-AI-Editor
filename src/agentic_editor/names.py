@@ -44,9 +44,20 @@ def song_and_artist(title: str) -> tuple[str, str]:
     raise UnnamedSong(f"'{title}' doesn't say the song and artist; name it 'Song - Artist'")
 
 
+def names_song(preset: Preset) -> bool:
+    return any(p in block.text for block in preset.text_blocks for p in PLACEHOLDERS)
+
+
+def reel_title(title: str) -> str:
+    """The reel's title for a preset that names the song: 'Song - Artist', from the
+    video's name rather than the planner's guess, which can name the wrong artist."""
+    song, artist = song_and_artist(title)
+    return f"{song} - {artist}"
+
+
 def fill(preset: Preset, title: str) -> Preset:
     """The preset with {song} and {artist} in its text replaced from the video's name."""
-    if not any(p in block.text for block in preset.text_blocks for p in PLACEHOLDERS):
+    if not names_song(preset):
         return preset
     song, artist = song_and_artist(title)
     blocks = [
