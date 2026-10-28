@@ -88,6 +88,15 @@ class TextBlock(Strict):
     )
 
 
+class Headline(Strict):
+    """How the planner writes {headline} in the text blocks for each video, when the
+    notes don't give it ("headline: ...")."""
+
+    hint: str = Field(default="", description="how to write it, with examples")
+    max_chars: int = Field(default=90, ge=10, le=300)
+    uppercase: bool = False
+
+
 class TitleOverlay(Strict):
     enabled: bool = False
     font: FontName = "Anton-Regular"
@@ -203,6 +212,7 @@ class Preset(Strict):
     title_overlay: TitleOverlay = TitleOverlay()
     one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
+    headline: Headline = Headline()
     logo: Logo = Logo()
     intro: str | None = None
     outro: str | None = None

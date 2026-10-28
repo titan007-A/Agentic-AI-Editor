@@ -8,6 +8,7 @@ import json
 import logging
 import secrets
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from agentic_editor import (
     download,
     ffmpeg,
     framing,
+    headline,
     hooks,
     names,
     review,
@@ -622,6 +624,7 @@ def edit(
     out_dir = settings.media_dir / "outputs" / work_dir.name / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
+    given_headline, notes = headline.from_notes(notes)
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
     failures: list[str] = []
     errors: list[Exception] = []
@@ -642,6 +645,9 @@ def edit(
         except names.UnnamedSong as exc:
             failed(preset.name, exc)
     presets = named
+    if any(headline.wanted(p) for p in presets):
+        presets = headlined(router, source, presets, given_headline, instructed, failed,
+                            settings, progress)  # fmt: skip
     if not presets:
         raise RuntimeError("; ".join(failures)) from errors[-1]
 
@@ -831,6 +837,42 @@ def understand(
             planning[preset.name] = wanted.content_notes.strip()
         updated.append(changed)
     return updated, decisions, planning, agent.start_point(wanted.requests, notes)
+
+
+def headlined(
+    router: ModelRouter,
+    source: download.Source,
+    presets: list[Preset],
+    given: str | None,
+    decisions: dict[str, tuple[list[str], list[str]]],
+    failed: Callable[[str, Exception], None],
+    settings: Settings,
+    progress: Progress,
+) -> list[Preset]:
+    """The presets with {headline} filled in: the one the notes give, or one the planner
+    writes for each preset from the video's title and description."""
+    face = compose.text_face(settings, None)
+    done = []
+    with ExitStack() as stack:
+        llm = None
+        for preset in presets:
+            if not headline.wanted(preset):
+                done.append(preset)
+                continue
+            try:
+                if given:
+                    line, said = given, "from your notes"
+                else:
+                    if llm is None:
+                        progress("plan", "writing the headline")
+                        llm = stack.enter_context(router.planner())
+                    line, said = headline.write(llm, source, preset), "written from the title"
+            except (LLMError, httpx.HTTPError, headline.NoHeadline) as exc:
+                failed(preset.name, exc)
+                continue
+            decisions[preset.name][0].append(f"headline {said}: {line}")
+            done.append(headline.fill(preset, line, face))
+    return done
 
 
 def confirmed_watermarks(

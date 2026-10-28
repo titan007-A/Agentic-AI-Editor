@@ -186,6 +186,18 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     ],
   },
   {
+    title: "Headline",
+    fields: [
+      {
+        path: "headline.hint",
+        label: "How to write {headline} (or give it in the notes as headline: ...)",
+        kind: "textarea",
+      },
+      { path: "headline.max_chars", label: "Max letters", kind: "number" },
+      { path: "headline.uppercase", label: "In capitals", kind: "switch" },
+    ],
+  },
+  {
     title: "Beat",
     fields: [
       { path: "beat_sync.snap_trims", label: "Start and end on the beat", kind: "switch" },

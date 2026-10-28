@@ -226,7 +226,8 @@ render behaves:
 | --- | --- |
 | `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces and off text already in the picture (name banners, titles) while it is on screen; lines break where they read well, never after a linking word like "the" or "de" when a better place is near, and each sentence starts a new line; on songs, presets that keep the original audio take their words from the isolated vocals when the full mix gives almost none; an .srt file is saved next to the video |
 | `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
-| `text_blocks` | fixed text drawn on every frame, such as a series tagline |
+| `text_blocks` | fixed text drawn on every frame, such as a series tagline; `{song}` and `{artist}` come from a video named "Song - Artist", and `{headline}` is written for each video (see `headline`) |
+| `headline` | how the planning model writes `{headline}` from the video's title and description (`hint` with examples, `max_chars`, `uppercase`); a notes line `headline: ...` gives it instead. Long headlines wrap into even lines without breaking a quoted song name |
 | `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage |
 | `grade` | colour: `auto` corrects a cast or a flat, dim picture; `look` (warm, cool, teal-orange, film, moody, vivid, mono, faded); a `.cube` LUT; `strength` |
 | `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
