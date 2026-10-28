@@ -572,3 +572,19 @@ def test_a_job_or_feed_takes_one_preset(env):
         "presets": ["square-1x1", "shorts-9x16"],
     }
     assert env.client.post("/api/feeds", json=feed).status_code == 422
+
+
+def test_the_admin_sends_a_preset_to_every_employee(env):
+    _, riya = employee(env, "riya")
+    _, aman = employee(env, "aman")
+    riyas = {p["name"]: p for p in riya.get("/api/presets").json()}["square-1x1"]
+    riya.put("/api/presets/square-1x1", json=riyas | {"label": "Riya's own"})
+    mine = {p["name"]: p for p in env.client.get("/api/presets").json()}["square-1x1"]
+    env.client.put("/api/presets/square-1x1", json=mine | {"label": "New house style"})
+    sent = env.client.post("/api/presets/square-1x1/share").json()
+    assert sorted(sent["sent_to"]) == ["aman", "riya"]
+    for client in (riya, aman):
+        labels = {p["name"]: p["label"] for p in client.get("/api/presets").json()}
+        assert labels["square-1x1"] == "New house style"
+    assert riya.post("/api/presets/square-1x1/share").status_code == 403
+    assert env.client.post("/api/presets/no-such/share").status_code == 404
