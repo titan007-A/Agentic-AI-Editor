@@ -123,9 +123,11 @@ export function PostCaption({ output }: { output: Output }) {
           No caption: {state.caption_notes[0] ?? "something went wrong"}
         </p>
       )}
-      {state.caption_status === "done" && state.caption_song && !showNaming && (
+      {state.caption_status === "done" && !showNaming && (
         <p className="text-xs text-muted-foreground">
-          About “{state.caption_song}”{state.caption_artist && ` by ${state.caption_artist}`}.{" "}
+          {/* Captions written before the song was kept don't know it. */}
+          {state.caption_song &&
+            `About “${state.caption_song}”${state.caption_artist && ` by ${state.caption_artist}`}. `}
           <button type="button" className="underline" onClick={openNaming}>
             Wrong song?
           </button>
