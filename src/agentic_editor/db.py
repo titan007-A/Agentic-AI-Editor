@@ -106,6 +106,10 @@ class Output(Base):
     caption_status: Mapped[str | None] = mapped_column(String(16))
     caption_sources: Mapped[list[dict]] = mapped_column(JSON, default=list)
     caption_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # The song it is about: as the model found it from the video, or as a person named it
+    # when the video doesn't say or the model got it wrong.
+    caption_song: Mapped[str] = mapped_column(Text, default="")
+    caption_artist: Mapped[str] = mapped_column(Text, default="")
 
     job: Mapped[Job] = relationship(back_populates="outputs")
 

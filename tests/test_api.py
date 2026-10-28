@@ -651,3 +651,51 @@ def test_a_caption_that_cant_be_written_says_why(env, monkeypatch):
     output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
     assert output["caption_status"] == "failed"
     assert output["caption_notes"] == ["the video doesn't say which song it is"]
+
+
+def test_a_song_named_by_hand_is_the_one_the_caption_is_about(env, monkeypatch):
+    from agentic_editor import caption
+
+    fake_captions(monkeypatch, env, fail=True)
+    asked = []
+    monkeypatch.setattr(
+        caption,
+        "gather",
+        lambda song, artist, *args: asked.append((song, artist)) or caption.Sources(),
+    )
+    (job,) = start(env.client)
+    output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
+    env.client.post(f"/api/outputs/{output_id}/caption")
+    assert (
+        env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]["caption_status"]
+        == "failed"
+    )
+
+    named = {"song": "“Piano Man”", "artist": "Billy Joel"}
+    assert env.client.post(f"/api/outputs/{output_id}/caption", json=named).status_code == 200
+    output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
+    assert output["caption_status"] == "done" and asked == [("Piano Man", "Billy Joel")]
+    assert (output["caption_song"], output["caption_artist"]) == ("Piano Man", "Billy Joel")
+    # Written again, it stays about that song.
+    env.client.post(f"/api/outputs/{output_id}/caption")
+    assert asked[-1] == ("Piano Man", "Billy Joel")
+
+
+def test_a_song_named_without_its_artist_is_refused(env, monkeypatch):
+    fake_captions(monkeypatch, env)
+    (job,) = start(env.client)
+    output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
+    response = env.client.post(f"/api/outputs/{output_id}/caption", json={"song": "Stronger"})
+    assert response.status_code == 422
+
+
+def test_the_song_the_model_found_is_shown(env, monkeypatch):
+    fake_captions(monkeypatch, env)
+    (job,) = start(env.client)
+    output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
+    env.client.post(f"/api/outputs/{output_id}/caption")
+    output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
+    assert (output["caption_song"], output["caption_artist"]) == (
+        "Felicità",
+        "Al Bano & Romina Power",
+    )

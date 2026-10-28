@@ -29,6 +29,8 @@ export type Output = {
   caption_status: "queued" | "writing" | "done" | "failed" | null;
   caption_sources: { title: string; url: string }[];
   caption_notes: string[];
+  caption_song: string;
+  caption_artist: string;
 };
 
 export type Verdict = "approved" | "posted" | "dismissed";
@@ -212,7 +214,8 @@ export const api = {
   verdict: (outputId: number, verdict: Verdict | null) =>
     request<Job>("POST", `/outputs/${outputId}/verdict`, { verdict }),
   output: (outputId: number) => request<Job>("GET", `/outputs/${outputId}`),
-  writeCaption: (outputId: number) => request<Job>("POST", `/outputs/${outputId}/caption`),
+  writeCaption: (outputId: number, named?: { song: string; artist: string }) =>
+    request<Job>("POST", `/outputs/${outputId}/caption`, named),
   accounts: () => request<Account[]>("GET", "/admin/users"),
   createAccount: (username: string, password: string) =>
     request<Account>("POST", "/admin/users", { username, password }),
