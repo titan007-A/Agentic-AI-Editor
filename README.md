@@ -82,6 +82,17 @@ finish. A MacBook with its lid closed sleeps anyway unless it is plugged in with
 attached. The first start asks whether to accept incoming connections; allow it, then
 phones and other computers on the network open `http://<mac name>.local:8000`.
 
+To reach it from anywhere on a domain of your own, put the domain's DNS on Cloudflare (the
+free plan is enough) and run a Cloudflare Tunnel; it is much quicker from phones than
+Tailscale Funnel's relays:
+
+```
+brew install cloudflared
+cloudflared tunnel login                                  # pick the domain in the browser
+scripts/macos-tunnel.sh setup ai-editor editor.example.com
+scripts/macos-tunnel.sh install                           # runs now and at every login
+```
+
 ### Moving to a Mac
 
 To make a Mac the editor's home, set it up as above (without starting the service yet),
