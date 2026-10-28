@@ -129,12 +129,16 @@ class FeedView(FeedRequest):
 
 
 class CaptionRequest(BaseModel):
-    # The song, when the video doesn't say which it is or the model named the wrong one.
+    # The song, when the video doesn't say which it is or the model named the wrong one;
+    # or a topic, for a post that isn't about a song.
     song: str = Field(default="", max_length=200)
     artist: str = Field(default="", max_length=200)
+    topic: str = Field(default="", max_length=200)
 
     @model_validator(mode="after")
-    def both(self) -> "CaptionRequest":
+    def one_subject(self) -> "CaptionRequest":
+        if self.song.strip() and self.topic.strip():
+            raise ValueError("name a song or a topic, not both")
         # Many songs share a name; the artist tells Wikipedia's articles apart.
         if self.song.strip() and not self.artist.strip():
             raise ValueError("name the artist too")
@@ -166,6 +170,7 @@ class OutputView(BaseModel):
     caption_notes: list[str] = []
     caption_song: str = ""
     caption_artist: str = ""
+    caption_topic: str = ""
 
 
 class JobView(BaseModel):
@@ -208,6 +213,7 @@ def job_view(job: Job, only: int | None = None, owner: str | None = None) -> Job
             caption_notes=o.caption_notes or [],
             caption_song=o.caption_song or "",
             caption_artist=o.caption_artist or "",
+            caption_topic=o.caption_topic or "",
         )
         for o in job.outputs
         if only is None or o.id == only
@@ -843,9 +849,13 @@ def create_app(
         song named here is the one it is about from now on."""
         output = find_output(output_id, session, account)
         if output.caption_status not in ("queued", "writing"):
-            if body and body.song.strip():
+            if body and body.topic.strip():
+                output.caption_topic = body.topic.strip()
+                output.caption_song = output.caption_artist = ""
+            elif body and body.song.strip():
                 output.caption_song = body.song.strip(" \"'“”")
                 output.caption_artist = body.artist.strip()
+                output.caption_topic = ""
             output.caption_status, output.caption_notes = "queued", []
             session.commit()
             jobs.write_caption(output.id)

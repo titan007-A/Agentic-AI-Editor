@@ -19,6 +19,7 @@ type Caption = Pick<
   | "caption_notes"
   | "caption_song"
   | "caption_artist"
+  | "caption_topic"
 >;
 
 function captionOf(output: Output): Caption {
@@ -29,6 +30,7 @@ function captionOf(output: Output): Caption {
     caption_notes: output.caption_notes ?? [],
     caption_song: output.caption_song ?? "",
     caption_artist: output.caption_artist ?? "",
+    caption_topic: output.caption_topic ?? "",
   };
 }
 
@@ -38,10 +40,13 @@ export function PostCaption({ output }: { output: Output }) {
   // What this card fetched itself, until the page hands it a newer output.
   const [fetched, setFetched] = useState<{ from: Output; value: Caption } | null>(null);
   const [asking, setAsking] = useState(false);
-  // Naming the song by hand: open by itself when no caption could be written.
+  // Naming the song, or another topic, by hand: open by itself when no caption could be
+  // written.
   const [naming, setNaming] = useState(false);
+  const [kind, setKind] = useState<"song" | "topic">("song");
   const [song, setSong] = useState("");
   const [artist, setArtist] = useState("");
+  const [topic, setTopic] = useState("");
   const state = fetched?.from === output ? fetched.value : captionOf(output);
   const busy = state.caption_status === "queued" || state.caption_status === "writing";
   const setState = (value: Caption) => setFetched({ from: output, value });
@@ -65,12 +70,16 @@ export function PostCaption({ output }: { output: Output }) {
   const showNaming = !busy && (naming || failed);
 
   function openNaming() {
+    setKind(state.caption_topic ? "topic" : "song");
     setSong(state.caption_song);
     setArtist(state.caption_artist);
+    setTopic(state.caption_topic);
     setNaming(true);
   }
 
-  async function write(named?: { song: string; artist: string }) {
+  const ready = kind === "topic" ? topic.trim() !== "" : song.trim() !== "" && artist.trim() !== "";
+
+  async function write(named?: { song: string; artist: string } | { topic: string }) {
     setAsking(true);
     try {
       const job = await api.writeCaption(output.id, named);
@@ -115,7 +124,8 @@ export function PostCaption({ output }: { output: Output }) {
       </div>
       {busy && (
         <p className="text-xs text-muted-foreground">
-          Reading Wikipedia about the song and writing it; about a minute.
+          Reading Wikipedia about {state.caption_topic || "the song"} and writing it; about a
+          minute.
         </p>
       )}
       {failed && (
@@ -126,10 +136,12 @@ export function PostCaption({ output }: { output: Output }) {
       {state.caption_status === "done" && !showNaming && (
         <p className="text-xs text-muted-foreground">
           {/* Captions written before the song was kept don't know it. */}
-          {state.caption_song &&
-            `About “${state.caption_song}”${state.caption_artist && ` by ${state.caption_artist}`}. `}
+          {state.caption_topic
+            ? `About ${state.caption_topic}. `
+            : state.caption_song &&
+              `About “${state.caption_song}”${state.caption_artist && ` by ${state.caption_artist}`}. `}
           <button type="button" className="underline" onClick={openNaming}>
-            Wrong song?
+            Wrong song or topic?
           </button>
         </p>
       )}
@@ -138,39 +150,74 @@ export function PostCaption({ output }: { output: Output }) {
           className="space-y-2 rounded-md border p-2"
           onSubmit={(event) => {
             event.preventDefault();
-            write({ song: song.trim(), artist: artist.trim() });
+            write(
+              kind === "topic"
+                ? { topic: topic.trim() }
+                : { song: song.trim(), artist: artist.trim() },
+            );
           }}
         >
-          <p className="text-xs text-muted-foreground">
-            Name the song and it is looked up on Wikipedia and written from there.
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="space-y-1">
-              <Label htmlFor={`song-${output.id}`}>Song</Label>
-              <Input
-                id={`song-${output.id}`}
-                value={song}
-                onChange={(event) => setSong(event.target.value)}
-                placeholder="Song name"
-                maxLength={200}
-                required
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor={`artist-${output.id}`}>Artist</Label>
-              <Input
-                id={`artist-${output.id}`}
-                value={artist}
-                onChange={(event) => setArtist(event.target.value)}
-                placeholder="Artist name"
-                maxLength={200}
-                required
-              />
-            </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="What the post is about">
+            {(["song", "topic"] as const).map((choice) => (
+              <Button
+                key={choice}
+                type="button"
+                size="sm"
+                variant={kind === choice ? "default" : "outline"}
+                aria-pressed={kind === choice}
+                onClick={() => setKind(choice)}
+              >
+                {choice === "song" ? "A song" : "Another topic"}
+              </Button>
+            ))}
           </div>
+          <p className="text-xs text-muted-foreground">
+            {kind === "song"
+              ? "Name the song and it is looked up on Wikipedia and written from there."
+              : "Name what the post is about (a person, place, event, film...) as Wikipedia would; the article it used is linked under the caption."}
+          </p>
+          {kind === "topic" ? (
+            <div className="space-y-1">
+              <Label htmlFor={`topic-${output.id}`}>Topic</Label>
+              <Input
+                id={`topic-${output.id}`}
+                value={topic}
+                onChange={(event) => setTopic(event.target.value)}
+                placeholder="Topic"
+                maxLength={200}
+                required
+              />
+            </div>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor={`song-${output.id}`}>Song</Label>
+                <Input
+                  id={`song-${output.id}`}
+                  value={song}
+                  onChange={(event) => setSong(event.target.value)}
+                  placeholder="Song name"
+                  maxLength={200}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor={`artist-${output.id}`}>Artist</Label>
+                <Input
+                  id={`artist-${output.id}`}
+                  value={artist}
+                  onChange={(event) => setArtist(event.target.value)}
+                  placeholder="Artist name"
+                  maxLength={200}
+                  required
+                />
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" size="sm" disabled={asking || !song.trim() || !artist.trim()}>
-              <Music /> Write caption for this song
+            <Button type="submit" size="sm" disabled={asking || !ready}>
+              <Music />{" "}
+              {kind === "topic" ? "Write caption on this topic" : "Write caption for this song"}
             </Button>
             {naming && !failed && (
               <Button type="button" variant="ghost" size="sm" onClick={() => setNaming(false)}>

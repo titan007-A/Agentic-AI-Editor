@@ -110,6 +110,8 @@ class Output(Base):
     # when the video doesn't say or the model got it wrong.
     caption_song: Mapped[str] = mapped_column(Text, default="")
     caption_artist: Mapped[str] = mapped_column(Text, default="")
+    # Or, for a post that isn't about a song, the topic a person named instead.
+    caption_topic: Mapped[str] = mapped_column(Text, default="")
 
     job: Mapped[Job] = relationship(back_populates="outputs")
 
