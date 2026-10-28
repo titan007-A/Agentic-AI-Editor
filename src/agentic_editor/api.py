@@ -71,9 +71,10 @@ class AccountView(BaseModel):
     presets: int
 
 
+# One preset a job (and a feed): the owner wants each video edited one way at a time.
 class JobRequest(BaseModel):
     sources: list[str] = Field(min_length=1)
-    presets: list[str] = Field(min_length=1)
+    presets: list[str] = Field(min_length=1, max_length=1)
     notes: str | None = None
 
 
@@ -102,7 +103,7 @@ class FeedRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     kind: Literal["folder", "link"]
     location: str = Field(min_length=1)
-    presets: list[str] = Field(min_length=1)
+    presets: list[str] = Field(min_length=1, max_length=1)
     notes: str | None = None
     enabled: bool = True
     active_from: int | None = Field(default=None, ge=0, le=23)
