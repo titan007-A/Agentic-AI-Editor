@@ -10,6 +10,8 @@ overlay or a still part of the scene (a sign on a wall, a framed photo) is for t
 model to confirm; this module only finds candidates.
 """
 
+import json
+import logging
 import subprocess
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
@@ -19,6 +21,8 @@ from pathlib import Path
 import numpy as np
 from pydantic import BaseModel
 
+log = logging.getLogger(__name__)
+
 SAMPLE_FPS = 2.0
 SAMPLE_WIDTH = 480
 WINDOW_SECONDS = 4.0
@@ -27,7 +31,7 @@ WINDOW_STEP = 1.0  # seconds between window starts
 # fraction of a second of each jump.
 PRESENCE_SECONDS = 1.5
 # Bump when detection changes, so cached candidates from the old detector aren't reused.
-VERSION = 3
+VERSION = 5
 
 EDGE_LEVEL = 28  # gray-level step that counts as an edge
 PERSISTENT_SHARE = 0.9  # of a window's frames an edge has to be in
@@ -38,6 +42,8 @@ MAX_AREA = 0.08  # overlays are small; bigger static patches are scenery
 MIN_EDGE_PIXELS = 25
 # Overlays sit near an edge of the frame; still scenery behind a speaker fills the middle.
 EDGE_BAND = 0.2
+# Letters and logos have strokes over at least this many rows and columns (sample pixels).
+MIN_STROKE_SPREAD = 3
 
 
 class Watermark(BaseModel):
@@ -112,6 +118,24 @@ def contrast(share: np.ndarray, reference: np.ndarray) -> float:
         return 0.0
     off = share[~reference].mean() if (~reference).any() else 0.0
     return float(share[reference].mean() - off)
+
+
+def spread(counts: np.ndarray) -> int:
+    """How many rows (or columns) hold nine tenths of the stroke pixels."""
+    total = counts.sum()
+    if not total:
+        return 0
+    return int(np.searchsorted(np.cumsum(np.sort(counts)[::-1]) / total, 0.9) + 1)
+
+
+def a_line(reference: np.ndarray) -> bool:
+    """Whether the strokes are one straight line: the picture's edge against a black bar, or
+    a border, stays put like an overlay, but runs along a row or two (or a column or two),
+    while letters and logos have strokes both ways."""
+    return (
+        spread(reference.sum(axis=1)) < MIN_STROKE_SPREAD
+        or spread(reference.sum(axis=0)) < MIN_STROKE_SPREAD
+    )
 
 
 def present(share: np.ndarray, reference: np.ndarray) -> bool:
@@ -316,6 +340,8 @@ def find(
         if not inside:
             continue
         reference = np.mean([boxes[k] >= PERSISTENT_SHARE for k in inside], axis=0) >= 0.5
+        if a_line(reference):
+            continue
         windows = [k for k, share in enumerate(boxes) if present(share, reference)]
         if len(windows) * (1 / sample_fps) < min(window_seconds, duration / 2):
             continue  # its pattern doesn't really stand out: scenery, not an overlay
@@ -323,9 +349,9 @@ def find(
         x0, y0, x1, y1 = (round(v * scale) for v in t.box)
         # Padding follows the shorter side, the text height for a handle: padded by its
         # length, it takes in so much scene that the vision model no longer sees an overlay.
-        # The found box already runs past the letters, so a quarter of it covers their
-        # anti-aliased edges without blurring a band of scene around a small handle.
-        pad = max(6, round(min(0.25 * min(x1 - x0, y1 - y0), 0.03 * source_size[0])))
+        # The found box already runs past the letters, so an eighth of it covers their
+        # anti-aliased edges; more blurs a visible band of scene around the mark.
+        pad = max(4, round(min(0.125 * min(x1 - x0, y1 - y0), 0.015 * source_size[0])))
         x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
         x1, y1 = min(source_size[0], x1 + pad), min(source_size[1], y1 + pad)
         found.append(
@@ -374,9 +400,12 @@ def detect(
     return find(lambda: sample_frames(video, ffmpeg_bin), source_size, duration)
 
 
+class _Reading(BaseModel):
+    text: str
+
+
 class _Verdict(BaseModel):
     overlay: bool
-    what: str
 
 
 def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> list[Path]:
@@ -417,14 +446,26 @@ def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> list
     return paths
 
 
+# Read from the close-up alone: shown the whole frame, the model copies out a caption
+# elsewhere in it and then calls a piece of furniture inside the box a watermark.
+READ_PROMPT = (
+    "This is a close-up of a small area of a video frame. Copy out every letter, word, "
+    "@name or web address you can read in it, exactly as written. If there is no writing in "
+    "it, answer with an empty text."
+)
 CONFIRM_PROMPT = (
     "The first image is a frame from a video with a red box drawn on it. The second is a "
-    "close-up of the area inside the box. Was what is inside the box added on top of the "
-    "video afterwards, as a watermark, logo, channel or app name, @username, website or other "
-    "branding? Or is it part of the filmed scene itself, such as a wall, furniture, a window, "
-    "a lamp, a person, their clothes, or a real sign in the room? Answer overlay=true only "
-    "for something added on top."
+    "close-up of the area inside the box, which reads: {text}. Was it added on top of the "
+    "video afterwards, as a flat graphic: a watermark, a channel or app logo, an @username, "
+    "a website address? Or is it part of the filmed scene itself? Text and logos printed "
+    "on things that were filmed are part of the scene: a product or its box, a screen or "
+    "monitor, a poster, a sign, clothes, an instrument, a microphone. Answer overlay=true "
+    "only if you are sure it was added on top; when in doubt, answer false."
 )
+
+
+def readable(text: str) -> bool:
+    return sum(c.isalnum() for c in text) >= 2
 
 
 def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_dir: Path):
@@ -436,15 +477,32 @@ def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_d
         dest = work_dir / f"watermark-{i}"
         dest.mkdir(parents=True, exist_ok=True)
         try:
+            images = _evidence(video, mark, ffmpeg_bin, dest)
             reply = vision.chat_json(
-                [{"role": "user", "content": CONFIRM_PROMPT}],
-                _Verdict.model_json_schema(),
-                images=_evidence(video, mark, ffmpeg_bin, dest),
+                [{"role": "user", "content": READ_PROMPT}],
+                _Reading.model_json_schema(),
+                images=images[1:],
                 temperature=0.0,
             )
-            overlay = parse(_Verdict, reply).overlay
+            text = parse(_Reading, reply).text.strip()
+            # Only a mark with something to read is blurred: a watermark names its owner,
+            # and an empty strip or a piece of furniture has nothing to read.
+            overlay = (
+                readable(text)
+                and parse(
+                    _Verdict,
+                    vision.chat_json(
+                        [{"role": "user", "content": CONFIRM_PROMPT.format(text=json.dumps(text))}],
+                        _Verdict.model_json_schema(),
+                        images=images,
+                        temperature=0.0,
+                    ),
+                ).overlay
+            )
+            log.info("watermark candidate %d reads %r: overlay %s", i, text, overlay)
         except LLMError:
-            # Unsure is treated as yes: a watermark must never be left in.
-            overlay = True
+            # No answer is no: a blur over part of the scene spoils the video more than a
+            # watermark left in.
+            overlay = False
         confirmed.append(mark.model_copy(update={"confirmed": overlay}))
     return confirmed

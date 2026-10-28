@@ -1,6 +1,7 @@
 import numpy as np
 
-from agentic_editor.analysis.watermarks import find, spans
+from agentic_editor.analysis import watermarks
+from agentic_editor.analysis.watermarks import Watermark, confirm, find, spans
 
 FPS, HEIGHT, WIDTH = 2.0, 270, 480
 rng = np.random.default_rng(1)
@@ -68,6 +69,47 @@ def test_a_still_shot_says_nothing():
 
 def test_moving_picture_without_overlay_has_no_candidates():
     assert find(lambda: frames(12), (1920, 1080), 12.0) == []
+
+
+def test_the_edge_of_the_picture_against_a_black_bar_is_not_an_overlay():
+    # One sharp row that never moves, like where a letterboxed picture meets its bar, above
+    # a smooth picture that does.
+    def lined():
+        for i in range(int(20 * FPS)):
+            frame = np.tile(((np.arange(WIDTH) + 37 * i) % 256).astype(np.uint8), (HEIGHT, 1))
+            frame[:30] = 0
+            frame[30:33, 100:380] = 255
+            yield frame
+
+    assert find(lined, (1920, 1080), 20.0) == []
+
+
+class Vision:
+    """Reads `text` off the close-up and says `overlay` about the frame."""
+
+    def __init__(self, text, overlay):
+        self.text, self.overlay, self.asked = text, overlay, []
+
+    def chat_json(self, messages, schema, images, **kwargs):
+        self.asked.append(images)
+        if "text" in schema["properties"]:
+            return {"text": self.text}
+        return {"overlay": self.overlay}
+
+
+def test_only_a_mark_the_vision_model_can_read_is_an_overlay(tmp_path, monkeypatch):
+    monkeypatch.setattr(watermarks, "_evidence", lambda *args: ["marked.jpg", "close.jpg"])
+    mark = Watermark(x=0, y=0, width=40, height=20, spans=[(0.0, 5.0)], windows=4)
+
+    def verdict(vision):
+        return confirm(vision, tmp_path / "v.mp4", [mark], "ffmpeg", tmp_path)[0].confirmed
+
+    assert verdict(Vision("@audit.channel", True))
+    assert not verdict(Vision("GENROUTER H3000", False))
+    # Nothing to read in the close-up: not asked about the frame, where a caption outside
+    # the box would be read instead.
+    empty = Vision("", True)
+    assert not verdict(empty) and empty.asked == [["close.jpg"]]
 
 
 def test_spans_bridge_a_single_missing_window():
