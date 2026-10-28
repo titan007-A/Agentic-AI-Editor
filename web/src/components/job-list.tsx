@@ -21,6 +21,7 @@ export function JobList({ jobs }: { jobs: Job[] }) {
               <JobStatus job={job} />
             </div>
             <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+              {job.owner && <span className="font-semibold text-foreground">{job.owner}</span>}
               <span>{job.presets.join(", ")}</span>
               <span>{new Date(job.created_at + "Z").toLocaleString()}</span>
             </div>

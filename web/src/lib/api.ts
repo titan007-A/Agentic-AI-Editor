@@ -71,6 +71,25 @@ export type Job = {
   parent_id: string | null;
   created_at: string;
   outputs: Output[];
+  /** Who started it, shown to the admin. */
+  owner: string | null;
+};
+
+export type Me = {
+  user: string;
+  id: string;
+  role: "admin" | "member";
+  notice_accepted: boolean;
+};
+
+export type Account = {
+  id: string;
+  username: string;
+  role: "admin" | "member";
+  created_at: string;
+  last_seen_at: string | null;
+  jobs: number;
+  presets: number;
 };
 
 export type JobEvent = { stage: string; message: string; progress: number; time: string };
@@ -148,18 +167,24 @@ async function settle<T>(path: string, status: number, statusText: string, data:
 
 export type UploadOptions = { onProgress?: (fraction: number) => void; signal?: AbortSignal };
 
+/** The query naming whose presets, for the admin managing an employee's; empty for one's own. */
+const whose = (owner?: string | null) => (owner ? `?owner=${encodeURIComponent(owner)}` : "");
+
 export const api = {
-  login: (password: string) => request("POST", "/login", { password }),
+  login: (username: string, password: string) => request("POST", "/login", { username, password }),
   logout: () => request("POST", "/logout"),
-  me: () => request<{ user: string; notice_accepted: boolean }>("GET", "/me"),
+  me: () => request<Me>("GET", "/me"),
   acceptNotice: () => request("POST", "/notice"),
   system: () => request<SystemInfo>("GET", "/system"),
   updateYtdlp: () => request<{ yt_dlp: string; note: string }>("POST", "/system/update-ytdlp"),
   fonts: () => request<string[]>("GET", "/fonts"),
-  presets: () => request<Preset[]>("GET", "/presets"),
-  savePreset: (preset: Preset) => request<Preset>("PUT", `/presets/${preset.name}`, preset),
-  deletePreset: (name: string) => request("DELETE", `/presets/${name}`),
-  presetYaml: (name: string) => request<{ yaml: string }>("GET", `/presets/${name}/yaml`),
+  presets: (owner?: string | null) => request<Preset[]>("GET", `/presets${whose(owner)}`),
+  savePreset: (preset: Preset, owner?: string | null) =>
+    request<Preset>("PUT", `/presets/${preset.name}${whose(owner)}`, preset),
+  deletePreset: (name: string, owner?: string | null) =>
+    request("DELETE", `/presets/${name}${whose(owner)}`),
+  presetYaml: (name: string, owner?: string | null) =>
+    request<{ yaml: string }>("GET", `/presets/${name}/yaml${whose(owner)}`),
   presetSchema: () =>
     request<{ properties: Record<string, { default?: unknown }> }>("GET", "/presets/schema"),
   learnStyle: (source: string, name: string | null) =>
@@ -181,6 +206,13 @@ export const api = {
   pile: (name: "ready" | "look") => request<Job[]>("GET", `/piles/${name}`),
   verdict: (outputId: number, verdict: Verdict | null) =>
     request<Job>("POST", `/outputs/${outputId}/verdict`, { verdict }),
+  accounts: () => request<Account[]>("GET", "/admin/users"),
+  createAccount: (username: string, password: string) =>
+    request<Account>("POST", "/admin/users", { username, password }),
+  resetPassword: (id: string, password: string) =>
+    request("POST", `/admin/users/${id}/password`, { password }),
+  removeAccount: (id: string, deleteWork: boolean) =>
+    request("DELETE", `/admin/users/${id}?delete_work=${deleteWork}`),
   upload: async (file: File, options: UploadOptions = {}) => {
     const { status, statusText, body } = await sendFile("/api/uploads", file, options);
     return settle<{ source: string; name: string }>("/uploads", status, statusText, body);

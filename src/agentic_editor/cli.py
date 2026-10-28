@@ -159,6 +159,74 @@ def _hash_password(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ask_password() -> str | None:
+    import getpass
+
+    password = getpass.getpass("Password: ")
+    if getpass.getpass("Again: ") != password:
+        print("the passwords don't match")
+        return None
+    return password
+
+
+def _user(args: argparse.Namespace) -> int:
+    """Accounts from this computer: the only way to make or remove an admin, so a stolen
+    web session can't hand out admin rights."""
+    from sqlalchemy import select
+
+    from agentic_editor import accounts
+    from agentic_editor.db import Job, User, make_sessionmaker
+
+    settings = get_settings()
+    with make_sessionmaker(settings.database)() as session:
+        try:
+            if args.action == "list":
+                for a in session.scalars(select(User).order_by(User.created_at)):
+                    jobs = session.query(Job).filter(Job.owner_id == a.id).count()
+                    seen = a.last_seen_at.strftime("%Y-%m-%d %H:%M") if a.last_seen_at else "never"
+                    print(f"{a.username:24s} {a.role:7s} {jobs:4d} jobs  last seen {seen}")
+                return 0
+            if not args.name:
+                print("give the account's username")
+                return 2
+            if args.action == "add":
+                role = accounts.ADMIN if args.admin else accounts.MEMBER
+                hashed = settings.password_hash if args.env_password else None
+                if args.env_password and not hashed:
+                    print("PASSWORD_HASH isn't set in .env")
+                    return 2
+                password = None if hashed else _ask_password()
+                if password is None and hashed is None:
+                    return 2
+                user = accounts.create(
+                    session, args.name, password, role, settings.presets_dir, password_hash=hashed
+                )
+                print(f"made {user.role} {user.username}")
+                return 0
+            user = accounts.find(session, args.name)
+            if user is None:
+                print(f"no account called {accounts.normal(args.name)}")
+                return 2
+            if args.action == "passwd":
+                password = _ask_password()
+                if password is None:
+                    return 2
+                accounts.set_password(session, user, password)
+                print(f"new password for {user.username}; their sessions are signed out")
+            elif args.action == "role":
+                accounts.set_role(session, user, args.role, settings.presets_dir)
+                print(f"{user.username} is now {user.role}")
+            elif args.action == "remove":
+                keeper = next((a for a in accounts.admins(session) if a.id != user.id), None)
+                accounts.remove(session, user, settings.presets_dir, keep_work_for=keeper)
+                heir = keeper.username if keeper else "nobody"
+                print(f"removed {args.name}; their jobs went to {heir}")
+        except accounts.AccountError as exc:
+            print(exc)
+            return 2
+    return 0
+
+
 def _relocate(args: argparse.Namespace) -> int:
     from agentic_editor.db import make_sessionmaker
     from agentic_editor.relocate import relocate
@@ -211,6 +279,15 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
         handler=_hash_password
     )
+    user = commands.add_parser("user", help="accounts: add, list, passwd, role, remove")
+    user.add_argument("action", choices=["add", "list", "passwd", "role", "remove"])
+    user.add_argument("name", nargs="?", help="the account's username")
+    user.add_argument("role", nargs="?", choices=["admin", "member"], help="for role")
+    user.add_argument("--admin", action="store_true", help="add: make an admin, not an employee")
+    user.add_argument(
+        "--env-password", action="store_true", help="add: use the password set in .env"
+    )
+    user.set_defaults(handler=_user)
     move = commands.add_parser(
         "relocate", help="after copying the media folder from another machine, fix its paths"
     )

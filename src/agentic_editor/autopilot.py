@@ -167,7 +167,13 @@ def _check(
             )
             room = max(0, feed.batch - busy) if active(feed, now.hour) else 0
             for e in new[:room]:
-                job = Job(source=e.source, title=e.title, presets=feed.presets, notes=feed.notes)
+                job = Job(
+                    source=e.source,
+                    title=e.title,
+                    presets=feed.presets,
+                    notes=feed.notes,
+                    owner_id=feed.owner_id,
+                )
                 db.add(job)
                 db.flush()
                 db.add(

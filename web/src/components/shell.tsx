@@ -3,10 +3,11 @@
 import { Clapperboard, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { UsageNotice } from "@/components/usage-notice";
 import { Button } from "@/components/ui/button";
+import { forgetMe, useMe } from "@/hooks/use-me";
 import { api } from "@/lib/api";
 import { mayLeave } from "@/lib/leave-guard.mjs";
 import { cn } from "@/lib/utils";
@@ -27,21 +28,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const onLogin = pathname.startsWith("/login");
-  const [noticeAccepted, setNoticeAccepted] = useState(true);
-
-  useEffect(() => {
-    if (onLogin) return;
-    api
-      .me()
-      .then((me) => setNoticeAccepted(me.notice_accepted))
-      .catch(() => {});
-  }, [onLogin]);
+  const me = useMe(!onLogin);
+  // Accepted on the server, or just now in this page.
+  const [acceptedNow, setAcceptedNow] = useState(false);
+  const noticeAccepted = !me || me.notice_accepted || acceptedNow;
+  const links = me?.role === "admin" ? [...LINKS, { href: "/people/", label: "People" }] : LINKS;
 
   if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
 
   async function logout() {
     if (!mayLeave()) return;
     await api.logout();
+    forgetMe();
     router.push("/login/");
   }
 
@@ -60,8 +58,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </span>
             <span className="hidden font-hand text-2xl font-bold sm:inline">Agentic AI Editor</span>
           </Link>
-          <nav className="flex min-w-0 flex-1 gap-0.5 sm:gap-1">
-            {LINKS.map((link) => {
+          <nav
+            // On a phone the links scroll sideways rather than run under the log out button.
+            className="flex min-w-0 flex-1 [scrollbar-width:none] gap-0.5 overflow-x-auto sm:gap-1"
+          >
+            {links.map((link) => {
               const active =
                 link.href === "/"
                   ? pathname === "/" || pathname.startsWith("/job")
@@ -83,13 +84,23 @@ export function Shell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label="Log out">
+          {me && (
+            <span className="hidden text-sm text-muted-foreground md:inline" title={me.role}>
+              {me.user}
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={logout}
+            aria-label={me ? `Log out ${me.user}` : "Log out"}
+          >
             <LogOut />
           </Button>
         </div>
       </header>
       <main className="mx-auto w-full max-w-5xl px-4 py-6">{children}</main>
-      <UsageNotice open={!noticeAccepted} onAccept={() => setNoticeAccepted(true)} />
+      <UsageNotice open={!noticeAccepted} onAccept={() => setAcceptedNow(true)} />
     </>
   );
 }
