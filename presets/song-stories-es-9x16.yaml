@@ -1,0 +1,61 @@
+name: song-stories-es-9x16
+label: Cómo se crearon las canciones (song stories, Spanish)
+platform: instagram_reels
+aspect_ratio: "9:16"
+resolution: 1080x1920
+fps: 30
+min_duration: 20
+max_duration: 45
+captions:
+  enabled: false
+hook:
+  enabled: true
+  overlay: false
+text_blocks:
+  - text: "{headline}"
+    font: Poppins-SemiBold
+    size: 50
+    color: "#FFFFFF"
+    anchor: top
+    offset: 344
+    max_width: 820
+    max_shrink: 0.8
+  - text: "AQUÍ MOSTRAMOS CÓMO SE\nCREARON LAS CANCIONES"
+    font: Poppins-SemiBold
+    size: 50
+    color: "#FFFFFF"
+    anchor: bottom
+    offset: 526
+    max_shrink: 0.8
+headline:
+  hint: >-
+    In Spanish, as the page "Cómo se crearon las canciones" writes them. Always put the
+    song's name in quotes, “like this”. Usually: Así fue como se creó “Stronger” de Daft Punk. For a
+    studio session: Así grabó Queen “Bohemian Rhapsody”. For another version of a song:
+    Así sonaría “Shape of You” de Ed Sheeran en versión swing jazz. For an artist's early
+    days: Así empezó Shakira antes de “Pies Descalzos”. When the footage is a scene from a
+    film rather than the real moment, say so, e.g. Así se creó “Bohemian Rhapsody” de
+    Queen (escena de película).
+  max_chars: 70
+  uppercase: true
+framing:
+  mode: none
+  background: "#000000"
+  crop_black_bars: true
+  text_gap_above: 36
+  text_gap_below: 34
+audio:
+  source: original
+  highpass_hz: 0
+  loudness_lufs: -14
+  true_peak_db: -1.5
+  fade_in: 0.02
+  fade_out: 0.4
+bitrate_mbps: 12
+style_notes: >-
+  The source is footage about a famous song: a studio session, an archive clip, an
+  interview, a documentary or a scene from a film, with its original sound. Pick the
+  single continuous passage, about 25 to 35 seconds, where the song itself is clearest and
+  most recognisable, or where the artist tells how it was made. Start where a sentence or
+  a musical phrase begins and end after one has finished; never cut in the middle of
+  either.
