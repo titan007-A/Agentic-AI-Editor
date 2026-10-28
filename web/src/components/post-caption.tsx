@@ -1,15 +1,25 @@
 "use client";
 
-import { Copy, PenLine } from "lucide-react";
+import { Copy, Music, PenLine } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { api, errorText, type Output } from "@/lib/api";
 
 const POLL_MS = 4000;
 
-type Caption = Pick<Output, "caption" | "caption_status" | "caption_sources" | "caption_notes">;
+type Caption = Pick<
+  Output,
+  | "caption"
+  | "caption_status"
+  | "caption_sources"
+  | "caption_notes"
+  | "caption_song"
+  | "caption_artist"
+>;
 
 function captionOf(output: Output): Caption {
   return {
@@ -17,6 +27,8 @@ function captionOf(output: Output): Caption {
     caption_status: output.caption_status ?? null,
     caption_sources: output.caption_sources ?? [],
     caption_notes: output.caption_notes ?? [],
+    caption_song: output.caption_song ?? "",
+    caption_artist: output.caption_artist ?? "",
   };
 }
 
@@ -26,6 +38,10 @@ export function PostCaption({ output }: { output: Output }) {
   // What this card fetched itself, until the page hands it a newer output.
   const [fetched, setFetched] = useState<{ from: Output; value: Caption } | null>(null);
   const [asking, setAsking] = useState(false);
+  // Naming the song by hand: open by itself when no caption could be written.
+  const [naming, setNaming] = useState(false);
+  const [song, setSong] = useState("");
+  const [artist, setArtist] = useState("");
   const state = fetched?.from === output ? fetched.value : captionOf(output);
   const busy = state.caption_status === "queued" || state.caption_status === "writing";
   const setState = (value: Caption) => setFetched({ from: output, value });
@@ -45,12 +61,22 @@ export function PostCaption({ output }: { output: Output }) {
     return () => clearInterval(timer);
   }, [busy, output]);
 
-  async function write() {
+  const failed = state.caption_status === "failed";
+  const showNaming = !busy && (naming || failed);
+
+  function openNaming() {
+    setSong(state.caption_song);
+    setArtist(state.caption_artist);
+    setNaming(true);
+  }
+
+  async function write(named?: { song: string; artist: string }) {
     setAsking(true);
     try {
-      const job = await api.writeCaption(output.id);
+      const job = await api.writeCaption(output.id, named);
       const latest = job.outputs.find((o) => o.id === output.id);
       if (latest) setState(captionOf(latest));
+      if (named) setNaming(false);
     } catch (err) {
       toast.error(errorText(err));
     } finally {
@@ -77,7 +103,7 @@ export function PostCaption({ output }: { output: Output }) {
               <Copy /> Copy
             </Button>
           )}
-          <Button variant="outline" size="sm" disabled={busy || asking} onClick={write}>
+          <Button variant="outline" size="sm" disabled={busy || asking} onClick={() => write()}>
             <PenLine />
             {busy
               ? "Writing..."
@@ -92,10 +118,65 @@ export function PostCaption({ output }: { output: Output }) {
           Reading Wikipedia about the song and writing it; about a minute.
         </p>
       )}
-      {state.caption_status === "failed" && (
+      {failed && (
         <p className="text-xs text-destructive">
           No caption: {state.caption_notes[0] ?? "something went wrong"}
         </p>
+      )}
+      {state.caption_status === "done" && state.caption_song && !showNaming && (
+        <p className="text-xs text-muted-foreground">
+          About “{state.caption_song}”{state.caption_artist && ` by ${state.caption_artist}`}.{" "}
+          <button type="button" className="underline" onClick={openNaming}>
+            Wrong song?
+          </button>
+        </p>
+      )}
+      {showNaming && (
+        <form
+          className="space-y-2 rounded-md border p-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            write({ song: song.trim(), artist: artist.trim() });
+          }}
+        >
+          <p className="text-xs text-muted-foreground">
+            Name the song and it is looked up on Wikipedia and written from there.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor={`song-${output.id}`}>Song</Label>
+              <Input
+                id={`song-${output.id}`}
+                value={song}
+                onChange={(event) => setSong(event.target.value)}
+                placeholder="Song name"
+                maxLength={200}
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`artist-${output.id}`}>Artist</Label>
+              <Input
+                id={`artist-${output.id}`}
+                value={artist}
+                onChange={(event) => setArtist(event.target.value)}
+                placeholder="Artist name"
+                maxLength={200}
+                required
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" disabled={asking || !song.trim() || !artist.trim()}>
+              <Music /> Write caption for this song
+            </Button>
+            {naming && !failed && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setNaming(false)}>
+                Cancel
+              </Button>
+            )}
+          </div>
+        </form>
       )}
       {state.caption_status === "done" && state.caption && (
         <>

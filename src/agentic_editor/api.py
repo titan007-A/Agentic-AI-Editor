@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
@@ -128,6 +128,19 @@ class FeedView(FeedRequest):
     recent: list[FeedItemView]
 
 
+class CaptionRequest(BaseModel):
+    # The song, when the video doesn't say which it is or the model named the wrong one.
+    song: str = Field(default="", max_length=200)
+    artist: str = Field(default="", max_length=200)
+
+    @model_validator(mode="after")
+    def both(self) -> "CaptionRequest":
+        # Many songs share a name; the artist tells Wikipedia's articles apart.
+        if self.song.strip() and not self.artist.strip():
+            raise ValueError("name the artist too")
+        return self
+
+
 class VerdictRequest(BaseModel):
     verdict: Literal["approved", "posted", "dismissed"] | None
 
@@ -151,6 +164,8 @@ class OutputView(BaseModel):
     caption_status: str | None = None
     caption_sources: list[dict] = []
     caption_notes: list[str] = []
+    caption_song: str = ""
+    caption_artist: str = ""
 
 
 class JobView(BaseModel):
@@ -191,6 +206,8 @@ def job_view(job: Job, only: int | None = None, owner: str | None = None) -> Job
             caption_status=o.caption_status,
             caption_sources=o.caption_sources or [],
             caption_notes=o.caption_notes or [],
+            caption_song=o.caption_song or "",
+            caption_artist=o.caption_artist or "",
         )
         for o in job.outputs
         if only is None or o.id == only
@@ -819,10 +836,16 @@ def create_app(
         return view(output.job, account, session, only=output.id)
 
     @app.post("/api/outputs/{output_id}/caption")
-    def write_caption(output_id: int, account: User, session: DB) -> JobView:
-        """Write the post's caption in the background; the output shows how it goes."""
+    def write_caption(
+        output_id: int, account: User, session: DB, body: CaptionRequest | None = None
+    ) -> JobView:
+        """Write the post's caption in the background; the output shows how it goes. A
+        song named here is the one it is about from now on."""
         output = find_output(output_id, session, account)
         if output.caption_status not in ("queued", "writing"):
+            if body and body.song.strip():
+                output.caption_song = body.song.strip(" \"'“”")
+                output.caption_artist = body.artist.strip()
             output.caption_status, output.caption_notes = "queued", []
             session.commit()
             jobs.write_caption(output.id)

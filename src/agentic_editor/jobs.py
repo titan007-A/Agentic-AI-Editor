@@ -163,12 +163,19 @@ def run_caption(output_id: int, Session: sessionmaker, settings: Settings, route
             wanted = preset.post_caption if preset else PostCaption()
             decisions = output.edl.get("decisions", [])
             path = Path(output.path)
+            named = output.caption_song, output.caption_artist
         headline = next((d.split(": ", 1)[1] for d in decisions if d.startswith("headline ")), "")
         title, description = source_text(path, settings.media_dir)
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         with router.planner() as llm:
             llm.context = caption.CONTEXT
-            song, artist = caption.identify(llm, title, description, headline)
+            song, artist = (
+                named if named[0] else (caption.identify(llm, title, description, headline))
+            )
+            with Session() as db:
+                output = db.get(Output, output_id)
+                output.caption_song, output.caption_artist = song, artist
+                db.commit()
             sources = caption.gather(song, artist, wanted.language, settings.cache_dir / "captions")
             written = caption.write(
                 llm, song, artist, sources, wanted.language, headline, wanted.style,
