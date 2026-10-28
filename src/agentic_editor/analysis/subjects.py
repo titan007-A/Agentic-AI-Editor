@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 FRAME_WIDTH = 640  # plenty to place a box, and keeps the vision call quick
 PER_CALL = 4
-MAX_ITEMS = 8  # per frame: a long list is where a small model starts repeating itself
+MAX_ITEMS = 5  # per frame: a long list is where a small model starts repeating itself
 
 Kind = Literal["head", "person", "instrument", "microphone", "text", "other"]
 
@@ -53,7 +53,7 @@ class _Reply(BaseModel):
 
 PROMPT = (
     "Each image is one frame of a video that will be cropped to a narrow vertical 9:16 "
-    "frame for phone screens. For every image, list at most 8 things, the most important "
+    "frame for phone screens. For every image, list at most 5 things, the most important "
     "first: each person's head (kind head), each musical instrument, microphone or mic stand, "
     "and each piece of on-screen text or graphics. Give a short label, the kind (head, "
     "instrument, microphone, text, other), a box [x0, y0, x1, y1] in 0-1000 coordinates "

@@ -106,3 +106,17 @@ def test_the_vision_model_gets_room_for_its_frames_and_a_cap_on_its_answer():
     llm.context, llm.max_reply = 8192, 2048
     llm.chat_json([{"role": "user", "content": "hi"}], {})
     assert sent[0]["options"]["num_ctx"] == 8192 and sent[0]["options"]["num_predict"] == 2048
+
+
+def test_an_answer_cut_off_at_the_length_cap_is_not_asked_again():
+    sent = []
+
+    def cut_off(request):
+        sent.append(request)
+        return httpx.Response(
+            200, json={"message": {"content": '{"frames": ['}, "done_reason": "length"}
+        )
+
+    with pytest.raises(LLMError, match="did not return JSON"):
+        client(cut_off).chat_json([{"role": "user", "content": "hi"}], {})
+    assert len(sent) == 1
