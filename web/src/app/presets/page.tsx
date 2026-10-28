@@ -1,7 +1,8 @@
 "use client";
 
 import { Copy, FileCode, Plus, Save, Sparkles, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { LearnStyleDialog } from "@/components/learn-style-dialog";
@@ -26,7 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { api, errorText, type Preset } from "@/lib/api";
+import { useMe } from "@/hooks/use-me";
+import { api, errorText, type Account, type Preset } from "@/lib/api";
 import { guardLeaving } from "@/lib/leave-guard.mjs";
 import { blankPreset } from "@/lib/preset-defaults.mjs";
 
@@ -34,6 +36,20 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const UNSAVED = "Your preset changes aren't saved. Leave and discard them?";
 
 export default function PresetsPage() {
+  return (
+    <Suspense>
+      <Presets />
+    </Suspense>
+  );
+}
+
+function Presets() {
+  const me = useMe();
+  // Whose presets are shown: the admin's own (null) or an employee's, by account id, as
+  // opened from People with ?owner= in the address.
+  const asked = useSearchParams().get("owner");
+  const [owner, setOwner] = useState<string | null>(asked);
+  const [people, setPeople] = useState<Account[]>([]);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -52,7 +68,7 @@ export default function PresetsPage() {
 
   const load = useCallback(
     (select?: string) =>
-      api.presets().then((list) => {
+      api.presets(owner).then((list) => {
         setPresets(list);
         setLoaded(true);
         setLoadError(null);
@@ -61,8 +77,29 @@ export default function PresetsPage() {
         setDirty(false);
         setLearned([]);
       }),
-    [],
+    [owner],
   );
+
+  useEffect(() => {
+    if (me?.role !== "admin") return;
+    api
+      .accounts()
+      .then(setPeople)
+      .catch(() => {});
+  }, [me?.role]);
+
+  function showOwner(next: string | null) {
+    if (next === owner) return;
+    if (dirty && !window.confirm(UNSAVED)) return;
+    setDirty(false);
+    setOwner(next);
+    const url = new URL(window.location.href);
+    if (next) url.searchParams.set("owner", next);
+    else url.searchParams.delete("owner");
+    window.history.replaceState(null, "", url);
+  }
+  const members = people.filter((p) => p.role === "member");
+  const shownFor = members.find((p) => p.id === owner)?.username;
 
   const openDraft = useCallback(
     (preset: Preset, notes: string[]) => {
@@ -147,7 +184,7 @@ export default function PresetsPage() {
     if (!draft) return;
     setBusy(true);
     try {
-      const saved = await api.savePreset(draft);
+      const saved = await api.savePreset(draft, owner);
       await load(saved.name);
       toast.success(`Saved ${saved.label}`);
     } catch (err) {
@@ -161,7 +198,7 @@ export default function PresetsPage() {
     if (!draft) return;
     setBusy(true);
     try {
-      await api.deletePreset(draft.name);
+      await api.deletePreset(draft.name, owner);
       setDeleteOpen(false);
       await load();
       toast.success(`Deleted ${draft.label}`);
@@ -175,7 +212,7 @@ export default function PresetsPage() {
   async function showYaml() {
     if (!draft) return;
     try {
-      setYaml((await api.presetYaml(draft.name)).yaml);
+      setYaml((await api.presetYaml(draft.name, owner)).yaml);
     } catch (err) {
       toast.error(errorText(err));
     }
@@ -238,12 +275,37 @@ export default function PresetsPage() {
     </Dialog>
   );
 
+  const ownerPicker = me?.role === "admin" && members.length > 0 && (
+    <div className="mb-4 space-y-2">
+      <Label htmlFor="owner-picker">Whose presets</Label>
+      <Select value={owner ?? "me"} onValueChange={(v) => showOwner(v === "me" ? null : v)}>
+        <SelectTrigger id="owner-picker" className="w-full sm:max-w-sm">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="me">Mine ({me.user})</SelectItem>
+          {members.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.username}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {shownFor && (
+        <p className="text-sm text-muted-foreground">
+          Changes here go to {shownFor}&apos;s presets; yours stay as they are.
+        </p>
+      )}
+    </div>
+  );
+
   // The dialogs come first in both views, so switching views keeps their state.
   if (!draft) {
     return (
       <>
         {learnDialog}
         {nameDialog}
+        {ownerPicker}
         <div className="mx-auto max-w-xl">
           <Card className="tape">
             <CardHeader>
@@ -273,6 +335,7 @@ export default function PresetsPage() {
     <>
       {learnDialog}
       {nameDialog}
+      {ownerPicker}
       <div className="space-y-6 pb-20">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1 space-y-2">

@@ -23,3 +23,6 @@ Thumbs.db
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+
+# Employees' own presets, made on the server.
+presets/people/

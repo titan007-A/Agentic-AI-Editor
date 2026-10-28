@@ -32,6 +32,21 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """An account: the owner as admin, who manages the others, or an employee (member)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    username: Mapped[str] = mapped_column(String(32), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(16), default="member")  # admin or member
+    # Raised on a password change or removal, which ends every session signed in before.
+    session_version: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    last_seen_at: Mapped[datetime | None]
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
@@ -45,6 +60,8 @@ class Job(Base):
     progress: Mapped[float] = mapped_column(default=0.0)
     error: Mapped[str | None] = mapped_column(Text)
     parent_id: Mapped[str | None] = mapped_column(String(12))
+    # Who started it; None for jobs from before accounts, which are the admin's.
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
@@ -125,6 +142,7 @@ class Feed(Base):
     active_from: Mapped[int | None]
     active_to: Mapped[int | None]
     batch: Mapped[int] = mapped_column(default=3)  # videos in progress at once, at most
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
     include_existing: Mapped[bool] = mapped_column(default=False)
     # Whether the first look, which notes what is already there, has been made. A new feed
     # starts without it; feeds saved before this column existed had made it, so the column
@@ -166,6 +184,7 @@ class StyleDraft(Base):
     id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
     source: Mapped[str] = mapped_column(Text)
     name: Mapped[str | None] = mapped_column(String(64))
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
     status: Mapped[str] = mapped_column(String(16), default="queued")
     message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
     preset: Mapped[dict | None] = mapped_column(JSON)

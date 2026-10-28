@@ -167,6 +167,26 @@ Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.
 
+### Accounts
+
+The owner is the admin; employees get accounts of their own. Each employee has presets of
+their own (a copy of the admin's, taken when the account is made) and sees only their own
+jobs, feeds and reels. The admin sees everyone's, with who made each, and manages every
+employee's presets from the Presets page ("Whose presets"), or from People.
+
+On People the admin adds employees, sets a new password (which signs them out everywhere)
+and removes them, keeping their jobs or deleting them too. Accounts made there are always
+employees; an admin is made, demoted or removed only on the server:
+
+```
+uv run aiedit user add NAME --admin             # asks for a password
+uv run aiedit user add NAME --admin --env-password   # the PASSWORD_HASH in .env
+uv run aiedit user list | passwd NAME | role NAME member | remove NAME
+```
+
+Until an account exists, the password in `.env` signs in as an admin called `admin`, so the
+upgrade locks nobody out. Only the admin can watch a folder on the server with Autopilot.
+
 ## Autopilot
 
 The Autopilot page in the web app watches feeds and edits each new video once:

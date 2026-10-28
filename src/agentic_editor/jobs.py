@@ -7,9 +7,9 @@ from huey import SqliteHuey
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import pipeline, style
+from agentic_editor import accounts, pipeline, style
 from agentic_editor.backends import get_backends
-from agentic_editor.db import Event, Job, Output, StyleDraft, make_sessionmaker
+from agentic_editor.db import Event, Job, Output, StyleDraft, User, make_sessionmaker
 from agentic_editor.presets import load_presets
 from agentic_editor.settings import Settings, get_settings
 
@@ -82,8 +82,10 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             job.status = "running"
             db.commit()
             source, preset_names, notes = job.source, list(job.presets), job.notes
+            owner = db.get(User, job.owner_id) if job.owner_id else None
+            folder = accounts.presets_dir(owner, settings.presets_dir)
 
-        available = load_presets(settings.presets_dir)
+        available = load_presets(folder)
         missing = [name for name in preset_names if name not in available]
         if missing:
             raise ValueError(f"unknown preset(s): {', '.join(missing)}")
@@ -149,11 +151,13 @@ def run_learning(
             draft.status = "running"
             db.commit()
             source, name = draft.source, draft.name
+            owner = db.get(User, draft.owner_id) if draft.owner_id else None
+            folder = accounts.presets_dir(owner, settings.presets_dir)
 
         learned = learn(source, settings, get_backends(), name, progress)
         preset = learned.preset
         if not name:
-            taken = set(load_presets(settings.presets_dir))
+            taken = set(load_presets(folder)) if folder.is_dir() else set()
             preset = preset.model_copy(update={"name": unused_name(preset.name, taken)})
         with Session() as db:
             draft = db.get(StyleDraft, draft_id)

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { useMe } from "@/hooks/use-me";
 import { api, errorText, type Feed, type FeedFields, type Preset } from "@/lib/api";
 import { wholeNumber } from "@/lib/form-values.mjs";
 
@@ -40,7 +41,12 @@ const MAX_BATCH = 20;
 export const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
 export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed) => void }) {
-  const [fields, setFields] = useState<FeedFields>(feed ?? BLANK);
+  // A folder is on the server's own disk, which only the admin may watch.
+  const me = useMe();
+  const folders = me?.role === "admin";
+  const [chosen, setFields] = useState<FeedFields>(feed ?? BLANK);
+  const fields: FeedFields =
+    me && !folders && chosen.kind === "folder" && !feed ? { ...chosen, kind: "link" } : chosen;
   const [presets, setPresets] = useState<Preset[]>([]);
   const [busy, setBusy] = useState(false);
   // Kept as typed, so the field can be cleared and retyped.
@@ -99,7 +105,7 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="folder">A folder</SelectItem>
+              {folders && <SelectItem value="folder">A folder</SelectItem>}
               <SelectItem value="link">A playlist or channel</SelectItem>
             </SelectContent>
           </Select>

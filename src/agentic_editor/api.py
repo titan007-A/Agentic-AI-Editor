@@ -24,10 +24,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import autopilot, jobs
-from agentic_editor.auth import LoginGuard, verify_password
+from agentic_editor import accounts, autopilot, jobs
+from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting, StyleDraft
+from agentic_editor.db import User as Account
 from agentic_editor.download import update_ytdlp
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
@@ -47,7 +48,27 @@ FAILED_LOGIN_DELAY = 1.0
 
 
 class LoginRequest(BaseModel):
+    username: str = ""
     password: str
+
+
+class AccountRequest(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordRequest(BaseModel):
+    password: str
+
+
+class AccountView(BaseModel):
+    id: str
+    username: str
+    role: str
+    created_at: datetime
+    last_seen_at: datetime | None
+    jobs: int
+    presets: int
 
 
 class JobRequest(BaseModel):
@@ -140,9 +161,11 @@ class JobView(BaseModel):
     parent_id: str | None
     created_at: datetime
     outputs: list[OutputView] = []
+    # The employee who started it, shown to the admin; None on a member's own list.
+    owner: str | None = None
 
 
-def job_view(job: Job, only: int | None = None) -> JobView:
+def job_view(job: Job, only: int | None = None, owner: str | None = None) -> JobView:
     outputs = [
         OutputView(
             id=o.id,
@@ -176,6 +199,7 @@ def job_view(job: Job, only: int | None = None) -> JobView:
         parent_id=job.parent_id,
         created_at=job.created_at,
         outputs=outputs,
+        owner=owner,
     )
 
 
@@ -258,28 +282,93 @@ def create_app(
         with make_session() as session:
             yield session
 
-    def user(request: Request) -> str:
-        if request.session.get("user") != "owner":
+    def user(request: Request) -> Account:
+        uid, version = request.session.get("uid"), request.session.get("v")
+        if not uid:
             raise HTTPException(401, "log in first")
-        return "owner"
+        with make_session() as session:
+            account = session.get(Account, uid)
+        # A changed password or a removed account ends the sessions signed in before it.
+        if account is None or account.session_version != version:
+            request.session.clear()
+            raise HTTPException(401, "log in first")
+        return account
+
+    def admin(account: Annotated[Account, Depends(user)]) -> Account:
+        if account.role != accounts.ADMIN:
+            raise HTTPException(403, "only the admin can do that")
+        return account
 
     DB = Annotated[Session, Depends(db)]
-    User = Annotated[str, Depends(user)]
+    User = Annotated[Account, Depends(user)]
+    Admin = Annotated[Account, Depends(admin)]
 
-    def find_job(job_id: str, session: Session) -> Job:
+    def mine(account: Account, owner_id: str | None) -> bool:
+        """The admin sees everything; an employee only their own."""
+        return account.role == accounts.ADMIN or owner_id == account.id
+
+    def owners(session: Session) -> dict[str | None, str]:
+        names: dict[str | None, str] = {a.id: a.username for a in session.scalars(select(Account))}
+        first = next((a for a in accounts.admins(session)), None)
+        names[None] = first.username if first else "admin"
+        return names
+
+    def view(
+        job: Job,
+        account: Account,
+        session: Session,
+        only: int | None = None,
+        names: dict[str | None, str] | None = None,
+    ) -> JobView:
+        """The job as its viewer sees it: the admin with who started it. A list passes
+        `names` read once, so a long one doesn't look each owner up again."""
+        if account.role != accounts.ADMIN:
+            return job_view(job, only)
+        return job_view(job, only, (names or owners(session)).get(job.owner_id))
+
+    def find_job(job_id: str, session: Session, account: Account) -> Job:
         job = session.get(Job, job_id)
-        if job is None:
+        if job is None or not mine(account, job.owner_id):
             raise HTTPException(404, "no such job")
         return job
 
-    def find_output(output_id: int, session: Session) -> Output:
+    def find_output(output_id: int, session: Session, account: Account) -> Output:
         output = session.get(Output, output_id)
-        if output is None:
+        if output is None or not mine(account, output.job.owner_id):
             raise HTTPException(404, "no such output")
         return output
 
-    def presets() -> dict[str, Preset]:
-        return load_presets(settings.presets_dir)
+    def whose(account: Account, owner: str | None, session: Session) -> Account | None:
+        """The account whose presets a request is about: the caller's own, or, for the
+        admin, any employee's named by id."""
+        if not owner or owner == account.id:
+            return account
+        if account.role != accounts.ADMIN:
+            raise HTTPException(403, "only the admin can see someone else's presets")
+        target = session.get(Account, owner)
+        if target is None:
+            raise HTTPException(404, "no such account")
+        return target
+
+    def presets_dir(account: Account | None) -> Path:
+        folder = accounts.presets_dir(account, settings.presets_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def presets(account: Account | None) -> dict[str, Preset]:
+        return load_presets(presets_dir(account))
+
+    def bootstrap() -> None:
+        """Before any account exists, the password in .env signs in as the admin, so
+        nobody is locked out by the upgrade to accounts."""
+        with make_session() as session:
+            if session.scalar(select(func.count()).select_from(Account)):
+                return
+            if settings.password_hash:
+                accounts.create(
+                    session, "admin", None, accounts.ADMIN, settings.presets_dir,
+                    password_hash=settings.password_hash,
+                )  # fmt: skip
 
     def enqueue(session: Session, **fields) -> Job:
         job = Job(**fields)
@@ -288,6 +377,7 @@ def create_app(
         jobs.process(job.id)
         return job
 
+    bootstrap()
     logins = app.state.logins = LoginGuard()
 
     @app.post("/api/login")
@@ -302,14 +392,25 @@ def create_app(
             )
         # Counted before the check, so that many guesses sent at once are limited too.
         logins.failed(client)
-        right = bool(settings.password_hash) and await asyncio.to_thread(
-            verify_password, body.password, settings.password_hash
-        )
-        if not right:
+
+        def check() -> Account | None:
+            with make_session() as session:
+                name = body.username
+                if not name.strip():  # the old login form, with only a password
+                    first = next(iter(accounts.admins(session)), None)
+                    name = first.username if first else ""
+                account = accounts.authenticate(session, name, body.password)
+                if account is not None:
+                    accounts.seen(session, account)
+                return account
+
+        account = await asyncio.to_thread(check)
+        if account is None:
             await asyncio.sleep(FAILED_LOGIN_DELAY)
-            raise HTTPException(401, "wrong password")
+            raise HTTPException(401, "wrong username or password")
         logins.succeeded(client)
-        request.session["user"] = "owner"
+        request.session.clear()
+        request.session.update({"uid": account.id, "v": account.session_version})
         return {"ok": True}
 
     @app.post("/api/logout")
@@ -318,13 +419,19 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/me")
-    def me(_: User, session: DB) -> dict:
-        accepted = session.get(Setting, NOTICE_KEY) is not None
-        return {"user": "owner", "notice_accepted": accepted}
+    def me(account: User, session: DB) -> dict:
+        accepted = session.get(Setting, f"{NOTICE_KEY}:{account.id}") is not None
+        return {
+            "user": account.username,
+            "id": account.id,
+            "role": account.role,
+            "notice_accepted": accepted,
+        }
 
     @app.post("/api/notice")
-    def accept_notice(_: User, session: DB) -> dict:
-        session.merge(Setting(key=NOTICE_KEY, value=datetime.now().isoformat()))
+    def accept_notice(account: User, session: DB) -> dict:
+        key = f"{NOTICE_KEY}:{account.id}"
+        session.merge(Setting(key=key, value=datetime.now().isoformat()))
         session.commit()
         return {"ok": True}
 
@@ -344,7 +451,7 @@ def create_app(
         }
 
     @app.post("/api/system/update-ytdlp")
-    async def ytdlp_update(_: User) -> dict:
+    async def ytdlp_update(_: Admin) -> dict:
         version = await asyncio.to_thread(update_ytdlp)
         return {"yt_dlp": version, "note": "restart the server to load the new version"}
 
@@ -353,33 +460,36 @@ def create_app(
         return sorted(p.stem for p in settings.fonts_dir.glob("*.[ot]tf"))
 
     @app.get("/api/presets")
-    def list_presets(_: User) -> list[dict]:
-        return [p.model_dump(mode="json") for p in presets().values()]
+    def list_presets(account: User, session: DB, owner: str | None = None) -> list[dict]:
+        return [p.model_dump(mode="json") for p in presets(whose(account, owner, session)).values()]
 
     @app.get("/api/presets/schema")
     def preset_schema(_: User) -> dict:
         return Preset.model_json_schema()
 
     @app.put("/api/presets/{name}")
-    def put_preset(name: str, body: dict, _: User) -> dict:
+    def put_preset(
+        name: str, body: dict, account: User, session: DB, owner: str | None = None
+    ) -> dict:
+        target = whose(account, owner, session)
         try:
             preset = Preset.model_validate({**body, "name": name})
         except ValidationError as exc:
             raise HTTPException(422, json.loads(exc.json(include_url=False))) from exc
-        save_preset(preset, settings.presets_dir)
+        save_preset(preset, presets_dir(target))
         return preset.model_dump(mode="json")
 
     @app.delete("/api/presets/{name}")
-    def delete_preset(name: str, _: User) -> dict:
-        path = settings.presets_dir / f"{name}.yaml"
-        if name not in presets():
+    def delete_preset(name: str, account: User, session: DB, owner: str | None = None) -> dict:
+        target = whose(account, owner, session)
+        if name not in presets(target):
             raise HTTPException(404, "no such preset")
-        path.unlink()
+        (presets_dir(target) / f"{name}.yaml").unlink()
         return {"ok": True}
 
     @app.get("/api/presets/{name}/yaml")
-    def preset_yaml(name: str, _: User) -> dict:
-        preset = presets().get(name)
+    def preset_yaml(name: str, account: User, session: DB, owner: str | None = None) -> dict:
+        preset = presets(whose(account, owner, session)).get(name)
         if preset is None:
             raise HTTPException(404, "no such preset")
         return {
@@ -422,8 +532,8 @@ def create_app(
             raise HTTPException(422, f"not a link or upload: {source}")
 
     @app.post("/api/jobs")
-    def create_jobs(body: JobRequest, _: User, session: DB) -> list[JobView]:
-        unknown = set(body.presets) - presets().keys()
+    def create_jobs(body: JobRequest, account: User, session: DB) -> list[JobView]:
+        unknown = set(body.presets) - presets(account).keys()
         if unknown:
             raise HTTPException(422, f"unknown preset(s): {', '.join(sorted(unknown))}")
         sources = list(dict.fromkeys(s.strip() for s in body.sources if s.strip()))
@@ -433,47 +543,53 @@ def create_app(
         for source in sources:
             title = source if source.startswith("http") else ""
             created.append(
-                enqueue(session, source=source, title=title, presets=body.presets, notes=body.notes)
+                enqueue(
+                    session,
+                    source=source,
+                    title=title,
+                    presets=body.presets,
+                    notes=body.notes,
+                    owner_id=account.id,
+                )
             )
-        return [job_view(j) for j in created]
+        return [view(j, account, session) for j in created]
 
     def draft_view(draft: StyleDraft) -> StyleDraftView:
         return StyleDraftView(**{k: getattr(draft, k) for k in StyleDraftView.model_fields})
 
     @app.post("/api/styles")
-    def start_learning(body: LearnRequest, _: User, session: DB) -> StyleDraftView:
+    def start_learning(body: LearnRequest, account: User, session: DB) -> StyleDraftView:
         source = body.source.strip()
         check_source(source)
-        draft = StyleDraft(source=source, name=body.name)
+        draft = StyleDraft(source=source, name=body.name, owner_id=account.id)
         session.add(draft)
         session.commit()
         jobs.learn_style(draft.id)
         return draft_view(draft)
 
     @app.get("/api/styles/{draft_id}")
-    def get_style(draft_id: str, _: User, session: DB) -> StyleDraftView:
+    def get_style(draft_id: str, account: User, session: DB) -> StyleDraftView:
         draft = session.get(StyleDraft, draft_id)
-        if draft is None:
+        if draft is None or not mine(account, draft.owner_id):
             raise HTTPException(404, "no such draft")
         return draft_view(draft)
 
     @app.get("/api/jobs")
-    def list_jobs(_: User, session: DB) -> list[JobView]:
-        rows = session.scalars(
-            select(Job)
-            .options(selectinload(Job.outputs))
-            .order_by(Job.created_at.desc())
-            .limit(200)
-        )
-        return [job_view(j) for j in rows]
+    def list_jobs(account: User, session: DB) -> list[JobView]:
+        query = select(Job).options(selectinload(Job.outputs))
+        if account.role != accounts.ADMIN:
+            query = query.where(Job.owner_id == account.id)
+        rows = session.scalars(query.order_by(Job.created_at.desc()).limit(200))
+        names = owners(session) if account.role == accounts.ADMIN else None
+        return [view(j, account, session, names=names) for j in rows]
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str, _: User, session: DB) -> JobView:
-        return job_view(find_job(job_id, session))
+    def get_job(job_id: str, account: User, session: DB) -> JobView:
+        return view(find_job(job_id, session, account), account, session)
 
     @app.delete("/api/jobs/{job_id}")
-    def delete_job(job_id: str, _: User, session: DB) -> dict:
-        job = find_job(job_id, session)
+    def delete_job(job_id: str, account: User, session: DB) -> dict:
+        job = find_job(job_id, session, account)
         if job.status in ("queued", "running"):
             raise HTTPException(409, "the job is still running")
         session.delete(job)
@@ -481,9 +597,11 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/jobs/{job_id}/regenerate")
-    def regenerate(job_id: str, body: RegenerateRequest, _: User, session: DB) -> JobView:
-        job = find_job(job_id, session)
-        if body.preset not in presets():
+    def regenerate(job_id: str, body: RegenerateRequest, account: User, session: DB) -> JobView:
+        job = find_job(job_id, session, account)
+        # The job's owner's presets: an admin regenerating an employee's job uses theirs.
+        owner = session.get(Account, job.owner_id) if job.owner_id else None
+        if body.preset not in presets(owner):
             raise HTTPException(422, f"unknown preset {body.preset}")
         # The new notes say what should change; the earlier instruction still stands.
         notes = "\n".join(n.strip() for n in (job.notes, body.notes) if n and n.strip())
@@ -494,13 +612,14 @@ def create_app(
             presets=[body.preset],
             notes=notes or None,
             parent_id=job.id,
+            owner_id=job.owner_id,
         )
-        return job_view(new)
+        return view(new, account, session)
 
     @app.get("/api/jobs/{job_id}/events")
-    async def job_events(job_id: str, request: Request, _: User):
+    async def job_events(job_id: str, request: Request, account: User):
         with make_session() as session:
-            find_job(job_id, session)
+            find_job(job_id, session, account)
 
         async def stream() -> AsyncIterator[str]:
             last = 0
@@ -534,16 +653,16 @@ def create_app(
         return re.sub(r"[^\w.-]+", "-", f"{output.job.title or 'video'}-{output.preset}")[:100]
 
     @app.get("/api/outputs/{output_id}/video")
-    def video(output_id: int, _: User, session: DB, download: bool = False) -> FileResponse:
-        output = find_output(output_id, session)
+    def video(output_id: int, account: User, session: DB, download: bool = False) -> FileResponse:
+        output = find_output(output_id, session, account)
         name = download_name(output)
         return FileResponse(
             output.path, media_type="video/mp4", filename=f"{name}.mp4" if download else None
         )
 
     @app.get("/api/outputs/{output_id}/subtitles")
-    def subtitles(output_id: int, _: User, session: DB) -> FileResponse:
-        output = find_output(output_id, session)
+    def subtitles(output_id: int, account: User, session: DB) -> FileResponse:
+        output = find_output(output_id, session, account)
         srt = Path(output.path).with_suffix(".srt")
         if not srt.exists():
             raise HTTPException(404, "no subtitles for this video")
@@ -554,14 +673,14 @@ def create_app(
     @app.get("/api/outputs/{output_id}/thumbnail")
     def thumbnail(
         output_id: int,
-        _: User,
+        account: User,
         session: DB,
         width: Annotated[int | None, Query(ge=120, le=1080)] = None,
     ) -> FileResponse:
         """The thumbnail, or a copy `width` px wide for a card, made once. Through a relay
         a dozen full 1080x1920 images is what makes a long list slow to appear, and asking
         again on every refresh only to hear they haven't changed costs a round trip each."""
-        output = find_output(output_id, session)
+        output = find_output(output_id, session, account)
         if not output.thumbnail:
             raise HTTPException(404, "no thumbnail")
         path = Path(output.thumbnail)
@@ -576,18 +695,21 @@ def create_app(
             path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"}
         )
 
-    def find_feed(feed_id: int, session: Session) -> Feed:
+    def find_feed(feed_id: int, session: Session, account: Account) -> Feed:
         feed = session.get(Feed, feed_id)
-        if feed is None:
+        if feed is None or not mine(account, feed.owner_id):
             raise HTTPException(404, "no such feed")
         return feed
 
-    def checked_feed(body: FeedRequest) -> FeedRequest:
-        unknown = set(body.presets) - presets().keys()
+    def checked_feed(body: FeedRequest, owner: Account | None) -> FeedRequest:
+        unknown = set(body.presets) - presets(owner).keys()
         if unknown:
             raise HTTPException(422, f"unknown preset(s): {', '.join(sorted(unknown))}")
         location = body.location.strip()
         if body.kind == "folder":
+            # A folder feed reads this computer's disk, which only the admin may.
+            if owner is not None and owner.role != accounts.ADMIN:
+                raise HTTPException(403, "only the admin can watch a folder on this computer")
             folder = Path(location).expanduser()
             if not folder.is_dir():
                 raise HTTPException(422, f"no such folder on this computer: {location}")
@@ -604,24 +726,27 @@ def create_app(
         return body.model_copy(update={"location": location, "notes": notes or None})
 
     @app.get("/api/feeds")
-    def list_feeds(_: User, session: DB) -> list[FeedView]:
+    def list_feeds(account: User, session: DB) -> list[FeedView]:
         feeds = select(Feed).options(selectinload(Feed.items).selectinload(FeedItem.job))
+        if account.role != accounts.ADMIN:
+            feeds = feeds.where(Feed.owner_id == account.id)
         return [feed_view(f) for f in session.scalars(feeds.order_by(Feed.id))]
 
     @app.post("/api/feeds")
-    def create_feed(body: FeedRequest, _: User, session: DB) -> FeedView:
-        feed = Feed(**checked_feed(body).model_dump())
+    def create_feed(body: FeedRequest, account: User, session: DB) -> FeedView:
+        feed = Feed(**checked_feed(body, account).model_dump(), owner_id=account.id)
         session.add(feed)
         session.commit()
         # Look at once: what is already there is noted now, before anything new arrives.
         autopilot.check(feed.id, make_session, jobs.process)
         session.expire_all()
-        return feed_view(find_feed(feed.id, session))
+        return feed_view(find_feed(feed.id, session, account))
 
     @app.put("/api/feeds/{feed_id}")
-    def update_feed(feed_id: int, body: FeedRequest, _: User, session: DB) -> FeedView:
-        feed = find_feed(feed_id, session)
-        updated = checked_feed(body)
+    def update_feed(feed_id: int, body: FeedRequest, account: User, session: DB) -> FeedView:
+        feed = find_feed(feed_id, session, account)
+        owner = session.get(Account, feed.owner_id) if feed.owner_id else None
+        updated = checked_feed(body, owner)
         if (updated.kind, updated.location) != (feed.kind, feed.location):
             feed.looked = False  # somewhere new: what is already there is noted first
         for key, value in updated.model_dump().items():
@@ -630,43 +755,116 @@ def create_app(
         return feed_view(feed)
 
     @app.delete("/api/feeds/{feed_id}")
-    def delete_feed(feed_id: int, _: User, session: DB) -> dict:
-        session.delete(find_feed(feed_id, session))
+    def delete_feed(feed_id: int, account: User, session: DB) -> dict:
+        session.delete(find_feed(feed_id, session, account))
         session.commit()
         return {"ok": True}
 
     @app.post("/api/feeds/{feed_id}/check")
-    def check_feed(feed_id: int, _: User, session: DB) -> FeedView:
-        find_feed(feed_id, session)
+    def check_feed(feed_id: int, account: User, session: DB) -> FeedView:
+        find_feed(feed_id, session, account)
         autopilot.check(feed_id, make_session, jobs.process)
         session.expire_all()
-        return feed_view(find_feed(feed_id, session))
+        return feed_view(find_feed(feed_id, session, account))
 
     @app.get("/api/piles")
-    def pile_counts(_: User, session: DB) -> dict[str, int]:
+    def pile_counts(account: User, session: DB) -> dict[str, int]:
         counts = {"ready": 0, "look": 0}
-        rows = session.execute(select(Output.pile, func.count()).group_by(Output.pile))
+        query = select(Output.pile, func.count()).join(Output.job)
+        if account.role != accounts.ADMIN:
+            query = query.where(Job.owner_id == account.id)
+        rows = session.execute(query.group_by(Output.pile))
         counts.update({pile: n for pile, n in rows if pile})
         return counts
 
     @app.get("/api/piles/{pile}")
-    def pile(pile: Literal["ready", "look"], _: User, session: DB) -> list[JobView]:
+    def pile(pile: Literal["ready", "look"], account: User, session: DB) -> list[JobView]:
         """The outputs in a pile, newest first, each with its job."""
+        query = select(Output).join(Output.job).where(Output.pile == pile)
+        if account.role != accounts.ADMIN:
+            query = query.where(Job.owner_id == account.id)
         outputs = session.scalars(
-            select(Output)
-            .where(Output.pile == pile)
-            .options(selectinload(Output.job).selectinload(Job.outputs))
+            query.options(selectinload(Output.job).selectinload(Job.outputs))
             .order_by(Output.id.desc())
             .limit(PILE_LIMIT)
         )
-        return [job_view(o.job, only=o.id) for o in outputs]
+        names = owners(session) if account.role == accounts.ADMIN else None
+        return [view(o.job, account, session, only=o.id, names=names) for o in outputs]
 
     @app.post("/api/outputs/{output_id}/verdict")
-    def verdict(output_id: int, body: VerdictRequest, _: User, session: DB) -> JobView:
-        output = find_output(output_id, session)
+    def verdict(output_id: int, body: VerdictRequest, account: User, session: DB) -> JobView:
+        output = find_output(output_id, session, account)
         output.verdict = body.verdict
         session.commit()
-        return job_view(output.job, only=output.id)
+        return view(output.job, account, session, only=output.id)
+
+    @app.get("/api/admin/users")
+    def list_accounts(_: Admin, session: DB) -> list[AccountView]:
+        counts = dict(
+            session.execute(select(Job.owner_id, func.count()).group_by(Job.owner_id)).all()
+        )
+        first = next(iter(accounts.admins(session)), None)
+        rows = session.scalars(select(Account).order_by(Account.created_at))
+        return [
+            AccountView(
+                id=a.id,
+                username=a.username,
+                role=a.role,
+                created_at=a.created_at,
+                last_seen_at=a.last_seen_at,
+                jobs=counts.get(a.id, 0) + (counts.get(None, 0) if a is first else 0),
+                presets=len(list(presets_dir(a).glob("*.yaml"))),
+            )
+            for a in rows
+        ]
+
+    @app.post("/api/admin/users")
+    def create_account(body: AccountRequest, _: Admin, session: DB) -> AccountView:
+        # Only employees are made here: a stolen admin session can't make more admins.
+        try:
+            account = accounts.create(
+                session, body.username, body.password, accounts.MEMBER, settings.presets_dir
+            )
+        except accounts.AccountError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return AccountView(
+            id=account.id, username=account.username, role=account.role,
+            created_at=account.created_at, last_seen_at=None, jobs=0,
+            presets=len(list(presets_dir(account).glob("*.yaml"))),
+        )  # fmt: skip
+
+    def find_account(account_id: str, session: Session) -> Account:
+        account = session.get(Account, account_id)
+        if account is None:
+            raise HTTPException(404, "no such account")
+        return account
+
+    @app.post("/api/admin/users/{account_id}/password")
+    def reset_password(account_id: str, body: PasswordRequest, me: Admin, session: DB) -> dict:
+        target = find_account(account_id, session)
+        try:
+            accounts.set_password(session, target, body.password)
+        except accounts.AccountError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"ok": True}
+
+    @app.delete("/api/admin/users/{account_id}")
+    def remove_account(account_id: str, me: Admin, session: DB, delete_work: bool = False) -> dict:
+        target = find_account(account_id, session)
+        if target.id == me.id:
+            raise HTTPException(422, "you can't remove your own account")
+        if target.role == accounts.ADMIN:
+            raise HTTPException(422, "an admin is removed from the Mac: aiedit user remove")
+        busy = session.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.owner_id == target.id, Job.status.in_(("queued", "running")))
+        )
+        if busy:
+            raise HTTPException(409, "their jobs are still running; wait or delete them first")
+        keeper = None if delete_work else session.get(Account, me.id)
+        accounts.remove(session, target, settings.presets_dir, keep_work_for=keeper)
+        return {"ok": True}
 
     if settings.web_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")

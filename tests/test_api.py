@@ -36,7 +36,14 @@ def env(tmp_path, monkeypatch):
     calls = []
 
     def fake_run(source, presets, settings, backends, notes, progress, run_id=None):
-        calls.append({"source": source, "presets": [p.name for p in presets], "notes": notes})
+        calls.append(
+            {
+                "source": source,
+                "presets": [p.name for p in presets],
+                "labels": [p.label for p in presets],
+                "notes": notes,
+            }
+        )
         progress("download", f"fetching {source}")
         progress("plan", "planning")
         outputs = []
@@ -194,7 +201,7 @@ def test_regenerate_reuses_the_source_with_new_notes(env):
         f"/api/jobs/{first['id']}/regenerate", json={"preset": "shorts-9x16", "notes": "shorter"}
     ).json()
     assert again["parent_id"] == first["id"]
-    assert env.calls[-1] == {
+    assert {k: v for k, v in env.calls[-1].items() if k != "labels"} == {
         "source": "https://x.test/v",
         "presets": ["shorts-9x16"],
         "notes": "shorter",
@@ -452,3 +459,104 @@ def test_a_job_with_some_versions_failed_is_done_and_says_which(env):
     job = env.client.get(f"/api/jobs/{created[0]['id']}").json()
     assert job["status"] == "done" and len(job["outputs"]) == 1
     assert job["error"] == "vocal-music-9x16: RuntimeError: encoder crashed"
+
+
+def employee(env, name="riya", password="employee-pass-1"):
+    """An employee made by the admin, and a client signed in as them."""
+    made = env.client.post("/api/admin/users", json={"username": name, "password": password})
+    assert made.status_code == 200, made.text
+    client = TestClient(env.client.app)
+    login = client.post("/api/login", json={"username": name, "password": password})
+    assert login.status_code == 200, login.text
+    return made.json(), client
+
+
+def test_the_admin_makes_employees_who_start_with_their_own_copy_of_the_presets(env):
+    account, riya = employee(env)
+    assert account["role"] == "member" and account["presets"] > 0
+    assert riya.get("/api/me").json()["role"] == "member"
+    mine = {p["name"]: p for p in riya.get("/api/presets").json()}
+    preset = mine["square-1x1"] | {"label": "Riya's square"}
+    assert riya.put("/api/presets/square-1x1", json=preset).status_code == 200
+    # The admin's own preset is untouched; theirs is changed, and the admin can see it.
+    admins = {p["name"]: p for p in env.client.get("/api/presets").json()}
+    assert admins["square-1x1"]["label"] != "Riya's square"
+    theirs = env.client.get(f"/api/presets?owner={account['id']}").json()
+    assert {p["name"]: p for p in theirs}["square-1x1"]["label"] == "Riya's square"
+
+
+def test_the_admin_edits_and_deletes_an_employees_presets(env):
+    account, riya = employee(env)
+    preset = env.client.get(f"/api/presets?owner={account['id']}").json()[0]
+    edited = preset | {"label": "Set by the admin"}
+    url = f"/api/presets/{preset['name']}?owner={account['id']}"
+    assert env.client.put(url, json=edited).status_code == 200
+    labels = {p["name"]: p["label"] for p in riya.get("/api/presets").json()}
+    assert labels[preset["name"]] == "Set by the admin"
+    assert env.client.delete(url).status_code == 200
+    assert preset["name"] not in {p["name"] for p in riya.get("/api/presets").json()}
+
+
+def test_an_employee_cant_reach_anyone_elses_presets_or_the_people_page(env):
+    first, _ = employee(env, "riya")
+    _, aman = employee(env, "aman")
+    me = env.client.get("/api/me").json()
+    for owner in (first["id"], me["id"]):
+        assert aman.get(f"/api/presets?owner={owner}").status_code == 403
+    assert aman.get("/api/admin/users").status_code == 403
+    made = aman.post("/api/admin/users", json={"username": "x-man", "password": "12345678"})
+    assert made.status_code == 403
+
+
+def test_an_employee_sees_only_their_own_jobs_and_the_admin_sees_who_made_each(env):
+    _, riya = employee(env)
+    admins_job = start(env.client)[0]["id"]
+    preset = {p["name"]: p for p in riya.get("/api/presets").json()}["square-1x1"]
+    riya.put("/api/presets/square-1x1", json=preset | {"label": "Riya's square"})
+    riyas_job = start(riya)[0]["id"]
+    assert env.calls[-1]["labels"] == ["Riya's square"]  # run with her own preset
+    assert [j["id"] for j in riya.get("/api/jobs").json()] == [riyas_job]
+    assert riya.get(f"/api/jobs/{admins_job}").status_code == 404
+    output = env.client.get(f"/api/jobs/{admins_job}").json()["outputs"][0]["id"]
+    assert riya.get(f"/api/outputs/{output}/video").status_code == 404
+    seen = {j["id"]: j["owner"] for j in env.client.get("/api/jobs").json()}
+    assert seen[riyas_job] == "riya" and seen[admins_job] == "admin"
+    assert riya.get("/api/jobs").json()[0]["owner"] is None
+
+
+def test_a_new_password_signs_the_employee_out_everywhere(env):
+    account, riya = employee(env)
+    reset = env.client.post(
+        f"/api/admin/users/{account['id']}/password", json={"password": "brand-new-pass"}
+    )
+    assert reset.status_code == 200
+    assert riya.get("/api/me").status_code == 401
+    again = riya.post("/api/login", json={"username": "riya", "password": "brand-new-pass"})
+    assert again.status_code == 200
+
+
+def test_removing_an_employee_keeps_their_jobs_for_the_admin_unless_asked(env):
+    account, riya = employee(env)
+    job = start(riya)[0]["id"]
+    assert env.client.delete(f"/api/admin/users/{account['id']}").status_code == 200
+    assert riya.get("/api/me").status_code == 401
+    assert env.client.get(f"/api/jobs/{job}").json()["owner"] == "admin"
+    other, aman = employee(env, "aman")
+    gone = start(aman)[0]["id"]
+    assert env.client.delete(f"/api/admin/users/{other['id']}?delete_work=true").status_code == 200
+    assert env.client.get(f"/api/jobs/{gone}").status_code == 404
+
+
+def test_the_web_makes_only_employees_and_never_removes_an_admin(env):
+    me = env.client.get("/api/me").json()
+    assert env.client.delete(f"/api/admin/users/{me['id']}").status_code == 422
+    made = env.client.post("/api/admin/users", json={"username": "boss", "password": "12345678"})
+    assert made.json()["role"] == "member"
+    short = env.client.post("/api/admin/users", json={"username": "kid", "password": "short"})
+    assert short.status_code == 422
+
+
+def test_only_the_admin_watches_a_folder_on_the_computer(env, tmp_path):
+    _, riya = employee(env)
+    feed = {"name": "mine", "kind": "folder", "location": str(tmp_path), "presets": ["square-1x1"]}
+    assert riya.post("/api/feeds", json=feed).status_code == 403
