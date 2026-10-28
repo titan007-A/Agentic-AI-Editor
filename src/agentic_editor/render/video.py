@@ -1,6 +1,7 @@
 """Builds the ffmpeg video filtergraph for an EDL. Pure string building, so the
 graph can be unit tested without running ffmpeg."""
 
+import itertools
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,6 +218,26 @@ def shot_parts(
     return crop, fit_chain((shot.width, picture_height), frame, background)
 
 
+GLIDE = 0.8  # seconds a band window takes to ease to a new row inside a shot
+
+
+def band_rows_expression(shots: list[Shot], clip_start: float) -> str:
+    """The window's top row over the clip's time t: the first shot's row, plus each later
+    shot's change, taken at once or eased in (smoothstep) around where it starts."""
+    terms = [str(shots[0].y)]
+    for before, shot in itertools.pairwise(shots):
+        change = shot.y - before.y
+        if not change:
+            continue
+        at = shot.start - clip_start
+        if shot.glide:
+            p = f"clip((t-{at - GLIDE / 2:.3f})/{GLIDE},0,1)"
+            terms.append(f"{change}*{p}*{p}*(3-2*{p})")
+        else:
+            terms.append(f"{change}*gte(t,{at:.3f})")
+    return "+".join(terms).replace("+-", "-")
+
+
 def crop_size(source: tuple[int, int], frame: tuple[int, int]) -> tuple[int, int]:
     """Largest window with the frame's aspect ratio that fits inside the source."""
     src_w, src_h = source
@@ -358,16 +379,14 @@ def build_graph(
         blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
         parts += blurred
         if edl.crop_mode == "none" and edl.shots:
-            # Cut top and bottom shot by shot, each at the picture's whole width.
-            count = len(edl.shots)
-            parts.append(f"[{label}]split={count}" + "".join(f"[s{k}]" for k in range(count)))
-            for k, shot in enumerate(edl.shots):
-                start, end = shot.start - clip.start, shot.end - clip.start
-                h = shot.height or (layers.content or (0, 0, *source))[3]
-                crop = [f"crop={shot.width}:{h}:{shot.x}:{shot.y}"]
-                trim = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
-                fit = band_fit(frame, background, preset.framing.picture_width, layers.picture_band)
-                segment(f"s{k}", trim + crop, fit)
+            # Cut top and bottom at the picture's whole width, one window whose row changes
+            # from shot to shot: at once on a cut, easing over GLIDE seconds inside a shot.
+            first = edl.shots[0]
+            h = first.height or (layers.content or (0, 0, *source))[3]
+            y = band_rows_expression(edl.shots, clip.start)
+            crop = [f"crop={first.width}:{h}:{first.x}:'{y}'"]
+            fit = band_fit(frame, background, preset.framing.picture_width, layers.picture_band)
+            segment(label, crop, fit)
             continue
         if edl.crop_mode == "smart" and edl.shots:
             # One continuous clip, framed shot by shot and joined back in order.

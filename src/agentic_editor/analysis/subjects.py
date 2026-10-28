@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 
 FRAME_WIDTH = 640  # plenty to place a box, and keeps the vision call quick
 PER_CALL = 4
+MAX_ITEMS = 8  # per frame: a long list is where a small model starts repeating itself
 
 Kind = Literal["head", "person", "instrument", "microphone", "text", "other"]
 
@@ -43,21 +44,21 @@ class _Found(BaseModel):
 
 class _Frame(BaseModel):
     image: int
-    items: list[_Found]
+    items: list[_Found] = Field(max_length=MAX_ITEMS)
 
 
 class _Reply(BaseModel):
-    frames: list[_Frame]
+    frames: list[_Frame] = Field(max_length=PER_CALL)
 
 
 PROMPT = (
     "Each image is one frame of a video that will be cropped to a narrow vertical 9:16 "
-    "frame for phone screens. For every image, list what is in it. For each person give two "
-    "entries: their head (kind head) and their whole visible body (kind person). Also list "
-    "each musical instrument, microphone or mic stand, and each piece of on-screen text or "
-    "graphics. Give a short label, the kind (head, person, instrument, microphone, text, "
-    "other), a box [x0, y0, x1, y1] in 0-1000 coordinates relative to that image's width and "
-    "height, and keep. Set keep=true when cutting through it would look wrong: the head of a "
+    "frame for phone screens. For every image, list at most 8 things, the most important "
+    "first: each person's head (kind head), each musical instrument, microphone or mic stand, "
+    "and each piece of on-screen text or graphics. Give a short label, the kind (head, "
+    "instrument, microphone, text, other), a box [x0, y0, x1, y1] in 0-1000 coordinates "
+    "relative to that image's width and height, and keep. Set keep=true when cutting "
+    "through it would look wrong: the head of a "
     "person the shot is about, the microphone or instrument someone is singing into or "
     "playing, readable text, a logo. Set keep=false for things that can be cropped without "
     "anyone noticing: bodies and shoulders, people in the background, stage equipment, "
@@ -93,10 +94,11 @@ def to_source(found: _Found, size: tuple[int, int]) -> Subject | None:
 
 def find(
     vision, video: Path, times: list[float], size: tuple[int, int], ffmpeg_bin: str, work: Path
-) -> list[list[Subject]]:
-    """Subjects at each of `times`, asking about a few frames per call."""
+) -> list[list[Subject] | None]:
+    """Subjects at each of `times`, asking about a few frames per call; None where the
+    model gave no usable answer, so it isn't remembered as an empty frame."""
     work.mkdir(parents=True, exist_ok=True)
-    found: list[list[Subject]] = []
+    found: list[list[Subject] | None] = []
     for batch_start in range(0, len(times), PER_CALL):
         batch = times[batch_start : batch_start + PER_CALL]
         images = [
@@ -114,7 +116,8 @@ def find(
         except LLMError as exc:
             # Framing falls back to the face detector for these frames.
             log.warning("no subjects for %d frame(s): %s", len(batch), exc)
-            by_image = {}
+            found += [None] * len(batch)
+            continue
         for i in range(len(batch)):
             subjects = [to_source(item, size) for item in by_image.get(i, [])]
             found.append([s for s in subjects if s is not None])

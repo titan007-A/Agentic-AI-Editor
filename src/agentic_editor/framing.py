@@ -20,6 +20,7 @@ between sizes at each cut.
 """
 
 import itertools
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -62,14 +63,17 @@ def crop_height(content: Content, frame: tuple[int, int]) -> int:
     return even(content[2] * frame[1] / frame[0])
 
 
-def view_times(clip: Clip, cuts: list[float]) -> list[float]:
-    """Where to sample for the vision model: early in each shot, then every few seconds."""
+def view_times(clip: Clip, cuts: list[float], every: float | None = VIEW_EVERY) -> list[float]:
+    """Where to sample for the vision model: early in each shot, then every few seconds
+    (or, with `every` None, only once a shot)."""
     times = []
     for start, end in shot_bounds(clip, cuts):
         t = start + min(0.5, (end - start) / 2)
         while t < end:
             times.append(round(t, 3))
-            t += VIEW_EVERY
+            if every is None:
+                break
+            t += every
     return times
 
 
@@ -383,6 +387,11 @@ def tall_shots(
 EDGE_TEXT = 0.35  # of the picture's height: text this near its top or bottom is cut off
 JUMP = 0.33  # of a band window's height: how far the main face jumps at a cut the detector missed
 MIN_RUN = 1.0  # seconds: no window is held for less, so the picture doesn't twitch
+# A band window stays where it sits for most of the reel unless the main face would lose more
+# than this share of its height (a little forehead or chin is fine)...
+FACE_TOLERANCE = 0.15
+# ...for at least this long; a briefer moment isn't worth moving the picture for.
+BRIEF = 2.0
 TEXT_MARGIN = 6  # px of picture kept clear of text that is cut off
 
 
@@ -464,8 +473,11 @@ def band_shots(
             y = lo + (hi - lo - height) / 2
             reason = "nothing that must stay; the middle of the picture"
         else:
-            # Some room above the heads, as a camera operator would leave.
-            y = min(whole[0], max(whole[0] - HEADROOM * height, whole[1] - height))
+            # The main face in the upper third, as a camera operator frames a person, as
+            # long as everything that must stay is still in.
+            centres = main_faces(start, end)
+            y = float(np.median(centres)) - height / 3 if centres else whole[0] - HEADROOM * height
+            y = min(whole[0], max(y, whole[1] - height))
             reason = "the picture's top and bottom cut around what matters"
         y = even(min(max(y, lo), hi - height))
         return Shot(start=start, end=end, x=left, width=picture_width, y=y, height=height,
@@ -499,14 +511,83 @@ def band_shots(
         runs.append((run_start, end))
         return runs
 
-    shots = []
+    def face_track(t0: float, t1: float) -> list[tuple[float, float]]:
+        """Forehead and chin rows of the main face in each sample of [t0, t1)."""
+        return [
+            ((f.cy - 0.55 * f.height) * src_height, (f.cy + 0.55 * f.height) * src_height)
+            for t, seen in faces
+            if t0 <= t < t1 and seen
+            for f in [max(seen, key=lambda f: f.area)]
+        ]
+
+    def cut_for(y: float, shot: Shot) -> float:
+        """Seconds of the shot in which a window at row y cuts the main face past tolerance."""
+        track = face_track(shot.start, shot.end)
+        if not track:
+            return 0.0
+        each = (shot.end - shot.start) / len(track)
+        lost = [
+            (max(0.0, y - top) + max(0.0, bottom - y - height)) / (bottom - top)
+            for top, bottom in track
+        ]
+        return each * sum(share > FACE_TOLERANCE for share in lost)
+
+    def keeping(y: float, shot: Shot) -> float:
+        """The row nearest y at which the shot's main face is whole (or, if it moves too much
+        for that, within tolerance), or else the shot's own best row. A window that has to
+        move anyway goes far enough to show the whole face."""
+        track = face_track(shot.start, shot.end)
+        if not track:
+            return shot.y
+        for tolerance in (0.0, FACE_TOLERANCE):
+            low = max(b - tolerance * (b - a) for a, b in track) - height
+            high = min(a + tolerance * (b - a) for a, b in track)
+            if low <= high:
+                # On an even row at or past `low`, so rounding never cuts what was kept.
+                return min(max(even(y), math.ceil(low / 2) * 2), even(high))
+        return shot.y
+
+    # Each shot's own best window, and whether it begins inside a shot of the source (a cut
+    # the detector missed) rather than at one of its cuts.
+    pieces: list[tuple[Shot, bool]] = []
     for start, end in shot_bounds(clip, cuts):
         heads = union(head_rows(start, end))
-        if heads is not None and heads[1] - heads[0] > height:
-            shots += [frame(a, b) for a, b in face_runs(start, end)]
-        else:
-            shots.append(frame(start, end))
+        runs = face_runs(start, end) if heads is not None and heads[1] - heads[0] > height else []
+        for i, (a, b) in enumerate(runs or [(start, end)]):
+            pieces.append((frame(a, b), i > 0))
+    # One window for the whole reel, where the shots mostly want it: a picture that moves at
+    # every cut makes each cut a jolt.
+    framed = [shot for shot, _ in pieces if not shot.reason.startswith("nothing")]
+    anchor = weighted_median([s.y for s in framed], [s.end - s.start for s in framed])
+    shots: list[Shot] = []
+    for shot, inside in pieces:
+        y, reason = shot.y, shot.reason
+        if anchor is not None:
+            y, reason = anchor, "the reel's one window"
+            if cut_for(anchor, shot) >= BRIEF:
+                y = keeping(anchor, shot)
+                reason = "moved only as far as the face needs"
+        y = even(min(max(y, lo), hi - height))
+        if shots and shots[-1].y == y:
+            shots[-1] = shots[-1].model_copy(update={"end": shot.end})
+            continue
+        # Moving at a cut of the source hides the move; inside a shot it glides.
+        shots.append(shot.model_copy(update={"y": y, "reason": reason, "glide": inside}))
+    if shots:
+        shots[0] = shots[0].model_copy(update={"glide": False})
     return shots
+
+
+def weighted_median(values: list[float], weights: list[float]) -> float | None:
+    if not values:
+        return None
+    order = sorted(zip(values, weights, strict=True))
+    half, total = sum(weights) / 2, 0.0
+    for value, weight in order:
+        total += weight
+        if total >= half:
+            return value
+    return order[-1][0]
 
 
 def _frame_group(

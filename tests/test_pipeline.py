@@ -321,3 +321,25 @@ def test_without_the_vision_model_only_overlay_sized_boxes_are_blurred(tmp_path)
         [handle, shirt], None, tmp_path / "v.mp4", None, tmp_path, lambda *a: None, (1920, 1080)
     )
     assert kept == [handle]
+
+
+def test_a_failed_vision_answer_is_asked_again_next_time(monkeypatch, tmp_path, make_analysis):
+    import json
+
+    from agentic_editor.analysis import subjects
+
+    answers = [[None, []], [[]]]
+    asked = []
+
+    def find(vision, video, times, *args):
+        asked.append(list(times))
+        return answers.pop(0)
+
+    monkeypatch.setattr(subjects, "find", find)
+    vision = type("V", (), {"model": "m:4b"})()
+    analysis = make_analysis(WORDS, 10)
+    settings = type("S", (), {"ffmpeg_bin": "ffmpeg"})()
+    pipeline.subject_samples(vision, tmp_path / "v.mp4", [1.0, 2.0], analysis, settings, tmp_path)
+    assert list(json.loads((tmp_path / "subjects-m_4b.json").read_text())) == ["2.000"]
+    pipeline.subject_samples(vision, tmp_path / "v.mp4", [1.0, 2.0], analysis, settings, tmp_path)
+    assert asked == [[1.0, 2.0], [1.0]]

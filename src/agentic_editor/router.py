@@ -24,6 +24,10 @@ from agentic_editor.settings import Settings
 from agentic_editor.transcript import Transcript
 
 PR_SET_PDEATHSIG = 1
+# Four frames are about 3,100 tokens; Ollama's default of 4,096 left the answer ~1,000 and
+# cut it off. A reply past VISION_REPLY tokens is a model repeating itself.
+VISION_CONTEXT = 8192
+VISION_REPLY = 2048
 
 
 def exit_with(parent: int, every: float = 1.0) -> None:
@@ -123,11 +127,14 @@ class ModelRouter:
         )
 
     def vision(self) -> OllamaClient:
-        """The vision model, holding the GPU while open."""
+        """The vision model, holding the GPU while open. Its calls carry several frames, more
+        than Ollama's default context holds with the answer: the answer was cut off."""
         return OllamaClient(
             self.settings.ollama_url,
             self.settings.vision_model,
             slot=slots.gpu,
             progress=self.progress,
             gpu_layers=self.settings.llm_gpu_layers,
+            context=VISION_CONTEXT,
+            max_reply=VISION_REPLY,
         )
