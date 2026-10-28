@@ -312,15 +312,39 @@ def test_a_video_that_cant_be_analysed_fails_with_the_reason(make_analysis, monk
         )
 
 
-def test_without_the_vision_model_only_overlay_sized_boxes_are_blurred(tmp_path):
+def test_without_the_vision_model_nothing_is_blurred(tmp_path):
     from agentic_editor.analysis.watermarks import Watermark
 
     handle = Watermark(x=1700, y=40, width=180, height=60, spans=[(0, 9)], windows=9)
-    shirt = Watermark(x=800, y=500, width=600, height=500, spans=[(0, 9)], windows=9)
     kept = pipeline.confirmed_watermarks(
-        [handle, shirt], None, tmp_path / "v.mp4", None, tmp_path, lambda *a: None, (1920, 1080)
+        [handle], None, tmp_path / "v.mp4", None, tmp_path, lambda *a: None, (1920, 1080)
     )
-    assert kept == [handle]
+    assert kept == []
+
+
+def test_a_box_bigger_than_a_watermark_is_never_blurred_whatever_the_model_says(
+    tmp_path, monkeypatch
+):
+    from agentic_editor.analysis import watermarks
+    from agentic_editor.analysis.watermarks import Watermark
+
+    handle = Watermark(x=1700, y=40, width=180, height=60, spans=[(0, 9)], windows=9)
+    # A product box on a desk, 246x328 of a 720x1280 picture: the model called it a logo.
+    box = Watermark(x=0, y=742, width=246, height=328, spans=[(0, 9)], windows=9)
+    asked = []
+
+    def confirm(vision, video, marks, *args):
+        asked.extend(marks)
+        return [m.model_copy(update={"confirmed": True}) for m in marks]
+
+    monkeypatch.setattr(watermarks, "confirm", confirm)
+    vision = type("V", (), {"model": "m:4b"})()
+    settings = type("S", (), {"ffmpeg_bin": "ffmpeg"})()
+    kept = pipeline.confirmed_watermarks(
+        [handle.model_copy(update={"x": 500, "y": 40}), box], vision, tmp_path / "v.mp4",
+        settings, tmp_path, lambda *a: None, (720, 1280),
+    )  # fmt: skip
+    assert [(m.x, m.width) for m in kept] == [(500, 180)] and len(asked) == 1
 
 
 def test_a_failed_vision_answer_is_asked_again_next_time(monkeypatch, tmp_path, make_analysis):

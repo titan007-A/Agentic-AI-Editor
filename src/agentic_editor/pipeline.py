@@ -49,7 +49,11 @@ log = logging.getLogger(__name__)
 Progress = Callable[[str, str], None]
 MAX_FIXES = 2
 # Without the vision model to tell, only a box this share of the frame can be an overlay.
-UNCHECKED_AREA = 0.05
+# A watermark (a handle, an app or channel logo) is small: no box bigger than this is ever
+# blurred, whatever the vision model says, so a blur never covers a piece of the scene.
+BLUR_AREA = 0.03  # of the frame
+BLUR_HEIGHT = 0.10
+BLUR_WIDTH = 0.5
 UPLOAD_PREFIX = "upload:"
 
 
@@ -890,20 +894,22 @@ def confirmed_watermarks(
     progress: Progress,
     frame: tuple[int, int],
 ) -> list[Watermark]:
-    """Candidates the vision model agrees are overlays. Without it every candidate the
-    size of an overlay is blurred: a smudge on some scenery is a smaller miss than a
-    watermark left in, but a blur over half the picture is no smaller."""
+    """Candidates the vision model agrees are overlays, and only those the size of one. A
+    blur over a piece of the scene spoils a video more than a watermark left in, so without
+    the vision model nothing is blurred."""
+    width, height = frame
+    candidates = [
+        m
+        for m in candidates
+        if m.width * m.height <= BLUR_AREA * width * height
+        and m.height <= BLUR_HEIGHT * height
+        and m.width <= BLUR_WIDTH * width
+    ]
     if not candidates:
         return []
     if vision is None:
-        small = [
-            m for m in candidates if m.width * m.height <= UNCHECKED_AREA * frame[0] * frame[1]
-        ]
-        log.warning(
-            "no vision model; blurring %d of %d unconfirmed watermark(s)",
-            len(small), len(candidates),
-        )  # fmt: skip
-        return small
+        log.warning("no vision model; leaving %d possible watermark(s) unblurred", len(candidates))
+        return []
     model = vision.model.replace(":", "_").replace("/", "_")
     cache = work_dir / f"watermarks-v{watermarks.VERSION}-{model}.json"
     if cache.exists():

@@ -27,7 +27,7 @@ WINDOW_STEP = 1.0  # seconds between window starts
 # fraction of a second of each jump.
 PRESENCE_SECONDS = 1.5
 # Bump when detection changes, so cached candidates from the old detector aren't reused.
-VERSION = 3
+VERSION = 4
 
 EDGE_LEVEL = 28  # gray-level step that counts as an edge
 PERSISTENT_SHARE = 0.9  # of a window's frames an edge has to be in
@@ -323,9 +323,9 @@ def find(
         x0, y0, x1, y1 = (round(v * scale) for v in t.box)
         # Padding follows the shorter side, the text height for a handle: padded by its
         # length, it takes in so much scene that the vision model no longer sees an overlay.
-        # The found box already runs past the letters, so a quarter of it covers their
-        # anti-aliased edges without blurring a band of scene around a small handle.
-        pad = max(6, round(min(0.25 * min(x1 - x0, y1 - y0), 0.03 * source_size[0])))
+        # The found box already runs past the letters, so an eighth of it covers their
+        # anti-aliased edges; more blurs a visible band of scene around the mark.
+        pad = max(4, round(min(0.125 * min(x1 - x0, y1 - y0), 0.015 * source_size[0])))
         x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
         x1, y1 = min(source_size[0], x1 + pad), min(source_size[1], y1 + pad)
         found.append(
@@ -420,10 +420,12 @@ def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> list
 CONFIRM_PROMPT = (
     "The first image is a frame from a video with a red box drawn on it. The second is a "
     "close-up of the area inside the box. Was what is inside the box added on top of the "
-    "video afterwards, as a watermark, logo, channel or app name, @username, website or other "
-    "branding? Or is it part of the filmed scene itself, such as a wall, furniture, a window, "
-    "a lamp, a person, their clothes, or a real sign in the room? Answer overlay=true only "
-    "for something added on top."
+    "video afterwards, as a flat graphic: a watermark, a channel or app logo, an @username, "
+    "a website address? Or is it part of the filmed scene itself? Text and logos printed "
+    "on things that were filmed are part of the scene: a product or its box, a screen or "
+    "monitor, a poster, a sign, clothes, an instrument, a microphone. So are walls, "
+    "furniture, lamps, plants and people. Answer overlay=true only if you are sure it was "
+    "added on top; when in doubt, answer false."
 )
 
 
@@ -444,7 +446,8 @@ def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_d
             )
             overlay = parse(_Verdict, reply).overlay
         except LLMError:
-            # Unsure is treated as yes: a watermark must never be left in.
-            overlay = True
+            # No answer is no: a blur over part of the scene spoils the video more than a
+            # watermark left in.
+            overlay = False
         confirmed.append(mark.model_copy(update={"confirmed": overlay}))
     return confirmed
