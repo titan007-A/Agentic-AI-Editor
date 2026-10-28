@@ -93,3 +93,16 @@ def test_a_model_that_wont_fit_whole_on_the_gpu_is_left_to_ollama():
     assert llm.chat_json([{"role": "user", "content": "hi"}], {}) == {}
     assert llm.chat_json([{"role": "user", "content": "again"}], {}) == {}
     assert ["num_gpu" in b["options"] for b in sent] == [True, False, False]
+
+
+def test_the_vision_model_gets_room_for_its_frames_and_a_cap_on_its_answer():
+    sent = []
+
+    def answer(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "{}"}})
+
+    llm = client(answer)
+    llm.context, llm.max_reply = 8192, 2048
+    llm.chat_json([{"role": "user", "content": "hi"}], {})
+    assert sent[0]["options"]["num_ctx"] == 8192 and sent[0]["options"]["num_predict"] == 2048

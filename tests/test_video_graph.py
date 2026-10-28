@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from agentic_editor.analysis.watermarks import Watermark
-from agentic_editor.edl import EDL, Clip, Zoom
+from agentic_editor.edl import EDL, Clip, Shot, Zoom
 from agentic_editor.presets import Preset
 from agentic_editor.render import text
 from agentic_editor.render.video import Layers, build_graph, frame_chain, video_band
@@ -206,3 +206,16 @@ def test_the_picture_goes_between_the_text_where_the_preset_puts_it():
     fit = band_fit(preset.size, "#C8A77D", 1.0, (top, bottom))
     assert fit[0].startswith(f"scale=1080:{bottom - top}:")
     assert f":(ow-iw)/2:{top}+({bottom - top}-ih)/2:" in fit[1]
+
+
+def test_band_windows_move_at_once_on_a_cut_and_ease_inside_a_shot():
+    from agentic_editor.render.video import band_rows_expression
+
+    shots = [
+        Shot(start=10, end=14, x=0, width=1080, y=300, height=900),
+        Shot(start=14, end=18, x=0, width=1080, y=500, height=900),
+        Shot(start=18, end=20, x=0, width=1080, y=420, height=900, glide=True),
+    ]
+    expression = band_rows_expression(shots, 10)
+    assert expression.startswith("300+200*gte(t,4.000)-80*")
+    assert "clip((t-7.600)/0.8,0,1)" in expression

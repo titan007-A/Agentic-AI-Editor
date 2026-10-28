@@ -44,6 +44,9 @@ class Shot(BaseModel):
     y: int = Field(default=0, ge=0)
     height: int | None = Field(default=None, gt=0)
     follow: bool = False  # the window tracks the subject's head instead of staying put
+    # The window eases here from where the shot before left it, rather than jumping: there
+    # is no cut in the source to hide the move.
+    glide: bool = False
     reason: str = ""
 
 

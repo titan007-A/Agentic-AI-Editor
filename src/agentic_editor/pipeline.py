@@ -169,9 +169,12 @@ def subject_samples(
         size = (analysis.width, analysis.height)
         found = subjects.find(vision, video, missing, size, settings.ffmpeg_bin, work_dir / "views")
         for t, items in zip(missing, found, strict=True):
-            known[f"{t:.3f}"] = [s.model_dump() for s in items]
+            if items is not None:  # a failed answer is asked again next time
+                known[f"{t:.3f}"] = [s.model_dump() for s in items]
         cache.write_text(json.dumps(known))
-    return [(t, [subjects.Subject.model_validate(s) for s in known[f"{t:.3f}"]]) for t in times]
+    return [
+        (t, [subjects.Subject.model_validate(s) for s in known.get(f"{t:.3f}", [])]) for t in times
+    ]
 
 
 def translated(
@@ -339,7 +342,9 @@ def band_framing(
     if key not in detections:
         detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
     face_samples = [(clip.start + t, found) for t, found in detections[key]]
-    times = framing.view_times(clip, analysis.scenes)
+    # Once a shot is enough: the face detector follows the faces through it, and the window
+    # only moves at a shot's start.
+    times = framing.view_times(clip, analysis.scenes, every=None)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
     marks = [(m.y, m.y + m.height) for m in analysis.watermarks]
     rows = compose.band_rows(preset, band, picture[2])

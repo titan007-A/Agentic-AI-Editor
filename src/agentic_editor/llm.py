@@ -37,9 +37,15 @@ class OllamaClient:
         slot=None,
         progress=None,
         gpu_layers: int | None = None,
+        context: int | None = None,
+        max_reply: int | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        # Tokens of prompt (images included) and reply the model holds at once, None for
+        # Ollama's default; and the most a reply may run to, so one that loops ends.
+        self.context = context
+        self.max_reply = max_reply
         # Layers to put on the GPU; None leaves it to Ollama, which keeps a margin and so
         # can split a model that would fit across the CPU too, at about two thirds the speed.
         self.gpu_layers = gpu_layers
@@ -82,6 +88,10 @@ class OllamaClient:
             "think": False,
             "options": {"temperature": temperature},
         }
+        if self.context:
+            body["options"]["num_ctx"] = self.context
+        if self.max_reply:
+            body["options"]["num_predict"] = self.max_reply
         # Small models now and then stop mid-answer; one more try nearly always lands.
         for attempt in range(2):
             if self.gpu_layers is not None:

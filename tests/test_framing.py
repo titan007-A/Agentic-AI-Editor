@@ -242,7 +242,7 @@ def test_lyrics_along_the_bottom_of_the_picture_are_cut_off():
     samples = [(5.0, [_text(1290, 1340)])]
     picture = (0, 526, 1080, 866)
     shots = band_shots(clip, [], samples, singer, picture, 900, 1920)
-    assert shots[0].y + shots[0].height <= 1290 - 6
+    assert shots[0].y + shots[0].height <= 1290 - 0.025 * 866
     assert shots[0].width == 1080
 
 
@@ -296,3 +296,53 @@ def test_a_face_that_only_wobbles_keeps_one_steady_window():
     assert len(shots) == 1
     middle = shots[0].y + 491
     assert abs(middle - 0.455 * 1920) < 0.02 * 1920
+
+
+def _singer(times, cy, height=0.1):
+    return [(t, [Face(cx=0.5, cy=cy(t), width=0.2, height=height, score=0.9)]) for t in times]
+
+
+def test_the_window_stays_put_across_cuts_when_the_face_is_roughly_in_place():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=12)
+    # Three camera angles, the face a little higher or lower in each.
+    rows = {0: 0.40, 1: 0.43, 2: 0.38}
+    face = _singer([0.25 + i * 0.5 for i in range(24)], lambda t: rows[int(t // 4)])
+    shots = band_shots(clip, [4.0, 8.0], [], face, (0, 0, 1080, 1920), 900, 1920)
+    assert len(shots) == 1 and (shots[0].start, shots[0].end) == (0, 12)
+    # The face in the window's upper third.
+    assert abs((0.40 * 1920 - shots[0].y) / 900 - 1 / 3) < 0.05
+
+
+def test_a_moment_too_brief_to_matter_doesnt_move_the_window():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=12)
+    # A one-second split screen at 6-7 s puts the face low; the cut there was missed.
+    face = _singer([0.25 + i * 0.25 for i in range(47)], lambda t: 0.85 if 6 <= t < 7 else 0.35)
+    shots = band_shots(clip, [], [], face, (0, 0, 1080, 1920), 900, 1920)
+    assert len(shots) == 1
+
+
+def test_a_face_out_of_the_window_for_long_moves_it_at_the_cut_without_gliding():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=12)
+    face = _singer([0.25 + i * 0.25 for i in range(47)], lambda t: 0.30 if t < 8 else 0.80)
+    shots = band_shots(clip, [8.0], [], face, (0, 0, 1080, 1920), 900, 1920)
+    assert [(s.start, s.end) for s in shots] == [(0, 8.0), (8.0, 12)]
+    assert not shots[1].glide
+    top, bottom = (0.80 - 0.055) * 1920, (0.80 + 0.055) * 1920
+    assert shots[1].y <= top and shots[1].y + 900 >= bottom
+
+
+def test_a_move_where_the_source_has_no_cut_glides():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=12)
+    face = _singer(
+        [0.25 + i * 0.25 for i in range(47)], lambda t: 0.25 if t < 6 else 0.75, height=0.2
+    )
+    shots = band_shots(clip, [], [], face, (0, 0, 1080, 1920), 900, 1920)
+    assert len(shots) == 2 and shots[1].glide
