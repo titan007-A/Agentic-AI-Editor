@@ -488,6 +488,19 @@ def create_app(
         (presets_dir(target) / f"{name}.yaml").unlink()
         return {"ok": True}
 
+    @app.post("/api/presets/{name}/share")
+    def share_preset(name: str, me: Admin, session: DB) -> dict:
+        """Copy one of the admin's presets to every employee, replacing theirs of that name:
+        employees' presets are their own copies, so the admin's later changes don't reach
+        them otherwise."""
+        preset = presets(me).get(name)
+        if preset is None:
+            raise HTTPException(404, "no such preset")
+        members = list(session.scalars(select(Account).where(Account.role == accounts.MEMBER)))
+        for member in members:
+            save_preset(preset, presets_dir(member))
+        return {"sent_to": [m.username for m in members]}
+
     @app.get("/api/presets/{name}/yaml")
     def preset_yaml(name: str, account: User, session: DB, owner: str | None = None) -> dict:
         preset = presets(whose(account, owner, session)).get(name)

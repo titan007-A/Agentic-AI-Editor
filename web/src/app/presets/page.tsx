@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, FileCode, Plus, Save, Sparkles, Trash2, X } from "lucide-react";
+import { Copy, FileCode, Plus, Save, Send, Sparkles, Trash2, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -62,6 +62,7 @@ function Presets() {
   const [naming, setNaming] = useState<"copy" | "new" | null>(null);
   const [copyName, setCopyName] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [yaml, setYaml] = useState<string | null>(null);
   const [learnOpen, setLearnOpen] = useState(false);
   const [learned, setLearned] = useState<string[]>([]);
@@ -99,6 +100,24 @@ function Presets() {
     window.history.replaceState(null, "", url);
   }
   const members = people.filter((p) => p.role === "member");
+
+  async function share() {
+    if (!draft) return;
+    setBusy(true);
+    try {
+      const { sent_to } = await api.sharePreset(draft.name);
+      toast.success(
+        sent_to.length
+          ? `${draft.label} sent to ${sent_to.join(", ")}`
+          : "There are no employees to send it to",
+      );
+      setShareOpen(false);
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
   const shownFor = members.find((p) => p.id === owner)?.username;
 
   const openDraft = useCallback(
@@ -299,6 +318,26 @@ function Presets() {
     </div>
   );
 
+  const shareDialog = draft && (
+    <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Send {draft.label} to all employees?</DialogTitle>
+          <DialogDescription>
+            {members.map((m) => m.username).join(", ")} get this preset as you saved it. An employee
+            who has a preset called {draft.name} has theirs replaced, with any changes they made to
+            it.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button onClick={share} disabled={busy}>
+            <Send /> Send
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   // The dialogs come first in both views, so switching views keeps their state.
   if (!draft) {
     return (
@@ -335,6 +374,7 @@ function Presets() {
     <>
       {learnDialog}
       {nameDialog}
+      {shareDialog}
       {ownerPicker}
       <div className="space-y-6 pb-20">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -368,6 +408,16 @@ function Presets() {
                 <Button variant="outline" onClick={() => setDeleteOpen(true)}>
                   <Trash2 /> Delete
                 </Button>
+                {me?.role === "admin" && !owner && members.length > 0 && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setShareOpen(true)}
+                    disabled={dirty}
+                    title={dirty ? "Save it first" : undefined}
+                  >
+                    <Send /> Send to all employees
+                  </Button>
+                )}
               </>
             )}
           </div>
