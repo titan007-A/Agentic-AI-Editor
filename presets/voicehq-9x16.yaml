@@ -17,7 +17,7 @@ text_blocks:
     size: 58
     color: "#FFFFFF"
     anchor: top
-    offset: 240
+    offset: 150
     max_shrink: 0.9
   - text: "Song: {song}\nArtist: {artist}"
     font: OpenSans-SemiBold
