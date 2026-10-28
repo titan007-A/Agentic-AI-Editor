@@ -19,6 +19,7 @@ from agentic_editor import (
     ffmpeg,
     framing,
     hooks,
+    names,
     review,
     silence,
     slots,
@@ -629,6 +630,17 @@ def edit(
         log.exception("%s failed", what)
         failures.append(f"{what}: {type(exc).__name__}: {exc}")
         errors.append(exc)
+
+    # A preset that names the song and artist takes them from the video's name.
+    named = []
+    for preset in presets:
+        try:
+            named.append(names.fill(preset, source.title))
+        except names.UnnamedSong as exc:
+            failed(preset.name, exc)
+    presets = named
+    if not presets:
+        raise RuntimeError("; ".join(failures)) from errors[-1]
 
     analyses: dict[str, Analysis] = {}
     for kind in dict.fromkeys(p.audio.source for p in presets):

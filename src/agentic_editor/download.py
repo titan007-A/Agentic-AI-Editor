@@ -102,9 +102,13 @@ def fetch(url: str, sources_dir: Path) -> Source:
 
 
 def local(path: Path) -> Source:
+    """A file on this machine, titled by its name; an upload by the name it was sent with,
+    kept beside it, since the stored one is made safe for a path."""
     if not path.exists():
         raise FileNotFoundError(path)
-    return Source(path=path.resolve(), title=path.stem)
+    sent = path.parent / ".name"
+    title = Path(sent.read_text(encoding="utf-8")).stem if sent.is_file() else path.stem
+    return Source(path=path.resolve(), title=title or path.stem)
 
 
 def update_ytdlp() -> str:

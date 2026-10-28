@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 NOTICE_KEY = "usage_notice_accepted"
+ORIGINAL_NAME = ".name"  # next to an upload: the file name it was sent with
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
 SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
 # How long a shutdown waits for running jobs; any still running are failed at the next start.
@@ -406,6 +407,11 @@ def create_app(
         name = f"{digest.hexdigest()[:20]}/{stem[:80]}{suffix}"
         (uploads / name).parent.mkdir(exist_ok=True)
         partial.replace(uploads / name)
+        # The stored name is made safe for a path; the title, which can carry a song and its
+        # artist ("Song — Artist"), is read from the name as it was.
+        (uploads / name).parent.joinpath(ORIGINAL_NAME).write_text(
+            Path(file.filename or name).name[:200], encoding="utf-8"
+        )
         return {"source": f"{UPLOAD_PREFIX}{name}", "name": file.filename}
 
     def check_source(source: str) -> None:

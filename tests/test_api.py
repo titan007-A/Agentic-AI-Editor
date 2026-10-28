@@ -240,6 +240,15 @@ def test_uploads_are_stored_by_content_hash_under_their_own_name(env):
     assert upload("notes.txt", b"x").status_code == 400
 
 
+def test_an_upload_keeps_the_name_it_was_sent_with_as_its_title(env):
+    from agentic_editor.pipeline import resolve_source
+
+    sent = env.client.post(
+        "/api/uploads", files={"file": ("Felicità — Al Bano & Romina.mp4", b"video bytes")}
+    ).json()
+    assert resolve_source(sent["source"], env.settings).title == "Felicità — Al Bano & Romina"
+
+
 def test_upload_references_cannot_escape_the_upload_folder(env):
     for ref in ["upload:../../etc/passwd", "upload:0123456789abcdef0123/../x.mp4"]:
         body = {"sources": [ref], "presets": ["square-1x1"]}
