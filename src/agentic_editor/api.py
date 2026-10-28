@@ -147,6 +147,10 @@ class OutputView(BaseModel):
     verdict: str | None = None
     pile: str | None = None
     edl: dict
+    caption: str = ""
+    caption_status: str | None = None
+    caption_sources: list[dict] = []
+    caption_notes: list[str] = []
 
 
 class JobView(BaseModel):
@@ -183,6 +187,10 @@ def job_view(job: Job, only: int | None = None, owner: str | None = None) -> Job
             verdict=o.verdict,
             pile=o.pile,
             edl=o.edl,
+            caption=o.caption or "",
+            caption_status=o.caption_status,
+            caption_sources=o.caption_sources or [],
+            caption_notes=o.caption_notes or [],
         )
         for o in job.outputs
         if only is None or o.id == only
@@ -804,6 +812,21 @@ def create_app(
         )
         names = owners(session) if account.role == accounts.ADMIN else None
         return [view(o.job, account, session, only=o.id, names=names) for o in outputs]
+
+    @app.get("/api/outputs/{output_id}")
+    def output_detail(output_id: int, account: User, session: DB) -> JobView:
+        output = find_output(output_id, session, account)
+        return view(output.job, account, session, only=output.id)
+
+    @app.post("/api/outputs/{output_id}/caption")
+    def write_caption(output_id: int, account: User, session: DB) -> JobView:
+        """Write the post's caption in the background; the output shows how it goes."""
+        output = find_output(output_id, session, account)
+        if output.caption_status not in ("queued", "writing"):
+            output.caption_status, output.caption_notes = "queued", []
+            session.commit()
+            jobs.write_caption(output.id)
+        return view(output.job, account, session, only=output.id)
 
     @app.post("/api/outputs/{output_id}/verdict")
     def verdict(output_id: int, body: VerdictRequest, account: User, session: DB) -> JobView:

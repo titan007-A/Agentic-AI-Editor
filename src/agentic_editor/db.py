@@ -100,6 +100,12 @@ class Output(Base):
     doubts: Mapped[list[str]] = mapped_column(JSON, default=list)
     # The editor's call, which overrides the agent's: approved, posted or dismissed.
     verdict: Mapped[str | None] = mapped_column(String(16))
+    # The post's caption (see caption.py): queued, writing, done or failed; the articles it
+    # was written from; and what to check before posting it, empty when it passed.
+    caption: Mapped[str] = mapped_column(Text, default="")
+    caption_status: Mapped[str | None] = mapped_column(String(16))
+    caption_sources: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    caption_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     job: Mapped[Job] = relationship(back_populates="outputs")
 

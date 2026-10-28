@@ -810,7 +810,8 @@ def edit(
         if len(errors) == 1:
             raise errors[0]
         raise RuntimeError("; ".join(failures)) from errors[-1]
-    meta = {"title": source.title, "url": source.url, "notes": notes}
+    meta = {"title": source.title, "url": source.url, "notes": notes,
+            "uploader": source.uploader, "description": source.description}  # fmt: skip
     (out_dir / "source.json").write_text(json.dumps(meta))
     return Result(source.title, outputs, failures)
 

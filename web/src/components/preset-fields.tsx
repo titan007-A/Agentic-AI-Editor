@@ -198,6 +198,16 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     ],
   },
   {
+    title: "Post caption",
+    fields: [
+      { path: "post_caption.enabled", label: "Write it after every render", kind: "switch" },
+      { path: "post_caption.language", label: "Language (es, en, it...)", kind: "text" },
+      { path: "post_caption.style", label: "How to write it (empty: default)", kind: "textarea" },
+      { path: "post_caption.min_words", label: "Min words", kind: "number" },
+      { path: "post_caption.max_words", label: "Max words", kind: "number" },
+    ],
+  },
+  {
     title: "Beat",
     fields: [
       { path: "beat_sync.snap_trims", label: "Start and end on the beat", kind: "switch" },
