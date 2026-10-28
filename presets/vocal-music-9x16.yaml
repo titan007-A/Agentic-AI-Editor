@@ -14,24 +14,26 @@ hook:
 text_blocks:
   - text: "This page is dedicated\nto sharing amazing artists'\nraw vocals without instruments"
     font: OpenSans-ExtraBold
-    size: 42
+    size: 58
     color: "#FFFFFF"
     anchor: top
-    offset: 290
+    offset: 240
     max_shrink: 0.9
   - text: Follow us for more iconic raw vocals
-    font: OpenSans-ExtraBold
-    size: 38
+    font: OpenSans-SemiBold
+    size: 52
     color: "#FFFFFF"
     anchor: bottom
-    offset: 470
+    offset: 480
     max_shrink: 0.5
 framing:
   mode: none
   background: "#000000"
   crop_black_bars: true
-  text_gap_above: 0
-  text_gap_below: 130
+  text_gap_above: 56
+  text_gap_below: 28
+  corner_radius: 16
+  corner_color: "#000000"
 audio:
   source: vocals
   highpass_hz: 60
