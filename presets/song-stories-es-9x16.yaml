@@ -38,6 +38,16 @@ headline:
     Queen (escena de película).
   max_chars: 70
   uppercase: true
+post_caption:
+  enabled: true
+  language: es
+  style: >-
+    three paragraphs, 150 to 220 words in all, in natural storytelling Spanish, neutral
+    between Spain and Latin America. The first sets up the song, the artist and the year
+    with a striking fact; the second goes deeper into how it was written or recorded, a
+    twist, a dispute or a technical detail; the third is about its legacy today and ends on
+    an emotional or reflective note. Two to four fitting emojis (such as 🎸 🎧 🔥 🌍 ✨ 🤝)
+    spread through the text, not bunched at the end. No hashtags and no call to follow.
 framing:
   mode: none
   background: "#000000"

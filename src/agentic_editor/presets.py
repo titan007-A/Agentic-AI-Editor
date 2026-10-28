@@ -97,6 +97,17 @@ class Headline(Strict):
     uppercase: bool = False
 
 
+class PostCaption(Strict):
+    """The post's caption, written from Wikipedia and Wikidata about the song: after every
+    render when enabled, or when asked for from the video's card."""
+
+    enabled: bool = False
+    language: str = Field(default="en", pattern=r"^[a-z]{2}$")
+    style: str = Field(default="", description="how to write it; empty for the default")
+    min_words: int = Field(default=150, ge=10, le=1000)
+    max_words: int = Field(default=220, ge=10, le=1000)
+
+
 class TitleOverlay(Strict):
     enabled: bool = False
     font: FontName = "Anton-Regular"
@@ -213,6 +224,7 @@ class Preset(Strict):
     one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
     headline: Headline = Headline()
+    post_caption: PostCaption = PostCaption()
     logo: Logo = Logo()
     intro: str | None = None
     outro: str | None = None

@@ -227,6 +227,7 @@ render behaves:
 | `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces and off text already in the picture (name banners, titles) while it is on screen; lines break where they read well, never after a linking word like "the" or "de" when a better place is near, and each sentence starts a new line; on songs, presets that keep the original audio take their words from the isolated vocals when the full mix gives almost none; an .srt file is saved next to the video |
 | `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline; `{song}` and `{artist}` come from a video named "Song - Artist", and `{headline}` is written for each video (see `headline`) |
+| `post_caption` | the post's caption, written from Wikipedia and Wikidata about the song (see below): `enabled` writes it after every render, otherwise the video's card has a Write caption button; `language`, `style`, word range |
 | `headline` | how the planning model writes `{headline}` from the video's title and description (`hint` with examples, `max_chars`, `uppercase`); a notes line `headline: ...` gives it instead. Long headlines wrap into even lines without breaking a quoted song name |
 | `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage |
 | `grade` | colour: `auto` corrects a cast or a flat, dim picture; `look` (warm, cool, teal-orange, film, moody, vivid, mono, faded); a `.cube` LUT; `strength` |
@@ -249,6 +250,20 @@ any shot whose edge would cut something is widened before rendering. `face`, `ce
 
 `framing.picture_width` shows the whole picture narrower than the frame (0.74 of its
 width, say), centred on the background, for pages that inset their videos.
+
+### Post captions
+
+The caption to post with a reel is written by the local planning model, for free, from what
+the song's Wikipedia articles (in the caption's language and in English) and its Wikidata
+entry say; it isn't asked to remember anything. The song is named from the video's
+headline, title and description, and an article only counts if Wikidata (or, without that,
+its first sentence) names the artist as the song's performer. The model is told to use only
+those sources; every capitalised name and every number of 10 or more in what it writes must
+appear in them, which is checked in code; and for each sentence stating a fact it must copy
+the sources' words that say so, which are then looked up in the sources. A caption that
+fails is written again once with what was wrong; what still fails is shown under it as
+"Check before posting", next to links to the articles it came from. A song Wikipedia has no
+article on gets no caption.
 
 ### Learning a style from a reel
 

@@ -103,3 +103,29 @@ def test_progress_has_a_share_for_every_video_a_job_makes(tmp_path, monkeypatch)
     with Session() as db:
         done = [e.progress for e in db.query(Event).filter_by(job_id="j1", stage="done")]
     assert done == pytest.approx([0.55 + 0.15, 0.55 + 0.30, 0.99])
+
+
+def test_a_restart_settles_captions_that_were_being_written(tmp_path, monkeypatch):
+    from agentic_editor.db import Output
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        job = Job(id="done", source="https://x.test/4", presets=["p"], status="done")
+        for status in ("writing", "queued", "done"):
+            job.outputs.append(
+                Output(preset="p", path="/x.mp4", duration=1, planner="m", edl={},
+                       caption_status=status)
+            )  # fmt: skip
+        db.add(job)
+        db.commit()
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: []))
+    asked = []
+    monkeypatch.setattr(jobs, "process", lambda job_id: None)
+    monkeypatch.setattr(jobs, "learn_style", lambda draft_id: None)
+    monkeypatch.setattr(jobs, "write_caption", asked.append)
+
+    jobs.recover(Session)
+
+    with Session() as db:
+        statuses = [o.caption_status for o in db.get(Job, "done").outputs]
+    assert statuses == ["failed", "queued", "done"] and asked == [2]

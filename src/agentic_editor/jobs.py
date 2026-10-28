@@ -1,16 +1,19 @@
 """Background jobs: one job is one source video rendered with one or more presets."""
 
+import json
 import logging
 from functools import lru_cache
+from pathlib import Path
 
 from huey import SqliteHuey
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, pipeline, style
+from agentic_editor import accounts, caption, pipeline, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import Event, Job, Output, StyleDraft, User, make_sessionmaker
-from agentic_editor.presets import load_presets
+from agentic_editor.presets import PostCaption, load_presets
+from agentic_editor.router import ModelRouter
 from agentic_editor.settings import Settings, get_settings
 
 log = logging.getLogger(__name__)
@@ -117,13 +120,73 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             job.error = "; ".join(result.failures) or None
             message = "all presets rendered" if not result.failures else "rendered, with failures"
             db.add(Event(job_id=job_id, stage="finished", message=message, progress=1.0))
+            captioned = [o for o in job.outputs if available[o.preset].post_caption.enabled]
+            for output in captioned:
+                output.caption_status = "queued"
             db.commit()
+            for output in captioned:
+                write_caption(output.id)
     except Exception as exc:
         log.exception("job %s failed", job_id)
         with Session() as db:
             job = db.get(Job, job_id)
             job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
             db.add(Event(job_id=job_id, stage="failed", message=job.error, progress=track.value))
+            db.commit()
+
+
+def source_text(output_path: Path, media_dir: Path) -> tuple[str, str]:
+    """The title and description of the video an output was made from. Older outputs
+    kept only the title next to them; the download's own record has the description."""
+    meta_file = output_path.parent / "source.json"
+    meta = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.exists() else {}
+    if not meta.get("description") and meta.get("url"):
+        for other in (media_dir / "sources").glob("*/source.json"):
+            found = json.loads(other.read_text(encoding="utf-8"))
+            if found.get("url") == meta["url"]:
+                meta = {**found, **{k: v for k, v in meta.items() if v}}
+                break
+    return meta.get("title", ""), meta.get("description", "")
+
+
+def run_caption(output_id: int, Session: sessionmaker, settings: Settings, router=None) -> None:
+    """Write an output's post caption (see caption.py). Like a job, it never stays
+    "writing": whatever happens is stored."""
+    try:
+        with Session() as db:
+            output = db.get(Output, output_id)
+            output.caption_status = "writing"
+            db.commit()
+            owner = db.get(User, output.job.owner_id) if output.job.owner_id else None
+            available = load_presets(accounts.presets_dir(owner, settings.presets_dir))
+            preset = available.get(output.preset)
+            wanted = preset.post_caption if preset else PostCaption()
+            decisions = output.edl.get("decisions", [])
+            path = Path(output.path)
+        headline = next((d.split(": ", 1)[1] for d in decisions if d.startswith("headline ")), "")
+        title, description = source_text(path, settings.media_dir)
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        with router.planner() as llm:
+            llm.context = caption.CONTEXT
+            song, artist = caption.identify(llm, title, description, headline)
+            sources = caption.gather(song, artist, wanted.language, settings.cache_dir / "captions")
+            written = caption.write(
+                llm, song, artist, sources, wanted.language, headline, wanted.style,
+                (wanted.min_words, wanted.max_words),
+            )  # fmt: skip
+        with Session() as db:
+            output = db.get(Output, output_id)
+            output.caption, output.caption_sources = written.text, written.sources
+            output.caption_notes, output.caption_status = written.notes, "done"
+            db.commit()
+    except Exception as exc:
+        log.exception("caption for output %s failed", output_id)
+        reason = (
+            str(exc) if isinstance(exc, caption.CaptionError) else f"{type(exc).__name__}: {exc}"
+        )
+        with Session() as db:
+            output = db.get(Output, output_id)
+            output.caption_status, output.caption_notes = "failed", [reason]
             db.commit()
 
 
@@ -182,7 +245,13 @@ def learn_style(draft_id: str) -> None:
     run_learning(draft_id, sessions(), get_settings())
 
 
+@huey.task()
+def write_caption(output_id: int) -> None:
+    run_caption(output_id, sessions(), get_settings())
+
+
 PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
+CAPTION = write_caption.task_class.__name__
 
 
 def recover(Session: sessionmaker) -> None:
@@ -197,6 +266,13 @@ def recover(Session: sessionmaker) -> None:
             db.add(Event(job_id=job.id, stage="failed", message=INTERRUPTED, progress=job.progress))
         for draft in db.scalars(select(StyleDraft).where(StyleDraft.status == "running")).all():
             draft.status, draft.error = "failed", INTERRUPTED
+        for output in db.scalars(select(Output).where(Output.caption_status == "writing")).all():
+            output.caption_status, output.caption_notes = "failed", [INTERRUPTED]
+        lost_captions = [
+            output_id
+            for output_id in db.scalars(select(Output.id).where(Output.caption_status == "queued"))
+            if (CAPTION, output_id) not in pending
+        ]
         lost_jobs = [
             job_id
             for job_id in db.scalars(select(Job.id).where(Job.status == "queued"))
@@ -214,3 +290,6 @@ def recover(Session: sessionmaker) -> None:
     for draft_id in lost_drafts:
         log.info("queueing style draft %s again", draft_id)
         learn_style(draft_id)
+    for output_id in lost_captions:
+        log.info("queueing the caption of output %s again", output_id)
+        write_caption(output_id)

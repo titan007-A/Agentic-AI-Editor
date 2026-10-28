@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { jobLabel } from "@/components/job-status";
 import { OutputVideo } from "@/components/output-video";
+import { PostCaption } from "@/components/post-caption";
 import { ShareButton } from "@/components/share-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -193,6 +194,7 @@ export function OutputCard({
           </Dialog>
           {actions}
         </div>
+        <PostCaption output={output} />
       </CardContent>
     </Card>
   );

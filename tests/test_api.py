@@ -588,3 +588,66 @@ def test_the_admin_sends_a_preset_to_every_employee(env):
         assert labels["square-1x1"] == "New house style"
     assert riya.post("/api/presets/square-1x1/share").status_code == 403
     assert env.client.post("/api/presets/no-such/share").status_code == 404
+
+
+class CaptionRouter:
+    """A ModelRouter whose planner is never asked: the caption steps are faked."""
+
+    def planner(self):
+        from contextlib import nullcontext
+
+        return nullcontext(SimpleNamespace(context=None))
+
+
+def fake_captions(monkeypatch, env, fail=False):
+    from agentic_editor import caption
+
+    def identify(llm, title, description, headline):
+        if fail:
+            raise caption.CaptionError("the video doesn't say which song it is")
+        return "Felicità", "Al Bano & Romina Power"
+
+    monkeypatch.setattr(caption, "identify", identify)
+    monkeypatch.setattr(caption, "gather", lambda *args: caption.Sources())
+    monkeypatch.setattr(
+        caption,
+        "write",
+        lambda *args: caption.Written(
+            "Un éxito de 1982 🎵", [{"title": "Felicità", "url": "u"}], []
+        ),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "write_caption",
+        lambda output_id: jobs.run_caption(output_id, env.sessions, env.settings, CaptionRouter()),
+    )
+
+
+def test_a_caption_is_written_when_asked_for_from_the_video(env, monkeypatch):
+    fake_captions(monkeypatch, env)
+    (job,) = start(env.client)
+    output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    assert output["caption_status"] is None  # square-1x1 doesn't write one by itself
+    response = env.client.post(f"/api/outputs/{output['id']}/caption")
+    assert response.status_code == 200
+    written = env.client.get(f"/api/outputs/{output['id']}").json()["outputs"][0]
+    assert written["caption_status"] == "done" and written["caption"] == "Un éxito de 1982 🎵"
+    assert written["caption_sources"] == [{"title": "Felicità", "url": "u"}]
+    assert written["caption_notes"] == []
+
+
+def test_a_preset_that_wants_captions_gets_one_after_every_render(env, monkeypatch):
+    fake_captions(monkeypatch, env)
+    (job,) = start(env.client, presets=("song-stories-es-9x16",))
+    output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    assert output["caption_status"] == "done"
+
+
+def test_a_caption_that_cant_be_written_says_why(env, monkeypatch):
+    fake_captions(monkeypatch, env, fail=True)
+    (job,) = start(env.client)
+    output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
+    env.client.post(f"/api/outputs/{output_id}/caption")
+    output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
+    assert output["caption_status"] == "failed"
+    assert output["caption_notes"] == ["the video doesn't say which song it is"]
