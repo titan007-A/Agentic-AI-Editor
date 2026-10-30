@@ -63,6 +63,7 @@ QUESTIONS = [
     {"question": "What language should the subtitles be in?", "choices": ["it", "en"]},
     {"question": "Isolated vocals or the full mix?", "choices": ["Vocals", "Full"]},
     {"question": "What aspect ratio?", "choices": ["9:16", "1:1"]},
+    {"question": "Short punchy edits or longer clips?", "choices": ["Short", "Long"]},
 ]
 
 

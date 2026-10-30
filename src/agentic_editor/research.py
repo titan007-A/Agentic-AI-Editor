@@ -231,7 +231,8 @@ ASK = (
 # What the presets decide; the model asks about it anyway at times.
 EDITING = re.compile(
     r"\b(subtitles?|captions?|on-screen|text|aspect|ratio|vertical|format|length|duration|"
-    r"seconds|isolated|instruments?|instrumental|a ?cappella|edit(ed|ing)?|fonts?)\b",
+    r"seconds|continuous|translat\w*|isolated|instruments?|instrumental|a ?cappella|"
+    r"edit(s|ed|ing)?|fonts?)\b",
     re.IGNORECASE,
 )
 CHAT = (
