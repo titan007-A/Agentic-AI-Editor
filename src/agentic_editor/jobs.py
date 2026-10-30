@@ -535,6 +535,61 @@ def run_chat(message_id: int, Session: sessionmaker, settings: Settings, router=
         find_reels(line.follow_up_id)
 
 
+def run_pdf_research(
+    research_id, Session, router, pdf_text, used, seen, progress, context, sites, options
+) -> None:
+    """A PDF research: its songs read from the PDF, then the best reels of each."""
+    progress("reading the PDF", 0.02)
+    with router.planner() as llm:
+        entries = research.pdf_entries(llm, pdf_text)
+    with Session() as db:
+        db.get(Research, research_id).entries = entries
+        db.commit()
+    given = research.run_pdf(
+        entries, router.planner, used, seen, progress, context=context, sites=sites, **options
+    )
+    with Session() as db:
+        found = db.get(Research, research_id)
+        for rank, (entry, reel) in enumerate(given):
+            found.items.append(item_of(reel, rank, entry))
+        empty = len(entries) - len({entry for entry, _ in given})
+        found.message = f"found reels for {len(entries) - empty} of {len(entries)} songs"
+        found.status, found.progress = "done", 1.0
+        db.commit()
+
+
+def item_of(reel: research.Reel, rank: int, entry: int | None = None) -> ResearchItem:
+    return ResearchItem(
+        rank=rank,
+        entry=entry,
+        code=reel.code,
+        url=reel.url,
+        query=reel.query,
+        account=reel.account,
+        handle=reel.handle,
+        caption=reel.caption or reel.snippet or reel.title,
+        likes=reel.likes,
+        comments=reel.comments,
+        views=reel.views,
+        width=reel.width,
+        height=reel.height,
+        bitrate=reel.bitrate,
+        duration=reel.duration,
+        posted_at=reel.posted,
+        thumbnail=reel.thumbnail,
+        relevance=reel.relevance,
+        why=reel.why,
+        song=reel.song,
+        matches=reel.matches,
+        preset=reel.preset,
+        preset_why=reel.preset_why,
+        per_day=reel.per_day,
+        virality=reel.virality,
+        score=reel.score,
+        seen=reel.seen,
+    )
+
+
 def run_research(
     research_id: str, Session: sessionmaker, settings: Settings, router=None, find=None, info=None
 ) -> None:
@@ -570,6 +625,15 @@ def run_research(
         context = research_context(
             research_id, Session, settings, router.planner, progress, find, info
         )
+        with Session() as db:
+            found = db.get(Research, research_id)
+            mode, pdf_text = found.mode, found.pdf_text
+        if mode == "pdf":
+            run_pdf_research(
+                research_id, Session, router, pdf_text, used, seen, progress, context, sites,
+                options,
+            )  # fmt: skip
+            return
         result = research.run(
             description,
             router.planner,
@@ -586,36 +650,7 @@ def run_research(
             found.considered, found.left_out = result.considered, result.left_out
             found.cutoff, found.brief = result.cutoff, result.brief
             for n, reel in enumerate(result.reels):
-                found.items.append(
-                    ResearchItem(
-                        rank=n,
-                        code=reel.code,
-                        url=reel.url,
-                        query=reel.query,
-                        account=reel.account,
-                        handle=reel.handle,
-                        caption=reel.caption or reel.snippet or reel.title,
-                        likes=reel.likes,
-                        comments=reel.comments,
-                        views=reel.views,
-                        width=reel.width,
-                        height=reel.height,
-                        bitrate=reel.bitrate,
-                        duration=reel.duration,
-                        posted_at=reel.posted,
-                        thumbnail=reel.thumbnail,
-                        relevance=reel.relevance,
-                        why=reel.why,
-                        song=reel.song,
-                        matches=reel.matches,
-                        preset=reel.preset,
-                        preset_why=reel.preset_why,
-                        per_day=reel.per_day,
-                        virality=reel.virality,
-                        score=reel.score,
-                        seen=reel.seen,
-                    )
-                )
+                found.items.append(item_of(reel, n))
             count = len(result.reels)
             found.message = f"found {count} reel{'' if count == 1 else 's'}"
             left = [

@@ -129,3 +129,38 @@ def test_the_last_notes_line_wins():
     # A regenerated job's notes are the earlier ones with the new lines after them.
     given, rest = names.from_notes("song: Wrong\nfaster\nsong: Right", {"song"})
     assert given == {"song": "Right"} and rest == "faster"
+
+
+def test_top_and_bottom_text_lines_replace_the_presets_own_for_one_job():
+    from agentic_editor.presets import TextBlock
+
+    texts, rest = names.texts_from_notes(
+        "song: Heaven\ntop text: old\nTop Text: Il capolavoro\\ndel 1985\nwarm look\n"
+        "bottom text: Seguici"
+    )
+    assert texts == {"top": "Il capolavoro\ndel 1985", "bottom": "Seguici"}  # the last wins
+    assert rest == "song: Heaven\nwarm look"
+    assert names.texts_from_notes(None) == ({}, None)
+
+    def block(text, anchor, size=60):
+        return TextBlock(text=text, anchor=anchor, offset=200, size=size)
+
+    italian = load_presets(ROOT / "presets")["vocal-music-it-9x16"]
+    preset = italian.model_copy(
+        update={
+            "text_blocks": [
+                block("Qui pubblichiamo", "top", 58),
+                block("{headline}", "top"),
+                block("Seguici adesso", "bottom", 52),
+            ]
+        }
+    )
+    changed = names.with_texts(preset, texts)
+    assert [(b.anchor, b.text, b.size) for b in changed.text_blocks] == [
+        ("top", "Il capolavoro\ndel 1985", 58),  # the first top block's look kept
+        ("bottom", "Seguici", 52),
+    ]
+    bare = italian.model_copy(update={"text_blocks": []})
+    added = names.with_texts(bare, {"bottom": "Seguici"}).text_blocks
+    assert [(b.anchor, b.text) for b in added] == [("bottom", "Seguici")]
+    assert names.with_texts(preset, {}) is preset

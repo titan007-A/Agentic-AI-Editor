@@ -279,6 +279,12 @@ class Research(Base):
     # Where it searches: "instagram" reels and YouTube "shorts" (see research.SITES).
     sites: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["instagram"])
     daily: Mapped[bool] = mapped_column(default=False)  # started by the account's morning one
+    # "search" (for a description or an account) or "pdf": a PDF of songs, each with the
+    # words to write above and below its reel, read into entries [{"singer", "song", "top",
+    # "bottom"}] and searched for one by one.
+    mode: Mapped[str] = mapped_column(String(8), default="search")
+    pdf_text: Mapped[str] = mapped_column(Text, default="")
+    entries: Mapped[list[dict]] = mapped_column(JSON, default=list)
     # A follow-up asked for in an earlier research's chat ("more Italian").
     parent_id: Mapped[str | None] = mapped_column(
         ForeignKey("research.id", ondelete="SET NULL"), index=True
@@ -369,6 +375,7 @@ class ResearchItem(Base):
     virality: Mapped[float] = mapped_column(default=0.0)
     score: Mapped[float] = mapped_column(default=0.0)
     seen: Mapped[bool] = mapped_column(default=False)  # shown by an earlier research
+    entry: Mapped[int | None]  # in a PDF research, the number of the song it is for
     # The person's feedback on it, which later researches learn from: "good", "bad" or
     # None, and why it wasn't for them ("Wrong music", their own words...).
     verdict: Mapped[str | None] = mapped_column(String(8))

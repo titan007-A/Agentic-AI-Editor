@@ -26,6 +26,7 @@ import {
   type InstagramAccount,
   type Preset,
   type Research,
+  type PdfEntry,
   type ResearchItem,
   type Site,
 } from "@/lib/api";
@@ -65,6 +66,20 @@ const SITES: { site: Site; label: string }[] = [
   { site: "shorts", label: "YouTube Shorts" },
 ];
 
+/** A PDF song's words as the lines of a job's notes the edit reads (see names.py). */
+function entryNotes(entry: PdfEntry): string {
+  const line = (key: string, value: string) =>
+    value.trim() ? `${key}: ${value.trim().replace(/\n/g, "\\n")}` : "";
+  return [
+    line("song", entry.song),
+    line("artist", entry.singer),
+    line("top text", entry.top),
+    line("bottom text", entry.bottom),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 // Of the reels a research gives, how many can be edited at once.
 const MAX_CHOSEN = 5;
 
@@ -96,6 +111,8 @@ function Researcher() {
   // The account a research is for; "" for a description alone.
   const [forAccount, setForAccount] = useState<string | null>(null);
   const [description, setDescription] = useState("");
+  // A PDF of songs, each with its words above and below, instead of a description.
+  const [pdf, setPdf] = useState<File | null>(null);
   const [skipQuestions, setSkipQuestions] = useState(false);
   const [sites, setSites] = useState<Site[]>(["instagram", "shorts"]);
   const [busy, setBusy] = useState(false);
@@ -175,6 +192,8 @@ function Researcher() {
   usePolling(load, running(current) || answering(current) ? RUNNING_POLL_MS : null);
 
   const chosen = picks.of === id ? picks.reels : {};
+  // A PDF's songs may each have a reel edited at once.
+  const limit = current?.mode === "pdf" ? Math.max(MAX_CHOSEN, current.entries.length) : MAX_CHOSEN;
   const startedHere = started.of === id ? started.jobs : [];
 
   function choose(item: ResearchItem, preset: string | null) {
@@ -191,7 +210,9 @@ function Researcher() {
     try {
       // One job a reel: each has its own preset.
       for (const item of current.items.filter((i) => i.id in chosen)) {
-        const [job] = await api.createJobs([item.url], [chosen[item.id]], notes);
+        const entry = item.entry === null ? undefined : current.entries[item.entry];
+        const told = [entry && entryNotes(entry), notes.trim()].filter(Boolean).join("\n");
+        const [job] = await api.createJobs([item.url], [chosen[item.id]], told);
         jobs.push({ item, jobId: job.id });
       }
       toast.success(`${jobs.length} edit${jobs.length === 1 ? "" : "s"} started`);
@@ -209,13 +230,17 @@ function Researcher() {
     event.preventDefault();
     setBusy(true);
     try {
-      const started = await api.startResearch(
-        description.trim(),
-        chosenAccount || null,
-        skipQuestions,
-        sites,
-      );
+      const started =
+        pdf && !chosenAccount
+          ? await api.researchPdf(pdf, sites)
+          : await api.startResearch(
+              description.trim(),
+              chosenAccount || null,
+              skipQuestions,
+              sites,
+            );
       setDescription("");
+      setPdf(null);
       await refreshList();
       router.push(`/research/?id=${started.id}`);
     } catch (err) {
@@ -304,8 +329,25 @@ function Researcher() {
                 }
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                disabled={!!pdf && !chosenAccount}
               />
             </div>
+            {!chosenAccount && (
+              <div className="space-y-1">
+                <Label htmlFor="research-pdf">Or a PDF of songs</Label>
+                <input
+                  id="research-pdf"
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="block w-full text-sm"
+                  onChange={(e) => setPdf(e.target.files?.[0] ?? null)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Each song with its singer, and the words to write above and below its reel: the
+                  researcher finds reels of each, and the edit writes your words.
+                </p>
+              </div>
+            )}
             <fieldset className="space-y-1">
               <legend className="text-sm font-medium">Search</legend>
               <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -338,7 +380,9 @@ function Researcher() {
             <Button
               type="submit"
               disabled={
-                busy || sites.length === 0 || (!chosenAccount && description.trim().length < 3)
+                busy ||
+                sites.length === 0 ||
+                (!chosenAccount && !pdf && description.trim().length < 3)
               }
             >
               <Search /> {busy ? "Starting..." : "Find reels"}
@@ -491,23 +535,53 @@ function Researcher() {
                   </Button>
                 ))}
               </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {sorted(current.items, order).map((item) => (
-                  <ReelCard
-                    key={item.id}
-                    item={item}
-                    presets={presets}
-                    research={current}
-                    chosen={item.id in chosen ? chosen[item.id] : null}
-                    full={Object.keys(chosen).length >= MAX_CHOSEN}
-                    onChoose={(preset) => choose(item, preset)}
-                    onChanged={setLoaded}
-                  />
-                ))}
-              </div>
+              {(current.mode === "pdf"
+                ? current.entries.map((entry, n) => ({
+                    entry,
+                    items: current.items.filter((i) => i.entry === n),
+                  }))
+                : [{ entry: null, items: current.items }]
+              ).map(({ entry, items }, n) => (
+                <section key={n} className="space-y-2">
+                  {entry && (
+                    <div className="space-y-0.5">
+                      <h3 className="font-medium break-words">
+                        {n + 1}. {[entry.song, entry.singer].filter(Boolean).join(" - ")}
+                      </h3>
+                      {entry.top && (
+                        <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+                          Above: {entry.top}
+                        </p>
+                      )}
+                      {entry.bottom && (
+                        <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+                          Below: {entry.bottom}
+                        </p>
+                      )}
+                      {items.length === 0 && (
+                        <p className="text-sm text-muted-foreground">No reels of it turned up.</p>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {sorted(items, order).map((item) => (
+                      <ReelCard
+                        key={item.id}
+                        item={item}
+                        presets={presets}
+                        research={current}
+                        chosen={item.id in chosen ? chosen[item.id] : null}
+                        full={Object.keys(chosen).length >= limit}
+                        onChoose={(preset) => choose(item, preset)}
+                        onChanged={setLoaded}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
               <Card className="sticky bottom-2 z-10 gap-3 p-4 shadow-lg">
                 <p className="text-sm font-medium">
-                  {Object.keys(chosen).length} of up to {MAX_CHOSEN} chosen to edit
+                  {Object.keys(chosen).length} of up to {limit} chosen to edit
                 </p>
                 {Object.keys(chosen).length > 0 && (
                   <div className="space-y-1">

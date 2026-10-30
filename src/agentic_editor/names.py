@@ -4,12 +4,16 @@ name ("Video by illusive.paradox") can't be changed, so lines "song: ..." and "a
 in the job's notes give them instead, and win over the name.
 
 Other words in braces are the preset's own, filled per reel: {year} from a "(1980)" in the
-video's name, and any of them, {day} say, from a line "day: 103" in the job's notes."""
+video's name, and any of them, {day} say, from a line "day: 103" in the job's notes.
+
+Lines "top text: ..." and "bottom text: ..." replace the preset's own words above and below
+the video for one job (the researcher's PDF mode gives each reel its own); "\\n" in them
+starts a new line."""
 
 import re
 from collections.abc import Callable
 
-from agentic_editor.presets import Preset
+from agentic_editor.presets import Preset, TextBlock
 
 Song = tuple[str, str]
 
@@ -116,6 +120,46 @@ def from_notes(notes: str | None, wanted: set[str]) -> tuple[dict[str, str], str
             given[name] = found[-1].group(1)
             notes = line.sub("", notes)
     return given, notes.strip() or None
+
+
+TEXT_LINE = re.compile(r"^\s*(top|bottom) text\s*:\s*(.+?)\s*$", re.I | re.M)
+
+
+def texts_from_notes(notes: str | None) -> tuple[dict[str, str], str | None]:
+    """The words a job's notes give for above and below the video ({"top": ..., "bottom":
+    ...}), the last line of each winning, and the notes without those lines."""
+    if not notes:
+        return {}, notes
+    texts = {m.group(1).lower(): m.group(2).replace("\\n", "\n") for m in TEXT_LINE.finditer(notes)}
+    rest = "\n".join(line for line in notes.splitlines() if not TEXT_LINE.match(line))
+    return texts, rest.strip() or None
+
+
+def with_texts(preset: Preset, texts: dict[str, str]) -> Preset:
+    """The preset with `texts` above ("top") and below ("bottom") the video instead of its
+    own: the first block anchored there takes the words, keeping its look, and any other
+    block there goes, so the reel shows just those words. A preset without a block there
+    gets one in the default look."""
+    if not texts:
+        return preset
+    blocks, placed = [], set()
+    for block in preset.text_blocks:
+        if block.anchor not in texts:
+            blocks.append(block)
+        elif block.anchor not in placed:
+            placed.add(block.anchor)
+            blocks.append(block.model_copy(update={"text": texts[block.anchor]}))
+    for anchor in ("top", "bottom"):
+        if anchor in texts and anchor not in placed:
+            blocks.append(
+                TextBlock(
+                    text=texts[anchor],
+                    size=64,
+                    anchor=anchor,
+                    offset=240 if anchor == "top" else 420,
+                )
+            )
+    return preset.model_copy(update={"text_blocks": blocks})
 
 
 def year_of(title: str) -> str | None:

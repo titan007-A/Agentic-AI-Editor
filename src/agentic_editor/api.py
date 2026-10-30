@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -56,6 +56,7 @@ NOTICE_KEY = "usage_notice_accepted"
 ORIGINAL_NAME = ".name"  # next to an upload: the file name it was sent with
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
 SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
+PDF_BYTES = 10 * 1024 * 1024  # the largest PDF of songs a research takes
 # How long a shutdown waits for running jobs; any still running are failed at the next start.
 SHUTDOWN_SECONDS = 30
 PILE_LIMIT = 100
@@ -212,6 +213,7 @@ class ResearchItemView(BaseModel):
     virality: float
     score: float
     seen: bool  # shown by an earlier research
+    entry: int | None  # in a PDF research, the number of the song it is for
     used: bool  # edited since, by a job of the research's owner
     verdict: str | None  # the person's feedback: "good", "bad" or none yet
     verdict_reason: str
@@ -271,6 +273,8 @@ class ResearchView(BaseModel):
     handle: str
     sites: list[str]
     daily: bool  # the account's morning research started it
+    mode: str  # "search", or "pdf": songs from a PDF, each with its words above and below
+    entries: list[dict]  # a PDF's songs: {"singer", "song", "top", "bottom"}
     parent_id: str | None
     status: str
     message: str
@@ -1043,6 +1047,41 @@ def create_app(
             jobs.find_reels(found.id)
         else:
             jobs.ask_questions(found.id)
+        return research_view(found, account, session)
+
+    @app.post("/api/research/pdf")
+    async def research_pdf(
+        file: UploadFile,
+        account: User,
+        session: DB,
+        sites: Annotated[str, Form()] = "instagram,shorts",
+    ) -> ResearchView:
+        """A research of the songs a PDF lists, each with the words to write above and
+        below its reel (see research.pdf_entries)."""
+        if Path(file.filename or "").suffix.lower() != ".pdf":
+            raise HTTPException(400, "give a PDF file")
+        data = await file.read(PDF_BYTES + 1)
+        if len(data) > PDF_BYTES:
+            raise HTTPException(413, "the PDF is larger than 10 MB")
+        chosen = [s for s in dict.fromkeys(sites.split(",")) if s in research.SITES]
+        if not chosen:
+            raise HTTPException(422, "search Instagram, YouTube Shorts or both")
+        try:
+            text = await asyncio.to_thread(research.read_pdf, data)
+        except Exception as exc:
+            raise HTTPException(422, f"couldn't read the PDF: {exc}") from exc
+        if len(text) < 3:
+            raise HTTPException(422, "the PDF has no text to read (a scanned page is a picture)")
+        found = Research(
+            description=f"PDF: {Path(file.filename or 'songs.pdf').name[:120]}",
+            owner_id=account.id,
+            mode="pdf",
+            pdf_text=text,
+            sites=chosen,
+        )
+        session.add(found)
+        session.commit()
+        jobs.find_reels(found.id)
         return research_view(found, account, session)
 
     @app.post("/api/research/{research_id}/answers")
