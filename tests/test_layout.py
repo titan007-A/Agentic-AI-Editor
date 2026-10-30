@@ -129,3 +129,39 @@ def test_spare_rows_go_to_the_plainer_side_of_the_moving_part():
     reel[:, 180:] = 0  # a dark strip under the clip; the photo above is busy
     assert layout.plainer_side(reel, (80, 180), 0, 192) == "below"
     assert layout.plainer_side(reel, (80, 192), 0, 192) == "above"  # nothing below
+
+
+def action_reel(frames: int = 10, blurred_sides: bool = False) -> np.ndarray:
+    """A still, detailed scene with a square falling down columns 60-80 of 200: the
+    action. With `blurred_sides`, the outer 40 columns each side change too, smoothly, as
+    a blurred copy of a picture does."""
+    rng = np.random.default_rng(3)
+    scene = rng.integers(60, 200, (100, 200, 3)).astype(np.uint8)
+    reel = np.repeat(scene[None], frames, axis=0).copy()
+    for k in range(frames):
+        reel[k, 10 + 6 * k : 25 + 6 * k, 60:80] = 255
+        if blurred_sides:
+            for side in (slice(0, 40), slice(160, 200)):
+                reel[k, :, side] = 40 + 12 * k  # flat, no detail, but it changes
+    return reel
+
+
+def test_the_action_is_where_the_picture_moves():
+    x0, y0, x1, y1 = layout.action_box(action_reel())
+    assert 55 <= x0 <= 60 and 80 <= x1 <= 85  # the falling square's columns
+    assert y0 <= 12 and y1 >= 75  # the whole fall, top to bottom
+    still = np.repeat(action_reel()[:1], 5, axis=0)
+    assert layout.action_box(still) is None
+    assert layout.action_box(action_reel()[:1]) is None
+
+
+def test_a_blurred_fill_moving_with_the_picture_isnt_action():
+    x0, _, x1, _ = layout.action_box(action_reel(blurred_sides=True))
+    assert x0 >= 40 and x1 <= 160
+
+
+def test_a_cut_or_a_swinging_camera_says_nothing_about_the_action():
+    reel = action_reel()
+    reel[5:] = 255 - reel[5:]  # the whole picture changes at frame 5: a cut
+    x0, _, x1, _ = layout.action_box(reel)
+    assert x0 >= 55 and x1 <= 85
