@@ -236,6 +236,20 @@ class ResearchAccount(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class AccountSnapshot(Base):
+    """How an Instagram account's own reels were doing when it was learned: each reel's
+    likes, comments and posting time, so the page's performance can be followed."""
+
+    __tablename__ = "account_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("research_accounts.id", ondelete="CASCADE"), index=True
+    )
+    taken_at: Mapped[datetime] = mapped_column(default=_now)
+    reels: Mapped[list[dict]] = mapped_column(JSON, default=list)
+
+
 class HiddenAccount(Base):
     """An Instagram account whose reels a person doesn't want: researches leave it out."""
 

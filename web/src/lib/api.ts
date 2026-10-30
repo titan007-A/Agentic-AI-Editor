@@ -142,6 +142,25 @@ export type Feedback = {
 
 export type HiddenAccount = { handle: string; created_at: string };
 
+/** How an account's own reels found were doing when it was last learned, and before. */
+export type Performance = {
+  taken_at: string | null;
+  previous_at: string | null;
+  reels: {
+    code: string;
+    url: string;
+    caption: string;
+    likes: number | null;
+    comments: number | null;
+    posted_at: string | null;
+    per_day: number | null;
+    /** Likes since the snapshot before; null when it wasn't in that one. */
+    gained: number | null;
+  }[];
+  average: number | null;
+  previous_average: number | null;
+};
+
 /** What the person's recent researches found spreading: reels posted lately, fastest
  * first, and songs several accounts posted reels of. */
 export type Trends = {
@@ -398,6 +417,8 @@ export const api = {
     request<InstagramAccount>("POST", "/research/accounts", { handle, presets }),
   updateInstagramAccount: (id: string, presets: string[]) =>
     request<InstagramAccount>("PUT", `/research/accounts/${id}`, { presets }),
+  pagePerformance: (id: string) =>
+    request<Performance>("GET", `/research/accounts/${id}/performance`),
   setSourcePages: (id: string, sources: string[]) =>
     request<InstagramAccount>("PUT", `/research/accounts/${id}/sources`, { sources }),
   setDailyResearch: (id: string, hour: number | null) =>

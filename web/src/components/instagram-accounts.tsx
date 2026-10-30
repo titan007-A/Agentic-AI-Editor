@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PagePerformance } from "@/components/page-performance";
 import { api, errorText, type InstagramAccount, type Preset } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -298,6 +299,7 @@ function AccountRow({
         </div>
       )}
       <SourcePages account={account} act={act} />
+      {!learning(account) && account.learned_at && <PagePerformance account={account} />}
       <label className="flex flex-wrap items-center gap-2 text-sm">
         Research every morning
         <select

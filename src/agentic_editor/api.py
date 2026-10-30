@@ -29,6 +29,7 @@ from agentic_editor import accounts, autopilot, jobs, research
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
+    AccountSnapshot,
     Event,
     Feed,
     FeedItem,
@@ -222,6 +223,26 @@ class FeedbackRequest(BaseModel):
     reason: str = Field(default="", max_length=300)
     # Leave its account out of later researches too.
     hide_account: bool = False
+
+
+class OwnReelView(BaseModel):
+    code: str
+    url: str
+    caption: str
+    likes: int | None
+    comments: int | None
+    posted_at: datetime | None
+    per_day: float | None  # likes and comments a day since it was posted
+    gained: int | None  # likes since the snapshot before; None when it wasn't in that one
+
+
+class PerformanceView(BaseModel):
+    # How the account's own reels found were doing when it was last learned, and before.
+    taken_at: datetime | None
+    previous_at: datetime | None
+    reels: list[OwnReelView]  # most liked first
+    average: float | None  # likes a reel
+    previous_average: float | None
 
 
 class SongTrendView(BaseModel):
@@ -905,6 +926,56 @@ def create_app(
         found.presets = checked_presets(body.presets, account)
         session.commit()
         return instagram_view(found)
+
+    @app.get("/api/research/accounts/{account_id}/performance")
+    def performance(account_id: str, account: User, session: DB) -> PerformanceView:
+        found = find_instagram(account_id, session, account)
+        snapshots = session.scalars(
+            select(AccountSnapshot)
+            .where(AccountSnapshot.account_id == found.id)
+            .order_by(AccountSnapshot.taken_at.desc(), AccountSnapshot.id.desc())
+            .limit(2)
+        ).all()
+        latest, previous = [*snapshots, None, None][:2]
+        if latest is None:
+            return PerformanceView(
+                taken_at=None, previous_at=None, reels=[], average=None, previous_average=None
+            )
+
+        def average(reels: list[dict]) -> float | None:
+            likes = [r["likes"] for r in reels if r.get("likes") is not None]
+            return round(sum(likes) / len(likes), 1) if likes else None
+
+        before = {r["code"]: r.get("likes") for r in previous.reels} if previous else {}
+        now = datetime.now(UTC)
+        reels = []
+        for r in latest.reels:
+            posted = datetime.fromisoformat(r["posted"]) if r.get("posted") else None
+            reactions = (r.get("likes") or 0) + 2 * (r.get("comments") or 0)
+            days = max(1.0, (now - posted).total_seconds() / 86400) if posted else None
+            old = before.get(r["code"])
+            reels.append(
+                OwnReelView(
+                    code=r["code"],
+                    url=research.reel_url(r["code"]),
+                    caption=r.get("caption") or "",
+                    likes=r.get("likes"),
+                    comments=r.get("comments"),
+                    posted_at=posted,
+                    per_day=round(reactions / days, 1) if days and reactions else None,
+                    gained=r["likes"] - old
+                    if old is not None and r.get("likes") is not None
+                    else None,
+                )
+            )
+        reels.sort(key=lambda r: r.likes or 0, reverse=True)
+        return PerformanceView(
+            taken_at=latest.taken_at,
+            previous_at=previous.taken_at if previous else None,
+            reels=reels,
+            average=average(latest.reels),
+            previous_average=average(previous.reels) if previous else None,
+        )
 
     @app.put("/api/research/accounts/{account_id}/sources")
     def set_sources(

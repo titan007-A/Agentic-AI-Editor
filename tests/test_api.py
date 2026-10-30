@@ -1187,6 +1187,34 @@ def test_the_trend_radar_reads_the_persons_recent_researches(env, monkeypatch):
     assert riya.get("/api/research/trends").json() == {"reels": [], "songs": []}  # not hers
 
 
+def test_an_accounts_page_performance_is_followed_from_learn_to_learn(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    url = f"/api/research/accounts/{account['id']}/performance"
+    first = env.client.get(url).json()
+    assert first["reels"][0]["code"] == "OWN001" and first["reels"][0]["likes"] == 5_000
+    assert first["average"] == 5_000 and first["previous_at"] is None
+    assert first["reels"][0]["gained"] is None
+
+    monkeypatch.setitem(REELS, "OWN001", ("voiceshq", "Bryan Adams vocals only", 5_600))
+    env.client.post(f"/api/research/accounts/{account['id']}/learn")
+    later = env.client.get(url).json()
+    reel = later["reels"][0]
+    assert (reel["likes"], reel["gained"]) == (5_600, 600)
+    assert reel["url"] == "https://www.instagram.com/reel/OWN001/"
+    assert (later["average"], later["previous_average"]) == (5_600, 5_000)
+
+    monkeypatch.setattr(jobs, "SNAPSHOTS", 2)
+    env.client.post(f"/api/research/accounts/{account['id']}/learn")
+    with env.sessions() as db:
+        from agentic_editor.db import AccountSnapshot
+
+        assert db.query(AccountSnapshot).count() == 2  # the oldest went
+    _, riya = employee(env)
+    assert riya.get(url).status_code == 404
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(

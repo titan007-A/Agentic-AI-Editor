@@ -7,12 +7,13 @@ from functools import lru_cache
 from pathlib import Path
 
 from huey import SqliteHuey
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import accounts, caption, pipeline, research, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
+    AccountSnapshot,
     Event,
     HiddenAccount,
     Job,
@@ -40,6 +41,7 @@ STAGE_PROGRESS = {
 }
 RENDER_START = 0.55
 RELEARN_DAYS = 7  # a research learns its account again when it was learned longer ago
+SNAPSHOTS = 30  # an account's latest snapshots kept (see learn_account)
 TASTE = 12  # reels of each kind (liked, not wanted) a research is told of
 TASTE_LOOKED_AT = 300  # the latest reels of earlier researches looked through for them
 INTERRUPTED = "stopped when the server shut down; regenerate to run it again"
@@ -319,6 +321,17 @@ def learn_account(
         account = db.get(ResearchAccount, account_id)
         account.summary, account.own, account.best = learned.summary, learned.own, learned.best
         account.learned_at = datetime.now(UTC)
+        if learned.stats:
+            db.add(AccountSnapshot(account_id=account_id, reels=learned.stats))
+            db.flush()
+            older = db.scalars(
+                select(AccountSnapshot.id)
+                .where(AccountSnapshot.account_id == account_id)
+                .order_by(AccountSnapshot.taken_at.desc(), AccountSnapshot.id.desc())
+                .offset(SNAPSHOTS)
+            ).all()
+            if older:
+                db.execute(delete(AccountSnapshot).where(AccountSnapshot.id.in_(older)))
         db.commit()
 
 

@@ -288,6 +288,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
   ones included): the songs several accounts posted reels of lately, and the reels
   posted then that gain likes and comments fastest. No searching of its own: it fills up
   as researches run.
+- **Page performance.** Each time one of your accounts is learned, a snapshot of its own
+  reels found (likes, comments, when posted) is kept, the latest 30. "Page performance"
+  on the account shows the likes a reel against the snapshot before, and each reel's
+  likes, growth and likes a day. Search engines find only part of a page: a sample.
 - **Every morning.** "Research every morning" on an Instagram account starts a research
   for it (Instagram and YouTube Shorts) each day at that hour, server time; one the
   server was off for starts when it is back, the same day. It shows in the list as

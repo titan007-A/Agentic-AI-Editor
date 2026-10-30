@@ -185,6 +185,9 @@ class Learned:
     summary: str
     own: list[str]
     best: list[dict]
+    # Each of its own reels found, with likes, comments and when it was posted: kept as a
+    # snapshot of how the page does (see jobs.learn_account).
+    stats: list[dict] = field(default_factory=list)
 
 
 class Searches(BaseModel):
@@ -907,7 +910,17 @@ def learn(
         {"code": r.code, "likes": r.likes, "caption": _short(r.caption or r.title, 200)}
         for r in own[:5]
     ]
-    return Learned(summary.strip(), [r.code for r in own], best)
+    stats = [
+        {
+            "code": r.code,
+            "likes": r.likes,
+            "comments": r.comments,
+            "posted": r.posted.isoformat() if r.posted else None,
+            "caption": _short(r.caption or r.title, 120),
+        }
+        for r in own
+    ]
+    return Learned(summary.strip(), [r.code for r in own], best, stats)
 
 
 def run(
