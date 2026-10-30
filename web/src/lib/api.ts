@@ -142,6 +142,13 @@ export type Feedback = {
 
 export type HiddenAccount = { handle: string; created_at: string };
 
+/** What the person's recent researches found spreading: reels posted lately, fastest
+ * first, and songs several accounts posted reels of. */
+export type Trends = {
+  reels: ResearchItem[];
+  songs: { song: string; reels: number; accounts: number; per_day: number }[];
+};
+
 /** Where a research searches: Instagram reels, YouTube Shorts. */
 export type Site = "instagram" | "shorts";
 
@@ -383,6 +390,7 @@ export const api = {
   giveFeedback: (itemId: number, feedback: Feedback) =>
     request<Research>("POST", `/research/items/${itemId}/feedback`, feedback),
   hiddenAccounts: () => request<HiddenAccount[]>("GET", "/research/hidden"),
+  researchTrends: () => request<Trends>("GET", "/research/trends"),
   unhideAccount: (handle: string) =>
     request("DELETE", `/research/hidden/${encodeURIComponent(handle)}`),
   instagramAccounts: () => request<InstagramAccount[]>("GET", "/research/accounts"),

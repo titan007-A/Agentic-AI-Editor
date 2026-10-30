@@ -59,6 +59,8 @@ CHANNEL = re.compile(
     r"https?://(?:www\.|m\.)?youtube\.com/(@[\w.-]+|channel/[\w-]+)(?:/\w*)?/?(?:\?.*)?$"
 )
 MAX_SOURCES = 10  # source pages an account may have
+TREND_DAYS = 14  # the trend radar looks at reels posted, and researches made, this recently
+TRENDING = 10  # reels it shows
 PER_SOURCE = 5  # the latest reels taken from each
 QUALITY = {"HD": 1.0, "SD": 0.85, "": 0.95}  # "" when the site didn't say
 MAX_QUERIES = 16
@@ -164,6 +166,16 @@ class Context:
     liked: list[str] = field(default_factory=list)
     disliked: list[str] = field(default_factory=list)
     hidden: set[str] = field(default_factory=set)
+
+
+@dataclass
+class SongTrend:
+    """A song several accounts posted reels of lately, as the trend radar shows it."""
+
+    song: str
+    reels: int
+    accounts: int
+    per_day: float  # the reels' likes and comments a day, together
 
 
 @dataclass
@@ -775,6 +787,41 @@ def rank(reels: list[Reel]) -> list[Reel]:
 
 def _same(text: str) -> str:
     return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
+
+
+def trends(items: list, now: datetime | None = None) -> tuple[list, list[SongTrend]]:
+    """The trend radar, from reels earlier researches gave (the database's items, newest
+    research first): those posted in the last TREND_DAYS, fastest spreading first, each
+    once; and the songs more than one account posted reels of then, most accounts first."""
+    now = now or datetime.now(UTC)
+
+    def fresh(item) -> bool:
+        posted = item.posted_at
+        if posted is None or item.per_day is None:
+            return False
+        posted = posted if posted.tzinfo else posted.replace(tzinfo=UTC)
+        return (now - posted).days < TREND_DAYS
+
+    once: dict[str, object] = {}
+    for item in items:
+        if fresh(item):
+            once.setdefault(item.code, item)
+    reels = sorted(once.values(), key=lambda i: i.per_day, reverse=True)
+    songs: dict[str, dict] = {}
+    for item in reels:
+        if not (key := _same(item.song)):
+            continue
+        song = songs.setdefault(key, {"song": item.song, "who": set(), "reels": 0, "per_day": 0.0})
+        song["who"].add(_same(item.handle or item.account) or item.code)
+        song["reels"] += 1
+        song["per_day"] += item.per_day
+    going = [
+        SongTrend(s["song"], s["reels"], len(s["who"]), round(s["per_day"], 1))
+        for s in songs.values()
+        if len(s["who"]) > 1
+    ]
+    going.sort(key=lambda t: (t.accounts, t.per_day), reverse=True)
+    return reels[:TRENDING], going[:TRENDING]
 
 
 def pick(

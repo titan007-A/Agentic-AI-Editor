@@ -602,3 +602,27 @@ def test_a_research_looks_at_the_accounts_source_pages_too():
         0, context, channel=broken,
     )  # fmt: skip
     assert [r.code for r in kept.reels] == ["ADAMS1"]  # one page failing costs only its reels
+
+
+def test_the_trend_radar_shows_fresh_fast_reels_and_songs_several_accounts_post():
+    from types import SimpleNamespace
+
+    now = datetime(2026, 10, 30, tzinfo=UTC)
+
+    def item(code, handle, song, days_ago, per_day):
+        posted = (now - timedelta(days=days_ago)).replace(tzinfo=None)  # as the database has it
+        return SimpleNamespace(code=code, handle=handle, account="", song=song,
+                               posted_at=posted, per_day=per_day)  # fmt: skip
+
+    items = [
+        item("A", "attic", "Heaven - Bryan Adams", 2, 900.0),
+        item("B", "rockblog", "Heaven - Bryan Adams", 5, 300.0),
+        item("A", "attic", "Heaven - Bryan Adams", 2, 900.0),  # found again: once
+        item("C", "attic", "Summer of 69 - Bryan Adams", 1, 5000.0),
+        item("D", "attic", "Summer of '69 - Bryan Adams", 3, 10.0),  # one account only
+        item("E", "old", "Heaven - Bryan Adams", 30, 99999.0),  # posted too long ago
+        SimpleNamespace(code="F", handle="x", account="", song="", posted_at=None, per_day=None),
+    ]
+    reels, songs = research.trends(items, now)
+    assert [r.code for r in reels] == ["C", "A", "B", "D"]
+    assert songs == [research.SongTrend("Heaven - Bryan Adams", 2, 2, 1200.0)]

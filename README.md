@@ -284,6 +284,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
   their latest too (5 each): a YouTube channel's Shorts tab lists them; an Instagram page
   can't be listed without signing in, so it is searched for by name and only its own
   reels are kept. They are rated and ranked with the rest, never shown twice.
+- **Trend radar.** From the reels your researches of the last two weeks found (morning
+  ones included): the songs several accounts posted reels of lately, and the reels
+  posted then that gain likes and comments fastest. No searching of its own: it fills up
+  as researches run.
 - **Every morning.** "Research every morning" on an Instagram account starts a research
   for it (Instagram and YouTube Shorts) each day at that hour, server time; one the
   server was off for starts when it is back, the same day. It shows in the list as

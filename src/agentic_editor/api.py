@@ -11,7 +11,7 @@ import signal
 import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -222,6 +222,20 @@ class FeedbackRequest(BaseModel):
     reason: str = Field(default="", max_length=300)
     # Leave its account out of later researches too.
     hide_account: bool = False
+
+
+class SongTrendView(BaseModel):
+    song: str
+    reels: int
+    accounts: int
+    per_day: float
+
+
+class TrendsView(BaseModel):
+    # Reels posted in the last two weeks, spreading fastest first, and songs several
+    # accounts posted lately: from what the person's researches found.
+    reels: list[ResearchItemView]
+    songs: list[SongTrendView]
 
 
 class HiddenAccountView(BaseModel):
@@ -794,6 +808,27 @@ def create_app(
             raise HTTPException(404, "no such research")
         return found
 
+    def item_views(
+        items: list[ResearchItem], owner: str | None, account: Account, session: Session
+    ) -> list[ResearchItemView]:
+        """Reels researches gave, each marked when `owner` edited it since or hid its
+        account."""
+        used = jobs.reel_codes(session.scalars(select(Job.source).where(Job.owner_id == owner)))
+        hidden = set(
+            session.scalars(
+                select(HiddenAccount.handle).where(HiddenAccount.owner_id == (owner or account.id))
+            )
+        )
+        names = ResearchItemView.model_fields.keys() - {"used", "hidden"}
+        return [
+            ResearchItemView(
+                **{k: getattr(i, k) for k in names},
+                used=i.code in used,
+                hidden=bool(i.handle) and i.handle in hidden,
+            )
+            for i in items
+        ]
+
     def research_view(
         found: Research, account: Account, session: Session, items: bool = False
     ) -> ResearchView:
@@ -804,24 +839,7 @@ def create_app(
             owner=owners(session).get(found.owner_id) if account.role == accounts.ADMIN else None,
         )
         if items:
-            sources = session.scalars(select(Job.source).where(Job.owner_id == found.owner_id))
-            used = jobs.reel_codes(sources)
-            hidden = set(
-                session.scalars(
-                    select(HiddenAccount.handle).where(
-                        HiddenAccount.owner_id == (found.owner_id or account.id)
-                    )
-                )
-            )
-            names = ResearchItemView.model_fields.keys() - {"used", "hidden"}
-            view.items = [
-                ResearchItemView(
-                    **{k: getattr(i, k) for k in names},
-                    used=i.code in used,
-                    hidden=bool(i.handle) and i.handle in hidden,
-                )
-                for i in found.items
-            ]
+            view.items = item_views(found.items, found.owner_id, account, session)
             view.messages = [
                 ResearchMessageView(**{k: getattr(m, k) for k in ResearchMessageView.model_fields})
                 for m in found.messages
@@ -1034,6 +1052,21 @@ def create_app(
         session.delete(found)
         session.commit()
         return {"ok": True}
+
+    @app.get("/api/research/trends")
+    def research_trends(account: User, session: DB) -> TrendsView:
+        since = datetime.now(UTC) - timedelta(days=research.TREND_DAYS)
+        items = session.scalars(
+            select(ResearchItem)
+            .join(Research)
+            .where(Research.owner_id == account.id, Research.created_at >= since)
+            .order_by(Research.created_at.desc(), ResearchItem.rank)
+        ).all()
+        reels, songs = research.trends(items)
+        return TrendsView(
+            reels=item_views(reels, account.id, account, session),
+            songs=[SongTrendView(**vars(t)) for t in songs],
+        )
 
     @app.get("/api/research")
     def list_research(account: User, session: DB) -> list[ResearchView]:

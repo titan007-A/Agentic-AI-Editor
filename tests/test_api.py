@@ -1163,6 +1163,30 @@ def test_an_account_takes_reels_from_its_source_pages(env, monkeypatch):
     assert context.sources == ["instagram:bestvocals", "youtube:@ChiaraTomao"]
 
 
+def test_the_trend_radar_reads_the_persons_recent_researches(env, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    fake_research(monkeypatch, env)
+    assert env.client.get("/api/research/trends").json() == {"reels": [], "songs": []}
+    started = env.client.post(
+        "/api/research", json={"description": "Bryan Adams live", "skip_questions": True}
+    ).json()
+    with env.sessions() as db:
+        found = db.get(Research, started["id"])
+        for n, item in enumerate(found.items):
+            item.posted_at = datetime.now(UTC) - timedelta(days=n + 1)
+            item.per_day = 100.0 * (n + 1)
+            item.song = "Heaven - Bryan Adams"
+        db.commit()
+    trends = env.client.get("/api/research/trends").json()
+    assert [r["code"] for r in trends["reels"]] == ["ADAMS2", "ADAMS1", "OWN001"]
+    assert trends["songs"] == [
+        {"song": "Heaven - Bryan Adams", "reels": 3, "accounts": 3, "per_day": 600.0}
+    ]
+    _, riya = employee(env)
+    assert riya.get("/api/research/trends").json() == {"reels": [], "songs": []}  # not hers
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(
