@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from agentic_editor.db import (
     Job,
     Output,
     Research,
+    ResearchAccount,
     ResearchItem,
     StyleDraft,
     User,
@@ -35,6 +37,7 @@ STAGE_PROGRESS = {
     "plan": 0.45,
 }
 RENDER_START = 0.55
+RELEARN_DAYS = 7  # a research learns its account again when it was learned longer ago
 INTERRUPTED = "stopped when the server shut down; regenerate to run it again"
 
 _queue_file = get_settings().queue_database
@@ -266,11 +269,74 @@ def reel_codes(sources) -> set[str]:
     return {code for source in sources if (code := research.code_of(source))}
 
 
+def learn_account(
+    account_id: str, Session: sessionmaker, planner, progress, find=None, info=None
+) -> None:
+    """Learn what an Instagram account posts (research.learn) and keep it on the account."""
+    with Session() as db:
+        handle = db.get(ResearchAccount, account_id).handle
+    options = {k: v for k, v in (("find", find), ("info", info)) if v is not None}
+    learned = research.learn(handle, planner, progress, **options)
+    with Session() as db:
+        account = db.get(ResearchAccount, account_id)
+        account.summary, account.own, account.best = learned.summary, learned.own, learned.best
+        account.learned_at = datetime.now(UTC)
+        db.commit()
+
+
+def stale(learned_at: datetime | None, now: datetime | None = None) -> bool:
+    """Whether an account was never learned, or learned too long ago."""
+    if learned_at is None:
+        return True
+    now = now or datetime.now(UTC)
+    # The database gives back the UTC time it was given, without its zone.
+    return now - learned_at.replace(tzinfo=UTC) > timedelta(days=RELEARN_DAYS)
+
+
+def run_account_learning(
+    account_id: str, Session: sessionmaker, settings: Settings, router=None, find=None, info=None
+) -> None:
+    """Learn an account on its own ("Learn again", or just added). Like a job, it never
+    stays "running": whatever happens is stored."""
+
+    def progress(message: str, value: float) -> None:
+        with Session() as db:
+            db.get(ResearchAccount, account_id).learn_message = message
+            db.commit()
+
+    try:
+        with Session() as db:
+            account = db.get(ResearchAccount, account_id)
+            if account is None:
+                return
+            account.learn_status, account.learn_error = "running", None
+            db.commit()
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        learn_account(account_id, Session, router.planner, progress, find, info)
+        with Session() as db:
+            account = db.get(ResearchAccount, account_id)
+            account.learn_status = "done"
+            account.learn_message = (
+                f"read {len(account.own)} of its reels"
+                if account.own
+                else "none of its reels found; researches go by its presets"
+            )
+            db.commit()
+    except Exception as exc:
+        log.exception("learning account %s failed", account_id)
+        with Session() as db:
+            account = db.get(ResearchAccount, account_id)
+            if account is not None:
+                account.learn_status, account.learn_error = "failed", f"{type(exc).__name__}: {exc}"
+                db.commit()
+
+
 def run_research(
     research_id: str, Session: sessionmaker, settings: Settings, router=None, find=None, info=None
 ) -> None:
-    """Find and rank reels for a research (see research.py). Like a job, it never stays
-    "running": whatever happens is stored."""
+    """Find and rank reels for a research (see research.py), learning its account first
+    when that wasn't done in a while. Like a job, it never stays "running": whatever
+    happens is stored."""
 
     def progress(message: str, value: float) -> None:
         with Session() as db:
@@ -284,6 +350,7 @@ def run_research(
             found.status = "running"
             db.commit()
             description, owner = found.description, found.owner_id
+            account = db.get(ResearchAccount, found.account_id) if found.account_id else None
             # Reels already edited, or shown by an earlier research, are left out.
             used = reel_codes(db.scalars(select(Job.source).where(Job.owner_id == owner)))
             seen = set(
@@ -293,12 +360,31 @@ def run_research(
                     .where(Research.owner_id == owner, Research.id != research_id)
                 )
             )
+            user = db.get(User, owner) if owner else None
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         options = {k: v for k, v in (("find", find), ("info", info)) if v is not None}
-        result = research.run(description, router.planner, used, seen, progress, **options)
+        available = load_presets(accounts.presets_dir(user, settings.presets_dir))
+        context = research.Context(presets=research.describe_presets(available))
+        if account is not None:
+            if stale(account.learned_at):
+                learn_account(account.id, Session, router.planner, progress, find, info)
+            with Session() as db:
+                account = db.get(ResearchAccount, account.id)
+            chosen = {n: p for n, p in available.items() if n in account.presets}
+            context = research.Context(
+                handle=account.handle,
+                summary=account.summary,
+                presets=research.describe_presets(chosen or available),
+                own=set(account.own),
+            )
+        result = research.run(
+            description, router.planner, used, seen, progress, context=context, **options
+        )
         with Session() as db:
             found = db.get(Research, research_id)
             found.queries, found.used = result.queries, result.used
+            found.considered, found.left_out = result.considered, result.left_out
+            found.cutoff, found.brief = result.cutoff, result.brief
             for n, reel in enumerate(result.reels):
                 found.items.append(
                     ResearchItem(
@@ -307,6 +393,7 @@ def run_research(
                         url=reel.url,
                         query=reel.query,
                         account=reel.account,
+                        handle=reel.handle,
                         caption=reel.caption or reel.snippet or reel.title,
                         likes=reel.likes,
                         comments=reel.comments,
@@ -314,6 +401,11 @@ def run_research(
                         thumbnail=reel.thumbnail,
                         relevance=reel.relevance,
                         why=reel.why,
+                        song=reel.song,
+                        matches=reel.matches,
+                        preset=reel.preset,
+                        preset_why=reel.preset_why,
+                        per_day=reel.per_day,
                         virality=reel.virality,
                         score=reel.score,
                         seen=reel.seen,
@@ -363,8 +455,14 @@ def find_reels(research_id: str) -> None:
     run_research(research_id, sessions(), get_settings())
 
 
+@huey.task()
+def read_account(account_id: str) -> None:
+    run_account_learning(account_id, sessions(), get_settings())
+
+
 PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
 CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__name__
+ACCOUNT = read_account.task_class.__name__
 
 
 def recover(Session: sessionmaker) -> None:
@@ -381,6 +479,9 @@ def recover(Session: sessionmaker) -> None:
             draft.status, draft.error = "failed", INTERRUPTED
         for found in db.scalars(select(Research).where(Research.status == "running")).all():
             found.status, found.error = "failed", INTERRUPTED
+        learning = select(ResearchAccount).where(ResearchAccount.learn_status == "running")
+        for account in db.scalars(learning).all():
+            account.learn_status, account.learn_error = "failed", INTERRUPTED
         for output in db.scalars(select(Output).where(Output.caption_status == "writing")).all():
             output.caption_status, output.caption_notes = "failed", [INTERRUPTED]
         lost_captions = [
@@ -403,6 +504,8 @@ def recover(Session: sessionmaker) -> None:
             for research_id in db.scalars(select(Research.id).where(Research.status == "queued"))
             if (RESEARCH, research_id) not in pending
         ]
+        queued = select(ResearchAccount.id).where(ResearchAccount.learn_status == "queued")
+        lost_accounts = [a for a in db.scalars(queued) if (ACCOUNT, a) not in pending]
         db.commit()
     for job_id in lost_jobs:
         log.info("queueing job %s again", job_id)
@@ -416,3 +519,6 @@ def recover(Session: sessionmaker) -> None:
     for research_id in lost_research:
         log.info("queueing research %s again", research_id)
         find_reels(research_id)
+    for account_id in lost_accounts:
+        log.info("queueing the learning of account %s again", account_id)
+        read_account(account_id)

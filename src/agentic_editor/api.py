@@ -24,7 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import accounts, autopilot, jobs
+from agentic_editor import accounts, autopilot, jobs, research
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
@@ -34,6 +34,7 @@ from agentic_editor.db import (
     Job,
     Output,
     Research,
+    ResearchAccount,
     Setting,
     StyleDraft,
 )
@@ -109,7 +110,32 @@ class StyleDraftView(BaseModel):
 
 
 class ResearchRequest(BaseModel):
-    description: str = Field(min_length=3, max_length=1000)
+    # What to find; for an account, an optional focus.
+    description: str = Field(default="", max_length=1000)
+    account_id: str | None = None
+
+
+class ResearchAccountRequest(BaseModel):
+    handle: str = Field(min_length=1, max_length=200)  # "@name", "name" or its link
+    presets: list[str] = Field(min_length=1, max_length=50)
+
+
+class ResearchAccountUpdate(BaseModel):
+    presets: list[str] = Field(min_length=1, max_length=50)
+
+
+class ResearchAccountView(BaseModel):
+    id: str
+    handle: str
+    presets: list[str]
+    summary: str
+    learned_at: datetime | None
+    own: int  # its own reels found
+    best: list[dict]
+    learn_status: str
+    learn_message: str
+    learn_error: str | None
+    created_at: datetime
 
 
 class ResearchItemView(BaseModel):
@@ -118,7 +144,8 @@ class ResearchItemView(BaseModel):
     code: str
     url: str
     query: str
-    account: str
+    account: str  # its display name
+    handle: str  # its Instagram name
     caption: str
     likes: int | None
     comments: int | None
@@ -126,6 +153,11 @@ class ResearchItemView(BaseModel):
     thumbnail: str
     relevance: float | None
     why: str
+    song: str
+    matches: str
+    preset: str
+    preset_why: str
+    per_day: float | None
     virality: float
     score: float
     seen: bool  # shown by an earlier research
@@ -135,11 +167,17 @@ class ResearchItemView(BaseModel):
 class ResearchView(BaseModel):
     id: str
     description: str
+    account_id: str | None
+    handle: str
     status: str
     message: str
     progress: float
+    brief: str
     queries: list[str]
     used: int
+    considered: int
+    left_out: dict[str, int]
+    cutoff: float | None
     error: str | None
     created_at: datetime
     found: int
@@ -700,9 +738,97 @@ def create_app(
             ]
         return view
 
+    # A person's Instagram accounts are theirs alone, the admin's too: each has its own
+    # researcher, knowing their presets.
+    def find_instagram(account_id: str, session: Session, account: Account) -> ResearchAccount:
+        found = session.get(ResearchAccount, account_id)
+        if found is None or found.owner_id != account.id:
+            raise HTTPException(404, "no such Instagram account")
+        return found
+
+    def instagram_view(found: ResearchAccount) -> ResearchAccountView:
+        fields = ResearchAccountView.model_fields.keys() - {"own"}
+        return ResearchAccountView(**{k: getattr(found, k) for k in fields}, own=len(found.own))
+
+    def checked_presets(names: list[str], account: Account) -> list[str]:
+        mine_ = presets(account)
+        if unknown := [n for n in names if n not in mine_]:
+            raise HTTPException(422, f"unknown preset {', '.join(unknown)}")
+        return list(dict.fromkeys(names))
+
+    def learn_again(found: ResearchAccount, session: Session) -> None:
+        found.learn_status, found.learn_message, found.learn_error = "queued", "", None
+        session.commit()
+        jobs.read_account(found.id)
+
+    @app.get("/api/research/accounts")
+    def list_instagram(account: User, session: DB) -> list[ResearchAccountView]:
+        rows = session.scalars(
+            select(ResearchAccount)
+            .where(ResearchAccount.owner_id == account.id)
+            .order_by(ResearchAccount.created_at)
+        )
+        return [instagram_view(a) for a in rows]
+
+    @app.post("/api/research/accounts")
+    def add_instagram(
+        body: ResearchAccountRequest, account: User, session: DB
+    ) -> ResearchAccountView:
+        handle = research.handle_of(body.handle)
+        if handle is None:
+            raise HTTPException(422, "give the account as @name or its Instagram link")
+        taken = select(ResearchAccount).where(
+            ResearchAccount.owner_id == account.id, ResearchAccount.handle == handle
+        )
+        if session.scalars(taken).first() is not None:
+            raise HTTPException(409, f"@{handle} is already one of your accounts")
+        found = ResearchAccount(
+            owner_id=account.id, handle=handle, presets=checked_presets(body.presets, account)
+        )
+        session.add(found)
+        learn_again(found, session)
+        return instagram_view(found)
+
+    @app.put("/api/research/accounts/{account_id}")
+    def update_instagram(
+        account_id: str, body: ResearchAccountUpdate, account: User, session: DB
+    ) -> ResearchAccountView:
+        found = find_instagram(account_id, session, account)
+        found.presets = checked_presets(body.presets, account)
+        session.commit()
+        return instagram_view(found)
+
+    @app.post("/api/research/accounts/{account_id}/learn")
+    def relearn_instagram(account_id: str, account: User, session: DB) -> ResearchAccountView:
+        found = find_instagram(account_id, session, account)
+        if found.learn_status in ("queued", "running"):
+            raise HTTPException(409, "it is being learned already")
+        learn_again(found, session)
+        return instagram_view(found)
+
+    @app.delete("/api/research/accounts/{account_id}")
+    def remove_instagram(account_id: str, account: User, session: DB) -> dict:
+        found = find_instagram(account_id, session, account)
+        if found.learn_status in ("queued", "running"):
+            raise HTTPException(409, "it is being learned; try again in a minute")
+        session.delete(found)
+        session.commit()
+        return {"ok": True}
+
     @app.post("/api/research")
     def start_research(body: ResearchRequest, account: User, session: DB) -> ResearchView:
-        found = Research(description=body.description.strip(), owner_id=account.id)
+        description = body.description.strip()
+        handle = ""
+        if body.account_id:
+            handle = find_instagram(body.account_id, session, account).handle
+        elif len(description) < 3:
+            raise HTTPException(422, "say what to find, or choose one of your accounts")
+        found = Research(
+            description=description,
+            owner_id=account.id,
+            account_id=body.account_id or None,
+            handle=handle,
+        )
         session.add(found)
         session.commit()
         jobs.find_reels(found.id)

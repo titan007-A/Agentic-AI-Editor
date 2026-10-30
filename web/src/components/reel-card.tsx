@@ -1,24 +1,15 @@
 "use client";
 
-import { Check, Copy, ExternalLink, Heart, ImageOff, MessageCircle, Scissors } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { Copy, ExternalLink, Heart, ImageOff, Lightbulb, MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { api, errorText, type Preset, type ResearchItem } from "@/lib/api";
+import { type Preset, type Research, type ResearchItem } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -33,23 +24,88 @@ function ago(when: string): string {
   return `${Math.round(days / 365)} years ago`;
 }
 
+/** The model's words ended with one full stop, whether they came with one or not. */
+const ended = (text: string) => text.replace(/[.\s]+$/, "") + ".";
+
+/** Why the researcher chose this reel, step by step, from what it stored of its thinking. */
+export function reasons(item: ResearchItem, research: Research, presets: Preset[]): string[] {
+  const label = presets.find((p) => p.name === item.preset)?.label ?? item.preset;
+  const lines = [`Found by the search “${item.query}”.`];
+  lines.push(
+    item.relevance === null
+      ? "The model couldn't rate how well it fits, so it counted as half a fit."
+      : ended(`Fit ${Math.round(item.relevance * 10)}/10: ${item.why || "no reason given"}`),
+  );
+  if (item.matches) {
+    lines.push(
+      ended(
+        research.handle
+          ? `Like @${research.handle}'s reels: ${item.matches}`
+          : `Matches what you asked: ${item.matches}`,
+      ),
+    );
+  }
+  if (item.song) lines.push(ended(`The song: ${item.song}`));
+  lines.push(
+    item.preset
+      ? ended(`Suits your preset “${label}”${item.preset_why ? `: ${item.preset_why}` : ""}`)
+      : "None of your presets stood out for it.",
+  );
+  if (item.likes === null) {
+    lines.push("Instagram didn't show its likes without signing in, so it counted as not viral.");
+  } else {
+    const reactions = `${compact.format(item.likes)} likes${
+      item.comments !== null ? ` and ${compact.format(item.comments)} comments` : ""
+    }`;
+    const pace =
+      item.per_day !== null && item.posted_at
+        ? `, about ${compact.format(item.per_day)} a day since it was posted ${ago(item.posted_at)}`
+        : "";
+    lines.push(
+      `${reactions}${pace}: viral ${percent(item.virality)} among the ${research.considered} reels rated.`,
+    );
+  }
+  lines.push(
+    research.handle
+      ? `Not shown by an earlier research, not one of @${research.handle}'s own, and not edited before.`
+      : "Not shown by an earlier research, and not edited before.",
+  );
+  const rank =
+    item.rank === 0
+      ? `the best of the ${research.considered} rated`
+      : `#${item.rank + 1} of the ${research.items.length} given`;
+  lines.push(
+    `Score ${item.score.toFixed(2)} = fit × (0.5 + 0.5 × viral): ${rank}` +
+      (research.cutoff !== null
+        ? `; the best reel left out scored ${research.cutoff.toFixed(2)}.`
+        : "."),
+  );
+  return lines;
+}
+
 /** One reel a research found: how well it fits and how far it spread, and ways to use it.
- * `onPick` picks it for editing with others; `full` says no more can be picked. */
+ * Chosen to edit, it carries a preset: the one the researcher thought it suits, when that
+ * is still one of the person's, which they can change. */
 export function ReelCard({
   item,
   presets,
-  picked = false,
-  full = false,
-  onPick,
+  research,
+  chosen,
+  full,
+  onChoose,
 }: {
   item: ResearchItem;
   presets: Preset[];
-  picked?: boolean;
-  full?: boolean;
-  onPick?: () => void;
+  research: Research;
+  /** The preset it is to be edited with ("" until one is picked); null when not chosen. */
+  chosen: string | null;
+  /** As many reels are chosen as may be. */
+  full: boolean;
+  onChoose: (preset: string | null) => void;
 }) {
   const [broken, setBroken] = useState(!item.thumbnail);
-  const [editing, setEditing] = useState(false);
+  const [explaining, setExplaining] = useState(false);
+  const suggested = presets.some((p) => p.name === item.preset) ? item.preset : "";
 
   async function copy() {
     try {
@@ -61,7 +117,7 @@ export function ReelCard({
   }
 
   return (
-    <Card className={cn("gap-0 overflow-hidden p-0", picked && "ring-2 ring-primary")}>
+    <Card className={cn("gap-0 overflow-hidden p-0", chosen !== null && "ring-2 ring-primary")}>
       <a
         href={item.url}
         target="_blank"
@@ -89,7 +145,12 @@ export function ReelCard({
       </a>
       <div className="space-y-2 p-3">
         <div className="flex items-baseline justify-between gap-2">
-          <p className="min-w-0 truncate font-medium">{item.account || "Instagram reel"}</p>
+          <p className="min-w-0 truncate font-medium">
+            {item.account || "Instagram reel"}
+            {item.handle && (
+              <span className="ml-1 text-xs font-normal text-muted-foreground">@{item.handle}</span>
+            )}
+          </p>
           <p className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
             {item.likes !== null && (
               <span className="flex items-center gap-0.5">
@@ -109,30 +170,45 @@ export function ReelCard({
           </Badge>
           <Badge variant="secondary">Viral {percent(item.virality)}</Badge>
           {item.posted_at && <Badge variant="outline">{ago(item.posted_at)}</Badge>}
+          {item.preset && (
+            <Badge variant="outline">
+              For {presets.find((p) => p.name === item.preset)?.label ?? item.preset}
+            </Badge>
+          )}
           {item.used && <Badge variant="outline">Edited</Badge>}
           {item.seen && !item.used && <Badge variant="outline">Shown before</Badge>}
         </div>
         {item.caption && <p className="line-clamp-3 text-sm break-words">{item.caption}</p>}
         {item.why && <p className="text-xs text-muted-foreground">Why: {item.why}</p>}
-        <div className="flex flex-wrap gap-2 pt-1">
-          {onPick && (
-            <Button
-              size="sm"
-              variant={picked ? "default" : "outline"}
-              aria-pressed={picked}
-              disabled={full && !picked}
-              onClick={onPick}
-            >
-              <Check /> {picked ? "Picked" : "Pick"}
-            </Button>
+        <div className="space-y-2 rounded-md border p-2">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Checkbox
+              checked={chosen !== null}
+              disabled={chosen === null && full}
+              onCheckedChange={(on) => onChoose(on ? suggested : null)}
+            />
+            {chosen === null && full ? "5 chosen already" : "Choose to edit"}
+          </label>
+          {chosen !== null && (
+            <div className="space-y-1">
+              <Label htmlFor={`reel-preset-${item.id}`}>Preset</Label>
+              <select
+                id={`reel-preset-${item.id}`}
+                value={chosen}
+                onChange={(e) => onChoose(e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {!chosen && <option value="">Pick a preset</option>}
+                {presets.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
-          <Button
-            size="sm"
-            variant={onPick ? "outline" : "default"}
-            onClick={() => setEditing(true)}
-          >
-            <Scissors /> Edit
-          </Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={copy}>
             <Copy /> Copy link
           </Button>
@@ -142,101 +218,23 @@ export function ReelCard({
             </a>
           </Button>
         </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="w-full"
+          aria-expanded={explaining}
+          onClick={() => setExplaining(!explaining)}
+        >
+          <Lightbulb /> {explaining ? "Hide reasoning" : "Explain reasoning"}
+        </Button>
+        {explaining && (
+          <ol className="list-inside list-decimal space-y-1 rounded-md border bg-muted/40 p-2 text-sm break-words">
+            {reasons(item, research, presets).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ol>
+        )}
       </div>
-      <EditDialog items={[item]} presets={presets} open={editing} onOpenChange={setEditing} />
     </Card>
-  );
-}
-
-/** Edits one reel, or several picked ones, with one preset: a job each. */
-export function EditDialog({
-  items,
-  presets,
-  open,
-  onOpenChange,
-}: {
-  items: ResearchItem[];
-  presets: Preset[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const router = useRouter();
-  const [chosen, setChosen] = useState("");
-  const [notes, setNotes] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function start() {
-    if (!chosen || busy) return;
-    setBusy(true);
-    try {
-      const jobs = await api.createJobs(
-        items.map((i) => i.url),
-        [chosen],
-        notes,
-      );
-      if (jobs.length === 1) {
-        toast.success("Job queued");
-        router.push(`/job/?id=${jobs[0].id}`);
-      } else {
-        toast.success(`${jobs.length} jobs queued`);
-        router.push("/");
-      }
-    } catch (err) {
-      toast.error(errorText(err));
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {items.length === 1 ? "Edit this reel" : `Edit these ${items.length} reels`}
-          </DialogTitle>
-          <DialogDescription className="break-all">
-            {items.length === 1
-              ? items[0].url
-              : "One job each, with the preset and notes chosen here."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <fieldset className="space-y-2">
-            <legend className="mb-2 text-sm font-medium">Preset</legend>
-            <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
-              {presets.map((p) => (
-                <button
-                  key={p.name}
-                  type="button"
-                  aria-pressed={chosen === p.name}
-                  onClick={() => setChosen(p.name)}
-                  className={cn(
-                    "sketch-tile p-2 text-left text-sm hover:bg-[#fdf3dc]",
-                    chosen === p.name && "bg-[#fdf3dc] font-medium ring-2 ring-primary",
-                  )}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
-          <div className="space-y-1">
-            <Label htmlFor={`reel-notes-${items[0]?.id}`}>Notes for the editor (optional)</Label>
-            <Textarea
-              id={`reel-notes-${items[0]?.id}`}
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder={"e.g. start on the chorus\nsong: Summer of '69\nartist: Bryan Adams"}
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button disabled={!chosen || busy} onClick={start}>
-            <Scissors /> Start edit
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

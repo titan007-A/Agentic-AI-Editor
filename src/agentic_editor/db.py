@@ -205,20 +205,55 @@ class StyleDraft(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class ResearchAccount(Base):
+    """An Instagram account a person runs, and the presets they edit its reels with: the
+    researcher learns what it posts and finds reels like its best ones (see research.py)."""
+
+    __tablename__ = "research_accounts"
+    __table_args__ = (UniqueConstraint("owner_id", "handle"),)
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    handle: Mapped[str] = mapped_column(String(64))
+    presets: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # What the planning model read in the account's own reels, and when; empty when none
+    # were found, and then a research goes by the presets.
+    summary: Mapped[str] = mapped_column(Text, default="")
+    learned_at: Mapped[datetime | None]
+    own: Mapped[list[str]] = mapped_column(JSON, default=list)  # its own reels' codes
+    best: Mapped[list[dict]] = mapped_column(JSON, default=list)  # its best liked
+    # Learning runs as a task of its own: idle, queued, running, done or failed.
+    learn_status: Mapped[str] = mapped_column(String(16), default="idle")
+    learn_message: Mapped[str] = mapped_column(Text, default="")
+    learn_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Research(Base):
-    """A search for Instagram reels that fit a description (see research.py)."""
+    """A search for Instagram reels that fit a description, or an account (see
+    research.py)."""
 
     __tablename__ = "research"
 
     id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    # What to find; for an account, an optional focus.
     description: Mapped[str] = mapped_column(Text)
     owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
+    account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("research_accounts.id", ondelete="SET NULL"), index=True
+    )
+    handle: Mapped[str] = mapped_column(Text, default="")  # kept if the account is removed
     status: Mapped[str] = mapped_column(String(16), default="queued")
     message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
     progress: Mapped[float] = mapped_column(default=0.0)
+    brief: Mapped[str] = mapped_column(Text, default="")  # the request as the model read it
     queries: Mapped[list[str]] = mapped_column(JSON, default=list)
     # Reels found but left out because they were edited already.
     used: Mapped[int] = mapped_column(default=0)
+    considered: Mapped[int] = mapped_column(default=0)  # reels looked up and rated
+    # Reels found but not given, by why ("shown before", "didn't fit"...).
+    left_out: Mapped[dict] = mapped_column(JSON, default=dict)
+    cutoff: Mapped[float | None]  # the best score of the rated reels not given
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
@@ -240,7 +275,8 @@ class ResearchItem(Base):
     code: Mapped[str] = mapped_column(String(64), index=True)
     url: Mapped[str] = mapped_column(Text)
     query: Mapped[str] = mapped_column(Text, default="")
-    account: Mapped[str] = mapped_column(Text, default="")
+    account: Mapped[str] = mapped_column(Text, default="")  # its display name
+    handle: Mapped[str] = mapped_column(Text, default="")  # its Instagram name, @handle
     caption: Mapped[str] = mapped_column(Text, default="")
     likes: Mapped[int | None]
     comments: Mapped[int | None]
@@ -250,6 +286,12 @@ class ResearchItem(Base):
     # among the reels found, and the two together.
     relevance: Mapped[float | None]
     why: Mapped[str] = mapped_column(Text, default="")
+    # The rest of the model's thinking: the song, what it matches, the preset it suits.
+    song: Mapped[str] = mapped_column(Text, default="")
+    matches: Mapped[str] = mapped_column(Text, default="")
+    preset: Mapped[str] = mapped_column(Text, default="")
+    preset_why: Mapped[str] = mapped_column(Text, default="")
+    per_day: Mapped[float | None]  # likes and comments a day since it was posted
     virality: Mapped[float] = mapped_column(default=0.0)
     score: Mapped[float] = mapped_column(default=0.0)
     seen: Mapped[bool] = mapped_column(default=False)  # shown by an earlier research

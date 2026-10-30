@@ -155,6 +155,41 @@ def test_a_restart_settles_researches_like_jobs(tmp_path, monkeypatch):
     assert asked == ["lost"]
 
 
+def test_a_restart_settles_the_learning_of_instagram_accounts(tmp_path, monkeypatch):
+    from agentic_editor.db import ResearchAccount
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add_all([
+            ResearchAccount(id="reading", handle="a", learn_status="running"),
+            ResearchAccount(id="waiting", handle="b", learn_status="queued"),
+            ResearchAccount(id="lost", handle="c", learn_status="queued"),
+            ResearchAccount(id="known", handle="d", learn_status="done"),
+        ])  # fmt: skip
+        db.commit()
+    queue = [SimpleNamespace(name=jobs.ACCOUNT, args=("waiting",))]
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue))
+    asked = []
+    monkeypatch.setattr(jobs, "read_account", asked.append)
+
+    jobs.recover(Session)
+
+    with Session() as db:
+        reading = db.get(ResearchAccount, "reading")
+        assert (reading.learn_status, reading.learn_error) == ("failed", jobs.INTERRUPTED)
+    assert asked == ["lost"]
+
+
+def test_an_account_is_learned_again_after_a_week():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 10, 30, 12, tzinfo=UTC)
+    assert jobs.stale(None, now)
+    # As the database gives it back: UTC, without its zone.
+    assert not jobs.stale(datetime(2026, 10, 25, 12), now)
+    assert jobs.stale(datetime(2026, 10, 30, 12) - timedelta(days=8), now)
+
+
 def test_reels_are_known_by_code_among_a_job_s_sources():
     sources = [
         "https://www.instagram.com/reel/DcafVd6BocI/?igsh=x",

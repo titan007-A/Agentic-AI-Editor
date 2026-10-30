@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentic_editor.auth import hash_password, verify_password
-from agentic_editor.db import Feed, Job, Research, StyleDraft, User
+from agentic_editor.db import Feed, Job, Research, ResearchAccount, StyleDraft, User
 
 ADMIN, MEMBER = "admin", "member"
 USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{2,31}")
@@ -124,6 +124,10 @@ def remove(
                 item.owner_id = keep_work_for.id
             else:
                 session.delete(item)
+    # Its Instagram accounts go with it: they name its presets, which go too. Researches
+    # made for them keep the account's name.
+    for item in session.scalars(select(ResearchAccount).where(ResearchAccount.owner_id == user.id)):
+        session.delete(item)
     if user.role == MEMBER:
         shutil.rmtree(presets_dir(user, presets_root), ignore_errors=True)
     session.delete(user)

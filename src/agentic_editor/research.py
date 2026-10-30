@@ -8,7 +8,13 @@ looked up with yt-dlp without signing in (account, caption, likes, comments, dat
 and length aren't given then), and the planning model rates how well each fits.
 
 Engines index only part of Instagram, mostly popular reels a few days old or more, so a
-research finds plenty, never everything."""
+research finds plenty, never everything.
+
+A research can be for one of the owner's Instagram accounts: the account is learned first
+(its own reels, found the same way, and what the planning model reads in them), and the
+searches and ratings aim at reels like its best ones, for the presets the owner edits it
+with. Each research gives its best few: never a reel shown before, the account's own or
+one already edited, and at most two from one account."""
 
 import logging
 import math
@@ -22,6 +28,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field
 
 from agentic_editor.llm import LLMError, parse
+from agentic_editor.presets import Preset
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +40,7 @@ PER_QUERY = 30  # results asked of the engines for each search
 MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
 SHOWN = 8  # the best this many are kept: the owner picks the ones to edit from them
 PER_ACCOUNT = 2  # of them at most from one account, so one page doesn't fill the research
+LEARN_REELS = 24  # reels looked up to find an account's own
 PAUSE = 1.0  # seconds between searches, so the engines don't turn it away
 LOOKUPS = 4  # reels looked up at once
 RATE_BATCH = 10
@@ -60,9 +68,16 @@ class Reel:
     comments: int | None = None
     posted: datetime | None = None
     thumbnail: str = ""
+    handle: str = ""  # the account's Instagram name, from the lookup
     looked_up: bool = False
     relevance: float | None = None  # 0-1, None when the model couldn't rate it
     why: str = ""
+    song: str = ""  # "Song - Artist" when the model could tell
+    artist: str = ""  # the singer or band it is about
+    matches: str = ""  # what of the account (or the description) it matches
+    preset: str = ""  # the preset it suits best
+    preset_why: str = ""
+    per_day: float | None = None  # likes and comments a day since it was posted
     virality: float = 0.0  # 0-1 within this research
     score: float = 0.0
     seen: bool = False  # shown by an earlier research
@@ -77,6 +92,31 @@ class Result:
     brief: str = ""  # the request as the model understood it, in English
     unrelated: int = 0  # rated below MIN_FIT, so left out
     repeats: int = 0  # shown by an earlier research, so left out
+    considered: int = 0  # reels looked up and rated
+    # Reels found but not given, by why: "edited", "shown before", "the account's own",
+    # "didn't fit", "same account".
+    left_out: dict[str, int] = field(default_factory=dict)
+    cutoff: float | None = None  # the best score of the reels that fit but weren't given
+
+
+@dataclass
+class Context:
+    """Whom a research is for: an Instagram account the owner runs (its name, what it
+    posts, its own reels) and the presets they edit with, by name with what each makes."""
+
+    handle: str = ""
+    summary: str = ""
+    presets: dict[str, str] = field(default_factory=dict)
+    own: set[str] = field(default_factory=set)
+
+
+@dataclass
+class Learned:
+    """What a look at an account found: what it posts, its own reels, the best liked."""
+
+    summary: str
+    own: list[str]
+    best: list[dict]
 
 
 class Searches(BaseModel):
@@ -88,17 +128,23 @@ class Rating(BaseModel):
     n: int
     relevance: int = Field(ge=0, le=10)
     why: str = Field(default="", max_length=200)
+    song: str = Field(default="", max_length=120)
+    artist: str = Field(default="", max_length=120)
+    matches: str = Field(default="", max_length=200)
+    preset: str = Field(default="", max_length=80)
+    preset_why: str = Field(default="", max_length=200)
 
 
 class Ratings(BaseModel):
     ratings: list[Rating]
 
 
-PLAN = (
-    "You find Instagram reels for a video editor who reposts and edits them. Their request "
-    "may be in Hindi, Hinglish or any language ('gaane' means songs, 'dundh' find, 'bdia' "
-    "good). First write `brief`: in one English sentence, exactly what content they want "
-    "(the music, artists or topic, its language or country, live or studio, any era). "
+class Summary(BaseModel):
+    summary: str = Field(max_length=1500)
+
+
+# How searches are written, for a request and for an account alike.
+SEARCHES = (
     "Then write {count} short web searches (2-6 words each) that find reels of exactly that: "
     "name real, well-known artists and songs of it (for Italian songs, say, Ricchi e Poveri "
     "'Sarà perché ti amo', Eros Ramazzotti, Laura Pausini), its genres, hashtags (without #) "
@@ -106,14 +152,51 @@ PLAN = (
     "Every search must be about the requested content on its own: never a bare city or "
     "place name, never a word of the request's language (such as 'gaane') unless the "
     "content is in that language. Vary them so they find different reels; don't add "
-    "'instagram' or 'reel'.\n\nTheir request: {description}"
+    "'instagram' or 'reel'."
+)
+PLAN = (
+    "You find Instagram reels for a video editor who reposts and edits them. Their request "
+    "may be in Hindi, Hinglish or any language ('gaane' means songs, 'dundh' find, 'bdia' "
+    "good). First write `brief`: in one English sentence, exactly what content they want "
+    "(the music, artists or topic, its language or country, live or studio, any era). "
+    + SEARCHES
+    + "\n\nTheir request: {description}"
+)
+PLAN_FOR = (
+    "You find Instagram reels for a video editor who runs the Instagram account @{handle} "
+    "and reposts reels edited with their presets.\n\nWhat @{handle} posts: {summary}\n\n"
+    "Their presets:\n{presets}\n\n{focus}First write `brief`: in one English sentence, "
+    "exactly what content to find: reels like the account's best liked ones that are going "
+    "viral now and suit the presets (the music, artists or topic, its language or country, "
+    "live or studio, any era); their request for this time, which may be in Hindi or "
+    "Hinglish, comes first. " + SEARCHES
 )
 RATE = (
     "Rate how well each Instagram reel fits what the editor wants, from its account, caption "
-    "and search snippet: 10 = exactly it, 5 = related, 0 = unrelated. Judge only the content "
-    "asked for, not popularity: music of another language or country than the one asked for "
-    "is 0, and so is a reel that only shares a word or a place name with the request. Give "
-    "one short reason each.\n\nWhat they want: {description}\n\nReels:\n{reels}"
+    "and search snippet. Judge only the content asked for, not popularity: music of another "
+    "language or country than the one asked for is 0, and so is a reel that only shares a "
+    "word or a place name with the request. For each reel give:\n"
+    "- n: its number\n"
+    "- relevance: 10 = exactly it, 5 = related, 0 = unrelated\n"
+    "- why: one sentence (under 25 words) on why it fits or doesn't\n"
+    "- song: the song's title when the caption names one, else ''\n"
+    "- artist: the main singer or band it is about, else ''\n"
+    "- matches: a few words on which part of what they want it matches, else ''\n"
+    "- preset: the name of the preset it suits best, exactly as listed, else ''\n"
+    "- preset_why: a few words on why that preset\n"
+    "Judge each reel by its own caption: reels found by the same search are often about "
+    "different songs and fit differently. Judge the music by its artist and song, not by "
+    "the language its caption is written in: a Spanish caption about an Italian song is "
+    "still an Italian song. A preset's language is the text the editor adds, not something "
+    "the reel must have.\n\n"
+    "What they want: {wish}\n\nTheir presets:\n{presets}\n\nReels:\n{reels}"
+)
+LEARN = (
+    "These are reels the Instagram account @{handle} posted, with their likes. In a few "
+    "sentences say what the account posts: the artists, songs, eras, genres and languages, "
+    "the format (for example isolated vocals, live concerts, the story behind a song), the "
+    "words and hashtags its captions use, and which kind of its reels got the most likes."
+    "\n\nReels:\n{reels}"
 )
 
 
@@ -126,12 +209,60 @@ def reel_url(code: str) -> str:
     return f"https://www.instagram.com/reel/{code}/"
 
 
-def plan(llm, description: str) -> tuple[str, list[str]]:
+def handle_of(text: str) -> str | None:
+    """An Instagram account's name from "@name", "name" or its profile link."""
+    text = text.strip()
+    if match := re.match(r"https?://(?:www\.|m\.)?instagram\.com/([\w.]+)/?(?:\?.*)?$", text):
+        text = match.group(1)
+    text = text.removeprefix("@").lower()
+    return text if re.fullmatch(r"[a-z0-9._]{1,30}", text) else None
+
+
+def describe_presets(presets: dict[str, Preset]) -> dict[str, str]:
+    """What each preset makes, in a line the planning model can match reels to."""
+    lines = {}
+    for name, preset in presets.items():
+        parts = [preset.label]
+        if preset.audio.source == "vocals":
+            parts.append("isolated vocals, the music removed")
+        texts = [" ".join(b.text.split()) for b in preset.text_blocks if b.text.strip()]
+        if texts:
+            parts.append("text on the reel: " + _short(" / ".join(texts), 200))
+        if preset.headline.hint and any("{headline}" in b.text for b in preset.text_blocks):
+            parts.append("headline: " + _short(preset.headline.hint, 150))
+        if preset.post_caption.enabled:
+            parts.append(f"post caption in '{preset.post_caption.language}'")
+        if preset.style_notes:
+            parts.append(_short(preset.style_notes, 150))
+        lines[name] = "; ".join(parts)
+    return lines
+
+
+def _preset_lines(presets: dict[str, str]) -> str:
+    return "\n".join(f"- {name}: {about}" for name, about in presets.items()) or "(none)"
+
+
+def plan(llm, description: str, context: Context | None = None) -> tuple[str, list[str]]:
     """The request as the model understood it, in English, and the searches for it. The
     request itself, in whatever words, isn't searched ("italian gaane" finds Hindi songs),
-    unless the model can't answer at all."""
+    unless the model can't answer at all. For an account the description is an optional
+    focus; without one, a model that can't answer leaves the account's name and the
+    presets to search."""
+    focus = description.strip()
+    if context and context.handle:
+        prompt = PLAN_FOR.format(
+            handle=context.handle,
+            summary=context.summary or "(not known yet: go by the presets)",
+            presets=_preset_lines(context.presets),
+            focus=f"Their request for this time: {focus}\n\n" if focus else "",
+            count=MAX_QUERIES,
+        )
+        fallback = [focus[:120]] if focus else [context.handle]
+        fallback += [about.split(";")[0] for about in context.presets.values()]
+    else:
+        prompt = PLAN.format(count=MAX_QUERIES, description=focus)
+        fallback = [focus[:120]]
     brief, queries = "", []
-    prompt = PLAN.format(count=MAX_QUERIES, description=description.strip())
     messages = [{"role": "user", "content": prompt}]
     for _ in range(2):
         try:
@@ -143,8 +274,7 @@ def plan(llm, description: str) -> tuple[str, list[str]]:
         queries += reply.queries
         if len(_tidy(queries)) >= MIN_QUERIES:
             break
-    queries = _tidy(queries) or _tidy([description[:120]])
-    return brief, queries[:MAX_QUERIES]
+    return brief, (_tidy(queries) or _tidy(fallback))[:MAX_QUERIES]
 
 
 def _tidy(queries: list[str]) -> list[str]:
@@ -231,6 +361,7 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
             log.info("couldn't look up %s: %s", reel.url, str(exc)[:200])
             return
         reel.account = meta.get("uploader") or meta.get("channel") or ""
+        reel.handle = (meta.get("channel") or "").lower()
         reel.caption = (meta.get("description") or meta.get("title") or "")[:1000]
         reel.likes = _count(meta.get("like_count"))
         reel.comments = _count(meta.get("comment_count"))
@@ -247,9 +378,23 @@ def _count(value) -> int | None:
     return int(value) if isinstance(value, int | float) and value >= 0 else None
 
 
-def rate(llm, description: str, reels: list[Reel], batch: int = RATE_BATCH) -> None:
-    """Each reel's relevance, 0-1, from the planning model. A batch it can't rate keeps
-    None, ranked as half relevant."""
+def rate(
+    llm,
+    description: str,
+    reels: list[Reel],
+    batch: int = RATE_BATCH,
+    context: Context | None = None,
+) -> None:
+    """Each reel's relevance, 0-1, from the planning model, with why, its song, what it
+    matches and the preset it suits best. A batch it can't rate keeps None, ranked as half
+    relevant."""
+    context = context or Context()
+    wish = description.strip()
+    if context.handle:
+        account = f"reels like those of @{context.handle}, which posts: " + (
+            context.summary or "(not known: go by the presets)"
+        )
+        wish = f"{wish}\nThat is, {account}" if wish else account
     for start in range(0, len(reels), batch):
         group = reels[start : start + batch]
         lines = "\n".join(
@@ -257,7 +402,7 @@ def rate(llm, description: str, reels: list[Reel], batch: int = RATE_BATCH) -> N
             f" | search: {_short(r.snippet, 200)}"
             for n, r in enumerate(group, 1)
         )
-        prompt = RATE.format(description=description.strip(), reels=lines)
+        prompt = RATE.format(wish=wish, presets=_preset_lines(context.presets), reels=lines)
         try:
             reply = parse(
                 Ratings,
@@ -272,8 +417,16 @@ def rate(llm, description: str, reels: list[Reel], batch: int = RATE_BATCH) -> N
             continue
         for rating in reply.ratings:
             if 1 <= rating.n <= len(group):
-                group[rating.n - 1].relevance = rating.relevance / 10
-                group[rating.n - 1].why = rating.why.strip()
+                reel = group[rating.n - 1]
+                reel.relevance = rating.relevance / 10
+                reel.why = rating.why.strip()
+                reel.artist = rating.artist.strip()
+                title = rating.song.strip()
+                reel.song = f"{title} - {reel.artist}" if title and reel.artist else title
+                reel.matches = rating.matches.strip()
+                if rating.preset.strip() in context.presets:
+                    reel.preset = rating.preset.strip()
+                    reel.preset_why = rating.preset_why.strip()
 
 
 def _short(text: str, limit: int) -> str:
@@ -293,6 +446,8 @@ def spread(reels: list[Reel], now: datetime | None = None) -> None:
         days = max(1.0, (now - r.posted).total_seconds() / 86400) if r.posted else 30.0
         return reactions(r) / days
 
+    for r in reels:
+        r.per_day = round(per_day(r), 1) if r.posted and reactions(r) else None
     total = [math.log1p(reactions(r)) for r in reels]
     fast = [math.log1p(per_day(r)) for r in reels]
     most, fastest = max(total, default=0) or 1, max(fast, default=0) or 1
@@ -307,18 +462,72 @@ def rank(reels: list[Reel]) -> list[Reel]:
     return sorted(reels, key=lambda r: r.score, reverse=True)
 
 
-def best(ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT) -> list[Reel]:
-    """The first `count` of the ranked reels, at most `per_account` from one account."""
-    kept, by = [], {}
-    for r in ranked:
-        key = r.account.casefold()
-        if key and by.get(key, 0) >= per_account:
+def _same(text: str) -> str:
+    return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
+
+
+def pick(
+    ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT
+) -> tuple[list[Reel], dict[str, int], float | None]:
+    """The best `count` of the ranked reels, at most `per_account` from one account (by its
+    Instagram name, its display name when that isn't known), so one page doesn't fill the
+    research; how many were passed over for that, and the best score left. Another reel of
+    a song already given is welcome: only a reel itself is never given twice."""
+    picked: list[Reel] = []
+    passed = 0
+    accounts: dict[str, int] = {}
+    rest: list[Reel] = []
+    for reel in ranked:
+        if len(picked) == count:
+            rest.append(reel)
             continue
-        by[key] = by.get(key, 0) + 1
-        kept.append(r)
-        if len(kept) == count:
-            break
-    return kept
+        who = _same(reel.handle or reel.account)
+        if who and accounts.get(who, 0) >= per_account:
+            passed += 1
+            continue
+        picked.append(reel)
+        accounts[who] = accounts.get(who, 0) + 1
+    cutoff = rest[0].score if rest else None
+    return picked, {"same account": passed} if passed else {}, cutoff
+
+
+def learn(
+    handle: str,
+    planner: Callable,
+    progress: Progress,
+    find=_engines,
+    info=_info,
+    pause: float | None = None,
+) -> Learned:
+    """Find the account's own reels and read what it posts. With none found the summary
+    is empty, and a research goes by the presets."""
+    progress(f"looking for @{handle}'s own reels", 0.03)
+    reels, failed = search([f'"{handle}"', handle], find, pause)
+    if not reels and failed:
+        raise RuntimeError("the search engines didn't answer; try again in a few minutes")
+    reels = reels[:LEARN_REELS]
+    progress(f"looking up {len(reels)} reels to find @{handle}'s own", 0.08)
+    look_up(reels, info)
+    own = sorted((r for r in reels if r.handle == handle), key=lambda r: r.likes or 0)[::-1]
+    if not own:
+        return Learned("", [], [])
+    progress(f"reading what @{handle} posts", 0.15)
+    lines = "\n".join(
+        f"- {'?' if r.likes is None else r.likes} likes: {_short(r.caption or r.title, 250)}"
+        for r in own[:15]
+    )
+    summary = ""
+    try:
+        with planner() as llm:
+            messages = [{"role": "user", "content": LEARN.format(handle=handle, reels=lines)}]
+            summary = parse(Summary, llm.chat_json(messages, Summary.model_json_schema())).summary
+    except LLMError as exc:
+        log.warning("couldn't read what @%s posts: %s", handle, exc)
+    best = [
+        {"code": r.code, "likes": r.likes, "caption": _short(r.caption or r.title, 200)}
+        for r in own[:5]
+    ]
+    return Learned(summary.strip(), [r.code for r in own], best)
 
 
 def run(
@@ -330,37 +539,53 @@ def run(
     find=_engines,
     info=_info,
     pause: float | None = None,
+    context: Context | None = None,
 ) -> Result:
-    """Search, look up, rate and rank. `planner()` opens the planning model, which holds
-    the GPU, so it is opened only to plan and to rate, never while waiting on the web.
-    Reels in `used` (already edited) and in `seen` (shown by an earlier research) are left
-    out, so each research brings new ones."""
+    """Search, look up, rate, rank and pick the best few. `planner()` opens the planning
+    model, which holds the GPU, so it is opened only to plan and to rate, never while
+    waiting on the web. Reels in `used` (already edited), in `seen` (shown by an earlier
+    research), the account's own and those that don't fit are left out, so each research
+    brings new ones."""
+    context = context or Context()
     progress("planning the searches", 0.02)
     with planner() as llm:
-        brief, queries = plan(llm, description)
+        brief, queries = plan(llm, description, context)
     reels, failed = search(queries, find, pause, progress)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
-    fresh = [r for r in reels if r.code not in used and r.code not in seen]
-    skipped = sum(r.code in used for r in reels)
-    repeats = sum(r.code in seen and r.code not in used for r in reels)
-    reels = fresh[:MAX_REELS]
+    left_out = {
+        "edited": sum(r.code in used for r in reels),
+        "shown before": sum(r.code in seen and r.code not in used for r in reels),
+        "the account's own": sum(r.code in context.own - used - seen for r in reels),
+    }
+    reels = [r for r in reels if r.code not in used | seen | context.own][:MAX_REELS]
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
+    if context.handle:
+        left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
+        reels = [r for r in reels if r.handle != context.handle]
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:
             # The brief says it plainly; the request keeps what the brief may have lost.
-            wanted = f"{brief} (their words: {description.strip()})" if brief else description
-            rate(llm, wanted, reels)
+            wanted = description.strip()
+            if brief:
+                wanted = f"{brief} (their words: {wanted})" if wanted else brief
+            rate(llm, wanted, reels, context=context)
     fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
+    left_out["didn't fit"] = len(reels) - len(fitting)
     spread(fitting)
+    picked, passed, cutoff = pick(rank(fitting))
+    left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
     return Result(
         queries,
-        best(rank(fitting)),
-        used=skipped,
+        picked,
+        used=left_out.get("edited", 0),
         failed_searches=failed,
         brief=brief,
-        unrelated=len(reels) - len(fitting),
-        repeats=repeats,
+        unrelated=left_out.get("didn't fit", 0),
+        repeats=left_out.get("shown before", 0),
+        considered=len(reels),
+        left_out=left_out,
+        cutoff=cutoff,
     )

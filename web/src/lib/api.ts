@@ -91,7 +91,10 @@ export type ResearchItem = {
   url: string;
   /** The search that found it first. */
   query: string;
+  /** Its display name. */
   account: string;
+  /** Its Instagram name, shown as @handle. */
+  handle: string;
   caption: string;
   likes: number | null;
   comments: number | null;
@@ -100,6 +103,15 @@ export type ResearchItem = {
   /** 0-1: how well it fits the description; null when the model couldn't rate it. */
   relevance: number | null;
   why: string;
+  /** "Song - Artist" when the model could tell. */
+  song: string;
+  /** What of the account (or description) it matches. */
+  matches: string;
+  /** The preset it suits best, and why. */
+  preset: string;
+  preset_why: string;
+  /** Likes and comments a day since it was posted. */
+  per_day: number | null;
   /** 0-1: how far it spread among the reels found. */
   virality: number;
   score: number;
@@ -111,18 +123,46 @@ export type ResearchItem = {
 
 export type Research = {
   id: string;
+  /** What to find; for an account, an optional focus. */
   description: string;
+  account_id: string | null;
+  handle: string;
   status: "queued" | "running" | "done" | "failed";
   message: string;
   progress: number;
+  /** The request as the model understood it, in English. */
+  brief: string;
   queries: string[];
   /** Reels found but left out, edited before. */
   used: number;
+  /** Reels looked up and rated. */
+  considered: number;
+  /** Reels found but not given, by why. */
+  left_out: Record<string, number>;
+  /** The best score of the rated reels not given. */
+  cutoff: number | null;
   error: string | null;
   created_at: string;
   found: number;
   owner: string | null;
   items: ResearchItem[];
+};
+
+/** One of the person's Instagram accounts, and the presets they edit its reels with. */
+export type InstagramAccount = {
+  id: string;
+  handle: string;
+  presets: string[];
+  /** What the researcher read in its own reels; empty when none were found. */
+  summary: string;
+  learned_at: string | null;
+  /** Its own reels found. */
+  own: number;
+  best: { code: string; likes: number | null; caption: string }[];
+  learn_status: "idle" | "queued" | "running" | "done" | "failed";
+  learn_message: string;
+  learn_error: string | null;
+  created_at: string;
 };
 
 export type Me = {
@@ -262,8 +302,17 @@ export const api = {
     request<Job>("POST", `/outputs/${outputId}/caption`, named),
   researches: () => request<Research[]>("GET", "/research"),
   research: (id: string) => request<Research>("GET", `/research/${id}`),
-  startResearch: (description: string) => request<Research>("POST", "/research", { description }),
+  startResearch: (description: string, accountId: string | null = null) =>
+    request<Research>("POST", "/research", { description, account_id: accountId }),
   deleteResearch: (id: string) => request("DELETE", `/research/${id}`),
+  instagramAccounts: () => request<InstagramAccount[]>("GET", "/research/accounts"),
+  addInstagramAccount: (handle: string, presets: string[]) =>
+    request<InstagramAccount>("POST", "/research/accounts", { handle, presets }),
+  updateInstagramAccount: (id: string, presets: string[]) =>
+    request<InstagramAccount>("PUT", `/research/accounts/${id}`, { presets }),
+  learnInstagramAccount: (id: string) =>
+    request<InstagramAccount>("POST", `/research/accounts/${id}/learn`),
+  removeInstagramAccount: (id: string) => request("DELETE", `/research/accounts/${id}`),
   accounts: () => request<Account[]>("GET", "/admin/users"),
   createAccount: (username: string, password: string) =>
     request<Account>("POST", "/admin/users", { username, password }),
