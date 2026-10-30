@@ -360,6 +360,13 @@ body::before {
   color: #7c2416;
 }
 
+/* Waiting for the person (a song to name), not failed. */
+[data-slot="badge"][data-tone="ask"] {
+  background: #f9cfa8;
+  border-color: var(--tangerine);
+  color: #6b3410;
+}
+
 [data-slot="progress"] {
   height: 12px;
   background: var(--paper-light);
