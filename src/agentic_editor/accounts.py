@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentic_editor.auth import hash_password, verify_password
-from agentic_editor.db import Feed, Job, StyleDraft, User
+from agentic_editor.db import Feed, Job, Research, StyleDraft, User
 
 ADMIN, MEMBER = "admin", "member"
 USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{2,31}")
@@ -114,11 +114,11 @@ def set_role(session: Session, user: User, role: str, presets_root: Path) -> Non
 def remove(
     session: Session, user: User, presets_root: Path, keep_work_for: User | None = None
 ) -> None:
-    """Remove an account and its presets. Its jobs, feeds and drafts go to `keep_work_for`
-    when given (the admin removing it), or are deleted with it."""
+    """Remove an account and its presets. Its jobs, feeds, drafts and researches go to
+    `keep_work_for` when given (the admin removing it), or are deleted with it."""
     if user.role == ADMIN and len(admins(session)) <= 1:
         raise AccountError("this is the only admin; make another one first")
-    for kind in (Job, Feed, StyleDraft):
+    for kind in (Job, Feed, StyleDraft, Research):
         for item in session.scalars(select(kind).where(kind.owner_id == user.id)):
             if keep_work_for is not None:
                 item.owner_id = keep_work_for.id

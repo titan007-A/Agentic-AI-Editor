@@ -216,6 +216,29 @@ The Autopilot page in the web app watches feeds and edits each new video once:
   Needs a look, with its doubts listed. "Looks fine" moves a video to Ready, "Posted"
   and "Dismiss" take it off the piles.
 
+## Researcher
+
+The Researcher page finds Instagram reels for what you describe ("80s rock singers live
+on stage, Bryan Adams, Queen"), ranked by how well they fit and how viral they are:
+
+- Instagram has no open search, so it searches the way a chat assistant does: web search
+  engines with `site:instagram.com/reel ...`, through the free `ddgs` library (several
+  engines, no key). The planning model turns the description into about 15 searches
+  (artists, songs, concerts, hashtags, languages); they run a second apart, so a research
+  takes a minute or a few.
+- Each reel found (up to 60) is looked up with yt-dlp without signing in: account,
+  caption, likes, comments, date and picture. Views and length aren't given then, and a
+  reel Instagram shows only to signed-in people keeps what the search engine said.
+- The planning model rates how well each fits (Fit, 0-100%). Viral compares likes and
+  comments, in total and per day since posting, among the reels found. The order is Fit
+  times a virality bonus, so a reel that doesn't fit stays low however viral, and among
+  those that fit the viral ones lead; "Best fit" and "Most viral" sort by one alone.
+- Reels you already edited are left out, ones an earlier research showed are marked.
+  Each card has Edit (pick a preset, and it starts the job), Copy link and Open.
+- Search engines index only part of Instagram, mostly popular reels a few days old or
+  more, so a research finds plenty, never everything; the engines may also turn it away
+  for a while when asked too often.
+
 ## Presets
 
 A preset is a YAML file in `presets/` whose file name matches its `name`. It sets the

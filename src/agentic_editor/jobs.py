@@ -9,9 +9,18 @@ from huey import SqliteHuey
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, caption, pipeline, style
+from agentic_editor import accounts, caption, pipeline, research, style
 from agentic_editor.backends import get_backends
-from agentic_editor.db import Event, Job, Output, StyleDraft, User, make_sessionmaker
+from agentic_editor.db import (
+    Event,
+    Job,
+    Output,
+    Research,
+    ResearchItem,
+    StyleDraft,
+    User,
+    make_sessionmaker,
+)
 from agentic_editor.presets import PostCaption, load_presets
 from agentic_editor.router import ModelRouter
 from agentic_editor.settings import Settings, get_settings
@@ -253,6 +262,77 @@ def run_learning(
             db.commit()
 
 
+def reel_codes(sources) -> set[str]:
+    return {code for source in sources if (code := research.code_of(source))}
+
+
+def run_research(
+    research_id: str, Session: sessionmaker, settings: Settings, router=None, find=None, info=None
+) -> None:
+    """Find and rank reels for a research (see research.py). Like a job, it never stays
+    "running": whatever happens is stored."""
+
+    def progress(message: str, value: float) -> None:
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.message, found.progress = message, max(found.progress, value)
+            db.commit()
+
+    try:
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.status = "running"
+            db.commit()
+            description, owner = found.description, found.owner_id
+            # Reels already edited are left out; ones an earlier research showed are marked.
+            used = reel_codes(db.scalars(select(Job.source).where(Job.owner_id == owner)))
+            seen = set(
+                db.scalars(
+                    select(ResearchItem.code)
+                    .join(Research)
+                    .where(Research.owner_id == owner, Research.id != research_id)
+                )
+            )
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        options = {k: v for k, v in (("find", find), ("info", info)) if v is not None}
+        result = research.run(description, router.planner, used, seen, progress, **options)
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.queries, found.used = result.queries, result.used
+            for n, reel in enumerate(result.reels):
+                found.items.append(
+                    ResearchItem(
+                        rank=n,
+                        code=reel.code,
+                        url=reel.url,
+                        query=reel.query,
+                        account=reel.account,
+                        caption=reel.caption or reel.snippet or reel.title,
+                        likes=reel.likes,
+                        comments=reel.comments,
+                        posted_at=reel.posted,
+                        thumbnail=reel.thumbnail,
+                        relevance=reel.relevance,
+                        why=reel.why,
+                        virality=reel.virality,
+                        score=reel.score,
+                        seen=reel.seen,
+                    )
+                )
+            count = len(result.reels)
+            found.message = f"found {count} reel{'' if count == 1 else 's'}"
+            if result.failed_searches:
+                found.message += f"; {len(result.failed_searches)} searches got no answer"
+            found.status, found.progress = "done", 1.0
+            db.commit()
+    except Exception as exc:
+        log.exception("research %s failed", research_id)
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.status, found.error = "failed", f"{type(exc).__name__}: {exc}"
+            db.commit()
+
+
 @huey.task()
 def process(job_id: str) -> None:
     run_job(job_id, sessions(), get_settings())
@@ -268,8 +348,13 @@ def write_caption(output_id: int) -> None:
     run_caption(output_id, sessions(), get_settings())
 
 
+@huey.task()
+def find_reels(research_id: str) -> None:
+    run_research(research_id, sessions(), get_settings())
+
+
 PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
-CAPTION = write_caption.task_class.__name__
+CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__name__
 
 
 def recover(Session: sessionmaker) -> None:
@@ -284,6 +369,8 @@ def recover(Session: sessionmaker) -> None:
             db.add(Event(job_id=job.id, stage="failed", message=INTERRUPTED, progress=job.progress))
         for draft in db.scalars(select(StyleDraft).where(StyleDraft.status == "running")).all():
             draft.status, draft.error = "failed", INTERRUPTED
+        for found in db.scalars(select(Research).where(Research.status == "running")).all():
+            found.status, found.error = "failed", INTERRUPTED
         for output in db.scalars(select(Output).where(Output.caption_status == "writing")).all():
             output.caption_status, output.caption_notes = "failed", [INTERRUPTED]
         lost_captions = [
@@ -301,6 +388,11 @@ def recover(Session: sessionmaker) -> None:
             for draft_id in db.scalars(select(StyleDraft.id).where(StyleDraft.status == "queued"))
             if (LEARN, draft_id) not in pending
         ]
+        lost_research = [
+            research_id
+            for research_id in db.scalars(select(Research.id).where(Research.status == "queued"))
+            if (RESEARCH, research_id) not in pending
+        ]
         db.commit()
     for job_id in lost_jobs:
         log.info("queueing job %s again", job_id)
@@ -311,3 +403,6 @@ def recover(Session: sessionmaker) -> None:
     for output_id in lost_captions:
         log.info("queueing the caption of output %s again", output_id)
         write_caption(output_id)
+    for research_id in lost_research:
+        log.info("queueing research %s again", research_id)
+        find_reels(research_id)

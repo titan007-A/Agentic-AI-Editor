@@ -5,6 +5,7 @@ description = "Local agentic video editor: download, analyze, plan, render and r
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "ddgs>=9",
     "fastapi>=0.115",
     "httpx>=0.28",
     "huey>=2.5",

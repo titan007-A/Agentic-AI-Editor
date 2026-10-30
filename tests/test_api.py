@@ -771,3 +771,90 @@ def test_a_job_that_couldnt_name_the_song_says_which_presets_need_it(env):
     done = env.client.get(f"/api/jobs/{again['id']}").json()
     assert done["status"] == "done" and done["unnamed"] == []
     assert env.calls[-1]["notes"] == "song: Piano Man\nartist: Billy Joel"
+
+
+class ResearchRouter:
+    def planner(self):
+        from contextlib import nullcontext
+
+        from tests.test_research import Planner
+
+        return nullcontext(Planner())
+
+
+def fake_research(monkeypatch, env, broken=False):
+    """Searches that always find the same three reels, two about Bryan Adams."""
+    from tests.test_research import hit
+
+    captions = {
+        "ADAMS1": ("Bryan Adams - Summer of 69 live", 900),
+        "ADAMS2": ("Bryan Adams, Heaven", 300),
+        "OTHER1": ("cat videos", 90_000),
+    }
+
+    def find(query, count):
+        if broken:
+            raise TimeoutError
+        return [hit(code) for code in captions]
+
+    def info(url):
+        caption, likes = captions[url.rstrip("/").rsplit("/", 1)[1]]
+        return {"uploader": "The Video Attic", "description": caption, "like_count": likes}
+
+    monkeypatch.setattr(jobs.research, "PAUSE", 0)
+    monkeypatch.setattr(
+        jobs,
+        "find_reels",
+        lambda research_id: jobs.run_research(
+            research_id, env.sessions, env.settings, ResearchRouter(), find, info
+        ),
+    )
+
+
+def test_a_research_ranks_reels_that_fit_first_and_marks_ones_edited_since(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    started = env.client.post("/api/research", json={"description": "Bryan Adams live"})
+    assert started.status_code == 200, started.text
+    found = env.client.get(f"/api/research/{started.json()['id']}").json()
+    assert found["status"] == "done" and found["message"] == "found 3 reels"
+    assert [i["code"] for i in found["items"]] == ["ADAMS1", "ADAMS2", "OTHER1"]
+    first = found["items"][0]
+    assert first["url"] == "https://www.instagram.com/reel/ADAMS1/"
+    assert first["relevance"] == 0.9 and first["likes"] == 900 and not first["used"]
+    assert found["queries"][0] == "Bryan Adams live"
+
+    # Edited from the Researcher: marked used there, and left out of the next research,
+    # which marks the others as shown before.
+    start(env.client, sources=(first["url"],))
+    again = env.client.get(f"/api/research/{found['id']}").json()
+    assert again["items"][0]["used"]
+    second = env.client.post("/api/research", json={"description": "Bryan Adams"}).json()
+    second = env.client.get(f"/api/research/{second['id']}").json()
+    assert [i["code"] for i in second["items"]] == ["ADAMS2", "OTHER1"]
+    assert all(i["seen"] for i in second["items"]) and second["used"] == 1
+
+    listed = env.client.get("/api/research").json()
+    assert [r["id"] for r in listed] == [second["id"], found["id"]]
+    assert listed[0]["found"] == 2 and listed[0]["items"] == []
+    assert env.client.delete(f"/api/research/{found['id']}").status_code == 200
+    assert env.client.get(f"/api/research/{found['id']}").status_code == 404
+
+
+def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
+    fake_research(monkeypatch, env, broken=True)
+    started = env.client.post("/api/research", json={"description": "Bryan Adams live"}).json()
+    failed = env.client.get(f"/api/research/{started['id']}").json()
+    assert failed["status"] == "failed" and "didn't answer" in failed["error"]
+
+
+def test_an_employee_sees_only_their_own_researches(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    mine = env.client.post("/api/research", json={"description": "Queen Live Aid"}).json()
+    _, riya = employee(env)
+    theirs = riya.post("/api/research", json={"description": "Bryan Adams live"}).json()
+    assert [r["id"] for r in riya.get("/api/research").json()] == [theirs["id"]]
+    assert riya.get(f"/api/research/{mine['id']}").status_code == 404
+    assert riya.delete(f"/api/research/{mine['id']}").status_code == 404
+    # The admin sees both, with whose each is.
+    listed = {r["id"]: r["owner"] for r in env.client.get("/api/research").json()}
+    assert listed[theirs["id"]] == "riya"

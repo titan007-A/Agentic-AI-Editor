@@ -27,7 +27,16 @@ from starlette.middleware.sessions import SessionMiddleware
 from agentic_editor import accounts, autopilot, jobs
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
-from agentic_editor.db import Event, Feed, FeedItem, Job, Output, Setting, StyleDraft
+from agentic_editor.db import (
+    Event,
+    Feed,
+    FeedItem,
+    Job,
+    Output,
+    Research,
+    Setting,
+    StyleDraft,
+)
 from agentic_editor.db import User as Account
 from agentic_editor.download import update_ytdlp
 from agentic_editor.pipeline import UPLOAD_PREFIX
@@ -97,6 +106,46 @@ class StyleDraftView(BaseModel):
     notes: list[str]
     error: str | None
     created_at: datetime
+
+
+class ResearchRequest(BaseModel):
+    description: str = Field(min_length=3, max_length=1000)
+
+
+class ResearchItemView(BaseModel):
+    id: int
+    rank: int
+    code: str
+    url: str
+    query: str
+    account: str
+    caption: str
+    likes: int | None
+    comments: int | None
+    posted_at: datetime | None
+    thumbnail: str
+    relevance: float | None
+    why: str
+    virality: float
+    score: float
+    seen: bool  # shown by an earlier research
+    used: bool  # edited since, by a job of the research's owner
+
+
+class ResearchView(BaseModel):
+    id: str
+    description: str
+    status: str
+    message: str
+    progress: float
+    queries: list[str]
+    used: int
+    error: str | None
+    created_at: datetime
+    found: int
+    # Shown to the admin: the employee who asked for it.
+    owner: str | None = None
+    items: list[ResearchItemView] = []
 
 
 class FeedRequest(BaseModel):
@@ -625,6 +674,61 @@ def create_app(
         if draft is None or not mine(account, draft.owner_id):
             raise HTTPException(404, "no such draft")
         return draft_view(draft)
+
+    def find_research(research_id: str, session: Session, account: Account) -> Research:
+        found = session.get(Research, research_id)
+        if found is None or not mine(account, found.owner_id):
+            raise HTTPException(404, "no such research")
+        return found
+
+    def research_view(
+        found: Research, account: Account, session: Session, items: bool = False
+    ) -> ResearchView:
+        fields = ResearchView.model_fields.keys() - {"found", "owner", "items"}
+        view = ResearchView(
+            **{k: getattr(found, k) for k in fields},
+            found=len(found.items),
+            owner=owners(session).get(found.owner_id) if account.role == accounts.ADMIN else None,
+        )
+        if items:
+            sources = session.scalars(select(Job.source).where(Job.owner_id == found.owner_id))
+            used = jobs.reel_codes(sources)
+            names = ResearchItemView.model_fields.keys() - {"used"}
+            view.items = [
+                ResearchItemView(**{k: getattr(i, k) for k in names}, used=i.code in used)
+                for i in found.items
+            ]
+        return view
+
+    @app.post("/api/research")
+    def start_research(body: ResearchRequest, account: User, session: DB) -> ResearchView:
+        found = Research(description=body.description.strip(), owner_id=account.id)
+        session.add(found)
+        session.commit()
+        jobs.find_reels(found.id)
+        return research_view(found, account, session)
+
+    @app.get("/api/research")
+    def list_research(account: User, session: DB) -> list[ResearchView]:
+        query = select(Research).options(selectinload(Research.items))
+        if account.role != accounts.ADMIN:
+            query = query.where(Research.owner_id == account.id)
+        rows = session.scalars(query.order_by(Research.created_at.desc()).limit(50))
+        return [research_view(r, account, session) for r in rows]
+
+    @app.get("/api/research/{research_id}")
+    def get_research(research_id: str, account: User, session: DB) -> ResearchView:
+        found = find_research(research_id, session, account)
+        return research_view(found, account, session, items=True)
+
+    @app.delete("/api/research/{research_id}")
+    def delete_research(research_id: str, account: User, session: DB) -> dict:
+        found = find_research(research_id, session, account)
+        if found.status in ("queued", "running"):
+            raise HTTPException(409, "the research is still running")
+        session.delete(found)
+        session.commit()
+        return {"ok": True}
 
     @app.get("/api/jobs")
     def list_jobs(account: User, session: DB) -> list[JobView]:
