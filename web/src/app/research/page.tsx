@@ -395,7 +395,16 @@ function Researcher() {
             </Card>
           )}
 
-          {asking(current) && <ResearchQuestions research={current} onAnswered={setLoaded} />}
+          {asking(current) && (
+            <ResearchQuestions
+              research={current}
+              onAnswered={(next) => {
+                // Its status in the list changes too: asking -> searching.
+                setLoaded(next);
+                refreshList();
+              }}
+            />
+          )}
 
           {current.status === "failed" && (
             <Card className="border-destructive p-4">

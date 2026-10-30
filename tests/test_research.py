@@ -392,6 +392,14 @@ def test_the_answers_are_part_of_what_to_find():
     assert research.with_answers("Bryan Adams", []) == "Bryan Adams"
 
 
+def test_a_model_that_cant_plan_searches_the_request_without_the_answers():
+    asked = research.with_answers("Bryan Adams", [{"question": "Live?", "answer": "Live"}])
+    assert research.plan(Planner(broken=True), asked) == ("", ["Bryan Adams"])
+    context = research.Context(handle="voiceshq", presets={"v": "Vocals only; isolated"})
+    answers_only = research.with_answers("", [{"question": "Live?", "answer": "Live"}])
+    assert research.plan(Planner(broken=True), answers_only, context)[1][0] == "voiceshq"
+
+
 def test_the_chat_is_told_each_pick_with_its_reasoning():
     from types import SimpleNamespace
 

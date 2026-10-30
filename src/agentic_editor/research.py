@@ -52,6 +52,7 @@ RATE_BATCH = 10
 MIN_FIT = 0.5
 MIN_QUERIES = 8  # fewer from the model, and it is asked once more
 MAX_QUESTIONS = 6  # asked before a research
+ANSWERED = "Their answers to the researcher's questions:"
 # Relevance leads: a reel that doesn't fit stays low however viral, and among those that
 # fit the viral ones come first.
 VIRAL_SHARE = 0.5
@@ -218,10 +219,13 @@ ASK = (
     "You find Instagram reels for a video editor who reposts and edits them. Before "
     "searching, ask them up to {count} short questions whose answers would change which "
     "reels to find: for example live or studio, which eras, which languages or countries, "
-    "isolated vocals or the full mix, which of their presets it is for, how recent or how "
-    "viral, artists to include or to avoid. Don't ask what they already said. Give each "
-    "question 2-5 suggested answers of a few words. Write in plain English, even when they "
-    "wrote in Hindi or Hinglish.\n\n{about}"
+    "which of their presets it is for, well-known hits or hidden gems, artists to include "
+    "or to avoid. Don't ask what they already said, nor about length, editing or the "
+    "sound: their presets decide those. Give each question 2-5 suggested answers of a few "
+    "words, each a direct answer to that question that fits their request: artists you "
+    "suggest must really match it (Italian artists for Italian songs). Reels are found "
+    "days to years after they are posted, so never offer the last day or hours. Write in "
+    "plain English, even when they wrote in Hindi or Hinglish.\n\n{about}"
 )
 CHAT = (
     "You are the researcher who found these Instagram reels for a video editor. Below is "
@@ -294,6 +298,8 @@ def plan(llm, description: str, context: Context | None = None) -> tuple[str, li
     focus; without one, a model that can't answer leaves the account's name and the
     presets to search."""
     focus = description.strip()
+    # Searched verbatim only as a last resort: the person's words, not the answers after them.
+    asked = focus.partition(ANSWERED)[0].strip()
     if context and context.handle:
         prompt = PLAN_FOR.format(
             handle=context.handle,
@@ -302,11 +308,11 @@ def plan(llm, description: str, context: Context | None = None) -> tuple[str, li
             focus=f"Their request for this time: {focus}\n\n" if focus else "",
             count=MAX_QUERIES,
         )
-        fallback = [focus[:120]] if focus else [context.handle]
+        fallback = [asked[:120]] if asked else [context.handle]
         fallback += [about.split(";")[0] for about in context.presets.values()]
     else:
         prompt = PLAN.format(count=MAX_QUERIES, description=focus)
-        fallback = [focus[:120]]
+        fallback = [asked[:120]]
     brief, queries = "", []
     messages = [{"role": "user", "content": prompt}]
     for _ in range(2):
@@ -370,7 +376,7 @@ def with_answers(description: str, answers: list[dict]) -> str:
     ]
     if not lines:
         return description
-    answered = "Their answers to the researcher's questions:\n" + "\n".join(lines)
+    answered = ANSWERED + "\n" + "\n".join(lines)
     return f"{description.strip()}\n{answered}" if description.strip() else answered
 
 
