@@ -19,6 +19,7 @@ one_liner:
   position: top
   offset: 230
   max_words: 9
+  fixed: true
   hint: >-
     A short funny meme caption about the gym fail in the video, in English, the way gym
     fail pages write them, e.g. "When the ego lifts but the body says no 💀", "POV: you
@@ -44,4 +45,5 @@ style_notes: >-
   wrong, with its original sound. Keep the whole fail in one continuous stretch: the set-up
   that leads to it (a moment of them getting ready or lifting), the fail itself, and a beat of
   the aftermath or the reaction. Never start after the fail has begun or end before it has
-  landed. From a compilation, pick the single funniest fail.
+  landed. From a compilation, pick the single funniest fail, and never take in its intro,
+  its end card, a channel logo or a title screen.

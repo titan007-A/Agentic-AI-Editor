@@ -278,6 +278,12 @@ def written_text(
     return edl.model_copy(update={**update, "decisions": decisions, "doubts": doubts})
 
 
+def without_text(items: list[subjects.Subject]) -> list[subjects.Subject]:
+    """Must-keep items but text: for footage whose point is the action (keep_action), text
+    burned into it is another page's caption or name, better cropped away than kept."""
+    return [s for s in items if s.kind != "text"]
+
+
 def recheck_framing(
     shots: list[Shot],
     sampled: list[float],
@@ -309,7 +315,8 @@ def recheck_framing(
                 shot, seen, face_samples, content, analysis.width, preset.framing.smoothing
             )
             x = min(path, key=lambda p: abs(p[0] - (t - shot.start)))[1]
-        spans = framing.keep_spans(found[t], face_samples, t, analysis.width)
+        items = without_text(found[t]) if preset.framing.keep_action else found[t]
+        spans = framing.keep_spans(items, face_samples, t, analysis.width)
         cut = framing.crossing(spans, x, shot.width)
         if cut:
             needed[k] = framing.union([*cut, *([needed[k]] if k in needed else [])])
@@ -410,7 +417,8 @@ def smart_framing(
         actions = compose.action_subjects(video, clip.start, clip.end, analysis.scenes, size,
                                           content)  # fmt: skip
         samples = [
-            (t, [*items, *(box for a, b, box in actions if a <= t < b)]) for t, items in samples
+            (t, [*without_text(items), *(box for a, b, box in actions if a <= t < b)])
+            for t, items in samples
         ]
     seen = framing.views(samples, face_samples, content, analysis.width)
     if not edl.shots:

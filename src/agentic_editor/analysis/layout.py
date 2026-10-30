@@ -332,7 +332,7 @@ def moving_rows(frames: np.ndarray, top: int, bottom: int) -> tuple[int, int] | 
 # spans the columns and rows holding at least this share of the busiest one's movement.
 ACTION_LEVEL = 24
 ACTION_GLOBAL = 0.5
-ACTION_SHARE = 0.15
+ACTION_SHARE = 0.25
 
 
 def action_box(frames: np.ndarray) -> tuple[int, int, int, int] | None:

@@ -491,7 +491,7 @@ def render(
 
     def banner(
         words: str, font_name: str, size: int, color: str, box: str | None,
-        position: str, offset: int, until: float, name: str,
+        position: str, offset: int, until: float, name: str, fixed: bool = False,
     ) -> int:  # fmt: skip
         font = face(font_name, words)
         wrapped = text.balance(words, font, size, frame[0] - 160)
@@ -501,7 +501,7 @@ def render(
         height = math.ceil(below - above)
         start = max(0, round(offset + above)) if position == "top" else offset
         taken = [(top, bottom) for _, _, top, bottom in obstacles]
-        top = banner_top(position, start, height, frame[1], rows, until, taken)
+        top = banner_top(position, start, height, frame[1], [] if fixed else rows, until, taken)
         obstacles.append((0.0, until, top, top + height))
         png = text.draw_banner(
             wrapped, font, size, color, box, frame, round(top - above), work_dir / name
@@ -529,7 +529,7 @@ def render(
         layers.line_duration = line.duration or 0.0
         layers.line_overlay = banner(
             edl.one_liner, line.font, line.size, line.color, line.box_color,
-            line.position, line.offset, line.duration or edl.duration, "line.png",
+            line.position, line.offset, line.duration or edl.duration, "line.png", line.fixed,
         )  # fmt: skip
 
     if preset.captions.enabled:
