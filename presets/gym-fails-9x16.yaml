@@ -1,0 +1,44 @@
+name: gym-fails-9x16
+label: Gym fails
+platform: instagram_reels
+aspect_ratio: "9:16"
+resolution: 1080x1920
+fps: 30
+min_duration: 3
+max_duration: 30
+captions:
+  enabled: false
+hook:
+  enabled: false
+one_liner:
+  enabled: true
+  font: OpenSans-ExtraBold
+  size: 56
+  color: "#000000"
+  box_color: "#FFFFFF"
+  position: top
+  offset: 230
+  max_words: 9
+  hint: >-
+    A short funny meme caption about the gym fail in the video, in English, the way gym
+    fail pages write them, e.g. "When the ego lifts but the body says no 💀", "POV: you
+    skipped leg day for 6 months", "He really thought he had that one 😭". About what goes
+    wrong in this video; no names, never mocking someone's body or a real injury.
+framing:
+  mode: none
+  background: "#000000"
+  crop_black_bars: true
+audio:
+  source: original
+  highpass_hz: 0
+  loudness_lufs: -14
+  true_peak_db: -1.5
+  fade_in: 0.02
+  fade_out: 0.3
+bitrate_mbps: 12
+style_notes: >-
+  The source is a gym fail: someone lifting, using a machine or showing off, and it going
+  wrong, with its original sound. Keep the whole fail in one continuous stretch: the set-up
+  that leads to it (a moment of them getting ready or lifting), the fail itself, and a beat of
+  the aftermath or the reaction. Never start after the fail has begun or end before it has
+  landed. From a compilation, pick the single funniest fail.
