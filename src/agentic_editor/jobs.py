@@ -113,6 +113,8 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
                         edl=out.edl.model_dump(mode="json"),
                         confidence=out.confidence,
                         doubts=out.doubts,
+                        caption_song=out.song[0] if out.song else "",
+                        caption_artist=out.song[1] if out.song else "",
                     )
                 )
             job.status, job.stage, job.progress = "done", "done", 1.0

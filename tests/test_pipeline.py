@@ -155,7 +155,7 @@ class Offline:
         self.vision_open = False
 
 
-def edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken=(), calls=None):
+def edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken=(), calls=None, notes=None):
     """pipeline.edit with analysis, planning and rendering faked; rendering `broken`
     versions raises. `calls` collects (what, whether the vision model was open)."""
     calls = [] if calls is None else calls
@@ -187,7 +187,25 @@ def edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken=(), calls
     settings = type("S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path})
     source = download.Source(path=tmp_path / "source.mp4", title="Talk")
     work = tmp_path / "cache" / "abc"
-    return pipeline.edit(source, work, presets, settings, None, None, lambda *args: None, "run1")
+    return pipeline.edit(source, work, presets, settings, None, notes, lambda *args: None, "run1")
+
+
+def test_a_link_s_song_and_artist_come_from_the_notes(make_analysis, monkeypatch, tmp_path):
+    preset = Preset(
+        name="a",
+        label="a",
+        min_duration=4,
+        max_duration=8,
+        captions={"enabled": False},
+        text_blocks=[{"text": "{song} - {artist}", "size": 40, "anchor": "top", "offset": 100}],
+    )
+    with pytest.raises(RuntimeError, match=r"add lines 'song: \.\.\.' and 'artist: \.\.\.'"):
+        edit_offline(monkeypatch, tmp_path, make_analysis, [preset])
+    notes = "song: Felicità\nartist: Al Bano & Romina Power"
+    result = edit_offline(monkeypatch, tmp_path, make_analysis, [preset], notes=notes)
+    (output,) = result.outputs
+    assert output.song == ("Felicità", "Al Bano & Romina Power")
+    assert output.edl.title == "Felicità - Al Bano & Romina Power"
 
 
 def test_one_failed_version_keeps_the_others(make_analysis, monkeypatch, tmp_path):

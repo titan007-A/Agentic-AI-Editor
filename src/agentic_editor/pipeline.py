@@ -68,6 +68,8 @@ class Output:
     issues: list[str] = field(default_factory=list)
     confidence: float = 1.0
     doubts: list[str] = field(default_factory=list)
+    # (song, artist) for a preset that names them, so its post caption is about that song.
+    song: tuple[str, str] | None = None
 
 
 @dataclass
@@ -634,7 +636,7 @@ def edit(
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
     given_headline, notes = headline.from_notes(notes)
-    given, notes = names.from_notes(notes, set().union(*(names.fields(p) for p in presets)))
+    given, notes = names.from_notes(notes, set().union(*(names.wanted(p) for p in presets)))
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
     failures: list[str] = []
     errors: list[Exception] = []
@@ -644,13 +646,14 @@ def edit(
         failures.append(f"{what}: {type(exc).__name__}: {exc}")
         errors.append(exc)
 
-    # A preset that names the song and artist takes them from the video's name, and so
-    # does its reel's title; its own fields come from the notes or the name.
-    named, titled = [], {}
+    # A preset that names the song and artist takes them from the notes or the video's
+    # name, and so do its reel's title and post caption, rather than the planner's guess,
+    # which can name the wrong artist; its own fields come from the notes or the name.
+    named, songs = [], {}
     for preset in presets:
         try:
             if names.names_song(preset):
-                titled[preset.name] = names.reel_title(source.title)
+                songs[preset.name] = names.song_and_artist(source.title, given)
             named.append(names.fill(preset, source.title, given))
         except (names.UnnamedSong, names.MissingField) as exc:
             failed(preset.name, exc)
@@ -719,7 +722,8 @@ def edit(
             except Exception as exc:
                 failed(preset.name, exc)
 
-    for name, title in titled.items():
+    for name, (song, artist) in songs.items():
+        title = f"{song} - {artist}"
         plans[name] = [(e.model_copy(update={"title": title}), p) for e, p in plans.get(name, [])]
 
     # Faces and the picture's black bars need only the CPU, so they are found before the
@@ -804,6 +808,7 @@ def edit(
                         unresolved,
                         score,
                         doubts,
+                        songs.get(preset.name),
                     )
                 )
                 progress("done", f"{name} -> {dest}")
