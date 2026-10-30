@@ -201,3 +201,137 @@ def test_the_song_is_put_in_quotes_however_the_model_wrote_it():
         "Así grabó Queen “Bohemian Rhapsody”"
     )
     assert headline.quote("Así empezó Shakira", "Pies Descalzos") == "Así empezó Shakira"
+
+
+class Watcher:
+    """A planner that says what the clip is from, then writes the headline given."""
+
+    def __init__(self, subject, line, written, sure="yes", named=None):
+        found = {"named": subject if named is None else named, "said_from": subject,
+                 "subject": subject, "sure": sure, "line": line}  # fmt: skip
+        self.answers = [found, *({"headline": w} for w in written)]
+        self.asked = []
+
+    def chat_json(self, messages, schema, **kwargs):
+        self.asked.append(messages[-1]["content"])
+        return self.answers.pop(0)
+
+
+GODFATHER = download.Source(
+    path=None, title="Video by cinema.lines", description="the most famous offer ever 🎬"
+)
+SAID = "I'm gonna make him an offer he can't refuse. Okay?"
+
+
+@pytest.fixture
+def wikipedia(monkeypatch):
+    from agentic_editor import caption
+
+    looked_up = []
+
+    def gather_topic(topic, language, cache):
+        looked_up.append((topic, language))
+        if topic == "Nowhere Film":
+            raise caption.CaptionError("Wikipedia has no article on “Nowhere Film”")
+        article = caption.Article(
+            "The Godfather", "https://en.wikipedia.org/wiki/The_Godfather",
+            "The Godfather is a 1972 American crime film directed by Francis Ford Coppola. "
+            "Marlon Brando plays Vito Corleone.",
+        )  # fmt: skip
+        return caption.Sources([article], ["publication date: 1972"])
+
+    monkeypatch.setattr(caption, "gather_topic", gather_topic)
+    return looked_up
+
+
+def test_a_researched_headline_comes_from_what_the_clip_says_and_wikipedia(wikipedia, tmp_path):
+    line = "“I'm gonna make him an offer he can't refuse” – The Godfather (1972)"
+    llm = Watcher("The Godfather", "I'm gonna make him an offer he can't refuse", [line])
+    written, doubts, spoken = headline.write_researched(
+        llm, GODFATHER, preset(research=True), SAID, tmp_path
+    )
+    assert written == line and doubts == []
+    assert spoken == "I'm gonna make him an offer he can't refuse"
+    assert wikipedia == [("The Godfather", "en")]
+    assert SAID in llm.asked[0]  # what the clip says is how it is told
+    assert "directed by Francis Ford Coppola" in llm.asked[1]  # the sources are written from
+
+
+def test_what_the_sources_and_clip_dont_back_is_flagged(wikipedia, tmp_path):
+    invented = "“Leave the gun, take the cannoli” – The Godfather (1971), Paramount"
+    llm = Watcher("The Godfather", "", [invented])
+    written, doubts, _ = headline.write_researched(
+        llm, GODFATHER, preset(research=True), SAID, tmp_path
+    )
+    assert written == invented
+    assert "headline: not in the sources: Paramount" in doubts
+    assert "headline: not in the sources: 1971" in doubts
+    assert (
+        "headline quotes “Leave the gun, take the cannoli”, which isn't what the clip says"
+        in doubts
+    )
+
+
+def test_a_clip_nothing_tells_of_isnt_guessed(wikipedia, tmp_path):
+    with pytest.raises(headline.NoHeadline, match="couldn't tell what the clip is from"):
+        headline.write_researched(
+            Watcher("", "", []), GODFATHER, preset(research=True), SAID, tmp_path
+        )
+    llm = Watcher("Nowhere Film", "", ["A scene from Nowhere Film"])
+    _, doubts, _ = headline.write_researched(llm, GODFATHER, preset(research=True), "", tmp_path)
+    assert doubts == ["headline: Wikipedia has no article on Nowhere Film, so nothing was checked"]
+
+
+def test_a_clip_the_page_labels_with_the_wrong_film_gets_no_headline(wikipedia, tmp_path):
+    # A Scent of a Woman scene captioned The Godfather: its words aren't that film's.
+    llm = Watcher("The Godfather", "", [], sure="no")
+    with pytest.raises(headline.NoHeadline, match="says the clip is from The Godfather, but"):
+        headline.write_researched(llm, GODFATHER, preset(research=True), "Hoo-ah", tmp_path)
+    llm = Watcher("The Godfather", "", ["A scene from The Godfather (1972)"], sure="unsure")
+    _, doubts, _ = headline.write_researched(llm, GODFATHER, preset(research=True), "Hm", tmp_path)
+    assert doubts == [
+        "headline: check the clip is from The Godfather; what it says didn't settle it"
+    ]
+
+
+def test_a_quote_counts_as_said_when_most_of_its_words_were_heard():
+    assert headline.heard("I'm going to make him an offer he can't refuse", SAID)
+    assert not headline.heard("Here's looking at you, kid", SAID)
+    assert not headline.heard("", SAID)
+
+
+def test_a_researched_headline_waits_for_what_the_clip_says(monkeypatch):
+    from agentic_editor import pipeline
+    from agentic_editor.settings import get_settings
+
+    watched = preset(research=True).model_copy(update={"name": "watched"})
+    plain = preset().model_copy(update={"name": "plain"})
+    written = []
+    monkeypatch.setattr(
+        headline, "write", lambda llm, s, p: written.append(p.name) or "From the title"
+    )
+
+    def researched(llm, source, p, said, cache):
+        written.append((p.name, said))
+        return "“Offer” – The Godfather", ["headline: not in the sources: X"], "an offer"
+
+    monkeypatch.setattr(headline, "write_researched", researched)
+
+    class Router:
+        @contextmanager
+        def planner(self):
+            yield object()
+
+    decisions = {"watched": ([], []), "plain": ([], [])}
+    notes_for = {"watched": "start late", "plain": None}
+    args = (Router(), GODFATHER, [watched, plain], None, decisions, lambda *a: 1 / 0,
+            get_settings(), lambda *a: None)  # fmt: skip
+    first = pipeline.headlined(*args)
+    assert written == ["plain"]  # the watched one waits
+    assert "{headline}" in first[0].text_blocks[0].text
+    second = pipeline.headlined(*args[:2], first, *args[3:], said=lambda p: SAID,
+                                notes_for=notes_for)  # fmt: skip
+    assert written == ["plain", ("watched", SAID)]
+    assert "Offer" in second[0].text_blocks[0].text
+    assert decisions["watched"][1] == ["headline: not in the sources: X"]
+    assert notes_for["watched"] == 'start late Keep the line "an offer" in the reel.'

@@ -1,0 +1,56 @@
+name: movie-lines-9x16
+label: Iconic movie lines (test, English)
+platform: instagram_reels
+aspect_ratio: "9:16"
+resolution: 1080x1920
+fps: 30
+min_duration: 10
+max_duration: 45
+captions:
+  enabled: false
+hook:
+  enabled: false
+text_blocks:
+  - text: "{headline}"
+    font: Poppins-SemiBold
+    size: 50
+    color: "#FFFFFF"
+    anchor: top
+    offset: 254
+    max_width: 860
+    max_shrink: 0.8
+  - text: "FOLLOW FOR MORE\nICONIC MOVIE LINES"
+    font: Poppins-SemiBold
+    size: 50
+    color: "#FFFFFF"
+    anchor: bottom
+    offset: 480
+    max_shrink: 0.8
+headline:
+  hint: >-
+    The famous line said in the clip, in quotes, then the film and its year, like:
+    “I'm gonna make him an offer he can't refuse” – The Godfather (1972). The year in full,
+    and only when the sources give it. When nothing said in the clip is a famous line, one striking
+    fact about the scene or the film from the sources instead.
+  max_chars: 110
+  research: true
+  language: en
+framing:
+  mode: none
+  background: "#000000"
+  crop_black_bars: true
+  text_gap_above: 56
+  text_gap_below: 28
+audio:
+  source: original
+  highpass_hz: 0
+  loudness_lufs: -14
+  true_peak_db: -1.5
+  fade_in: 0.02
+  fade_out: 0.4
+bitrate_mbps: 12
+style_notes: >-
+  The source is a scene from a film or series with its original sound. The reel must
+  contain the famous line said in it, whole: start a moment before the line's sentence
+  begins (with the set-up that leads to it when there is one) and end after the line and
+  the reaction to it have finished; never cut a sentence.

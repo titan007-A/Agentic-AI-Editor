@@ -4,9 +4,12 @@ video's title and description in the way the preset's hint asks."""
 
 import re
 from collections.abc import Callable
+from typing import Literal
 
 from pydantic import BaseModel
 
+from agentic_editor import caption
+from agentic_editor.agent import LANGUAGES
 from agentic_editor.download import Source
 from agentic_editor.llm import parse
 from agentic_editor.presets import Preset
@@ -40,6 +43,61 @@ Reply with:
 - headline: {hint}
   One sentence of at most {max_chars} characters, without hashtags or emoji, with the
   song's name in quotes, saying nothing the title and description don't support."""
+
+
+SAID_CHARS = 2500  # of what the clip says, for the model
+QUOTE = re.compile(r"[“\"]([^”\"]{3,})[”\"]")
+# A quoted line counts as said in the clip when this share of its words were heard.
+HEARD = 0.75
+
+IDENTIFY = """A short vertical video is a clip from something people know: a film, a
+series, a speech, a song. Say what it is from. Go by what is said in the clip: a page's
+title and description can name the wrong film.
+
+Title: {title}
+Channel: {uploader}
+Description: {description}
+Said in it (speech recognition, may mishear a word): {said}
+
+Reply with:
+- named: the film (or series, speech, song) the title or description say it is from;
+  empty if they name none.
+- said_from: the film (or series, speech, song) whose scene the words said in the clip
+  are from, as far as you know that scene's dialogue; empty if you don't know it.
+- subject: the one it is from, by its title as Wikipedia has it, e.g. "The Godfather":
+  said_from when you know it, else named; empty if neither.
+- sure: "yes" only if the words said in the clip are that film's own dialogue as you
+  know it; "no" if they are from another one; "unsure" if you can't tell.
+- line: the best-known line said in the clip, as it is said, mending only a word the
+  speech recognition plainly misheard; empty if nothing said in it is a known line."""
+
+RESEARCHED = """Write the headline of a short vertical video, shown in big letters above the
+picture. {hint}
+One line of at most {max_chars} characters, in {language}, without hashtags or emoji. Say
+only what the clip and the sources below say, nothing else you know: no year, name or
+number they don't give.
+
+The clip is from: {subject}
+The line said in it: {line}
+Its title: {title}
+Its description: {description}
+
+{sources}
+
+Reply with headline."""
+
+
+class Subject(BaseModel):
+    # All required, as for ratings: the model leaves out what it may.
+    named: str
+    said_from: str
+    subject: str
+    sure: Literal["yes", "no", "unsure"]
+    line: str
+
+
+class Researched(BaseModel):
+    headline: str
 
 
 class NoHeadline(ValueError):
@@ -84,6 +142,83 @@ def write(llm, source: Source, preset: Preset) -> str:
             "headline in the notes as 'headline: ...'"
         )
     return quote(reply.headline, reply.song.strip())
+
+
+def write_researched(
+    llm, source: Source, preset: Preset, said: str, cache
+) -> tuple[str, list[str], str]:
+    """The headline from what the clip is and says, looked up on Wikipedia (see
+    Headline.research); what to check before posting it (names and numbers the sources
+    don't give, a quote the clip doesn't say); and the line said, for the planner to keep."""
+    said = " ".join(said.split())[:SAID_CHARS]
+    description = source.description.strip()[:DESCRIPTION_CHARS] or "(none)"
+    asked = IDENTIFY.format(title=source.title, uploader=source.uploader or "(unknown)",
+                            description=description, said=said or "(nothing)")  # fmt: skip
+    found = parse(
+        Subject,
+        llm.chat_json(
+            [{"role": "user", "content": asked}], Subject.model_json_schema(), temperature=0.0
+        ),
+    )
+    subject, line = found.subject.strip(), found.line.strip()
+    if not subject:
+        raise NoHeadline(
+            "couldn't tell what the clip is from; write the headline in the notes as "
+            "'headline: ...'"
+        )
+    # A page that labels a clip with the wrong film is caught by what the clip says: a
+    # headline naming that film would be wrong, so none is written.
+    if found.sure == "no":
+        raise NoHeadline(
+            f"the page says the clip is from {found.named or subject}, but what is said in "
+            "it isn't that film's; write the headline in the notes as 'headline: ...'"
+        )
+    doubts = []
+    if found.sure == "unsure":
+        doubts.append(f"headline: check the clip is from {subject}; what it says didn't settle it")
+    try:
+        sources = caption.gather_topic(subject, preset.headline.language, cache)
+        block = caption._sources_block(sources)
+    except caption.CaptionError:
+        sources, block = caption.Sources(), "(Wikipedia has nothing on it)"
+        doubts.append(f"headline: Wikipedia has no article on {subject}, so nothing was checked")
+    prompt = RESEARCHED.format(
+        hint=preset.headline.hint or "Say what the clip is and the line said in it.",
+        max_chars=preset.headline.max_chars,
+        language=LANGUAGES.get(preset.headline.language, preset.headline.language),
+        subject=subject, line=line or "(none)", title=source.title, description=description,
+        sources=block,
+    )  # fmt: skip
+    messages = [{"role": "user", "content": prompt}]
+    written = _researched(llm, messages)
+    if len(written) > preset.headline.max_chars:
+        messages += [
+            {"role": "assistant", "content": Researched(headline=written).model_dump_json()},
+            {"role": "user", "content": f"Shorter: at most {preset.headline.max_chars} letters."},
+        ]
+        written = _researched(llm, messages)
+    if not written:
+        raise NoHeadline("no headline came back; write it in the notes as 'headline: ...'")
+    known = "\n".join([sources.corpus(), said, line, subject, source.title, description])
+    doubts += [f"headline: not in the sources: {t}"
+               for t in caption.unsupported_terms(written, known)]  # fmt: skip
+    doubts += [f"headline quotes “{q}”, which isn't what the clip says"
+               for q in QUOTE.findall(written) if not heard(q, said)]  # fmt: skip
+    return written, doubts, line
+
+
+def heard(quote: str, said: str) -> bool:
+    """Whether the clip says the quoted line: most of its words were heard."""
+    words = caption.NAME.findall(caption.plain(quote))
+    spoken = set(caption.NAME.findall(caption.plain(said)))
+    return bool(words) and sum(w in spoken for w in words) >= HEARD * len(words)
+
+
+def _researched(llm, messages: list[dict]) -> str:
+    reply = parse(
+        Researched, llm.chat_json(messages, Researched.model_json_schema(), temperature=0.0)
+    )
+    return tidy(reply.headline)
 
 
 def _ask(llm, messages: list[dict]) -> Written:
