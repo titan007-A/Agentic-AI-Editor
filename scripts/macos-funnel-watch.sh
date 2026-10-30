@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Keeps a Tailscale Funnel link to the editor answering from the internet. After the Mac's
-# network changes, Funnel can stay on while Tailscale's public relays no longer reach it:
-# TLS handshakes end at once (ERR_SSL_PROTOCOL_ERROR on a phone). Turning Funnel off and
-# on again registers it afresh. Run every 5 minutes by launchd once installed.
+# Keeps the editor's public links answering from the internet. Run every 5 minutes by
+# launchd once installed.
+# - Tailscale Funnel: after the Mac's network changes, Funnel can stay on while Tailscale's
+#   public relays no longer reach it: TLS handshakes end at once (ERR_SSL_PROTOCOL_ERROR on
+#   a phone). Turning Funnel off and on again registers it afresh.
+# - Cloudflare Tunnel (scripts/macos-tunnel.sh): after a network drop cloudflared can stop
+#   retrying and stay up with no connection, so the domain shows Cloudflare's error 530
+#   while the editor runs fine. Restarting it connects it again within seconds.
 #   scripts/macos-funnel-watch.sh install | uninstall | check
 set -uo pipefail
 
@@ -14,6 +18,8 @@ LOGS="$HOME/Library/Logs/agentic-editor"
 DOMAIN="gui/$(id -u)"
 TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 PORT="${PORT:-8000}"
+TUNNEL=com.agentic-editor.tunnel
+TUNNEL_CONFIG="$HOME/.cloudflared/config.yml"
 
 reachable() {
     # Over the public internet, as a visitor comes: the tailnet would take a shortcut.
@@ -21,6 +27,37 @@ reachable() {
 }
 
 check() {
+    check_funnel
+    check_tunnel
+}
+
+answer() {
+    # The HTTP status a visitor gets, 000 when nothing answers.
+    curl -s -m 20 -o /dev/null -w '%{http_code}' "$1" || true
+}
+
+check_tunnel() {
+    launchctl print "$DOMAIN/$TUNNEL" >/dev/null 2>&1 || return 0  # not in use
+    local host code
+    host="$(sed -n 's/^[[:space:]-]*hostname:[[:space:]]*//p' "$TUNNEL_CONFIG" 2>/dev/null | head -1)"
+    [ -n "$host" ] || return 0
+    # With the editor itself down, restarting the tunnel can't help.
+    [ "$(answer "http://127.0.0.1:$PORT/login/")" = 200 ] || return 0
+    case "$(answer "https://$host/login/")" in
+        502 | 52? | 530 | 000) ;;
+        *) return 0 ;;
+    esac
+    sleep 30
+    code="$(answer "https://$host/login/")"
+    case "$code" in
+        502 | 52? | 530 | 000) ;;
+        *) return 0 ;;
+    esac
+    echo "$(date '+%F %T') https://$host answers $code while the editor runs; restarting the tunnel"
+    launchctl kickstart -k "$DOMAIN/$TUNNEL"
+}
+
+check_funnel() {
     # Read whole first: with pipefail, grep -q quitting early fails the pipe (SIGPIPE).
     local status
     status="$("$TS" funnel status 2>/dev/null)"

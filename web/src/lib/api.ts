@@ -244,6 +244,7 @@ export type SystemInfo = {
   yt_dlp: string;
 };
 
+import { failureText, NO_CONNECTION } from "@/lib/failure.mjs";
 import { loginPath } from "@/lib/next-path.mjs";
 import { sendFile } from "@/lib/upload.mjs";
 
@@ -252,7 +253,7 @@ export class ApiError extends Error {
     public status: number,
     public detail: unknown,
   ) {
-    super(typeof detail === "string" ? detail : `request failed with ${status}`);
+    super(failureText(status, detail));
   }
 }
 
@@ -264,7 +265,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  const response = await fetch(`/api${path}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, init);
+  } catch {
+    throw new Error(NO_CONNECTION);
+  }
   const data = await response.json().catch(() => null);
   return settle<T>(path, response.status, response.statusText, data);
 }

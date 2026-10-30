@@ -93,6 +93,12 @@ scripts/macos-tunnel.sh setup ai-editor editor.example.com
 scripts/macos-tunnel.sh install                           # runs now and at every login
 ```
 
+After a network drop, cloudflared can stay up without a connection (the domain then shows
+Cloudflare's error 530), and Tailscale Funnel's relays can stop reaching the Mac.
+`scripts/macos-funnel-watch.sh install` checks both public links every 5 minutes, as a
+visitor would, and restarts whichever got stuck while the editor itself runs (log:
+`~/Library/Logs/agentic-editor/funnel-watch.log`).
+
 ### Moving to a Mac
 
 To make a Mac the editor's home, set it up as above (without starting the service yet),
