@@ -1,11 +1,13 @@
 "use client";
 
 import { Scissors, Search, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { EditDialog, ReelCard } from "@/components/reel-card";
+import { InstagramAccounts, learning } from "@/components/instagram-accounts";
+import { ReelCard } from "@/components/reel-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,12 +15,18 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { usePolling } from "@/hooks/use-polling";
-import { api, errorText, type Preset, type Research, type ResearchItem } from "@/lib/api";
+import {
+  api,
+  errorText,
+  type InstagramAccount,
+  type Preset,
+  type Research,
+  type ResearchItem,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const RUNNING_POLL_MS = 3000;
 const SHOWN_RESEARCHES = 6;
-const PICK = 5; // reels picked at most from a research, to edit together
 
 type Order = "best" | "fit" | "viral";
 const ORDERS: { key: Order; label: string }[] = [
@@ -36,6 +44,26 @@ function sorted(items: ResearchItem[], order: Order): ResearchItem[] {
 
 const running = (r: Research | null) => r?.status === "queued" || r?.status === "running";
 
+// Of the reels a research gives, how many can be edited at once.
+const MAX_CHOSEN = 5;
+
+type Started = { item: ResearchItem; jobId: string };
+
+/** A research's name: the account it was for, and what it asked for. */
+function named(r: Research): string {
+  if (!r.handle) return r.description;
+  return r.description ? `@${r.handle} · ${r.description}` : `@${r.handle}`;
+}
+
+/** Why else reels found were not given, in a line: the message names those that didn't fit
+ * and those shown before. */
+function leftOut(r: Research): string {
+  const parts = Object.entries(r.left_out)
+    .filter(([why]) => why !== "didn't fit" && why !== "shown before")
+    .map(([why, n]) => `${n} ${why}`);
+  return parts.length ? ` · also left out: ${parts.join(", ")}` : "";
+}
+
 function Researcher() {
   const id = useSearchParams().get("id") ?? "";
   const router = useRouter();
@@ -43,19 +71,22 @@ function Researcher() {
   const [loaded, setLoaded] = useState<Research | null>(null);
   const current = loaded?.id === id ? loaded : null;
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [accounts, setAccounts] = useState<InstagramAccount[]>([]);
+  // The account a research is for; "" for a description alone.
+  const [forAccount, setForAccount] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [order, setOrder] = useState<Order>("best");
-  // Reels picked to edit together, at most PICK, kept for the research they were picked in.
-  const [picks, setPicks] = useState<{ research: string; ids: number[] }>({
-    research: "",
-    ids: [],
-  });
-  const picked = picks.research === id ? picks.ids : [];
-  const setPicked = (next: (now: number[]) => number[]) =>
-    setPicks({ research: id, ids: next(picked) });
-  const [editing, setEditing] = useState(false);
   const [all, setAll] = useState(false);
+  // The reels chosen to edit in the research shown, each with its preset ("" until one is
+  // picked), and the jobs started from it: both start over on another research.
+  const [picks, setPicks] = useState<{ of: string; reels: Record<number, string> }>({
+    of: "",
+    reels: {},
+  });
+  const [started, setStarted] = useState<{ of: string; jobs: Started[] }>({ of: "", jobs: [] });
+  const [notes, setNotes] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const refreshList = useCallback(
     () =>
@@ -65,14 +96,32 @@ function Researcher() {
         .catch((err) => toast.error(errorText(err))),
     [],
   );
+  const refreshAccounts = useCallback(
+    () =>
+      api
+        .instagramAccounts()
+        .then(setAccounts)
+        .catch(() => {}),
+    [],
+  );
 
   useEffect(() => {
     refreshList();
+    refreshAccounts();
     api
       .presets()
       .then(setPresets)
       .catch(() => {});
-  }, [refreshList]);
+  }, [refreshList, refreshAccounts]);
+  usePolling(refreshAccounts, accounts.some(learning) ? RUNNING_POLL_MS : null);
+
+  // The first account is chosen until the person picks; none, a description.
+  const chosenAccount =
+    forAccount === null
+      ? (accounts[0]?.id ?? "")
+      : accounts.some((a) => a.id === forAccount)
+        ? forAccount
+        : "";
 
   // Without one chosen, the latest research is shown.
   useEffect(() => {
@@ -100,11 +149,42 @@ function Researcher() {
   }, [load]);
   usePolling(load, running(current) ? RUNNING_POLL_MS : null);
 
+  const chosen = picks.of === id ? picks.reels : {};
+  const startedHere = started.of === id ? started.jobs : [];
+
+  function choose(item: ResearchItem, preset: string | null) {
+    const reels = Object.fromEntries(
+      Object.entries(chosen).filter(([key]) => Number(key) !== item.id),
+    );
+    setPicks({ of: id, reels: preset === null ? reels : { ...reels, [item.id]: preset } });
+  }
+
+  async function editChosen() {
+    if (!current || editing) return;
+    setEditing(true);
+    const jobs: Started[] = [];
+    try {
+      // One job a reel: each has its own preset.
+      for (const item of current.items.filter((i) => i.id in chosen)) {
+        const [job] = await api.createJobs([item.url], [chosen[item.id]], notes);
+        jobs.push({ item, jobId: job.id });
+      }
+      toast.success(`${jobs.length} edit${jobs.length === 1 ? "" : "s"} started`);
+      setPicks({ of: id, reels: {} });
+      setNotes("");
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setStarted({ of: id, jobs: [...startedHere, ...jobs] });
+      setEditing(false);
+    }
+  }
+
   async function start(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      const started = await api.startResearch(description.trim());
+      const started = await api.startResearch(description.trim(), chosenAccount || null);
       setDescription("");
       await refreshList();
       router.push(`/research/?id=${started.id}`);
@@ -133,10 +213,13 @@ function Researcher() {
       <div>
         <h1 className="font-hand text-4xl font-bold">Researcher</h1>
         <p className="text-sm text-muted-foreground">
-          Describe the reels you want; it searches Instagram through web search engines and ranks
-          what it finds by how well it fits and how viral it is.
+          It searches Instagram through web search engines for reels like your account&apos;s best
+          ones, or for what you describe, and gives the 8 that fit best and are most viral, never
+          one it showed you before. Choose up to 5 of them to edit.
         </p>
       </div>
+
+      <InstagramAccounts accounts={accounts} presets={presets} onChange={refreshAccounts} />
 
       <Card className="tape">
         <CardHeader>
@@ -144,18 +227,54 @@ function Researcher() {
         </CardHeader>
         <CardContent>
           <form onSubmit={start} className="space-y-3">
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Find reels for">
+              {accounts.map((a) => (
+                <Button
+                  key={a.id}
+                  type="button"
+                  size="sm"
+                  variant={chosenAccount === a.id ? "default" : "outline"}
+                  aria-pressed={chosenAccount === a.id}
+                  onClick={() => setForAccount(a.id)}
+                >
+                  @{a.handle}
+                </Button>
+              ))}
+              {accounts.length > 0 && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={chosenAccount === "" ? "default" : "outline"}
+                  aria-pressed={chosenAccount === ""}
+                  onClick={() => setForAccount("")}
+                >
+                  A description
+                </Button>
+              )}
+            </div>
             <div className="space-y-2">
-              <Label htmlFor="research-description">What are you looking for?</Label>
+              <Label htmlFor="research-description">
+                {chosenAccount
+                  ? "Anything in particular this time? (optional)"
+                  : "What are you looking for?"}
+              </Label>
               <Textarea
                 id="research-description"
                 rows={3}
                 maxLength={1000}
-                placeholder="e.g. 80s rock singers live on stage, Bryan Adams, Queen, Italian ballads too"
+                placeholder={
+                  chosenAccount
+                    ? "e.g. Italian ballads, or leave it empty"
+                    : "e.g. 80s rock singers live on stage, Bryan Adams, Queen, Italian ballads too"
+                }
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={busy || description.trim().length < 3}>
+            <Button
+              type="submit"
+              disabled={busy || (!chosenAccount && description.trim().length < 3)}
+            >
               <Search /> {busy ? "Starting..." : "Find reels"}
             </Button>
           </form>
@@ -178,7 +297,7 @@ function Researcher() {
                 >
                   <span className="min-w-0 truncate">
                     {r.owner && <span className="text-muted-foreground">{r.owner}: </span>}
-                    {r.description}
+                    {named(r)}
                   </span>
                   <Badge variant={r.status === "failed" ? "destructive" : "outline"}>
                     {r.status === "done" ? `${r.found} reels` : r.status}
@@ -199,11 +318,13 @@ function Researcher() {
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 space-y-1">
-              <h2 className="text-lg font-semibold break-words">{current.description}</h2>
+              <h2 className="text-lg font-semibold break-words">{named(current)}</h2>
+              {current.brief && <p className="text-sm break-words">Looked for: {current.brief}</p>}
               {current.status === "done" && (
                 <p className="text-sm text-muted-foreground">
                   {current.message}
-                  {current.used > 0 && ` · ${current.used} you edited before left out`}
+                  {current.considered > 0 && ` (${current.considered} rated)`}
+                  {leftOut(current)}
                 </p>
               )}
             </div>
@@ -253,7 +374,9 @@ function Researcher() {
 
           {current.status === "done" && current.items.length === 0 && (
             <p className="py-6 text-sm text-muted-foreground">
-              No reels found; try other words, or an artist or song by name.
+              {Object.keys(current.left_out).length
+                ? "Nothing new: every reel it found was shown or edited before. Try a focus, such as an artist or a song by name."
+                : "No reels found; try other words, or an artist or song by name."}
             </p>
           )}
 
@@ -272,46 +395,72 @@ function Researcher() {
                   </Button>
                 ))}
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="text-muted-foreground">
-                  Picked {picked.length} of {PICK}
-                </span>
-                <Button size="sm" disabled={picked.length === 0} onClick={() => setEditing(true)}>
-                  <Scissors /> Edit picked
-                </Button>
-                {picked.length > 0 && (
-                  <Button size="sm" variant="ghost" onClick={() => setPicked(() => [])}>
-                    Clear
-                  </Button>
-                )}
-              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {sorted(current.items, order).map((item) => (
                   <ReelCard
                     key={item.id}
                     item={item}
                     presets={presets}
-                    picked={picked.includes(item.id)}
-                    full={picked.length >= PICK}
-                    onPick={() =>
-                      setPicked((now) =>
-                        now.includes(item.id)
-                          ? now.filter((id) => id !== item.id)
-                          : now.length < PICK
-                            ? [...now, item.id]
-                            : now,
-                      )
-                    }
+                    research={current}
+                    chosen={item.id in chosen ? chosen[item.id] : null}
+                    full={Object.keys(chosen).length >= MAX_CHOSEN}
+                    onChoose={(preset) => choose(item, preset)}
                   />
                 ))}
               </div>
-              <EditDialog
-                items={current.items.filter((i) => picked.includes(i.id))}
-                presets={presets}
-                open={editing}
-                onOpenChange={setEditing}
-              />
+              <Card className="sticky bottom-2 z-10 gap-3 p-4 shadow-lg">
+                <p className="text-sm font-medium">
+                  {Object.keys(chosen).length} of up to {MAX_CHOSEN} chosen to edit
+                </p>
+                {Object.keys(chosen).length > 0 && (
+                  <div className="space-y-1">
+                    <Label htmlFor="research-notes">
+                      Notes for the editor, for each (optional)
+                    </Label>
+                    <Textarea
+                      id="research-notes"
+                      rows={2}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="e.g. start on the chorus"
+                    />
+                  </div>
+                )}
+                <Button
+                  disabled={
+                    editing ||
+                    Object.keys(chosen).length === 0 ||
+                    Object.values(chosen).some((preset) => !preset)
+                  }
+                  onClick={editChosen}
+                >
+                  <Scissors /> {editing ? "Starting..." : "Edit selected"}
+                </Button>
+                {Object.values(chosen).some((preset) => !preset) && (
+                  <p className="text-xs text-muted-foreground">
+                    Pick a preset for each reel chosen.
+                  </p>
+                )}
+              </Card>
             </>
+          )}
+
+          {startedHere.length > 0 && (
+            <Card className="gap-2 p-4">
+              <p className="text-sm font-medium">Edits started from this research</p>
+              <ul className="space-y-1 text-sm">
+                {startedHere.map(({ item, jobId }) => (
+                  <li key={jobId} className="flex justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      #{item.rank + 1} {item.account || item.url}
+                    </span>
+                    <Link href={`/job/?id=${jobId}`} className="shrink-0 underline">
+                      Open the job
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </Card>
           )}
         </div>
       )}

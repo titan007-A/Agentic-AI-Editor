@@ -777,29 +777,34 @@ class ResearchRouter:
     def planner(self):
         from contextlib import nullcontext
 
-        from tests.test_research import Planner
+        from tests.test_research import AccountPlanner
 
-        return nullcontext(Planner())
+        return nullcontext(AccountPlanner())
+
+
+# What the fake search engines find, whatever is asked: (account, caption, likes).
+REELS = {
+    "ADAMS1": ("attic", "Bryan Adams - Summer of 69 live", 900),
+    "ADAMS2": ("rockblog", "Bryan Adams, Heaven", 300),
+    "OTHER1": ("cats", "cat videos", 90_000),
+    "OWN001": ("voiceshq", "Bryan Adams vocals only", 5_000),
+}
 
 
 def fake_research(monkeypatch, env, broken=False):
-    """Searches that always find the same three reels, two about Bryan Adams."""
+    """Searches that always find the same four reels: two about Bryan Adams, cats, and
+    one of @voiceshq's own."""
     from tests.test_research import hit
-
-    captions = {
-        "ADAMS1": ("Bryan Adams - Summer of 69 live", 900),
-        "ADAMS2": ("Bryan Adams, Heaven", 300),
-        "OTHER1": ("cat videos", 90_000),
-    }
 
     def find(query, count):
         if broken:
             raise TimeoutError
-        return [hit(code) for code in captions]
+        return [hit(code) for code in REELS]
 
     def info(url):
-        caption, likes = captions[url.rstrip("/").rsplit("/", 1)[1]]
-        return {"uploader": "The Video Attic", "description": caption, "like_count": likes}
+        channel, caption, likes = REELS[url.rstrip("/").rsplit("/", 1)[1]]
+        return {"uploader": channel.title(), "channel": channel, "description": caption,
+                "like_count": likes}  # fmt: skip
 
     monkeypatch.setattr(jobs.research, "PAUSE", 0)
     monkeypatch.setattr(
@@ -809,37 +814,98 @@ def fake_research(monkeypatch, env, broken=False):
             research_id, env.sessions, env.settings, ResearchRouter(), find, info
         ),
     )
+    monkeypatch.setattr(
+        jobs,
+        "read_account",
+        lambda account_id: jobs.run_account_learning(
+            account_id, env.sessions, env.settings, ResearchRouter(), find, info
+        ),
+    )
 
 
-def test_a_research_ranks_reels_that_fit_and_brings_new_ones_each_time(env, monkeypatch):
+def test_a_research_ranks_reels_that_fit_first_and_never_shows_one_twice(env, monkeypatch):
     fake_research(monkeypatch, env)
     started = env.client.post("/api/research", json={"description": "Bryan Adams live"})
     assert started.status_code == 200, started.text
     found = env.client.get(f"/api/research/{started.json()['id']}").json()
     # The cat video doesn't fit: left out, not shown at the bottom.
     assert found["status"] == "done"
-    assert found["message"] == "found 2 reels; left out 1 that didn't fit"
-    assert [i["code"] for i in found["items"]] == ["ADAMS1", "ADAMS2"]
-    first = found["items"][0]
+    assert found["message"] == "found 3 reels; left out 1 that didn't fit"
+    assert [i["code"] for i in found["items"]] == ["OWN001", "ADAMS1", "ADAMS2"]
+    first = found["items"][1]
     assert first["url"] == "https://www.instagram.com/reel/ADAMS1/"
     assert first["relevance"] == 0.9 and first["likes"] == 900 and not first["used"]
-    assert found["queries"][0] == "Bryan Adams live"
+    assert (first["account"], first["handle"]) == ("Attic", "attic")
+    assert first["song"] == "Bryan Adams - Summer of 69 live"  # as the fake model names it
+    assert found["queries"][0] == "Bryan Adams live" and found["considered"] == 4
+    assert found["brief"] == "Bryan Adams singing live"
 
     # Edited from the Researcher: marked used there. The next research brings only new
     # reels: the edited one and the ones shown before are left out.
     start(env.client, sources=(first["url"],))
     again = env.client.get(f"/api/research/{found['id']}").json()
-    assert again["items"][0]["used"]
+    assert again["items"][1]["used"]
     second = env.client.post("/api/research", json={"description": "Bryan Adams"}).json()
     second = env.client.get(f"/api/research/{second['id']}").json()
     assert second["items"] == [] and second["used"] == 1
-    assert second["message"] == "found 0 reels; left out 1 that didn't fit and 1 shown before"
+    assert second["message"] == "found 0 reels; left out 1 that didn't fit and 2 shown before"
+    assert second["left_out"] == {"edited": 1, "shown before": 2, "didn't fit": 1}
 
     listed = env.client.get("/api/research").json()
     assert [r["id"] for r in listed] == [second["id"], found["id"]]
-    assert listed[1]["found"] == 2 and listed[1]["items"] == []
+    assert listed[1]["found"] == 3 and listed[1]["items"] == []
     assert env.client.delete(f"/api/research/{found['id']}").status_code == 200
     assert env.client.get(f"/api/research/{found['id']}").status_code == 404
+
+
+def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    bad = env.client.post("/api/research/accounts", json={"handle": "x y", "presets": ["a"]})
+    assert bad.status_code == 422
+    unknown = {"handle": "@voiceshq", "presets": ["no-such"]}
+    assert env.client.post("/api/research/accounts", json=unknown).status_code == 422
+    body = {"handle": "https://www.instagram.com/VoicesHQ/", "presets": ["voicehq-9x16"]}
+    added = env.client.post("/api/research/accounts", json=body)
+    assert added.status_code == 200, added.text
+    assert env.client.post("/api/research/accounts", json=body).status_code == 409
+    (account,) = env.client.get("/api/research/accounts").json()
+    assert account["handle"] == "voiceshq" and account["presets"] == ["voicehq-9x16"]
+    assert account["learn_status"] == "done" and account["own"] == 1
+    assert account["summary"].startswith("Isolated vocals") and account["learned_at"]
+    assert account["best"][0]["code"] == "OWN001"
+
+    # No description needed: the account says what to find. Its own reel stays out, and
+    # each reel says which preset it suits and why.
+    assert env.client.post("/api/research", json={"description": ""}).status_code == 422
+    started = env.client.post("/api/research", json={"account_id": account["id"]}).json()
+    found = env.client.get(f"/api/research/{started['id']}").json()
+    assert found["handle"] == "voiceshq" and found["account_id"] == account["id"]
+    assert "OWN001" not in [i["code"] for i in found["items"]]
+    assert found["left_out"] == {"the account's own": 1, "didn't fit": 1}
+    item = found["items"][0]
+    assert (item["preset"], item["preset_why"], item["matches"]) == (
+        "voicehq-9x16",
+        "vocals only",
+        "vocals",
+    )
+
+    changed = env.client.put(
+        f"/api/research/accounts/{account['id']}", json={"presets": ["podcast-9x16"]}
+    )
+    assert changed.json()["presets"] == ["podcast-9x16"]
+    learned = env.client.post(f"/api/research/accounts/{account['id']}/learn").json()
+    assert learned["learn_status"] == "queued"  # as the page saw it; the fake ran it already
+    assert env.client.delete(f"/api/research/accounts/{account['id']}").status_code == 200
+    # The research keeps the account's name.
+    kept = env.client.get(f"/api/research/{found['id']}").json()
+    assert kept["handle"] == "voiceshq" and kept["account_id"] is None
+
+    # An account is its owner's alone, the admin's too.
+    _, riya = employee(env)
+    mine = env.client.post("/api/research/accounts", json=body).json()
+    assert riya.get("/api/research/accounts").json() == []
+    assert riya.post("/api/research", json={"account_id": mine["id"]}).status_code == 404
+    assert riya.delete(f"/api/research/accounts/{mine['id']}").status_code == 404
 
 
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):

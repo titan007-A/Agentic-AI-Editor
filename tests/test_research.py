@@ -160,10 +160,153 @@ def test_a_research_finds_rates_and_ranks_leaving_out_what_was_edited():
     # Edited, shown before and unrelated (a viral cat video) are all left out.
     assert [r.code for r in result.reels] == ["ADAMS1"]
     assert (result.used, result.repeats, result.unrelated) == (1, 1, 1)
+    assert result.left_out == {"edited": 1, "shown before": 1, "didn't fit": 1}
     assert result.queries[0] == "Bryan Adams live" and result.brief == "Bryan Adams singing live"
-    assert result.reels[0].relevance == 0.9
+    assert result.reels[0].relevance == 0.9 and result.considered == 2
+    # The rating is asked with the brief, and the request as they wrote it.
+    assert "Bryan Adams singing live (their words: Bryan Adams live)" in llm.asked[-1]
     assert len(opened) == 2  # the model holds the GPU only to plan and to rate
     assert steps == sorted(steps)
+
+
+def test_the_best_five_are_varied_one_song_once_two_from_an_account_at_most():
+    def reel(code, handle, song, score):
+        return Reel(code, "", "", handle=handle, song=song, score=score)
+
+    ranked = [
+        reel("A1", "attic", "Heaven - Bryan Adams", 0.9),
+        reel("A2", "attic", "Summer of 69 - Bryan Adams", 0.85),
+        reel("A3", "attic", "Run to You - Bryan Adams", 0.8),  # a third from attic
+        reel("B1", "rockblog", "heaven – bryan adams", 0.75),  # Heaven again
+        reel("B2", "rockblog", "", 0.7),
+        reel("C1", "", "", 0.65),
+        reel("C2", "vault", "Caruso - Lucio Dalla", 0.6),
+        reel("C3", "vault", "Felicità - Al Bano", 0.5),
+    ]
+    picked, passed, cutoff = research.pick(ranked, count=5)
+    assert [r.code for r in picked] == ["A1", "A2", "B2", "C1", "C2"]
+    assert passed == {"same account": 1, "same song": 1} and cutoff == 0.5
+
+
+def test_no_more_than_two_of_the_five_are_about_one_artist():
+    ranked = [
+        Reel(f"M{n}", "", "", handle=f"page{n}", artist="Michael Jackson", score=1 - n / 10)
+        for n in range(4)
+    ] + [Reel("Q1", "", "", handle="rock", artist="Queen", score=0.5)]
+    picked, passed, _ = research.pick(ranked)
+    assert [r.code for r in picked] == ["M0", "M1", "Q1"]
+    assert passed == {"same artist": 2}
+
+
+def test_the_rated_song_and_artist_are_named_together():
+    class Rater:
+        def chat_json(self, messages, schema, **kwargs):
+            first = {"n": 1, "relevance": 8, "song": "Heaven", "artist": "Bryan Adams"}
+            return {"ratings": [first, {"n": 2, "relevance": 8, "artist": "Queen"}]}
+
+    reels = [Reel("A", "", ""), Reel("B", "", "")]
+    research.rate(Rater(), "80s rock", reels)
+    assert [(r.song, r.artist) for r in reels] == [("Heaven - Bryan Adams", "Bryan Adams"),
+                                                  ("", "Queen")]  # fmt: skip
+
+
+def test_an_account_s_name_is_read_from_how_people_write_it():
+    assert research.handle_of("@VoicesHQ") == "voiceshq"
+    assert research.handle_of("https://www.instagram.com/the.vocal_vault/?hl=en") == (
+        "the.vocal_vault"
+    )
+    assert research.handle_of("voiceshq ") == "voiceshq"
+    assert research.handle_of("not an account!") is None
+
+
+def test_presets_are_described_by_what_they_make():
+    from agentic_editor.presets import load_presets
+    from agentic_editor.settings import ROOT
+
+    about = research.describe_presets(load_presets(ROOT / "presets"))
+    assert "isolated vocals" in about["voicehq-9x16"]
+    assert "Song: {song}" in about["voicehq-9x16"]
+    assert "post caption in 'es'" in about["song-stories-es-9x16"]
+
+
+class AccountPlanner(Planner):
+    """Reads an account's reels into a summary, and rates with a song and a preset."""
+
+    def chat_json(self, messages, schema, **kwargs):
+        prompt = messages[-1]["content"]
+        if "summary" in schema["properties"]:
+            self.asked.append(prompt)
+            return {"summary": "Isolated vocals of 80s rock singers, Bryan Adams most liked."}
+        reply = super().chat_json(messages, schema, **kwargs)
+        for rating, line in zip(reply.get("ratings", []), prompt.split("Reels:\n")[-1].split("\n"),
+                                strict=False):  # fmt: skip
+            rating.update(song=line.split("caption: ")[-1].split(" |")[0], matches="vocals",
+                          preset="voicehq-9x16", preset_why="vocals only")  # fmt: skip
+        return reply
+
+
+def test_an_account_is_learned_from_its_own_reels():
+    llm = AccountPlanner()
+
+    def find(query, count):
+        return [hit("OWN001"), hit("OWN002"), hit("OTHER1")]
+
+    def info(url):
+        code = research.code_of(url)
+        channel = "voiceshq" if code.startswith("OWN") else "someone"
+        likes = {"OWN001": 50, "OWN002": 900}.get(code, 10)
+        return {"channel": channel, "description": f"vocals {code}", "like_count": likes}
+
+    learned = research.learn("voiceshq", lambda: nullcontext(llm), lambda *a: None, find, info, 0)
+    assert learned.own == ["OWN002", "OWN001"]  # best liked first
+    assert learned.summary.startswith("Isolated vocals")
+    assert learned.best[0] == {"code": "OWN002", "likes": 900, "caption": "vocals OWN002"}
+    assert "900 likes: vocals OWN002" in llm.asked[-1]
+
+    nobody = research.learn(
+        "voiceshq", lambda: nullcontext(llm), lambda *a: None, find, lambda url: {}, 0
+    )
+    assert nobody == research.Learned("", [], [])
+
+
+def test_a_research_for_an_account_finds_reels_like_its_own_but_not_its_own():
+    llm = AccountPlanner()
+
+    def find(query, count):
+        return [hit("OWN001"), hit("OWN009"), hit("ADAMS1"), hit("ADAMS2")]
+
+    def info(url):
+        code = research.code_of(url)
+        if code == "OWN009":  # one of its own the account's learning didn't find
+            return {"channel": "voiceshq", "description": "Bryan Adams vocals"}
+        return {"channel": "attic", "description": f"Bryan Adams {code}", "like_count": 100}
+
+    context = research.Context(
+        handle="voiceshq",
+        summary="Isolated vocals of 80s rock singers.",
+        presets={"voicehq-9x16": "Vocals only; isolated vocals", "podcast-9x16": "Podcast"},
+        own={"OWN001"},
+    )
+    result = research.run(
+        "", lambda: nullcontext(llm), set(), set(), lambda *a: None, find, info, 0, context
+    )
+    assert [r.code for r in result.reels] == ["ADAMS1", "ADAMS2"]
+    assert result.left_out == {"the account's own": 2}
+    plan_prompt, rate_prompt = llm.asked[0], llm.asked[-1]
+    assert "@voiceshq" in plan_prompt and "voicehq-9x16: Vocals only" in plan_prompt
+    assert "Isolated vocals of 80s rock singers" in rate_prompt
+    first = result.reels[0]
+    assert (first.song, first.preset, first.preset_why) == (
+        "Bryan Adams ADAMS1",
+        "voicehq-9x16",
+        "vocals only",
+    )
+    assert result.queries[0] == "Bryan Adams live"  # no focus: the model's searches only
+
+
+def test_a_model_that_cant_plan_an_account_s_searches_leaves_its_name_and_presets():
+    context = research.Context(handle="voiceshq", presets={"v": "Vocals only; isolated"})
+    assert research.plan(Planner(broken=True), "", context) == ("", ["voiceshq", "Vocals only"])
 
 
 def test_a_research_the_engines_turned_away_says_so():
@@ -192,10 +335,3 @@ def test_an_empty_search_is_no_reels_but_a_failing_engine_is_a_failure(monkeypat
     monkeypatch.setattr(ddgs, "DDGS", Engines)
     reels, failed = research.search(["empty", "busy"], pause=0)
     assert reels == [] and failed == ["busy"]
-
-
-def test_one_account_fills_at_most_two_of_the_eight():
-    ranked = [Reel(f"A{n}", "", "", account="VoicesHQ") for n in range(4)]
-    ranked += [Reel(f"B{n}", "", "", account="") for n in range(10)]
-    kept = research.best(ranked)
-    assert [r.code for r in kept] == ["A0", "A1", "B0", "B1", "B2", "B3", "B4", "B5"]
