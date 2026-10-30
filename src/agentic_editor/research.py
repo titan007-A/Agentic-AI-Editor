@@ -80,7 +80,7 @@ class Result:
 
 
 class Searches(BaseModel):
-    brief: str = Field(default="", max_length=400)
+    brief: str = Field(max_length=400)  # required: left optional, the model skipped it
     queries: list[str] = Field(min_length=1, max_length=MAX_QUERIES * 2)
 
 
