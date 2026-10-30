@@ -279,6 +279,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
   (both by default). Shorts are found the same way ("site:youtube.com/shorts ...") and
   rated and ranked with the reels; a link to a full video, or one YouTube says is longer
   than 3 minutes, is left out. A Short's card shows its views and a "YouTube Short" badge.
+- **Every morning.** "Research every morning" on an Instagram account starts a research
+  for it (Instagram and YouTube Shorts) each day at that hour, server time; one the
+  server was off for starts when it is back, the same day. It shows in the list as
+  "Daily", with reels new since the day before, as for any research.
 - **Quality check.** Each reel's best version is read when it is looked up (no download):
   under 480p on its short side it is left out ("low quality"), SD (480-719p) ranks a
   little lower than HD, and its card shows the resolution. A Short's card also shows its

@@ -168,6 +168,8 @@ export type Research = {
   handle: string;
   /** Where it searched. */
   sites: Site[];
+  /** Started by its account's morning research. */
+  daily: boolean;
   /** The research whose chat asked for this one. */
   parent_id: string | null;
   /** "asking": thinking of questions (none yet), then waiting for the answers. */
@@ -209,6 +211,10 @@ export type InstagramAccount = {
   learn_status: "idle" | "queued" | "running" | "done" | "failed";
   learn_message: string;
   learn_error: string | null;
+  /** A research for it every morning at this hour (server time); null when off. */
+  daily_hour: number | null;
+  /** The day the last one started. */
+  daily_on: string | null;
   created_at: string;
 };
 
@@ -382,6 +388,8 @@ export const api = {
     request<InstagramAccount>("POST", "/research/accounts", { handle, presets }),
   updateInstagramAccount: (id: string, presets: string[]) =>
     request<InstagramAccount>("PUT", `/research/accounts/${id}`, { presets }),
+  setDailyResearch: (id: string, hour: number | null) =>
+    request<InstagramAccount>("PUT", `/research/accounts/${id}/daily`, { hour }),
   learnInstagramAccount: (id: string) =>
     request<InstagramAccount>("POST", `/research/accounts/${id}/learn`),
   removeInstagramAccount: (id: string) => request("DELETE", `/research/accounts/${id}`),

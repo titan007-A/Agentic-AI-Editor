@@ -1108,6 +1108,35 @@ def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypa
         assert env.client.post("/api/research", json=body).status_code == 422
 
 
+def test_an_account_can_be_researched_for_every_morning(env, monkeypatch):
+    from datetime import datetime
+
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    assert account["daily_hour"] is None
+    url = f"/api/research/accounts/{account['id']}/daily"
+    assert env.client.put(url, json={"hour": 24}).status_code == 422
+    assert env.client.put(url, json={"hour": 7}).json()["daily_hour"] == 7
+
+    def morning(day, hour):
+        return jobs.start_daily(env.sessions, datetime(2026, 10, day, hour, 30))
+
+    assert morning(30, 6) == []  # not yet
+    (first,) = morning(30, 9)  # the server was off at 7: it starts once it is back
+    assert morning(30, 10) == []  # once a day
+    found = env.client.get(f"/api/research/{first}").json()
+    assert found["daily"] and found["status"] == "done" and found["handle"] == "voiceshq"
+    assert found["sites"] == ["instagram", "shorts"]
+    assert len(morning(31, 7)) == 1  # the next morning
+    assert env.client.get("/api/research/accounts").json()[0]["daily_on"] == "2026-10-31"
+
+    assert env.client.put(url, json={"hour": None}).json()["daily_hour"] is None
+    assert jobs.start_daily(env.sessions, datetime(2026, 11, 1, 12)) == []  # off
+    _, riya = employee(env)
+    assert riya.put(url, json={"hour": 7}).status_code == 404
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(

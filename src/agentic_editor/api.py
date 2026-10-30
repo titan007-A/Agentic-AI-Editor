@@ -11,7 +11,7 @@ import signal
 import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -156,6 +156,11 @@ class ResearchAccountUpdate(BaseModel):
     presets: list[str] = Field(min_length=1, max_length=50)
 
 
+class DailyRequest(BaseModel):
+    # The hour of the morning research, server time; None turns it off.
+    hour: int | None = Field(ge=0, le=23)
+
+
 class ResearchAccountView(BaseModel):
     id: str
     handle: str
@@ -167,6 +172,8 @@ class ResearchAccountView(BaseModel):
     learn_status: str
     learn_message: str
     learn_error: str | None
+    daily_hour: int | None  # a research every day at this hour; None when off
+    daily_on: date | None  # the day the last one started
     created_at: datetime
 
 
@@ -222,6 +229,7 @@ class ResearchView(BaseModel):
     account_id: str | None
     handle: str
     sites: list[str]
+    daily: bool  # the account's morning research started it
     parent_id: str | None
     status: str
     message: str
@@ -428,6 +436,10 @@ def create_app(
                 await asyncio.to_thread(autopilot.check_all, make_session, jobs.process)
             except Exception:
                 log.exception("checking the feeds failed")
+            try:
+                await asyncio.to_thread(jobs.start_daily, make_session)
+            except Exception:
+                log.exception("starting the morning researches failed")
             await asyncio.sleep(SCAN_SECONDS)
 
     @asynccontextmanager
@@ -867,6 +879,15 @@ def create_app(
     ) -> ResearchAccountView:
         found = find_instagram(account_id, session, account)
         found.presets = checked_presets(body.presets, account)
+        session.commit()
+        return instagram_view(found)
+
+    @app.put("/api/research/accounts/{account_id}/daily")
+    def set_daily(
+        account_id: str, body: DailyRequest, account: User, session: DB
+    ) -> ResearchAccountView:
+        found = find_instagram(account_id, session, account)
+        found.daily_hour = body.hour
         session.commit()
         return instagram_view(found)
 

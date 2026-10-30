@@ -50,6 +50,10 @@ function PresetChoice({
   );
 }
 
+/** The hours a morning research can start at, server time (the Mac's, India's). */
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+const clock = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
+
 /** The person's Instagram accounts: each has its own researcher, which learns what the
  * account posts and finds reels like its best ones for the presets chosen for it. */
 export function InstagramAccounts({
@@ -214,6 +218,30 @@ function AccountRow({
           </Button>
         </div>
       )}
+      <label className="flex flex-wrap items-center gap-2 text-sm">
+        Research every morning
+        <select
+          aria-label={`Research for @${account.handle} every morning`}
+          value={account.daily_hour ?? ""}
+          onChange={(e) => {
+            const hour = e.target.value === "" ? null : Number(e.target.value);
+            act(
+              () => api.setDailyResearch(account.id, hour),
+              hour === null
+                ? `No morning research for @${account.handle}`
+                : `@${account.handle} is researched every day at ${clock(hour)}`,
+            );
+          }}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+        >
+          <option value="">Off</option>
+          {HOURS.map((hour) => (
+            <option key={hour} value={hour}>
+              at {clock(hour)}
+            </option>
+          ))}
+        </select>
+      </label>
       {learning(account) ? (
         <p className="text-sm text-muted-foreground">
           Learning what it posts{account.learn_message && `: ${account.learn_message}`}...

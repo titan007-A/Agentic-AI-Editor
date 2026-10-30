@@ -361,6 +361,7 @@ function Researcher() {
                 >
                   <span className="min-w-0 truncate">
                     {r.owner && <span className="text-muted-foreground">{r.owner}: </span>}
+                    {r.daily && <span className="text-muted-foreground">Daily: </span>}
                     {named(r)}
                   </span>
                   <Badge variant={r.status === "failed" ? "destructive" : "outline"}>

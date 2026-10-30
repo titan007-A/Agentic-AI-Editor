@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -226,6 +226,10 @@ class ResearchAccount(Base):
     learn_status: Mapped[str] = mapped_column(String(16), default="idle")
     learn_message: Mapped[str] = mapped_column(Text, default="")
     learn_error: Mapped[str | None] = mapped_column(Text)
+    # A research for it every morning: the hour (server time) it starts at, None when off,
+    # and the day the last one started.
+    daily_hour: Mapped[int | None]
+    daily_on: Mapped[date | None]
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
@@ -257,6 +261,7 @@ class Research(Base):
     handle: Mapped[str] = mapped_column(Text, default="")  # kept if the account is removed
     # Where it searches: "instagram" reels and YouTube "shorts" (see research.SITES).
     sites: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["instagram"])
+    daily: Mapped[bool] = mapped_column(default=False)  # started by the account's morning one
     # A follow-up asked for in an earlier research's chat ("more Italian").
     parent_id: Mapped[str | None] = mapped_column(
         ForeignKey("research.id", ondelete="SET NULL"), index=True
