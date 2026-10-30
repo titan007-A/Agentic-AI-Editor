@@ -1,5 +1,7 @@
 """A song and its artist from a video's name, "Song - Artist", for presets whose text
-names them with {song} and {artist}. The rules are the owner's earlier reel tool's.
+names them with {song} and {artist}. The rules are the owner's earlier reel tool's. A link's
+name ("Video by illusive.paradox") can't be changed, so lines "song: ..." and "artist: ..."
+in the job's notes give them instead, and win over the name.
 
 Other words in braces are the preset's own, filled per reel: {year} from a "(1980)" in the
 video's name, and any of them, {day} say, from a line "day: 103" in the job's notes."""
@@ -23,6 +25,7 @@ NUMBERED_BRACKETS = re.compile(r"\s*[(\[{][^)\]}]*\d[^)\]}]*[)\]}]")
 # A track number: "01. ", "3) " or a zero-padded "07 ". A bare "50 Cent" is a name.
 TRACK_NUMBER = re.compile(r"^(?:\d{1,3}\s*[.)]\s+|0\d{1,2}[\s.)_-]+)")
 EDGE_PUNCTUATION = " \t-_,;:|/\\"
+NOTES_HINT = " or add lines 'song: ...' and 'artist: ...' to the notes"
 
 
 class UnnamedSong(ValueError):
@@ -41,7 +44,15 @@ def strip_numbers(name: str) -> str:
     return cleaned or name
 
 
-def song_and_artist(title: str) -> tuple[str, str]:
+def song_and_artist(title: str, given: dict[str, str] | None = None) -> tuple[str, str]:
+    given = given or {}
+    if "song" in given and "artist" in given:
+        return given["song"], given["artist"]
+    song, artist = _from_name(title)
+    return given.get("song", song), given.get("artist", artist)
+
+
+def _from_name(title: str) -> tuple[str, str]:
     for separator in SEPARATORS:
         if separator in title:
             song, _, artist = title.partition(separator)
@@ -50,25 +61,25 @@ def song_and_artist(title: str) -> tuple[str, str]:
                 return strip_numbers(song), strip_numbers(artist)
             raise UnnamedSong(
                 f"'{title}' has a '{separator.strip() or separator}' but nothing on one side "
-                "of it; name the file 'Song - Artist'"
+                f"of it; name the file 'Song - Artist'{NOTES_HINT}"
             )
-    raise UnnamedSong(f"'{title}' doesn't say the song and artist; name it 'Song - Artist'")
+    raise UnnamedSong(
+        f"'{title}' doesn't say the song and artist; name it 'Song - Artist'{NOTES_HINT}"
+    )
 
 
 def names_song(preset: Preset) -> bool:
     return any(p in block.text for block in preset.text_blocks for p in PLACEHOLDERS)
 
 
-def reel_title(title: str) -> str:
-    """The reel's title for a preset that names the song: 'Song - Artist', from the
-    video's name rather than the planner's guess, which can name the wrong artist."""
-    song, artist = song_and_artist(title)
-    return f"{song} - {artist}"
-
-
 def fields(preset: Preset) -> set[str]:
     """The preset's own words in braces: {year}, {day}, not {song} or {headline}."""
     return {f for block in preset.text_blocks for f in FIELD.findall(block.text)} - OWN
+
+
+def wanted(preset: Preset) -> set[str]:
+    """Every word in braces the notes can give for this preset, the song and artist too."""
+    return fields(preset) | ({"song", "artist"} if names_song(preset) else set())
 
 
 def _key(name: str) -> str:
@@ -95,8 +106,8 @@ def year_of(title: str) -> str | None:
 
 
 def fill(preset: Preset, title: str, given: dict[str, str] | None = None) -> Preset:
-    """The preset with {song} and {artist} in its text replaced from the video's name, and
-    its own fields from `given` (the notes) or, for {year}, the name."""
+    """The preset with {song} and {artist} in its text replaced from `given` (the notes) or
+    the video's name, and its own fields from `given` or, for {year}, the name."""
     own = fields(preset)
     if not names_song(preset) and not own:
         return preset
@@ -104,7 +115,7 @@ def fill(preset: Preset, title: str, given: dict[str, str] | None = None) -> Pre
     if "year" in own and "year" not in values and (year := year_of(title)):
         values["year"] = year
     if names_song(preset):
-        values["song"], values["artist"] = song_and_artist(title)
+        values["song"], values["artist"] = song_and_artist(title, values)
     if missing := sorted(own - values.keys()):
         hint = (
             " or put the year in the video's name, 'Song (1980) - Artist'"

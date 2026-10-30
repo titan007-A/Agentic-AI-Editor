@@ -643,6 +643,32 @@ def test_a_preset_that_wants_captions_gets_one_after_every_render(env, monkeypat
     assert output["caption_status"] == "done"
 
 
+def test_a_reel_that_names_its_song_writes_the_caption_about_it(env, monkeypatch):
+    from agentic_editor import caption
+
+    fake_captions(monkeypatch, env, fail=True)  # the model would have to guess: it can't
+    asked = []
+    monkeypatch.setattr(
+        caption,
+        "gather",
+        lambda song, artist, *args: asked.append((song, artist)) or caption.Sources(),
+    )
+    run = env.run
+
+    def named_run(*args, **kwargs):
+        result = run(*args, **kwargs)
+        for out in result.outputs:
+            out.song = ("Felicità", "Al Bano & Romina Power")
+        return result
+
+    env.run = named_run
+    (job,) = start(env.client, presets=("song-stories-es-9x16",))
+    output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    assert output["caption_status"] == "done"
+    assert (output["caption_song"], output["caption_artist"]) == asked[0]
+    assert asked == [("Felicità", "Al Bano & Romina Power")]
+
+
 def test_a_caption_that_cant_be_written_says_why(env, monkeypatch):
     fake_captions(monkeypatch, env, fail=True)
     (job,) = start(env.client)

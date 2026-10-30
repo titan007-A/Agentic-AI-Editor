@@ -46,13 +46,31 @@ def test_a_preset_without_the_names_doesnt_need_them():
     assert names.fill(preset, "IMG_4379") is preset
 
 
-def test_a_reel_that_names_the_song_is_titled_by_it():
+def test_a_preset_names_the_song_when_its_text_has_it():
     preset = load_presets(ROOT / "presets")["voicehq-9x16"]
     assert names.names_song(preset)
     assert not names.names_song(load_presets(ROOT / "presets")["vocal-music-it-9x16"])
-    assert names.reel_title("07. Felicità (2) — Al Bano & Romina Power") == (
-        "Felicità - Al Bano & Romina Power"
+
+
+def test_a_link_s_song_and_artist_come_from_lines_in_the_notes():
+    # An Instagram link is called "Video by <account>" and can't be renamed.
+    preset = load_presets(ROOT / "presets")["voicehq-9x16"]
+    assert names.wanted(preset) == {"song", "artist"}
+    assert names.wanted(load_presets(ROOT / "presets")["vocal-music-it-9x16"]) == set()
+    notes = "song: Felicità\nArtist: Al Bano & Romina Power\nstart at the chorus"
+    given, rest = names.from_notes(notes, names.wanted(preset))
+    assert given == {"song": "Felicità", "artist": "Al Bano & Romina Power"}
+    assert rest == "start at the chorus"
+    filled = names.fill(preset, "Video by illusive.paradox", given)
+    assert filled.text_blocks[1].text == "Song: Felicità\nArtist: Al Bano & Romina Power"
+    # Only one of them in the notes: the name gives the other, and the notes win.
+    assert names.song_and_artist("Felicita - Al Bano", {"artist": "Al Bano & Romina Power"}) == (
+        "Felicita",
+        "Al Bano & Romina Power",
     )
+    # Neither: the reel says both ways to give them.
+    with pytest.raises(names.UnnamedSong, match=r"Song - Artist' or add lines 'song: \.\.\.'"):
+        names.fill(preset, "Video by illusive.paradox", {"song": "Felicità"})
 
 
 def stories(text: str):
