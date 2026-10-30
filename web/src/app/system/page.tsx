@@ -7,6 +7,8 @@ import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { api, errorText, type SystemInfo } from "@/lib/api";
 
 const ROWS: { key: keyof SystemInfo; label: string }[] = [
@@ -23,13 +25,38 @@ export default function SystemPage() {
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Days finished jobs and their videos are kept, as saved and as typed.
+  const [keepDays, setKeepDays] = useState<number | null>(null);
+  const [typed, setTyped] = useState("");
 
   useEffect(() => {
     api
       .system()
       .then(setInfo)
       .catch((err) => toast.error(errorText(err)));
+    api
+      .storage()
+      .then(({ keep_days }) => {
+        setKeepDays(keep_days);
+        setTyped(String(keep_days));
+      })
+      .catch(() => {});
   }, []);
+
+  async function saveKeep(event: React.FormEvent) {
+    event.preventDefault();
+    try {
+      const { keep_days } = await api.setStorage(Number(typed));
+      setKeepDays(keep_days);
+      toast.success(
+        keep_days === 0
+          ? "Videos are kept until deleted by hand"
+          : `Videos are deleted ${keep_days} day${keep_days === 1 ? "" : "s"} after they're made`,
+      );
+    } catch (err) {
+      toast.error(errorText(err));
+    }
+  }
 
   async function updateYtdlp() {
     setUpdating(true);
@@ -64,6 +91,42 @@ export default function SystemPage() {
           )}
         </CardContent>
       </Card>
+
+      {keepDays !== null && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Disk space</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={saveKeep} className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Finished jobs and their videos, with the downloads and uploads they came from, are
+                deleted this many days after they are made, for everyone. 0 keeps them until deleted
+                by hand.
+              </p>
+              <div className="flex items-end gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor="keep-days">Delete after (days)</Label>
+                  <Input
+                    id="keep-days"
+                    className="w-28"
+                    inputMode="numeric"
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={!/^\d{1,3}$/.test(typed) || Number(typed) === keepDays}
+                >
+                  Save
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

@@ -379,6 +379,10 @@ export const api = {
   jobs: () => request<Job[]>("GET", "/jobs"),
   job: (id: string) => request<Job>("GET", `/jobs/${id}`),
   deleteJob: (id: string) => request("DELETE", `/jobs/${id}`),
+  clearJobs: () => request<{ deleted: number; freed_mb: number }>("POST", "/jobs/clear"),
+  storage: () => request<{ keep_days: number }>("GET", "/system/storage"),
+  setStorage: (keepDays: number) =>
+    request<{ keep_days: number }>("PUT", "/system/storage", { keep_days: keepDays }),
   createJobs: (sources: string[], presets: string[], notes: string) =>
     request<Job[]>("POST", "/jobs", { sources, presets, notes: notes || null }),
   regenerate: (id: string, preset: string, notes: string) =>

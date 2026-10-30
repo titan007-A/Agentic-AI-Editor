@@ -25,7 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import accounts, autopilot, jobs, research
+from agentic_editor import accounts, autopilot, cleanup, jobs, research
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
@@ -97,6 +97,11 @@ class JobRequest(BaseModel):
 class RegenerateRequest(BaseModel):
     preset: str
     notes: str | None = None
+
+
+class KeepRequest(BaseModel):
+    # Days a finished job and its videos are kept; 0 keeps them until deleted by hand.
+    keep_days: int = Field(ge=0, le=cleanup.MAX_KEEP_DAYS)
 
 
 class LearnRequest(BaseModel):
@@ -485,6 +490,10 @@ def create_app(
                 await asyncio.to_thread(jobs.start_daily, make_session)
             except Exception:
                 log.exception("starting the morning researches failed")
+            try:
+                await asyncio.to_thread(cleanup.sweep, make_session, settings)
+            except Exception:
+                log.exception("deleting old videos failed")
             await asyncio.sleep(SCAN_SECONDS)
 
     @asynccontextmanager
@@ -1218,9 +1227,28 @@ def create_app(
         job = find_job(job_id, session, account)
         if job.status in ("queued", "running"):
             raise HTTPException(409, "the job is still running")
-        session.delete(job)
-        session.commit()
+        cleanup.delete_jobs(session, [job], settings.media_dir)
         return {"ok": True}
+
+    @app.post("/api/jobs/clear")
+    def clear_jobs(account: User, session: DB) -> dict:
+        """Every finished job the account sees (the admin: everyone's) with its videos;
+        ones still being edited stay."""
+        query = select(Job).options(selectinload(Job.outputs))
+        if account.role != accounts.ADMIN:
+            query = query.where(Job.owner_id == account.id)
+        found = session.scalars(query.where(Job.status.in_(cleanup.FINISHED))).all()
+        deleted, freed = cleanup.delete_jobs(session, found, settings.media_dir)
+        return {"deleted": deleted, "freed_mb": round(freed / 1e6, 1)}
+
+    @app.get("/api/system/storage")
+    def storage(_: Admin, session: DB) -> dict:
+        return {"keep_days": cleanup.keep_days(session)}
+
+    @app.put("/api/system/storage")
+    def set_storage(body: KeepRequest, _: Admin, session: DB) -> dict:
+        cleanup.set_keep_days(session, body.keep_days)
+        return {"keep_days": body.keep_days}
 
     @app.post("/api/jobs/{job_id}/regenerate")
     def regenerate(job_id: str, body: RegenerateRequest, account: User, session: DB) -> JobView:
