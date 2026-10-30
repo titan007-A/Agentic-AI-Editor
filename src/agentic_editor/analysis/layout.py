@@ -346,6 +346,13 @@ def action_box(frames: np.ndarray) -> tuple[int, int, int, int] | None:
     if not len(moved):
         return None
     height, width = moved.shape[1:]
+    # A blurred, enlarged copy of the picture filling the sides (or top and bottom) moves
+    # with it but has little fine detail: its movement isn't action.
+    detail = np.abs(np.diff(grey, axis=2))[:, :-1, :] + np.abs(np.diff(grey, axis=1))[:, :, :-1]
+    detail = np.pad(detail.mean(axis=0), ((0, 1), (0, 1)), mode="edge")
+    sharp_cols = detail.mean(axis=0) >= BLURRED * np.percentile(detail.mean(axis=0), 90)
+    sharp_rows = detail.mean(axis=1) >= BLURRED * np.percentile(detail.mean(axis=1), 90)
+    moved = moved & sharp_rows[None, :, None] & sharp_cols[None, None, :]
     spans = []
     for energy, size in ((moved.sum(axis=(0, 1)), width), (moved.sum(axis=(0, 2)), height)):
         energy = ndimage.uniform_filter1d(energy.astype(np.float32), max(1, size // 30))
