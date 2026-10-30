@@ -229,6 +229,18 @@ class ResearchAccount(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class HiddenAccount(Base):
+    """An Instagram account whose reels a person doesn't want: researches leave it out."""
+
+    __tablename__ = "research_hidden"
+    __table_args__ = (UniqueConstraint("owner_id", "handle"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
+    handle: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Research(Base):
     """A search for Instagram reels that fit a description, or an account (see
     research.py)."""
@@ -327,6 +339,10 @@ class ResearchItem(Base):
     virality: Mapped[float] = mapped_column(default=0.0)
     score: Mapped[float] = mapped_column(default=0.0)
     seen: Mapped[bool] = mapped_column(default=False)  # shown by an earlier research
+    # The person's feedback on it, which later researches learn from: "good", "bad" or
+    # None, and why it wasn't for them ("Wrong music", their own words...).
+    verdict: Mapped[str | None] = mapped_column(String(8))
+    verdict_reason: Mapped[str] = mapped_column(Text, default="")
 
     research: Mapped[Research] = relationship(back_populates="items")
 

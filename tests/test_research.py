@@ -328,6 +328,45 @@ def test_a_research_for_an_account_finds_reels_like_its_own_but_not_its_own():
     assert result.queries[0] == "Bryan Adams live"  # no focus: the model's searches only
 
 
+def test_feedback_steers_planning_and_rating_and_hidden_accounts_stay_out():
+    llm = AccountPlanner()
+
+    def find(query, count):
+        return [hit("ADAMS1"), hit("ADAMS2"), hit("ADAMS3")]
+
+    def info(url):
+        code = research.code_of(url)
+        channel = "spampage" if code == "ADAMS3" else "attic"
+        return {"channel": channel, "description": f"Bryan Adams {code}", "like_count": 100}
+
+    context = research.Context(
+        liked=[research.taste_line("Heaven - Bryan Adams", "", "attic")],
+        disliked=[
+            research.taste_line("", "Bryan Adams karaoke cover", "covers", "Not the real singer")
+        ],
+        hidden={"spampage"},
+    )
+    result = research.run(
+        "Bryan Adams",
+        lambda: nullcontext(llm),
+        set(),
+        set(),
+        lambda *a: None,
+        find,
+        info,
+        0,
+        context,
+    )
+    assert [r.code for r in result.reels] == ["ADAMS1", "ADAMS2"]
+    assert result.left_out == {"hidden account": 1}
+    for prompt in (llm.asked[0], llm.asked[-1]):  # planning, rating
+        assert "liked before (find more like these):\n- Heaven - Bryan Adams (@attic)" in prompt
+        assert "- Bryan Adams karaoke cover (@covers): Not the real singer" in prompt
+    plain = Planner()
+    research.plan(plain, "Bryan Adams")
+    assert "liked before" not in plain.asked[0]  # no feedback, nothing said of it
+
+
 def test_a_model_that_cant_plan_an_account_s_searches_leaves_its_name_and_presets():
     context = research.Context(handle="voiceshq", presets={"v": "Vocals only; isolated"})
     assert research.plan(Planner(broken=True), "", context) == ("", ["voiceshq", "Vocals only"])

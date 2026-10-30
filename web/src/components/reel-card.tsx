@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { ReelFeedback } from "@/components/reel-feedback";
 import { type Preset, type Research, type ResearchItem } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -93,6 +94,7 @@ export function ReelCard({
   chosen,
   full,
   onChoose,
+  onChanged,
 }: {
   item: ResearchItem;
   presets: Preset[];
@@ -102,6 +104,8 @@ export function ReelCard({
   /** As many reels are chosen as may be. */
   full: boolean;
   onChoose: (preset: string | null) => void;
+  /** Feedback was given: the research as it is now. */
+  onChanged: (next: Research) => void;
 }) {
   const [broken, setBroken] = useState(!item.thumbnail);
   const [explaining, setExplaining] = useState(false);
@@ -180,6 +184,7 @@ export function ReelCard({
         </div>
         {item.caption && <p className="line-clamp-3 text-sm break-words">{item.caption}</p>}
         {item.why && <p className="text-xs text-muted-foreground">Why: {item.why}</p>}
+        <ReelFeedback item={item} onChanged={onChanged} />
         <div className="space-y-2 rounded-md border p-2">
           <label className="flex items-center gap-2 text-sm font-medium">
             <Checkbox

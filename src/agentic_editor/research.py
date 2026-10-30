@@ -14,7 +14,10 @@ A research can be for one of the owner's Instagram accounts: the account is lear
 (its own reels, found the same way, and what the planning model reads in them), and the
 searches and ratings aim at reels like its best ones, for the presets the owner edits it
 with. Each research gives its best few: never a reel shown before, the account's own or
-one already edited, and at most two from one account or of one song."""
+one already edited, and at most two from one account or of one song.
+
+The person's feedback teaches later researches: the reels they liked or edited and those
+they didn't want (with why) go to planning and rating, and accounts they hid are left out."""
 
 import logging
 import math
@@ -99,7 +102,7 @@ class Result:
     repeats: int = 0  # shown by an earlier research, so left out
     considered: int = 0  # reels looked up and rated
     # Reels found but not given, by why: "edited", "shown before", "the account's own",
-    # "didn't fit", "same account".
+    # "didn't fit", "hidden account", "same account".
     left_out: dict[str, int] = field(default_factory=dict)
     cutoff: float | None = None  # the best score of the reels that fit but weren't given
 
@@ -113,6 +116,11 @@ class Context:
     summary: str = ""
     presets: dict[str, str] = field(default_factory=dict)
     own: set[str] = field(default_factory=set)
+    # What the person's feedback on earlier researches taught: reels they liked (or
+    # edited) and didn't want, a line each (see taste_line), and accounts they hid.
+    liked: list[str] = field(default_factory=list)
+    disliked: list[str] = field(default_factory=list)
+    hidden: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -299,6 +307,29 @@ def _preset_lines(presets: dict[str, str]) -> str:
     return "\n".join(f"- {name}: {about}" for name, about in presets.items()) or "(none)"
 
 
+def taste_line(song: str, caption: str, handle: str, reason: str = "") -> str:
+    """A reel the person gave feedback on, as the model is told it."""
+    what = song or _short(caption, 120) or "a reel"
+    line = f"{what} (@{handle})" if handle else what
+    return f"{line}: {reason}" if reason else line
+
+
+def _taste(context: Context) -> str:
+    """What the person's feedback taught, for planning and rating; '' without any."""
+    parts = []
+    if context.liked:
+        parts.append(
+            "Reels they liked before (find more like these):\n"
+            + "\n".join(f"- {line}" for line in context.liked)
+        )
+    if context.disliked:
+        parts.append(
+            "Reels they didn't want, with why when they said (find fewer like these):\n"
+            + "\n".join(f"- {line}" for line in context.disliked)
+        )
+    return "\n\n".join(parts)
+
+
 def plan(llm, description: str, context: Context | None = None) -> tuple[str, list[str]]:
     """The request as the model understood it, in English, and the searches for it. The
     request itself, in whatever words, isn't searched ("italian gaane" finds Hindi songs),
@@ -321,6 +352,8 @@ def plan(llm, description: str, context: Context | None = None) -> tuple[str, li
     else:
         prompt = PLAN.format(count=MAX_QUERIES, description=focus)
         fallback = [asked[:120]]
+    if taste := _taste(context or Context()):
+        prompt += "\n\n" + taste
     brief, queries = "", []
     messages = [{"role": "user", "content": prompt}]
     for _ in range(2):
@@ -541,6 +574,8 @@ def rate(
             context.summary or "(not known: go by the presets)"
         )
         wish = f"{wish}\nThat is, {account}" if wish else account
+    if taste := _taste(context):
+        wish = f"{wish}\n\n{taste}"
     for start in range(0, len(reels), batch):
         group = reels[start : start + batch]
         lines = "\n".join(
@@ -732,6 +767,8 @@ def run(
     if context.handle:
         left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
         reels = [r for r in reels if r.handle != context.handle]
+    left_out["hidden account"] = sum(r.handle in context.hidden for r in reels)
+    reels = [r for r in reels if r.handle not in context.hidden]
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:

@@ -262,6 +262,12 @@ Hinglish too), ranked by how well they fit and how viral they are:
   wrote in; or ask for something else ("more Italian", "older concerts") and it starts a
   follow-up research, linked both ways, which keeps the earlier answers and never shows a
   reel shown before.
+- **Feedback.** Every reel has "Good pick" and "Not for me" (with a reason to tap or your
+  own words). Later researches learn from it: for an Instagram account, the reels you liked
+  or edited and those you didn't want go to the planning and rating model ("find more like
+  these", "fewer like these"); for a description alone only those you didn't want, since
+  its topic is another each time. "Never show @x again" hides an account from all your
+  researches; hidden accounts are listed on the page, each with a button to show it again.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.
