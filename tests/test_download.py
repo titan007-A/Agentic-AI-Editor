@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 
 import pytest
 import yt_dlp
@@ -72,3 +73,45 @@ def test_a_link_downloaded_before_needs_no_site(tmp_path, site, monkeypatch):
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", offline)
     assert download.fetch("https://x.test/v", tmp_path) == first
+
+
+def test_yt_dlp_signs_in_with_a_copy_of_the_cookies_file(tmp_path, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    cookies = tmp_path / "youtube-cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setattr(get_settings(), "cookies_file", cookies)
+    with download.signed_in({"quiet": True}) as options:
+        copy = Path(options["cookiefile"])
+        assert copy != cookies and copy.read_text() == cookies.read_text()
+        assert options["quiet"]
+    assert not copy.exists()  # yt-dlp wrote to its own copy, gone once done
+
+    monkeypatch.setattr(get_settings(), "cookies_file", tmp_path / "gone.txt")
+    with download.signed_in({"quiet": True}) as options:
+        assert options == {"quiet": True}  # a missing file: as without one
+    monkeypatch.setattr(get_settings(), "cookies_file", None)
+    with download.signed_in({"quiet": True}) as options:
+        assert options == {"quiet": True}
+
+
+def test_youtube_asking_to_sign_in_says_what_to_do(tmp_path, monkeypatch):
+    class Blocked:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def extract_info(self, url, download=False):
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: [youtube] qzAm4LKWkBU: Sign in to confirm you’re not a bot. Use "
+                "--cookies-from-browser or --cookies for the authentication."
+            )
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Blocked)
+    with pytest.raises(RuntimeError, match="an admin adds a YouTube cookies file"):
+        download.fetch("https://www.youtube.com/shorts/qzAm4LKWkBU", tmp_path)

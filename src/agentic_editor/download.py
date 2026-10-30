@@ -5,12 +5,15 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from agentic_editor import slots
-from agentic_editor.settings import get_settings
+from agentic_editor.settings import ROOT, get_settings
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +25,47 @@ class Source:
     uploader: str = ""
     url: str = ""
     description: str = ""
+
+
+@contextmanager
+def signed_in(options: dict) -> Iterator[dict]:
+    """yt-dlp's `options` with the settings' cookies file (see Settings.cookies_file), when
+    there is one. Each gets a copy: yt-dlp writes its cookies back when done, and lookups
+    run at once would write one file together."""
+    cookies = get_settings().cookies_file
+    if cookies is None:
+        yield options
+        return
+    path = cookies.expanduser() if cookies.expanduser().is_absolute() else ROOT / cookies
+    if not path.is_file():
+        log.warning("the cookies file %s isn't there; YouTube may ask to sign in", path)
+        yield options
+        return
+    with tempfile.TemporaryDirectory() as folder:
+        copy = Path(folder) / "cookies.txt"
+        shutil.copyfile(path, copy)
+        yield {**options, "cookiefile": str(copy)}
+
+
+# What YouTube says when it wants this machine signed in before it gives a video.
+BOT_CHECK = "confirm you’re not a bot"
+SIGN_IN = (
+    "YouTube is asking this computer to sign in before it gives videos (\"confirm you're "
+    'not a bot"), so no YouTube video can be downloaded until an admin adds a YouTube '
+    'cookies file: see "YouTube asks to sign in" in the README'
+)
+
+
+@contextmanager
+def _explained() -> Iterator[None]:
+    """yt-dlp's errors, with YouTube's request to sign in said in words an editor can act
+    on (see SIGN_IN)."""
+    try:
+        yield
+    except Exception as exc:
+        if BOT_CHECK in str(exc).replace("'", "’"):
+            raise RuntimeError(SIGN_IN) from exc
+        raise
 
 
 def _slug(text: str) -> str:
@@ -71,7 +115,8 @@ def fetch(url: str, sources_dir: Path) -> Source:
 
     from yt_dlp import YoutubeDL
 
-    with YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True}) as ydl:
+    options = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    with _explained(), signed_in(options) as options, YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
     key = _slug(f"{info.get('extractor_key', 'web')}-{info.get('id') or url}")
     dest = sources_dir / key
@@ -82,7 +127,8 @@ def fetch(url: str, sources_dir: Path) -> Source:
         if source is not None:
             log.info("already downloaded: %s", source.title)
         else:
-            with YoutubeDL(_ytdlp_options(dest)) as ydl:
+            options = _ytdlp_options(dest)
+            with _explained(), signed_in(options) as options, YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=True)
             path = next(p for p in dest.iterdir() if p.stem == "source" and p.suffix != ".json")
             source = Source(

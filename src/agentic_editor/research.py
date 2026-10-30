@@ -34,6 +34,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agentic_editor.download import signed_in
 from agentic_editor.llm import LLMError, parse
 from agentic_editor.presets import Preset
 
@@ -692,7 +693,7 @@ def _info(url: str) -> dict:
         "socket_timeout": 15,
         "logger": _Quiet(),
     }
-    with YoutubeDL(options) as ydl:
+    with signed_in(options) as options, YoutubeDL(options) as ydl:
         return ydl.extract_info(url, download=False)
 
 
@@ -755,7 +756,8 @@ def _channel_shorts(url: str, count: int) -> list[dict]:
     from yt_dlp import YoutubeDL
 
     options = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}
-    with YoutubeDL({**options, "playlistend": count, "logger": _Quiet()}) as ydl:
+    options = {**options, "playlistend": count, "logger": _Quiet()}
+    with signed_in(options) as options, YoutubeDL(options) as ydl:
         return ydl.extract_info(url, download=False).get("entries") or []
 
 

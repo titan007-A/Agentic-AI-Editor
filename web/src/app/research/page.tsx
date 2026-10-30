@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { filled, PresetFieldInputs, useFieldValues } from "@/components/job-fields";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { usePolling } from "@/hooks/use-polling";
@@ -30,6 +31,7 @@ import {
   type ResearchItem,
   type Site,
 } from "@/lib/api";
+import { fieldNotes, presetFields } from "@/lib/preset-fields.mjs";
 import { cn } from "@/lib/utils";
 
 const RUNNING_POLL_MS = 3000;
@@ -126,6 +128,7 @@ function Researcher() {
   });
   const [started, setStarted] = useState<{ of: string; jobs: Started[] }>({ of: "", jobs: [] });
   const [notes, setNotes] = useState("");
+  const fieldValues = useFieldValues();
   const [editing, setEditing] = useState(false);
 
   const refreshList = useCallback(
@@ -196,6 +199,19 @@ function Researcher() {
   const limit = current?.mode === "pdf" ? Math.max(MAX_CHOSEN, current.entries.length) : MAX_CHOSEN;
   const startedHere = started.of === id ? started.jobs : [];
 
+  /** The words a chosen reel's preset needs given; a PDF's own top and bottom text stand
+   * in for the preset's there. */
+  function fieldsOf(item: ResearchItem): string[] {
+    const preset = presets.find((p) => p.name === chosen[item.id]);
+    if (!preset) return [];
+    const entry = item.entry === null ? undefined : current?.entries[item.entry];
+    const replaced = entry ? (["top", "bottom"] as const).filter((a) => entry[a]) : [];
+    return presetFields(preset, [...replaced]);
+  }
+  const chosenItems = current ? current.items.filter((i) => i.id in chosen) : [];
+  const fields = [...new Set(chosenItems.flatMap(fieldsOf))];
+  const counted = (name: string) => chosenItems.filter((i) => fieldsOf(i).includes(name)).length;
+
   function choose(item: ResearchItem, preset: string | null) {
     const reels = Object.fromEntries(
       Object.entries(chosen).filter(([key]) => Number(key) !== item.id),
@@ -209,12 +225,15 @@ function Researcher() {
     const jobs: Started[] = [];
     try {
       // One job a reel: each has its own preset.
+      const used: Record<string, number> = {};
       for (const item of current.items.filter((i) => i.id in chosen)) {
         const entry = item.entry === null ? undefined : current.entries[item.entry];
-        const told = [entry && entryNotes(entry), notes.trim()].filter(Boolean).join("\n");
+        const given = fieldNotes(fieldsOf(item), fieldValues.values, used);
+        const told = [entry && entryNotes(entry), given, notes.trim()].filter(Boolean).join("\n");
         const [job] = await api.createJobs([item.url], [chosen[item.id]], told);
         jobs.push({ item, jobId: job.id });
       }
+      fieldValues.keep(used);
       toast.success(`${jobs.length} edit${jobs.length === 1 ? "" : "s"} started`);
       setPicks({ of: id, reels: {} });
       setNotes("");
@@ -598,11 +617,19 @@ function Researcher() {
                     />
                   </div>
                 )}
+                <PresetFieldInputs
+                  fields={fields}
+                  values={fieldValues.values}
+                  onChange={fieldValues.setValues}
+                  videos={Math.max(1, ...fields.map(counted))}
+                  idPrefix="research-field"
+                />
                 <Button
                   disabled={
                     editing ||
                     Object.keys(chosen).length === 0 ||
-                    Object.values(chosen).some((preset) => !preset)
+                    Object.values(chosen).some((preset) => !preset) ||
+                    !filled(fields, fieldValues.values)
                   }
                   onClick={editChosen}
                 >

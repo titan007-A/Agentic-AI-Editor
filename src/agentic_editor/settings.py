@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     presets_dir: Path = Path("presets")
     fonts_dir: Path = Path("fonts")
 
+    # A cookies.txt of a browser signed in to YouTube (and only YouTube), for yt-dlp: a
+    # machine that looks up many videos is asked to "confirm you're not a bot", and every
+    # YouTube download fails until it signs in. Relative to the repository like the rest.
+    cookies_file: Path | None = None
+
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
 
