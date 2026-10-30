@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { HiddenAccounts } from "@/components/hidden-accounts";
 import { InstagramAccounts, learning } from "@/components/instagram-accounts";
 import { ReelCard } from "@/components/reel-card";
 import { ResearchChat } from "@/components/research-chat";
@@ -239,6 +240,10 @@ function Researcher() {
       </div>
 
       <InstagramAccounts accounts={accounts} presets={presets} onChange={refreshAccounts} />
+      <HiddenAccounts
+        version={current?.items.filter((i) => i.hidden).length ?? 0}
+        onUnhidden={load}
+      />
 
       <Card className="tape">
         <CardHeader>
@@ -460,6 +465,7 @@ function Researcher() {
                     chosen={item.id in chosen ? chosen[item.id] : null}
                     full={Object.keys(chosen).length >= MAX_CHOSEN}
                     onChoose={(preset) => choose(item, preset)}
+                    onChanged={setLoaded}
                   />
                 ))}
               </div>

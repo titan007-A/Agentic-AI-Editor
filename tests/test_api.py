@@ -12,7 +12,7 @@ from agentic_editor import api, jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
-from agentic_editor.db import Event, Job, Output, make_sessionmaker
+from agentic_editor.db import Event, Job, Output, Research, make_sessionmaker
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.presets import Preset
 from agentic_editor.settings import ROOT, Settings
@@ -984,6 +984,61 @@ def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(env
     assert riya.get("/api/research/accounts").json() == []
     assert riya.post("/api/research", json={"account_id": mine["id"]}).status_code == 404
     assert riya.delete(f"/api/research/accounts/{mine['id']}").status_code == 404
+
+
+def test_feedback_on_reels_teaches_later_researches(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    started = env.client.post(
+        "/api/research", json={"account_id": account["id"], "skip_questions": True}
+    ).json()
+    found = env.client.get(f"/api/research/{started['id']}").json()
+    good, bad = found["items"]
+    assert (good["verdict"], good["verdict_reason"], good["hidden"]) == (None, "", False)
+
+    def feedback(item, **body):
+        return env.client.post(f"/api/research/items/{item['id']}/feedback", json=body)
+
+    assert feedback(good, verdict="good", reason="ignored").json()["items"][0]["verdict"] == "good"
+    told = feedback(bad, verdict="bad", reason=" Wrong music ", hide_account=True).json()
+    after = told["items"][1]
+    assert (after["verdict"], after["verdict_reason"], after["hidden"]) == (
+        "bad",
+        "Wrong music",
+        True,
+    )
+    assert told["items"][0]["verdict_reason"] == "" and not told["items"][0]["hidden"]
+    assert feedback({"id": 999}, verdict="good").status_code == 404
+    assert env.client.get("/api/research/hidden").json()[0]["handle"] == "rockblog"
+
+    # A later research for the account is told what was liked and what wasn't; one for a
+    # description alone only what wasn't, its topic being another; both leave hidden out.
+    with env.sessions() as db:
+        owner = db.get(Research, found["id"]).owner_id
+        later = Research(description="", owner_id=owner, account_id=account["id"])
+        alone = Research(description="x", owner_id=owner)
+        db.add_all([later, alone])
+        db.commit()
+        assert jobs.taste(db, later) == {
+            "liked": ["Bryan Adams - Summer of 69 live (@attic)"],
+            "disliked": ["Bryan Adams, Heaven (@rockblog): Wrong music"],
+            "hidden": {"rockblog"},
+        }
+        assert jobs.taste(db, alone) == {"liked": [], "disliked": [], "hidden": {"rockblog"}}
+
+    # Taken back, and unhidden; an employee can't give feedback on the admin's reels.
+    assert feedback(good, verdict=None).json()["items"][0]["verdict"] is None
+    assert env.client.delete("/api/research/hidden/rockblog").status_code == 200
+    assert env.client.delete("/api/research/hidden/rockblog").status_code == 404
+    assert env.client.get(f"/api/research/{found['id']}").json()["items"][1]["hidden"] is False
+    _, riya = employee(env)
+    assert (
+        riya.post(
+            f"/api/research/items/{good['id']}/feedback", json={"verdict": "good"}
+        ).status_code
+        == 404
+    )
 
 
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):

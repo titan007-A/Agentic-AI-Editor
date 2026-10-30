@@ -119,7 +119,21 @@ export type ResearchItem = {
   seen: boolean;
   /** Edited since. */
   used: boolean;
+  /** The person's feedback, which later researches learn from. */
+  verdict: "good" | "bad" | null;
+  verdict_reason: string;
+  /** Its account is one the person hid. */
+  hidden: boolean;
 };
+
+/** Feedback on a reel; null takes it back. */
+export type Feedback = {
+  verdict: "good" | "bad" | null;
+  reason?: string;
+  hide_account?: boolean;
+};
+
+export type HiddenAccount = { handle: string; created_at: string };
 
 /** A question the researcher asks before searching, with suggested answers. */
 export type ResearchQuestion = { question: string; choices: string[] };
@@ -334,6 +348,11 @@ export const api = {
   chatOnResearch: (id: string, text: string) =>
     request<Research>("POST", `/research/${id}/chat`, { text }),
   deleteResearch: (id: string) => request("DELETE", `/research/${id}`),
+  giveFeedback: (itemId: number, feedback: Feedback) =>
+    request<Research>("POST", `/research/items/${itemId}/feedback`, feedback),
+  hiddenAccounts: () => request<HiddenAccount[]>("GET", "/research/hidden"),
+  unhideAccount: (handle: string) =>
+    request("DELETE", `/research/hidden/${encodeURIComponent(handle)}`),
   instagramAccounts: () => request<InstagramAccount[]>("GET", "/research/accounts"),
   addInstagramAccount: (handle: string, presets: string[]) =>
     request<InstagramAccount>("POST", "/research/accounts", { handle, presets }),

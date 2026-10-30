@@ -31,10 +31,12 @@ from agentic_editor.db import (
     Event,
     Feed,
     FeedItem,
+    HiddenAccount,
     Job,
     Output,
     Research,
     ResearchAccount,
+    ResearchItem,
     ResearchMessage,
     Setting,
     StyleDraft,
@@ -187,6 +189,21 @@ class ResearchItemView(BaseModel):
     score: float
     seen: bool  # shown by an earlier research
     used: bool  # edited since, by a job of the research's owner
+    verdict: str | None  # the person's feedback: "good", "bad" or none yet
+    verdict_reason: str
+    hidden: bool  # its account is one the research's owner hid
+
+
+class FeedbackRequest(BaseModel):
+    verdict: Literal["good", "bad"] | None  # None takes the feedback back
+    reason: str = Field(default="", max_length=300)
+    # Leave its account out of later researches too.
+    hide_account: bool = False
+
+
+class HiddenAccountView(BaseModel):
+    handle: str
+    created_at: datetime
 
 
 class ResearchView(BaseModel):
@@ -760,9 +777,20 @@ def create_app(
         if items:
             sources = session.scalars(select(Job.source).where(Job.owner_id == found.owner_id))
             used = jobs.reel_codes(sources)
-            names = ResearchItemView.model_fields.keys() - {"used"}
+            hidden = set(
+                session.scalars(
+                    select(HiddenAccount.handle).where(
+                        HiddenAccount.owner_id == (found.owner_id or account.id)
+                    )
+                )
+            )
+            names = ResearchItemView.model_fields.keys() - {"used", "hidden"}
             view.items = [
-                ResearchItemView(**{k: getattr(i, k) for k in names}, used=i.code in used)
+                ResearchItemView(
+                    **{k: getattr(i, k) for k in names},
+                    used=i.code in used,
+                    hidden=bool(i.handle) and i.handle in hidden,
+                )
                 for i in found.items
             ]
             view.messages = [
@@ -903,6 +931,53 @@ def create_app(
         jobs.answer_chat(said.id)
         session.refresh(found)
         return research_view(found, account, session, items=True)
+
+    @app.post("/api/research/items/{item_id}/feedback")
+    def give_feedback(
+        item_id: int, body: FeedbackRequest, account: User, session: DB
+    ) -> ResearchView:
+        """A thumbs up or down on a reel a research gave, which later researches of its
+        owner learn from (see jobs.taste)."""
+        item = session.get(ResearchItem, item_id)
+        if item is None:
+            raise HTTPException(404, "no such reel")
+        found = find_research(item.research_id, session, account)
+        item.verdict = body.verdict
+        item.verdict_reason = body.reason.strip() if body.verdict == "bad" else ""
+        if body.hide_account:
+            if not item.handle:
+                raise HTTPException(422, "its account isn't known, so it can't be hidden")
+            owner = found.owner_id or account.id  # a research from before accounts: the admin's
+            hidden = select(HiddenAccount).where(
+                HiddenAccount.owner_id == owner, HiddenAccount.handle == item.handle
+            )
+            if session.scalars(hidden).first() is None:
+                session.add(HiddenAccount(owner_id=owner, handle=item.handle))
+        session.commit()
+        session.refresh(found)
+        return research_view(found, account, session, items=True)
+
+    @app.get("/api/research/hidden")
+    def list_hidden(account: User, session: DB) -> list[HiddenAccountView]:
+        rows = session.scalars(
+            select(HiddenAccount)
+            .where(HiddenAccount.owner_id == account.id)
+            .order_by(HiddenAccount.handle)
+        )
+        return [HiddenAccountView(handle=h.handle, created_at=h.created_at) for h in rows]
+
+    @app.delete("/api/research/hidden/{handle}")
+    def unhide(handle: str, account: User, session: DB) -> dict:
+        found = session.scalars(
+            select(HiddenAccount).where(
+                HiddenAccount.owner_id == account.id, HiddenAccount.handle == handle
+            )
+        ).first()
+        if found is None:
+            raise HTTPException(404, "that account isn't hidden")
+        session.delete(found)
+        session.commit()
+        return {"ok": True}
 
     @app.get("/api/research")
     def list_research(account: User, session: DB) -> list[ResearchView]:

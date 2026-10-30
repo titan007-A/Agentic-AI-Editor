@@ -14,6 +14,7 @@ from agentic_editor import accounts, caption, pipeline, research, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     Event,
+    HiddenAccount,
     Job,
     Output,
     Research,
@@ -39,6 +40,8 @@ STAGE_PROGRESS = {
 }
 RENDER_START = 0.55
 RELEARN_DAYS = 7  # a research learns its account again when it was learned longer ago
+TASTE = 12  # reels of each kind (liked, not wanted) a research is told of
+TASTE_LOOKED_AT = 300  # the latest reels of earlier researches looked through for them
 INTERRUPTED = "stopped when the server shut down; regenerate to run it again"
 
 _queue_file = get_settings().queue_database
@@ -270,6 +273,40 @@ def reel_codes(sources) -> set[str]:
     return {code for source in sources if (code := research.code_of(source))}
 
 
+def taste(db, found: Research) -> dict:
+    """What a person's feedback teaches a research (see research.Context): for an account,
+    the reels of its earlier researches they liked or edited and those they didn't want;
+    for a description alone only those they didn't want, as its topic is another each
+    time; and the accounts they hid, always."""
+    owner = found.owner_id
+    used = reel_codes(db.scalars(select(Job.source).where(Job.owner_id == owner)))
+    items = db.scalars(
+        select(ResearchItem)
+        .join(Research)
+        .where(
+            Research.owner_id == owner,
+            Research.account_id == found.account_id,
+            Research.id != found.id,
+        )
+        .order_by(ResearchItem.id.desc())
+        .limit(TASTE_LOOKED_AT)
+    )
+    liked: dict[str, str] = {}
+    disliked: dict[str, str] = {}
+    for item in items:
+        line = research.taste_line(item.song, item.caption, item.handle, item.verdict_reason)
+        if item.verdict == "bad":
+            disliked.setdefault(item.code, line)
+        elif found.account_id and (item.verdict == "good" or item.code in used):
+            liked.setdefault(item.code, line)
+    hidden = db.scalars(select(HiddenAccount.handle).where(HiddenAccount.owner_id == owner))
+    return {
+        "liked": list(liked.values())[:TASTE],
+        "disliked": list(disliked.values())[:TASTE],
+        "hidden": set(hidden),
+    }
+
+
 def learn_account(
     account_id: str, Session: sessionmaker, planner, progress, find=None, info=None
 ) -> None:
@@ -341,9 +378,10 @@ def research_context(
         found = db.get(Research, research_id)
         account = db.get(ResearchAccount, found.account_id) if found.account_id else None
         user = db.get(User, found.owner_id) if found.owner_id else None
+        learned = taste(db, found)
     available = load_presets(accounts.presets_dir(user, settings.presets_dir))
     if account is None:
-        return research.Context(presets=research.describe_presets(available))
+        return research.Context(presets=research.describe_presets(available), **learned)
     if stale(account.learned_at):
         learn_account(account.id, Session, planner, progress, find, info)
     with Session() as db:
@@ -354,6 +392,7 @@ def research_context(
         summary=account.summary,
         presets=research.describe_presets(chosen or available),
         own=set(account.own),
+        **learned,
     )
 
 
