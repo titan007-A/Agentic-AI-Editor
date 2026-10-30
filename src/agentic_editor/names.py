@@ -7,8 +7,11 @@ Other words in braces are the preset's own, filled per reel: {year} from a "(198
 video's name, and any of them, {day} say, from a line "day: 103" in the job's notes."""
 
 import re
+from collections.abc import Callable
 
 from agentic_editor.presets import Preset
+
+Song = tuple[str, str]
 
 # Most specific first: a spaced hyphen beats a bare one, so Jay-Z or a hyphenated title
 # isn't split in the middle.
@@ -44,11 +47,25 @@ def strip_numbers(name: str) -> str:
     return cleaned or name
 
 
-def song_and_artist(title: str, given: dict[str, str] | None = None) -> tuple[str, str]:
+def song_and_artist(
+    title: str, given: dict[str, str] | None = None, hear: Callable[[], Song | None] | None = None
+) -> tuple[str, str]:
+    """From the notes (`given`), else the name, else `hear` (the sound, see shazam.py)."""
     given = given or {}
     if "song" in given and "artist" in given:
         return given["song"], given["artist"]
-    song, artist = _from_name(title)
+    try:
+        song, artist = _from_name(title)
+    except UnnamedSong:
+        if hear is None:
+            raise
+        if not (heard := hear()):
+            raise UnnamedSong(
+                f"'{title}' doesn't say the song and artist and its sound wasn't recognised; "
+                "add lines 'song: ...' and 'artist: ...' to the notes"
+            ) from None
+        # Shazam names live and remastered takes: "(Live at Live Aid, ... 1985)".
+        song, artist = (strip_numbers(name) for name in heard)
     return given.get("song", song), given.get("artist", artist)
 
 
@@ -88,15 +105,17 @@ def _key(name: str) -> str:
 
 def from_notes(notes: str | None, wanted: set[str]) -> tuple[dict[str, str], str | None]:
     """Values the notes give for `wanted` fields, one "name: value" line each, and the notes
-    without those lines, so the instruction reader doesn't take them for an instruction."""
+    without those lines, so the instruction reader doesn't take them for an instruction.
+    The last line for a field wins: a regenerated job's notes are the earlier ones plus
+    the new."""
     if not notes or not wanted:
         return {}, notes
     given = {}
     for name in sorted(wanted):
         line = re.compile(rf"^\s*{_key(name)}\s*:\s*(.+?)\s*$", re.I | re.M)
-        if match := line.search(notes):
-            given[name] = match.group(1)
-            notes = notes[: match.start()] + notes[match.end() :]
+        if found := list(line.finditer(notes)):
+            given[name] = found[-1].group(1)
+            notes = line.sub("", notes)
     return given, notes.strip() or None
 
 
@@ -105,7 +124,12 @@ def year_of(title: str) -> str | None:
     return match.group(1) if match else None
 
 
-def fill(preset: Preset, title: str, given: dict[str, str] | None = None) -> Preset:
+def fill(
+    preset: Preset,
+    title: str,
+    given: dict[str, str] | None = None,
+    hear: Callable[[], Song | None] | None = None,
+) -> Preset:
     """The preset with {song} and {artist} in its text replaced from `given` (the notes) or
     the video's name, and its own fields from `given` or, for {year}, the name."""
     own = fields(preset)
@@ -115,7 +139,7 @@ def fill(preset: Preset, title: str, given: dict[str, str] | None = None) -> Pre
     if "year" in own and "year" not in values and (year := year_of(title)):
         values["year"] = year
     if names_song(preset):
-        values["song"], values["artist"] = song_and_artist(title, values)
+        values["song"], values["artist"] = song_and_artist(title, values, hear)
     if missing := sorted(own - values.keys()):
         hint = (
             " or put the year in the video's name, 'Song (1980) - Artist'"

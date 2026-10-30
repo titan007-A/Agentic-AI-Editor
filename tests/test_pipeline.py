@@ -385,3 +385,29 @@ def test_a_failed_vision_answer_is_asked_again_next_time(monkeypatch, tmp_path, 
     assert list(json.loads((tmp_path / "subjects-m_4b.json").read_text())) == ["2.000"]
     pipeline.subject_samples(vision, tmp_path / "v.mp4", [1.0, 2.0], analysis, settings, tmp_path)
     assert asked == [[1.0, 2.0], [1.0]]
+
+
+def test_auto_name_hears_the_song_once_for_every_preset(make_analysis, monkeypatch, tmp_path):
+    def named(name, auto_name):
+        block = {"text": "{song} - {artist}", "size": 40, "anchor": "top", "offset": 100}
+        return Preset(
+            name=name,
+            label=name,
+            min_duration=4,
+            max_duration=8,
+            captions={"enabled": False},
+            text_blocks=[block],
+            auto_name=auto_name,
+        )
+
+    heard = []
+    monkeypatch.setattr(
+        pipeline.shazam,
+        "song",
+        lambda video, work: heard.append(video) or ("Piano Man", "Billy Joel"),
+    )
+    presets = [named("a", True), named("b", True), named("c", False)]
+    result = edit_offline(monkeypatch, tmp_path, make_analysis, presets)
+    assert [o.song for o in result.outputs] == [("Piano Man", "Billy Joel")] * 2
+    assert len(heard) == 1
+    assert result.failures[0].startswith("c: UnnamedSong: 'Talk' doesn't say the song")
