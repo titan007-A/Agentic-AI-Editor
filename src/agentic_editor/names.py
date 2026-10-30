@@ -28,6 +28,13 @@ NUMBERED_BRACKETS = re.compile(r"\s*[(\[{][^)\]}]*\d[^)\]}]*[)\]}]")
 # A track number: "01. ", "3) " or a zero-padded "07 ". A bare "50 Cent" is a name.
 TRACK_NUMBER = re.compile(r"^(?:\d{1,3}\s*[.)]\s+|0\d{1,2}[\s.)_-]+)")
 EDGE_PUNCTUATION = " \t-_,;:|/\\"
+# A recording's note after the name, as Shazam gives it: "(Live)", "[2011 Remaster]",
+# "- Remastered 2009". "(feat. Adam Levine)" stays.
+TAKE = re.compile(
+    r"\s*(?:[(\[][^)\]]*\b(?:live|remaster(?:ed)?|version|edit|mono|stereo)\b[^)\]]*[)\]]"
+    r"|-\s*(?:live|remaster(?:ed)?)\b.*$)",
+    re.I,
+)
 NOTES_HINT = " or add lines 'song: ...' and 'artist: ...' to the notes"
 
 
@@ -64,8 +71,8 @@ def song_and_artist(
                 f"'{title}' doesn't say the song and artist and its sound wasn't recognised; "
                 "add lines 'song: ...' and 'artist: ...' to the notes"
             ) from None
-        # Shazam names live and remastered takes: "(Live at Live Aid, ... 1985)".
-        song, artist = (strip_numbers(name) for name in heard)
+        # Shazam names live and remastered takes: "(Live)", "(Live at Live Aid, ... 1985)".
+        song, artist = (strip_numbers(TAKE.sub("", name)) or name for name in heard)
     return given.get("song", song), given.get("artist", artist)
 
 

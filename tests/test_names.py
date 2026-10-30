@@ -121,6 +121,17 @@ def test_a_preset_with_auto_name_hears_the_song_when_nothing_names_it():
         "Freddie",
     )
     assert len(heard) == 2
+    for take in (
+        "Summer of '69 (Live)",
+        "Summer of '69 - Remastered 2008",
+        "Summer of '69 [Live Edit]",
+    ):
+        assert (
+            names.song_and_artist("x", {}, lambda take=take: (take, "Bryan Adams"))[0]
+            == "Summer of '69"
+        )
+    feat = names.song_and_artist("x", {}, lambda: ("Payphone (feat. Wiz Khalifa)", "Maroon 5"))
+    assert feat == ("Payphone (feat. Wiz Khalifa)", "Maroon 5")
     with pytest.raises(names.UnnamedSong, match="sound wasn't recognised; add lines 'song: "):
         names.fill(preset, "Video by illusive.paradox", {}, lambda: None)
 
