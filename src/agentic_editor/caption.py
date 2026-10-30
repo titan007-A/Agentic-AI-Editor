@@ -150,6 +150,26 @@ def identify(llm, title: str, description: str, headline: str) -> tuple[str, str
     return song, artist
 
 
+def performed_in(llm, title: str, description: str) -> tuple[str, str] | None:
+    """The song sung in the video and who sings it there, as its post's caption says (a
+    live cover is the person singing, not the song's own artist); None when it doesn't."""
+    prompt = (
+        "Which song is sung in this short video, and who sings it in the video? Answer from "
+        "the video's own text only. For a cover or a talent-show performance the singer is "
+        "the person performing it in the video, not the song's original artist. Leave both "
+        "empty if the text doesn't name the song and who sings it.\n\n"
+        f"Title: {title}\nDescription: {description[:1500]}"
+    )
+    reply = parse(
+        _Song,
+        llm.chat_json(
+            [{"role": "user", "content": prompt}], _Song.model_json_schema(), temperature=0.0
+        ),
+    )
+    song, singer = reply.song.strip(" \"'“”‘’"), reply.artist.strip()
+    return (song, singer) if song and singer else None
+
+
 def _wiki(http: httpx.Client, language: str, **params) -> dict:
     response = http.get(
         f"https://{language}.wikipedia.org/w/api.php",

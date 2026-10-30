@@ -121,7 +121,9 @@ def test_a_preset_with_auto_name_hears_the_song_when_nothing_names_it():
         "Freddie",
     )
     assert len(heard) == 2
-    with pytest.raises(names.UnnamedSong, match="sound wasn't recognised; add lines 'song: "):
+    with pytest.raises(
+        names.UnnamedSong, match="nor its post's caption told them; add lines 'song: "
+    ):
         names.fill(preset, "Video by illusive.paradox", {}, lambda: None)
 
 
@@ -164,3 +166,23 @@ def test_top_and_bottom_text_lines_replace_the_presets_own_for_one_job():
     added = names.with_texts(bare, {"bottom": "Seguici"}).text_blocks
     assert [(b.anchor, b.text) for b in added] == [("bottom", "Seguici")]
     assert names.with_texts(preset, {}) is preset
+
+
+def test_the_singer_in_the_video_is_read_from_the_post_s_caption():
+    from agentic_editor import caption
+
+    class Reader:
+        def __init__(self, song, artist):
+            self.answer = {"song": song, "artist": artist}
+            self.asked = ""
+
+        def chat_json(self, messages, schema, **kwargs):
+            self.asked = messages[-1]["content"]
+            return self.answer
+
+    llm = Reader("‘Signed, Sealed, Delivered I'm Yours’", "Fantasia Barrino")
+    found = caption.performed_in(llm, "Video by iconiclivemusic", "Fantasia on American Idol")
+    assert found == ("Signed, Sealed, Delivered I'm Yours", "Fantasia Barrino")
+    assert "not the song's original artist" in llm.asked
+    assert caption.performed_in(Reader("", ""), "Video by x", "a dance") is None
+    assert caption.performed_in(Reader("Hello", ""), "Video by x", "Hello") is None

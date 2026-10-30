@@ -65,8 +65,8 @@ def song_and_artist(
             raise
         if not (heard := hear()):
             raise UnnamedSong(
-                f"'{title}' doesn't say the song and artist and its sound wasn't recognised; "
-                "add lines 'song: ...' and 'artist: ...' to the notes"
+                f"'{title}' doesn't say the song and artist, and neither its sound nor its "
+                "post's caption told them; add lines 'song: ...' and 'artist: ...' to the notes"
             ) from None
         song, artist = heard
     return given.get("song", song), given.get("artist", artist)
