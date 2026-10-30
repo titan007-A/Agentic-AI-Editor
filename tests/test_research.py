@@ -67,7 +67,11 @@ PDF_ENTRIES = [
 
 def pdf(lines: list[str]) -> bytes:
     """A one-page PDF with these lines of text, as a word processor's export has them."""
-    text = " ".join(f"({line}) Tj 0 -16 Td" for line in lines)
+
+    def escaped(line: str) -> str:
+        return line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    text = " ".join(f"({escaped(line)}) Tj 0 -16 Td" for line in lines)
     content = f"BT /F1 12 Tf 72 720 Td {text} ET"
     objects = [
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -82,8 +86,9 @@ def pdf(lines: list[str]) -> bytes:
         offsets.append(len(out))
         out += f"{n} 0 obj\n{body}\nendobj\n"
     table = "".join(f"{offset:010d} 00000 n \n" for offset in offsets)
+    xref = len(out)
     out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n{table}"
-    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{len(out)}\n%%EOF"
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
     return out.encode("latin-1")
 
 
