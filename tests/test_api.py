@@ -1264,3 +1264,66 @@ def test_an_employee_sees_only_their_own_researches(env, monkeypatch):
     # The admin sees both, with whose each is.
     listed = {r["id"]: r["owner"] for r in env.client.get("/api/research").json()}
     assert listed[theirs["id"]] == "riya"
+
+
+def per_job_outputs(env):
+    """Videos written as the pipeline writes them: media/outputs/<video>/<job id>/."""
+
+    def run(source, presets, settings, backends, notes, progress, run_id=None):
+        folder = settings.media_dir / "outputs" / "abc0123456789abcdef0" / run_id
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{presets[0].name}.mp4"
+        path.write_bytes(b"fake video")
+        edl = EDL(clips=[Clip(start=1, end=21)], title="A title")
+        return pipeline.Result("Sample song", [pipeline.Output(presets[0].name, path, edl, "m")])
+
+    env.run = run
+
+
+def test_deleting_a_job_deletes_its_videos(env):
+    per_job_outputs(env)
+    (job,) = start(env.client)
+    folder = env.settings.media_dir / "outputs" / "abc0123456789abcdef0" / job["id"]
+    assert (folder / "square-1x1.mp4").exists()
+    assert env.client.delete(f"/api/jobs/{job['id']}").status_code == 200
+    assert not folder.exists()
+
+
+def test_deleting_a_failed_job_deletes_what_it_left(env):
+    def broken(source, presets, settings, backends, notes, progress, run_id=None):
+        folder = settings.media_dir / "outputs" / "abc0123456789abcdef0" / run_id
+        folder.mkdir(parents=True)
+        (folder / "half.mp4").write_bytes(b"half a video")
+        raise RuntimeError("the encoder crashed")
+
+    env.run = broken
+    (job,) = start(env.client)
+    assert env.client.get(f"/api/jobs/{job['id']}").json()["status"] == "failed"
+    folder = env.settings.media_dir / "outputs" / "abc0123456789abcdef0" / job["id"]
+    assert folder.exists()
+    assert env.client.delete(f"/api/jobs/{job['id']}").status_code == 200
+    assert not folder.exists()
+
+
+def test_clear_all_deletes_the_finished_jobs_one_sees(env):
+    per_job_outputs(env)
+    _, riya = employee(env)
+    mine = start(env.client, sources=("https://x.test/a", "https://x.test/b"))
+    start(riya)
+    cleared = riya.post("/api/jobs/clear").json()
+    assert cleared["deleted"] == 1  # only her own
+    assert {j["id"] for j in env.client.get("/api/jobs").json()} == {j["id"] for j in mine}
+    assert env.client.post("/api/jobs/clear").json()["deleted"] == 2  # the admin's: everyone's
+    assert env.client.get("/api/jobs").json() == []
+    outputs = env.settings.media_dir / "outputs"
+    assert not outputs.exists() or not any(outputs.iterdir())
+
+
+def test_only_the_admin_sets_how_long_videos_are_kept(env):
+    _, riya = employee(env)
+    assert env.client.get("/api/system/storage").json() == {"keep_days": 4}
+    assert env.client.put("/api/system/storage", json={"keep_days": 7}).json() == {"keep_days": 7}
+    assert env.client.get("/api/system/storage").json() == {"keep_days": 7}
+    assert env.client.put("/api/system/storage", json={"keep_days": -1}).status_code == 422
+    assert riya.put("/api/system/storage", json={"keep_days": 0}).status_code == 403
+    assert riya.get("/api/system/storage").status_code == 403
