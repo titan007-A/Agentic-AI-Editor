@@ -28,6 +28,24 @@ function ago(when: string): string {
 /** A YouTube Short rather than an Instagram reel (see research.YOUTUBE). */
 export const isShort = (item: ResearchItem) => item.code.startsWith("yt:");
 
+/** "HD" or "SD" by the picture's short side (see research.Reel.quality); "" when not known. */
+export function quality(item: ResearchItem): string {
+  if (!item.width || !item.height) return "";
+  return Math.min(item.width, item.height) >= 720 ? "HD" : "SD";
+}
+
+/** Seconds as 0:30. */
+const clock = (seconds: number) =>
+  `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}`;
+
+/** The shortest reel its suggested preset makes, when the source is shorter than that. */
+function tooShort(item: ResearchItem, presets: Preset[]): number | null {
+  const shortest = presets.find((p) => p.name === item.preset)?.min_duration;
+  return item.duration !== null && typeof shortest === "number" && item.duration < shortest
+    ? shortest
+    : null;
+}
+
 /** The model's words ended with one full stop, whether they came with one or not. */
 const ended = (text: string) => text.replace(/[.\s]+$/, "") + ".";
 
@@ -50,6 +68,20 @@ export function reasons(item: ResearchItem, research: Research, presets: Preset[
     );
   }
   if (item.song) lines.push(ended(`The song: ${item.song}`));
+  const grade = quality(item);
+  lines.push(
+    grade
+      ? `Picture: ${item.width}×${item.height}${
+          item.bitrate ? ` at ${(item.bitrate / 1000).toFixed(1)} Mbit/s` : ""
+        } (${grade}${grade === "SD" ? ", so it ranks a little lower" : ""}).`
+      : "The site didn't say how sharp its picture is.",
+  );
+  const shortest = tooShort(item, presets);
+  if (shortest !== null && item.duration !== null) {
+    lines.push(
+      `It is ${clock(item.duration)} long, shorter than the ${shortest} s its preset makes at least.`,
+    );
+  }
   lines.push(
     item.preset
       ? ended(`Suits your preset “${label}”${item.preset_why ? `: ${item.preset_why}` : ""}`)
@@ -183,6 +215,17 @@ export function ReelCard({
             Fit {item.relevance === null ? "?" : percent(item.relevance)}
           </Badge>
           {isShort(item) && <Badge variant="outline">YouTube Short</Badge>}
+          {quality(item) && (
+            <Badge variant={quality(item) === "HD" ? "outline" : "secondary"}>
+              {Math.min(item.width ?? 0, item.height ?? 0)}p {quality(item)}
+            </Badge>
+          )}
+          {item.duration !== null && (
+            <Badge variant={tooShort(item, presets) === null ? "outline" : "destructive"}>
+              {clock(item.duration)}
+              {tooShort(item, presets) !== null && ` (preset needs ${tooShort(item, presets)} s)`}
+            </Badge>
+          )}
           <Badge variant="secondary">Viral {percent(item.virality)}</Badge>
           {item.posted_at && <Badge variant="outline">{ago(item.posted_at)}</Badge>}
           {item.preset && (

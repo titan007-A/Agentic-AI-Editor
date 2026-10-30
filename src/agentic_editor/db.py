@@ -327,6 +327,11 @@ class ResearchItem(Base):
     likes: Mapped[int | None]
     comments: Mapped[int | None]
     views: Mapped[int | None]  # a YouTube Short's; Instagram doesn't show them
+    # The best version the site offers: its picture, kbit/s and (YouTube's) seconds.
+    width: Mapped[int | None]
+    height: Mapped[int | None]
+    bitrate: Mapped[float | None]
+    duration: Mapped[float | None]
     posted_at: Mapped[datetime | None]
     thumbnail: Mapped[str] = mapped_column(Text, default="")
     # 0-1 each: how well it fits (None when the model couldn't rate it), how far it spread

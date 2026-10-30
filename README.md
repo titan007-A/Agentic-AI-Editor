@@ -279,6 +279,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
   (both by default). Shorts are found the same way ("site:youtube.com/shorts ...") and
   rated and ranked with the reels; a link to a full video, or one YouTube says is longer
   than 3 minutes, is left out. A Short's card shows its views and a "YouTube Short" badge.
+- **Quality check.** Each reel's best version is read when it is looked up (no download):
+  under 480p on its short side it is left out ("low quality"), SD (480-719p) ranks a
+  little lower than HD, and its card shows the resolution. A Short's card also shows its
+  length, in red when it is shorter than its preset's shortest reel.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.

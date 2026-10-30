@@ -51,6 +51,10 @@ YOUTUBE = "yt:"  # a Short's code is this and its video id: Instagram codes have
 SITES = {"instagram": "site:instagram.com/reel", "shorts": "site:youtube.com/shorts"}
 SITE = SITES["instagram"]
 MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
+# Picture quality, by the short side of the best version the site offers: below SD is left
+# out (it looks soft once edited at 1080 wide), SD ranks a little lower than HD.
+SD, HD = 480, 720
+QUALITY = {"HD": 1.0, "SD": 0.85, "": 0.95}  # "" when the site didn't say
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
 MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
@@ -91,6 +95,10 @@ class Reel:
     looked_up: bool = False
     views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
     long: bool = False  # a YouTube video, not a Short: left out
+    width: int | None = None  # of the best version the site offers
+    height: int | None = None
+    bitrate: float | None = None  # kbit/s of that version
+    duration: float | None = None  # seconds; YouTube gives it, Instagram doesn't
     relevance: float | None = None  # 0-1, None when the model couldn't rate it
     why: str = ""
     song: str = ""  # "Song - Artist" when the model could tell
@@ -107,6 +115,14 @@ class Reel:
     def short(self) -> bool:
         return self.code.startswith(YOUTUBE)
 
+    @property
+    def quality(self) -> str:
+        """ "HD", "SD" or "low" by its picture's short side; "" when not known."""
+        if not (self.width and self.height):
+            return ""
+        side = min(self.width, self.height)
+        return "HD" if side >= HD else "SD" if side >= SD else "low"
+
 
 @dataclass
 class Result:
@@ -119,7 +135,7 @@ class Result:
     repeats: int = 0  # shown by an earlier research, so left out
     considered: int = 0  # reels looked up and rated
     # Reels found but not given, by why: "edited", "shown before", "the account's own",
-    # "didn't fit", "hidden account", "not a Short", "same account".
+    # "didn't fit", "hidden account", "not a Short", "low quality", "same account".
     left_out: dict[str, int] = field(default_factory=dict)
     cutoff: float | None = None  # the best score of the reels that fit but weren't given
 
@@ -591,6 +607,15 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
         if stamp := meta.get("timestamp"):
             reel.posted = datetime.fromtimestamp(stamp, UTC)
         reel.thumbnail = meta.get("thumbnail") or ""
+        best = max(
+            (f for f in meta.get("formats") or [] if f.get("height") and f.get("width")),
+            key=lambda f: (f["height"] * f["width"], f.get("tbr") or 0),
+            default=meta,
+        )
+        reel.width, reel.height = _count(best.get("width")), _count(best.get("height"))
+        reel.bitrate = best.get("tbr") if isinstance(best.get("tbr"), int | float) else None
+        if isinstance(meta.get("duration"), int | float):
+            reel.duration = float(meta["duration"])
         reel.looked_up = True
 
     with ThreadPoolExecutor(workers) as pool:
@@ -684,7 +709,8 @@ def spread(reels: list[Reel], now: datetime | None = None) -> None:
 def rank(reels: list[Reel]) -> list[Reel]:
     for r in reels:
         relevance = 0.5 if r.relevance is None else r.relevance
-        r.score = round(relevance * (1 - VIRAL_SHARE + VIRAL_SHARE * r.virality), 3)
+        viral = 1 - VIRAL_SHARE + VIRAL_SHARE * r.virality
+        r.score = round(relevance * viral * QUALITY.get(r.quality, 1.0), 3)
     return sorted(reels, key=lambda r: r.score, reverse=True)
 
 
@@ -817,6 +843,8 @@ def run(
     reels = [r for r in reels if r.handle not in context.hidden]
     left_out["not a Short"] = sum(r.long for r in reels)
     reels = [r for r in reels if not r.long]
+    left_out["low quality"] = sum(r.quality == "low" for r in reels)
+    reels = [r for r in reels if r.quality != "low"]
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:
