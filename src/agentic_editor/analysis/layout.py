@@ -19,6 +19,14 @@ INK = 48  # per channel: how far a pixel may be from the text colour and still b
 FULL_HEIGHT = 0.9  # a picture band taller than this fills the frame
 BLURRED = 0.5  # detail around the picture, against inside it, below which it is a blur
 EDGE = 4.0  # how much stronger than a typical row step a picture's edge is
+# A picture that is partly a still image, a photo above a clip: rows where more than MOVES
+# of the pixels change over the reel are the clip, rows where less than STILL_ROW do are
+# the photo. It counts when the photo has STILL_PART of the picture's rows and the clip
+# MOVING_PART; a normal video moves nearly everywhere, a strip of changing lyrics is thin.
+MOVES = 0.5
+STILL_ROW = 0.1
+STILL_PART = 0.2
+MOVING_PART = 0.25
 
 Box = tuple[float, float, float, float]  # x0, y0, x1, y1 as shares of the frame
 Line = tuple[int, int, int, int]  # top, bottom, left, right in pixels
@@ -285,3 +293,34 @@ def lines(mask: np.ndarray) -> list[Line]:
         cols = np.nonzero(mask[top:bottom].any(axis=0))[0]
         found.append((top, bottom, int(cols[0]), int(cols[-1]) + 1))
     return found
+
+
+def plainer_side(frames: np.ndarray, rows: tuple[int, int], top: int, bottom: int) -> str:
+    """Which of the still rows next to the moving `rows`, "above" or "below", hold less
+    detail: a window taller than the moving part shows a dark strip there rather than the
+    edge of a photo's caption."""
+    reach = max(1, (bottom - top) // 10)
+    grey = np.median(frames.astype(np.float32).mean(axis=3), axis=0)
+    detail = np.abs(np.diff(grey, axis=1)).mean(axis=1)
+    above = detail[max(top, rows[0] - reach) : rows[0]]
+    below = detail[rows[1] : min(bottom, rows[1] + reach)]
+    if not len(above) or not len(below):
+        return "above" if len(above) else "below"
+    return "above" if above.mean() < below.mean() else "below"
+
+
+def moving_rows(frames: np.ndarray, top: int, bottom: int) -> tuple[int, int] | None:
+    """The rows between `top` and `bottom` where a picture that is partly a still image
+    moves, as rows of the frames; None when it all moves, as a normal video does, or
+    nothing does."""
+    height = bottom - top
+    if len(frames) < 2 or height <= 0:
+        return None
+    still = frames[:, top:bottom].astype(np.float32).mean(axis=3).std(axis=0) <= STILL
+    share = (~still).mean(axis=1)
+    run = _longest_run(share > MOVES, gap=max(1, height // 50))
+    if run is None or run[1] - run[0] < MOVING_PART * height:
+        return None
+    if (share < STILL_ROW).mean() < STILL_PART:
+        return None
+    return top + run[0], top + run[1]
