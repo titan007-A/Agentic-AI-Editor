@@ -142,6 +142,32 @@ export type Feedback = {
 
 export type HiddenAccount = { handle: string; created_at: string };
 
+/** How an account's own reels found were doing when it was last learned, and before. */
+export type Performance = {
+  taken_at: string | null;
+  previous_at: string | null;
+  reels: {
+    code: string;
+    url: string;
+    caption: string;
+    likes: number | null;
+    comments: number | null;
+    posted_at: string | null;
+    per_day: number | null;
+    /** Likes since the snapshot before; null when it wasn't in that one. */
+    gained: number | null;
+  }[];
+  average: number | null;
+  previous_average: number | null;
+};
+
+/** What the person's recent researches found spreading: reels posted lately, fastest
+ * first, and songs several accounts posted reels of. */
+export type Trends = {
+  reels: ResearchItem[];
+  songs: { song: string; reels: number; accounts: number; per_day: number }[];
+};
+
 /** Where a research searches: Instagram reels, YouTube Shorts. */
 export type Site = "instagram" | "shorts";
 
@@ -168,6 +194,8 @@ export type Research = {
   handle: string;
   /** Where it searched. */
   sites: Site[];
+  /** Started by its account's morning research. */
+  daily: boolean;
   /** The research whose chat asked for this one. */
   parent_id: string | null;
   /** "asking": thinking of questions (none yet), then waiting for the answers. */
@@ -209,6 +237,12 @@ export type InstagramAccount = {
   learn_status: "idle" | "queued" | "running" | "done" | "failed";
   learn_message: string;
   learn_error: string | null;
+  /** Pages it takes reels from: "instagram:name", "youtube:@name". */
+  sources: string[];
+  /** A research for it every morning at this hour (server time); null when off. */
+  daily_hour: number | null;
+  /** The day the last one started. */
+  daily_on: string | null;
   created_at: string;
 };
 
@@ -375,6 +409,7 @@ export const api = {
   giveFeedback: (itemId: number, feedback: Feedback) =>
     request<Research>("POST", `/research/items/${itemId}/feedback`, feedback),
   hiddenAccounts: () => request<HiddenAccount[]>("GET", "/research/hidden"),
+  researchTrends: () => request<Trends>("GET", "/research/trends"),
   unhideAccount: (handle: string) =>
     request("DELETE", `/research/hidden/${encodeURIComponent(handle)}`),
   instagramAccounts: () => request<InstagramAccount[]>("GET", "/research/accounts"),
@@ -382,6 +417,12 @@ export const api = {
     request<InstagramAccount>("POST", "/research/accounts", { handle, presets }),
   updateInstagramAccount: (id: string, presets: string[]) =>
     request<InstagramAccount>("PUT", `/research/accounts/${id}`, { presets }),
+  pagePerformance: (id: string) =>
+    request<Performance>("GET", `/research/accounts/${id}/performance`),
+  setSourcePages: (id: string, sources: string[]) =>
+    request<InstagramAccount>("PUT", `/research/accounts/${id}/sources`, { sources }),
+  setDailyResearch: (id: string, hour: number | null) =>
+    request<InstagramAccount>("PUT", `/research/accounts/${id}/daily`, { hour }),
   learnInstagramAccount: (id: string) =>
     request<InstagramAccount>("POST", `/research/accounts/${id}/learn`),
   removeInstagramAccount: (id: string) => request("DELETE", `/research/accounts/${id}`),

@@ -1108,6 +1108,113 @@ def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypa
         assert env.client.post("/api/research", json=body).status_code == 422
 
 
+def test_an_account_can_be_researched_for_every_morning(env, monkeypatch):
+    from datetime import datetime
+
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    assert account["daily_hour"] is None
+    url = f"/api/research/accounts/{account['id']}/daily"
+    assert env.client.put(url, json={"hour": 24}).status_code == 422
+    assert env.client.put(url, json={"hour": 7}).json()["daily_hour"] == 7
+
+    def morning(day, hour):
+        return jobs.start_daily(env.sessions, datetime(2026, 10, day, hour, 30))
+
+    assert morning(30, 6) == []  # not yet
+    (first,) = morning(30, 9)  # the server was off at 7: it starts once it is back
+    assert morning(30, 10) == []  # once a day
+    found = env.client.get(f"/api/research/{first}").json()
+    assert found["daily"] and found["status"] == "done" and found["handle"] == "voiceshq"
+    assert found["sites"] == ["instagram", "shorts"]
+    assert len(morning(31, 7)) == 1  # the next morning
+    assert env.client.get("/api/research/accounts").json()[0]["daily_on"] == "2026-10-31"
+
+    assert env.client.put(url, json={"hour": None}).json()["daily_hour"] is None
+    assert jobs.start_daily(env.sessions, datetime(2026, 11, 1, 12)) == []  # off
+    _, riya = employee(env)
+    assert riya.put(url, json={"hour": 7}).status_code == 404
+
+
+def test_an_account_takes_reels_from_its_source_pages(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    assert account["sources"] == []
+    url = f"/api/research/accounts/{account['id']}/sources"
+    given = [
+        "@BestVocals",
+        "https://www.youtube.com/@ChiaraTomao/shorts",
+        "https://www.instagram.com/bestvocals/",  # the same page again
+    ]
+    saved = env.client.put(url, json={"sources": given}).json()
+    assert saved["sources"] == ["instagram:bestvocals", "youtube:@ChiaraTomao"]
+    bad = env.client.put(url, json={"sources": ["https://www.youtube.com/watch?v=x"]})
+    assert bad.status_code == 422 and "watch?v=x" in bad.json()["detail"]
+    assert env.client.put(url, json={"sources": ["@a"] * 11}).status_code == 422
+    with env.sessions() as db:
+        found = Research(description="", owner_id=None, account_id=account["id"])
+        db.add(found)
+        db.commit()
+        context = jobs.research_context(
+            found.id, env.sessions, env.settings, None, None, None, None
+        )
+    assert context.sources == ["instagram:bestvocals", "youtube:@ChiaraTomao"]
+
+
+def test_the_trend_radar_reads_the_persons_recent_researches(env, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    fake_research(monkeypatch, env)
+    assert env.client.get("/api/research/trends").json() == {"reels": [], "songs": []}
+    started = env.client.post(
+        "/api/research", json={"description": "Bryan Adams live", "skip_questions": True}
+    ).json()
+    with env.sessions() as db:
+        found = db.get(Research, started["id"])
+        for n, item in enumerate(found.items):
+            item.posted_at = datetime.now(UTC) - timedelta(days=n + 1)
+            item.per_day = 100.0 * (n + 1)
+            item.song = "Heaven - Bryan Adams"
+        db.commit()
+    trends = env.client.get("/api/research/trends").json()
+    assert [r["code"] for r in trends["reels"]] == ["ADAMS2", "ADAMS1", "OWN001"]
+    assert trends["songs"] == [
+        {"song": "Heaven - Bryan Adams", "reels": 3, "accounts": 3, "per_day": 600.0}
+    ]
+    _, riya = employee(env)
+    assert riya.get("/api/research/trends").json() == {"reels": [], "songs": []}  # not hers
+
+
+def test_an_accounts_page_performance_is_followed_from_learn_to_learn(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    url = f"/api/research/accounts/{account['id']}/performance"
+    first = env.client.get(url).json()
+    assert first["reels"][0]["code"] == "OWN001" and first["reels"][0]["likes"] == 5_000
+    assert first["average"] == 5_000 and first["previous_at"] is None
+    assert first["reels"][0]["gained"] is None
+
+    monkeypatch.setitem(REELS, "OWN001", ("voiceshq", "Bryan Adams vocals only", 5_600))
+    env.client.post(f"/api/research/accounts/{account['id']}/learn")
+    later = env.client.get(url).json()
+    reel = later["reels"][0]
+    assert (reel["likes"], reel["gained"]) == (5_600, 600)
+    assert reel["url"] == "https://www.instagram.com/reel/OWN001/"
+    assert (later["average"], later["previous_average"]) == (5_600, 5_000)
+
+    monkeypatch.setattr(jobs, "SNAPSHOTS", 2)
+    env.client.post(f"/api/research/accounts/{account['id']}/learn")
+    with env.sessions() as db:
+        from agentic_editor.db import AccountSnapshot
+
+        assert db.query(AccountSnapshot).count() == 2  # the oldest went
+    _, riya = employee(env)
+    assert riya.get(url).status_code == 404
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(

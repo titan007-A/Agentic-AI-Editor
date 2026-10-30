@@ -279,6 +279,23 @@ Hinglish too), ranked by how well they fit and how viral they are:
   (both by default). Shorts are found the same way ("site:youtube.com/shorts ...") and
   rated and ranked with the reels; a link to a full video, or one YouTube says is longer
   than 3 minutes, is left out. A Short's card shows its views and a "YouTube Short" badge.
+- **Source pages.** Each of your accounts can list pages to take reels from (an Instagram
+  @name or a YouTube channel link, up to 10). Every research for the account looks at
+  their latest too (5 each): a YouTube channel's Shorts tab lists them; an Instagram page
+  can't be listed without signing in, so it is searched for by name and only its own
+  reels are kept. They are rated and ranked with the rest, never shown twice.
+- **Trend radar.** From the reels your researches of the last two weeks found (morning
+  ones included): the songs several accounts posted reels of lately, and the reels
+  posted then that gain likes and comments fastest. No searching of its own: it fills up
+  as researches run.
+- **Page performance.** Each time one of your accounts is learned, a snapshot of its own
+  reels found (likes, comments, when posted) is kept, the latest 30. "Page performance"
+  on the account shows the likes a reel against the snapshot before, and each reel's
+  likes, growth and likes a day. Search engines find only part of a page: a sample.
+- **Every morning.** "Research every morning" on an Instagram account starts a research
+  for it (Instagram and YouTube Shorts) each day at that hour, server time; one the
+  server was off for starts when it is back, the same day. It shows in the list as
+  "Daily", with reels new since the day before, as for any research.
 - **Quality check.** Each reel's best version is read when it is looked up (no download):
   under 480p on its short side it is left out ("low quality"), SD (480-719p) ranks a
   little lower than HD, and its card shows the resolution. A Short's card also shows its

@@ -11,7 +11,7 @@ import signal
 import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -29,6 +29,7 @@ from agentic_editor import accounts, autopilot, jobs, research
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
+    AccountSnapshot,
     Event,
     Feed,
     FeedItem,
@@ -156,6 +157,16 @@ class ResearchAccountUpdate(BaseModel):
     presets: list[str] = Field(min_length=1, max_length=50)
 
 
+class SourcesRequest(BaseModel):
+    # Instagram @names or profile links, YouTube channel links.
+    sources: list[str] = Field(max_length=research.MAX_SOURCES)
+
+
+class DailyRequest(BaseModel):
+    # The hour of the morning research, server time; None turns it off.
+    hour: int | None = Field(ge=0, le=23)
+
+
 class ResearchAccountView(BaseModel):
     id: str
     handle: str
@@ -167,6 +178,9 @@ class ResearchAccountView(BaseModel):
     learn_status: str
     learn_message: str
     learn_error: str | None
+    sources: list[str]  # pages it takes reels from: "instagram:name", "youtube:@name"
+    daily_hour: int | None  # a research every day at this hour; None when off
+    daily_on: date | None  # the day the last one started
     created_at: datetime
 
 
@@ -211,6 +225,40 @@ class FeedbackRequest(BaseModel):
     hide_account: bool = False
 
 
+class OwnReelView(BaseModel):
+    code: str
+    url: str
+    caption: str
+    likes: int | None
+    comments: int | None
+    posted_at: datetime | None
+    per_day: float | None  # likes and comments a day since it was posted
+    gained: int | None  # likes since the snapshot before; None when it wasn't in that one
+
+
+class PerformanceView(BaseModel):
+    # How the account's own reels found were doing when it was last learned, and before.
+    taken_at: datetime | None
+    previous_at: datetime | None
+    reels: list[OwnReelView]  # most liked first
+    average: float | None  # likes a reel
+    previous_average: float | None
+
+
+class SongTrendView(BaseModel):
+    song: str
+    reels: int
+    accounts: int
+    per_day: float
+
+
+class TrendsView(BaseModel):
+    # Reels posted in the last two weeks, spreading fastest first, and songs several
+    # accounts posted lately: from what the person's researches found.
+    reels: list[ResearchItemView]
+    songs: list[SongTrendView]
+
+
 class HiddenAccountView(BaseModel):
     handle: str
     created_at: datetime
@@ -222,6 +270,7 @@ class ResearchView(BaseModel):
     account_id: str | None
     handle: str
     sites: list[str]
+    daily: bool  # the account's morning research started it
     parent_id: str | None
     status: str
     message: str
@@ -428,6 +477,10 @@ def create_app(
                 await asyncio.to_thread(autopilot.check_all, make_session, jobs.process)
             except Exception:
                 log.exception("checking the feeds failed")
+            try:
+                await asyncio.to_thread(jobs.start_daily, make_session)
+            except Exception:
+                log.exception("starting the morning researches failed")
             await asyncio.sleep(SCAN_SECONDS)
 
     @asynccontextmanager
@@ -776,6 +829,27 @@ def create_app(
             raise HTTPException(404, "no such research")
         return found
 
+    def item_views(
+        items: list[ResearchItem], owner: str | None, account: Account, session: Session
+    ) -> list[ResearchItemView]:
+        """Reels researches gave, each marked when `owner` edited it since or hid its
+        account."""
+        used = jobs.reel_codes(session.scalars(select(Job.source).where(Job.owner_id == owner)))
+        hidden = set(
+            session.scalars(
+                select(HiddenAccount.handle).where(HiddenAccount.owner_id == (owner or account.id))
+            )
+        )
+        names = ResearchItemView.model_fields.keys() - {"used", "hidden"}
+        return [
+            ResearchItemView(
+                **{k: getattr(i, k) for k in names},
+                used=i.code in used,
+                hidden=bool(i.handle) and i.handle in hidden,
+            )
+            for i in items
+        ]
+
     def research_view(
         found: Research, account: Account, session: Session, items: bool = False
     ) -> ResearchView:
@@ -786,24 +860,7 @@ def create_app(
             owner=owners(session).get(found.owner_id) if account.role == accounts.ADMIN else None,
         )
         if items:
-            sources = session.scalars(select(Job.source).where(Job.owner_id == found.owner_id))
-            used = jobs.reel_codes(sources)
-            hidden = set(
-                session.scalars(
-                    select(HiddenAccount.handle).where(
-                        HiddenAccount.owner_id == (found.owner_id or account.id)
-                    )
-                )
-            )
-            names = ResearchItemView.model_fields.keys() - {"used", "hidden"}
-            view.items = [
-                ResearchItemView(
-                    **{k: getattr(i, k) for k in names},
-                    used=i.code in used,
-                    hidden=bool(i.handle) and i.handle in hidden,
-                )
-                for i in found.items
-            ]
+            view.items = item_views(found.items, found.owner_id, account, session)
             view.messages = [
                 ResearchMessageView(**{k: getattr(m, k) for k in ResearchMessageView.model_fields})
                 for m in found.messages
@@ -867,6 +924,82 @@ def create_app(
     ) -> ResearchAccountView:
         found = find_instagram(account_id, session, account)
         found.presets = checked_presets(body.presets, account)
+        session.commit()
+        return instagram_view(found)
+
+    @app.get("/api/research/accounts/{account_id}/performance")
+    def performance(account_id: str, account: User, session: DB) -> PerformanceView:
+        found = find_instagram(account_id, session, account)
+        snapshots = session.scalars(
+            select(AccountSnapshot)
+            .where(AccountSnapshot.account_id == found.id)
+            .order_by(AccountSnapshot.taken_at.desc(), AccountSnapshot.id.desc())
+            .limit(2)
+        ).all()
+        latest, previous = [*snapshots, None, None][:2]
+        if latest is None:
+            return PerformanceView(
+                taken_at=None, previous_at=None, reels=[], average=None, previous_average=None
+            )
+
+        def average(reels: list[dict]) -> float | None:
+            likes = [r["likes"] for r in reels if r.get("likes") is not None]
+            return round(sum(likes) / len(likes), 1) if likes else None
+
+        before = {r["code"]: r.get("likes") for r in previous.reels} if previous else {}
+        now = datetime.now(UTC)
+        reels = []
+        for r in latest.reels:
+            posted = datetime.fromisoformat(r["posted"]) if r.get("posted") else None
+            reactions = (r.get("likes") or 0) + 2 * (r.get("comments") or 0)
+            days = max(1.0, (now - posted).total_seconds() / 86400) if posted else None
+            old = before.get(r["code"])
+            reels.append(
+                OwnReelView(
+                    code=r["code"],
+                    url=research.reel_url(r["code"]),
+                    caption=r.get("caption") or "",
+                    likes=r.get("likes"),
+                    comments=r.get("comments"),
+                    posted_at=posted,
+                    per_day=round(reactions / days, 1) if days and reactions else None,
+                    gained=r["likes"] - old
+                    if old is not None and r.get("likes") is not None
+                    else None,
+                )
+            )
+        reels.sort(key=lambda r: r.likes or 0, reverse=True)
+        return PerformanceView(
+            taken_at=latest.taken_at,
+            previous_at=previous.taken_at if previous else None,
+            reels=reels,
+            average=average(latest.reels),
+            previous_average=average(previous.reels) if previous else None,
+        )
+
+    @app.put("/api/research/accounts/{account_id}/sources")
+    def set_sources(
+        account_id: str, body: SourcesRequest, account: User, session: DB
+    ) -> ResearchAccountView:
+        found = find_instagram(account_id, session, account)
+        stored = []
+        for given in body.sources:
+            source = research.source_of(given)
+            if source is None:
+                raise HTTPException(
+                    422, f"{given!r} isn't an Instagram @name or a YouTube channel link"
+                )
+            stored.append(source)
+        found.sources = list(dict.fromkeys(stored))
+        session.commit()
+        return instagram_view(found)
+
+    @app.put("/api/research/accounts/{account_id}/daily")
+    def set_daily(
+        account_id: str, body: DailyRequest, account: User, session: DB
+    ) -> ResearchAccountView:
+        found = find_instagram(account_id, session, account)
+        found.daily_hour = body.hour
         session.commit()
         return instagram_view(found)
 
@@ -990,6 +1123,21 @@ def create_app(
         session.delete(found)
         session.commit()
         return {"ok": True}
+
+    @app.get("/api/research/trends")
+    def research_trends(account: User, session: DB) -> TrendsView:
+        since = datetime.now(UTC) - timedelta(days=research.TREND_DAYS)
+        items = session.scalars(
+            select(ResearchItem)
+            .join(Research)
+            .where(Research.owner_id == account.id, Research.created_at >= since)
+            .order_by(Research.created_at.desc(), ResearchItem.rank)
+        ).all()
+        reels, songs = research.trends(items)
+        return TrendsView(
+            reels=item_views(reels, account.id, account, session),
+            songs=[SongTrendView(**vars(t)) for t in songs],
+        )
 
     @app.get("/api/research")
     def list_research(account: User, session: DB) -> list[ResearchView]:

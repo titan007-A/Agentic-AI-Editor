@@ -7,12 +7,13 @@ from functools import lru_cache
 from pathlib import Path
 
 from huey import SqliteHuey
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import accounts, caption, pipeline, research, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
+    AccountSnapshot,
     Event,
     HiddenAccount,
     Job,
@@ -40,6 +41,7 @@ STAGE_PROGRESS = {
 }
 RENDER_START = 0.55
 RELEARN_DAYS = 7  # a research learns its account again when it was learned longer ago
+SNAPSHOTS = 30  # an account's latest snapshots kept (see learn_account)
 TASTE = 12  # reels of each kind (liked, not wanted) a research is told of
 TASTE_LOOKED_AT = 300  # the latest reels of earlier researches looked through for them
 INTERRUPTED = "stopped when the server shut down; regenerate to run it again"
@@ -319,6 +321,17 @@ def learn_account(
         account = db.get(ResearchAccount, account_id)
         account.summary, account.own, account.best = learned.summary, learned.own, learned.best
         account.learned_at = datetime.now(UTC)
+        if learned.stats:
+            db.add(AccountSnapshot(account_id=account_id, reels=learned.stats))
+            db.flush()
+            older = db.scalars(
+                select(AccountSnapshot.id)
+                .where(AccountSnapshot.account_id == account_id)
+                .order_by(AccountSnapshot.taken_at.desc(), AccountSnapshot.id.desc())
+                .offset(SNAPSHOTS)
+            ).all()
+            if older:
+                db.execute(delete(AccountSnapshot).where(AccountSnapshot.id.in_(older)))
         db.commit()
 
 
@@ -392,8 +405,43 @@ def research_context(
         summary=account.summary,
         presets=research.describe_presets(chosen or available),
         own=set(account.own),
+        sources=list(account.sources or []),
         **learned,
     )
+
+
+def start_daily(Session: sessionmaker, now: datetime | None = None) -> list[str]:
+    """Start the morning research of each Instagram account whose hour has come and that
+    had none yet today (a server that was off at that hour starts it once it is back).
+    `now` is local time, which the hours are in. Returns the researches started."""
+    now = now or datetime.now()
+    started = []
+    with Session() as db:
+        due = db.scalars(
+            select(ResearchAccount).where(
+                ResearchAccount.daily_hour.is_not(None), ResearchAccount.daily_hour <= now.hour
+            )
+        )
+        for account in due:
+            if account.daily_on == now.date():
+                continue
+            found = Research(
+                description="",
+                owner_id=account.owner_id,
+                account_id=account.id,
+                handle=account.handle,
+                sites=list(research.SITES),
+                daily=True,
+            )
+            db.add(found)
+            db.flush()
+            account.daily_on = now.date()
+            started.append(found.id)
+        db.commit()
+    for research_id in started:
+        log.info("starting the morning research %s", research_id)
+        find_reels(research_id)
+    return started
 
 
 def run_questions(

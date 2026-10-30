@@ -10,6 +10,7 @@ import { HiddenAccounts } from "@/components/hidden-accounts";
 import { InstagramAccounts, learning } from "@/components/instagram-accounts";
 import { ReelCard } from "@/components/reel-card";
 import { ResearchChat } from "@/components/research-chat";
+import { TrendRadar } from "@/components/trend-radar";
 import { ResearchQuestions } from "@/components/research-questions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -249,6 +250,7 @@ function Researcher() {
       </div>
 
       <InstagramAccounts accounts={accounts} presets={presets} onChange={refreshAccounts} />
+      <TrendRadar version={list?.filter((r) => r.status === "done").length ?? 0} />
       <HiddenAccounts
         version={current?.items.filter((i) => i.hidden).length ?? 0}
         onUnhidden={load}
@@ -361,6 +363,7 @@ function Researcher() {
                 >
                   <span className="min-w-0 truncate">
                     {r.owner && <span className="text-muted-foreground">{r.owner}: </span>}
+                    {r.daily && <span className="text-muted-foreground">Daily: </span>}
                     {named(r)}
                   </span>
                   <Badge variant={r.status === "failed" ? "destructive" : "outline"}>

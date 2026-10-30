@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -221,12 +221,33 @@ class ResearchAccount(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     learned_at: Mapped[datetime | None]
     own: Mapped[list[str]] = mapped_column(JSON, default=list)  # its own reels' codes
+    # Pages the owner takes reels from, "instagram:name" or "youtube:@name": every research
+    # for the account looks at their latest too.
+    sources: Mapped[list[str]] = mapped_column(JSON, default=list)
     best: Mapped[list[dict]] = mapped_column(JSON, default=list)  # its best liked
     # Learning runs as a task of its own: idle, queued, running, done or failed.
     learn_status: Mapped[str] = mapped_column(String(16), default="idle")
     learn_message: Mapped[str] = mapped_column(Text, default="")
     learn_error: Mapped[str | None] = mapped_column(Text)
+    # A research for it every morning: the hour (server time) it starts at, None when off,
+    # and the day the last one started.
+    daily_hour: Mapped[int | None]
+    daily_on: Mapped[date | None]
     created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class AccountSnapshot(Base):
+    """How an Instagram account's own reels were doing when it was learned: each reel's
+    likes, comments and posting time, so the page's performance can be followed."""
+
+    __tablename__ = "account_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("research_accounts.id", ondelete="CASCADE"), index=True
+    )
+    taken_at: Mapped[datetime] = mapped_column(default=_now)
+    reels: Mapped[list[dict]] = mapped_column(JSON, default=list)
 
 
 class HiddenAccount(Base):
@@ -257,6 +278,7 @@ class Research(Base):
     handle: Mapped[str] = mapped_column(Text, default="")  # kept if the account is removed
     # Where it searches: "instagram" reels and YouTube "shorts" (see research.SITES).
     sites: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["instagram"])
+    daily: Mapped[bool] = mapped_column(default=False)  # started by the account's morning one
     # A follow-up asked for in an earlier research's chat ("more Italian").
     parent_id: Mapped[str | None] = mapped_column(
         ForeignKey("research.id", ondelete="SET NULL"), index=True

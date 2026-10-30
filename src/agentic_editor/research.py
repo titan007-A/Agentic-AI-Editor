@@ -54,6 +54,14 @@ MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
 # Picture quality, by the short side of the best version the site offers: below SD is left
 # out (it looks soft once edited at 1080 wide), SD ranks a little lower than HD.
 SD, HD = 480, 720
+# A YouTube channel's link, of any of its tabs.
+CHANNEL = re.compile(
+    r"https?://(?:www\.|m\.)?youtube\.com/(@[\w.-]+|channel/[\w-]+)(?:/\w*)?/?(?:\?.*)?$"
+)
+MAX_SOURCES = 10  # source pages an account may have
+TREND_DAYS = 14  # the trend radar looks at reels posted, and researches made, this recently
+TRENDING = 10  # reels it shows
+PER_SOURCE = 5  # the latest reels taken from each
 QUALITY = {"HD": 1.0, "SD": 0.85, "": 0.95}  # "" when the site didn't say
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
@@ -95,6 +103,7 @@ class Reel:
     looked_up: bool = False
     views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
     long: bool = False  # a YouTube video, not a Short: left out
+    page: str = ""  # the Instagram source page it was searched for: kept only when its own
     width: int | None = None  # of the best version the site offers
     height: int | None = None
     bitrate: float | None = None  # kbit/s of that version
@@ -149,11 +158,24 @@ class Context:
     summary: str = ""
     presets: dict[str, str] = field(default_factory=dict)
     own: set[str] = field(default_factory=set)
+    # Pages the owner takes reels from ("instagram:name", "youtube:@name"): their latest
+    # are looked at in every research, besides what the searches find.
+    sources: list[str] = field(default_factory=list)
     # What the person's feedback on earlier researches taught: reels they liked (or
     # edited) and didn't want, a line each (see taste_line), and accounts they hid.
     liked: list[str] = field(default_factory=list)
     disliked: list[str] = field(default_factory=list)
     hidden: set[str] = field(default_factory=set)
+
+
+@dataclass
+class SongTrend:
+    """A song several accounts posted reels of lately, as the trend radar shows it."""
+
+    song: str
+    reels: int
+    accounts: int
+    per_day: float  # the reels' likes and comments a day, together
 
 
 @dataclass
@@ -163,6 +185,9 @@ class Learned:
     summary: str
     own: list[str]
     best: list[dict]
+    # Each of its own reels found, with likes, comments and when it was posted: kept as a
+    # snapshot of how the page does (see jobs.learn_account).
+    stats: list[dict] = field(default_factory=list)
 
 
 class Searches(BaseModel):
@@ -622,6 +647,55 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
         list(pool.map(one, reels))
 
 
+def source_of(text: str) -> str | None:
+    """A source page as stored: "youtube:@name" (or "youtube:channel/UC...") from a YouTube
+    channel's link, "instagram:name" from an Instagram @name or profile link."""
+    text = text.strip()
+    if match := re.match(CHANNEL, text):
+        return "youtube:" + match.group(1)
+    if handle := handle_of(text):
+        return "instagram:" + handle
+    return None
+
+
+def _channel_shorts(url: str, count: int) -> list[dict]:
+    """A YouTube channel's latest Shorts, newest first, as its Shorts tab lists them."""
+    from yt_dlp import YoutubeDL
+
+    options = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}
+    with YoutubeDL({**options, "playlistend": count, "logger": _Quiet()}) as ydl:
+        return ydl.extract_info(url, download=False).get("entries") or []
+
+
+def from_sources(
+    sources: list[str], find=_engines, pause: float | None = None, channel=_channel_shorts
+) -> list[Reel]:
+    """The latest reels of each source page: a YouTube channel's Shorts tab lists them; an
+    Instagram page can't be listed without signing in, so it is searched for, and what the
+    search finds is kept only when it is the page's own (see run)."""
+    found: dict[str, Reel] = {}
+    for source in sources[:MAX_SOURCES]:
+        kind, name = source.split(":", 1)
+        if kind == "youtube":
+            try:
+                entries = channel(f"https://www.youtube.com/{name}/shorts", PER_SOURCE)
+            except Exception as exc:
+                log.warning("couldn't list %s's Shorts: %s", name, exc)
+                continue
+            for entry in entries:
+                link = entry.get("url") or ""
+                code = code_of(link)
+                if code and "/shorts/" in link and code not in found:  # never a video
+                    title = entry.get("title") or ""
+                    found[code] = Reel(code, reel_url(code), f"from {name}", title=title)
+        else:
+            reels, _ = search([f'"{name}"'], find, pause)
+            for reel in reels[: PER_SOURCE * 2]:  # half of what a search finds is others'
+                reel.query, reel.page = f"from @{name}", name
+                found.setdefault(reel.code, reel)
+    return list(found.values())
+
+
 def _count(value) -> int | None:
     return int(value) if isinstance(value, int | float) and value >= 0 else None
 
@@ -718,6 +792,41 @@ def _same(text: str) -> str:
     return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
 
 
+def trends(items: list, now: datetime | None = None) -> tuple[list, list[SongTrend]]:
+    """The trend radar, from reels earlier researches gave (the database's items, newest
+    research first): those posted in the last TREND_DAYS, fastest spreading first, each
+    once; and the songs more than one account posted reels of then, most accounts first."""
+    now = now or datetime.now(UTC)
+
+    def fresh(item) -> bool:
+        posted = item.posted_at
+        if posted is None or item.per_day is None:
+            return False
+        posted = posted if posted.tzinfo else posted.replace(tzinfo=UTC)
+        return (now - posted).days < TREND_DAYS
+
+    once: dict[str, object] = {}
+    for item in items:
+        if fresh(item):
+            once.setdefault(item.code, item)
+    reels = sorted(once.values(), key=lambda i: i.per_day, reverse=True)
+    songs: dict[str, dict] = {}
+    for item in reels:
+        if not (key := _same(item.song)):
+            continue
+        song = songs.setdefault(key, {"song": item.song, "who": set(), "reels": 0, "per_day": 0.0})
+        song["who"].add(_same(item.handle or item.account) or item.code)
+        song["reels"] += 1
+        song["per_day"] += item.per_day
+    going = [
+        SongTrend(s["song"], s["reels"], len(s["who"]), round(s["per_day"], 1))
+        for s in songs.values()
+        if len(s["who"]) > 1
+    ]
+    going.sort(key=lambda t: (t.accounts, t.per_day), reverse=True)
+    return reels[:TRENDING], going[:TRENDING]
+
+
 def pick(
     ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT, per_song: int = PER_SONG
 ) -> tuple[list[Reel], dict[str, int], float | None]:
@@ -801,7 +910,17 @@ def learn(
         {"code": r.code, "likes": r.likes, "caption": _short(r.caption or r.title, 200)}
         for r in own[:5]
     ]
-    return Learned(summary.strip(), [r.code for r in own], best)
+    stats = [
+        {
+            "code": r.code,
+            "likes": r.likes,
+            "comments": r.comments,
+            "posted": r.posted.isoformat() if r.posted else None,
+            "caption": _short(r.caption or r.title, 120),
+        }
+        for r in own
+    ]
+    return Learned(summary.strip(), [r.code for r in own], best, stats)
 
 
 def run(
@@ -815,6 +934,7 @@ def run(
     pause: float | None = None,
     context: Context | None = None,
     sites: tuple[str, ...] = ("instagram",),
+    channel=_channel_shorts,
 ) -> Result:
     """Search, look up, rate, rank and pick the best few. `planner()` opens the planning
     model, which holds the GPU, so it is opened only to plan and to rate, never while
@@ -828,6 +948,12 @@ def run(
     reels, failed = search(queries, find, pause, progress, sites)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
+    if context.sources:
+        progress("looking at your source pages", 0.42)
+        # The pages first, up to half of what is looked up, so the searches still count.
+        picked = from_sources(context.sources, find, pause, channel)[: MAX_REELS // 2]
+        taken = {r.code for r in picked}
+        reels = picked + [r for r in reels if r.code not in taken]
     left_out = {
         "edited": sum(r.code in used for r in reels),
         "shown before": sum(r.code in seen and r.code not in used for r in reels),
@@ -836,6 +962,7 @@ def run(
     reels = [r for r in reels if r.code not in used | seen | context.own][:MAX_REELS]
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
+    reels = [r for r in reels if not r.page or r.handle == r.page]  # another's, found by name
     if context.handle:
         left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
         reels = [r for r in reels if r.handle != context.handle]
