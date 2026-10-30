@@ -129,14 +129,14 @@ class Searches(BaseModel):
 class Rating(BaseModel):
     n: int
     relevance: int = Field(ge=0, le=10)
-    why: str = Field(default="", max_length=200)
-    # Required: left optional, the 9b model mostly left them out, and with no song a
-    # research can't keep two reels of one song at most.
+    # All required: the 9b model leaves out any it may, and then a research can't keep two
+    # reels of one song at most, or explain its picks.
+    why: str = Field(max_length=200)
     song: str = Field(max_length=120)
     artist: str = Field(max_length=120)
-    matches: str = Field(default="", max_length=200)
+    matches: str = Field(max_length=200)
     preset: str = Field(max_length=80)
-    preset_why: str = Field(default="", max_length=200)
+    preset_why: str = Field(max_length=200)
 
 
 class Ratings(BaseModel):

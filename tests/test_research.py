@@ -32,10 +32,10 @@ class Planner:
         return {
             "ratings": [
                 {
+                    **NAMELESS,
                     "n": n,
                     "relevance": 9 if "Bryan Adams" in line else 1,
                     "why": "fits",
-                    **NAMELESS,
                 }
                 for n, line in enumerate(reels, 1)
             ]
@@ -43,7 +43,7 @@ class Planner:
 
 
 # The fields a rating always has, as the model leaves them when the caption doesn't say.
-NAMELESS = {"song": "", "artist": "", "preset": ""}
+NAMELESS = {"why": "", "song": "", "artist": "", "matches": "", "preset": "", "preset_why": ""}
 
 
 def hit(code, title="", body=""):
