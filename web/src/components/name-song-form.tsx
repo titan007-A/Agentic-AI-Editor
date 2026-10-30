@@ -27,6 +27,8 @@ export function NameSongForm({ job }: { job: Job }) {
     try {
       const notes = `song: ${song.trim()}\nartist: ${artist.trim()}`;
       const next = await api.regenerate(job.id, job.unnamed[0], notes);
+      // The stopped job made nothing: the new one takes its place in the list.
+      if (job.outputs.length === 0) await api.deleteJob(job.id).catch(() => {});
       toast.success("Carrying on with that song");
       router.push(`/job/?id=${next.id}`);
     } catch (err) {
@@ -48,8 +50,9 @@ export function NameSongForm({ job }: { job: Job }) {
         <div className="space-y-1">
           <p className="font-medium">Which song is it?</p>
           <p className="text-sm text-muted-foreground">
-            The reel shows the song&apos;s name, and this video didn&apos;t say which song it is.
-            Name it and the reel is made, from where the job stopped.
+            The reel shows the song&apos;s name, and neither the video&apos;s name, its sound nor
+            its post&apos;s caption said which song it is. Name it and the reel is made, from where
+            the job stopped.
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-2">

@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { JobStatus, jobLabel } from "@/components/job-status";
+import { JobStatus, jobLabel, needsName } from "@/components/job-status";
 import { NameSongForm } from "@/components/name-song-form";
 import { OutputCard } from "@/components/output-card";
 import { Button } from "@/components/ui/button";
@@ -125,13 +125,15 @@ function JobDetail() {
         </Card>
       )}
 
-      {job.status === "failed" && (
-        <Card className="border-destructive p-4">
-          <p className="text-sm whitespace-pre-wrap text-destructive">{job.error}</p>
-        </Card>
+      {needsName(job) ? (
+        <NameSongForm job={job} />
+      ) : (
+        job.status === "failed" && (
+          <Card className="border-destructive p-4">
+            <p className="text-sm whitespace-pre-wrap text-destructive">{job.error}</p>
+          </Card>
+        )
       )}
-
-      {!active && job.unnamed.length > 0 && <NameSongForm job={job} />}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {job.outputs.map((output) => (
