@@ -58,6 +58,9 @@ SD, HD = 480, 720
 CHANNEL = re.compile(
     r"https?://(?:www\.|m\.)?youtube\.com/(@[\w.-]+|channel/[\w-]+)(?:/\w*)?/?(?:\?.*)?$"
 )
+PDF_ENTRIES = 40  # songs one PDF may list
+PER_ENTRY = 4  # reels given for each of them
+PDF_TEXT = 15_000  # characters of a PDF the model reads
 MAX_SOURCES = 10  # source pages an account may have
 TREND_DAYS = 14  # the trend radar looks at reels posted, and researches made, this recently
 TRENDING = 10  # reels it shows
@@ -225,6 +228,18 @@ class Questions(BaseModel):
     questions: list[Question] = Field(min_length=1, max_length=8)
 
 
+class PdfEntry(BaseModel):
+    # All required, as for ratings: the model leaves out what it may.
+    singer: str = Field(max_length=120)
+    song: str = Field(max_length=160)
+    top: str = Field(max_length=400)
+    bottom: str = Field(max_length=400)
+
+
+class PdfEntries(BaseModel):
+    entries: list[PdfEntry] = Field(min_length=1, max_length=PDF_ENTRIES)
+
+
 class Reply(BaseModel):
     # All required, as for ratings: the model leaves out what it may.
     kind: Literal["answer", "refine"]
@@ -315,6 +330,14 @@ CHAT = (
     "Reply in the language they wrote in.\n\n{about}\n\nThe chat so far:\n{history}\n\n"
     "Their message: {message}"
 )
+READ_PDF = (
+    "This is the text of a PDF a video editor wrote: a list of songs to make Instagram "
+    "reels of, each with the words to write above the video and below it. For each song "
+    "give singer, song, top (the words for above) and bottom (the words for below), copied "
+    "exactly as written, in their language, with \\n where a new line starts; '' for any "
+    "the PDF doesn't give. Don't translate, shorten or add anything. Leave out headings "
+    "and anything that isn't a song.\n\nThe PDF:\n{text}"
+)
 LEARN = (
     "These are reels the Instagram account @{handle} posted, with their likes. In a few "
     "sentences say what the account posts: the artists, songs, eras, genres and languages, "
@@ -346,6 +369,39 @@ def handle_of(text: str) -> str | None:
         text = match.group(1)
     text = text.removeprefix("@").lower()
     return text if re.fullmatch(r"[a-z0-9._]{1,30}", text) else None
+
+
+def read_pdf(data: bytes) -> str:
+    """The text of a PDF's pages; '' for one that is only pictures (a scan)."""
+    import io
+
+    from pypdf import PdfReader
+
+    pages = PdfReader(io.BytesIO(data)).pages
+    return "\n".join((page.extract_text() or "").strip() for page in pages).strip()
+
+
+def pdf_entries(llm, text: str) -> list[dict]:
+    """The songs a PDF lists, each {"singer", "song", "top", "bottom"}, in its order."""
+    prompt = READ_PDF.format(text=text[:PDF_TEXT])
+    reply = parse(
+        PdfEntries,
+        llm.chat_json(
+            [{"role": "user", "content": prompt}], PdfEntries.model_json_schema(), temperature=0.0
+        ),
+    )
+    entries = []
+    for e in reply.entries:
+        if e.song.strip() or e.singer.strip():
+            entries.append(
+                {
+                    "singer": e.singer.strip(),
+                    "song": e.song.strip(),
+                    "top": e.top.strip().replace("\\n", "\n"),
+                    "bottom": e.bottom.strip().replace("\\n", "\n"),
+                }
+            )
+    return entries
 
 
 def describe_presets(presets: dict[str, Preset]) -> dict[str, str]:
@@ -998,3 +1054,54 @@ def run(
         left_out=left_out,
         cutoff=cutoff,
     )
+
+
+def run_pdf(
+    entries: list[dict],
+    planner: Callable,
+    used: set[str],
+    seen: set[str],
+    progress: Progress,
+    find=_engines,
+    info=_info,
+    pause: float | None = None,
+    context: Context | None = None,
+    sites: tuple[str, ...] = ("instagram",),
+) -> list[tuple[int, Reel]]:
+    """For each song a PDF lists (see pdf_entries), the best few reels of it, PER_ENTRY at
+    most, as (its entry's number, reel): searched for by singer and song, looked up, rated
+    and ranked as in run, never one edited, shown before, or given for another song."""
+    context = context or Context()
+    given: list[tuple[int, Reel]] = []
+    taken = used | seen | context.own
+    answered = False
+    for n, entry in enumerate(entries):
+        song, singer = entry["song"], entry["singer"]
+        who = " - ".join(x for x in (song, singer) if x)
+        progress(f"searching for {who} ({n + 1} of {len(entries)})", 0.05 + 0.9 * n / len(entries))
+        queries = _tidy([f"{singer} {song}", f"{song} {singer} live"])
+        reels, failed = search(queries, find, pause, sites=sites)
+        answered = answered or len(failed) < len(queries) * len(sites)
+        reels = [r for r in reels if r.code not in taken][: MAX_REELS // 4]
+        look_up(reels, info)
+        reels = [
+            r
+            for r in reels
+            if not r.long
+            and r.quality != "low"
+            and r.handle not in context.hidden
+            and not (context.handle and r.handle == context.handle)
+        ]
+        if reels:
+            with planner() as llm:
+                wish = f"reels of the song '{song}' by {singer}, {singer} singing it"
+                rate(llm, wish, reels, context=context)
+        fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
+        suggest(fitting, context)
+        spread(fitting)
+        picked, _, _ = pick(rank(fitting), count=PER_ENTRY)
+        taken |= {r.code for r in picked}
+        given += [(n, r) for r in picked]
+    if not answered and entries:
+        raise RuntimeError("the search engines didn't answer; try again in a few minutes")
+    return given

@@ -300,6 +300,14 @@ Hinglish too), ranked by how well they fit and how viral they are:
   under 480p on its short side it is left out ("low quality"), SD (480-719p) ranks a
   little lower than HD, and its card shows the resolution. A Short's card also shows its
   length, in red when it is shorter than its preset's shortest reel.
+- **From a PDF.** Instead of a description, give a PDF of songs: each with its singer and
+  the words to write above and below its reel, in any layout. The planning model reads
+  the songs and their words exactly as written, and each song is searched for and rated
+  (up to 4 reels each, never one twice). The research shows the reels song by song, with
+  its words; choose a reel for each, and "Edit selected" starts each edit with the notes
+  lines `song:`, `artist:`, `top text:` and `bottom text:`, so the reel shows your words in
+  place of the preset's own above and below the video (in the look of the preset's first
+  block there). A scanned PDF is only pictures and can't be read.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.

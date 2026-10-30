@@ -246,7 +246,7 @@ export function ReelCard({
               disabled={chosen === null && full}
               onCheckedChange={(on) => onChoose(on ? suggested : null)}
             />
-            {chosen === null && full ? "5 chosen already" : "Choose to edit"}
+            {chosen === null && full ? "As many chosen as may be" : "Choose to edit"}
           </label>
           {chosen !== null && (
             <div className="space-y-1">

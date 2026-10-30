@@ -122,6 +122,8 @@ export type ResearchItem = {
   /** 0-1: how far it spread among the reels found. */
   virality: number;
   score: number;
+  /** In a PDF research, the number of the song it is for. */
+  entry: number | null;
   /** Shown by an earlier research. */
   seen: boolean;
   /** Edited since. */
@@ -168,6 +170,9 @@ export type Trends = {
   songs: { song: string; reels: number; accounts: number; per_day: number }[];
 };
 
+/** A song a PDF lists, with the words to write above and below its reel. */
+export type PdfEntry = { singer: string; song: string; top: string; bottom: string };
+
 /** Where a research searches: Instagram reels, YouTube Shorts. */
 export type Site = "instagram" | "shorts";
 
@@ -196,6 +201,9 @@ export type Research = {
   sites: Site[];
   /** Started by its account's morning research. */
   daily: boolean;
+  /** "pdf": songs from a PDF, each with its words above and below; else "search". */
+  mode: "search" | "pdf";
+  entries: PdfEntry[];
   /** The research whose chat asked for this one. */
   parent_id: string | null;
   /** "asking": thinking of questions (none yet), then waiting for the answers. */
@@ -401,6 +409,12 @@ export const api = {
       skip_questions: skipQuestions,
       sites,
     }),
+  researchPdf: (file: File, sites: Site[]) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("sites", sites.join(","));
+    return request<Research>("POST", "/research/pdf", form);
+  },
   answerResearch: (id: string, answers: ResearchAnswer[]) =>
     request<Research>("POST", `/research/${id}/answers`, { answers }),
   chatOnResearch: (id: string, text: string) =>

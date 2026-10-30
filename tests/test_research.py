@@ -30,6 +30,9 @@ class Planner:
             }
         if "questions" in schema["properties"]:
             return {"questions": QUESTIONS}
+        if "entries" in schema["properties"]:
+            assert "Bryan Adams" in prompt  # the PDF's text
+            return {"entries": PDF_ENTRIES}
         if "kind" in schema["properties"]:
             message = prompt.rsplit("Their message: ", 1)[-1]
             if message.lower().startswith("why"):
@@ -51,6 +54,37 @@ class Planner:
                 for n, line in enumerate(reels, 1)
             ]
         }
+
+
+# The songs the fake model reads from a PDF; the second has nothing to find.
+PDF_ENTRIES = [
+    {"singer": "Bryan Adams", "song": "Heaven", "top": "Il capolavoro\\ndel 1985",
+     "bottom": "Seguici"},
+    {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": ""},
+    {"singer": " ", "song": " ", "top": "a heading", "bottom": ""},  # no song: left out
+]  # fmt: skip
+
+
+def pdf(lines: list[str]) -> bytes:
+    """A one-page PDF with these lines of text, as a word processor's export has them."""
+    text = " ".join(f"({line}) Tj 0 -16 Td" for line in lines)
+    content = f"BT /F1 12 Tf 72 720 Td {text} ET"
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        "/Resources << /Font << /F1 5 0 R >> >> >>",
+        f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out, offsets = "%PDF-1.4\n", []
+    for n, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{n} 0 obj\n{body}\nendobj\n"
+    table = "".join(f"{offset:010d} 00000 n \n" for offset in offsets)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n{table}"
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{len(out)}\n%%EOF"
+    return out.encode("latin-1")
 
 
 # The fields a rating always has, as the model leaves them when the caption doesn't say.
@@ -626,3 +660,43 @@ def test_the_trend_radar_shows_fresh_fast_reels_and_songs_several_accounts_post(
     reels, songs = research.trends(items, now)
     assert [r.code for r in reels] == ["C", "A", "B", "D"]
     assert songs == [research.SongTrend("Heaven - Bryan Adams", 2, 2, 1200.0)]
+
+
+def test_a_pdf_of_songs_is_read_and_each_song_searched_for():
+    text = research.read_pdf(pdf(["1. Bryan Adams - Heaven", "Sopra: Il capolavoro"]))
+    assert "Bryan Adams - Heaven" in text and "Sopra: Il capolavoro" in text
+    entries = research.pdf_entries(Planner(), text)
+    assert entries == [
+        {"singer": "Bryan Adams", "song": "Heaven", "top": "Il capolavoro\ndel 1985",
+         "bottom": "Seguici"},
+        {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": ""},
+    ]  # fmt: skip
+
+    asked = []
+
+    def find(query, count):
+        asked.append(query)
+        if "Nobody" in query:
+            return []
+        return [hit("HEAVEN001"), hit("HEAVEN002"), hit("USED00001"), hit("CATS00001")]
+
+    def info(url):
+        code = research.code_of(url)
+        about = "cat videos" if code.startswith("CATS") else "Bryan Adams Heaven live"
+        return {"channel": code.lower(), "description": about, "like_count": 100}
+
+    llm = Planner()
+    given = research.run_pdf(
+        entries, lambda: nullcontext(llm), {"USED00001"}, set(), lambda *a: None, find, info, 0
+    )
+    assert [(entry, r.code) for entry, r in given] == [(0, "HEAVEN001"), (0, "HEAVEN002")]
+    assert any("Bryan Adams Heaven" in q for q in asked)
+    assert "the song 'Heaven' by Bryan Adams" in llm.asked[-1]
+
+    def down(query, count):
+        raise TimeoutError
+
+    with pytest.raises(RuntimeError, match="didn't answer"):
+        research.run_pdf(
+            entries, lambda: nullcontext(llm), set(), set(), lambda *a: None, down, pause=0
+        )

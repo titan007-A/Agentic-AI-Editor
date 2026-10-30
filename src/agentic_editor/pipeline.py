@@ -647,8 +647,13 @@ def edit(
     out_dir = settings.media_dir / "outputs" / work_dir.name / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
+    texts, notes = names.texts_from_notes(notes)
+    presets = [names.with_texts(p, texts) for p in presets]
     given_headline, notes = headline.from_notes(notes)
-    given, notes = names.from_notes(notes, set().union(*(names.wanted(p) for p in presets)))
+    # "song:" and "artist:" lines are always taken, so the instruction reader never sees
+    # them; a preset that doesn't name the song still gets them for its reel's song.
+    wanted = set().union({"song", "artist"}, *(names.wanted(p) for p in presets))
+    given, notes = names.from_notes(notes, wanted)
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
     failures: list[str] = []
     errors: list[Exception] = []
@@ -674,6 +679,8 @@ def edit(
         try:
             if names.names_song(preset):
                 songs[preset.name] = names.song_and_artist(source.title, given, hear)
+            elif given.get("song") and given.get("artist"):
+                songs[preset.name] = (given["song"], given["artist"])
             named.append(names.fill(preset, source.title, given, hear))
         except (names.UnnamedSong, names.MissingField) as exc:
             failed(preset.name, exc)

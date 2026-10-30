@@ -1215,6 +1215,35 @@ def test_an_accounts_page_performance_is_followed_from_learn_to_learn(env, monke
     assert riya.get(url).status_code == 404
 
 
+def test_a_pdf_of_songs_becomes_a_research_of_each(env, monkeypatch):
+    from tests.test_research import pdf
+
+    fake_research(monkeypatch, env)
+
+    def send(name, data, **form):
+        files = {"file": (name, data, "application/pdf")}
+        return env.client.post("/api/research/pdf", files=files, data=form)
+
+    songs = pdf(["Bryan Adams - Heaven", "Sopra: Il capolavoro del 1985", "Sotto: Seguici"])
+    started = send("Canzoni.pdf", songs)
+    assert started.status_code == 200, started.text
+    assert started.json()["mode"] == "pdf" and started.json()["description"] == "PDF: Canzoni.pdf"
+    found = env.client.get(f"/api/research/{started.json()['id']}").json()
+    assert found["status"] == "done", found["error"]
+    assert [e["song"] for e in found["entries"]] == ["Heaven", "Nothing"]
+    assert found["entries"][0]["top"] == "Il capolavoro\ndel 1985"
+    assert found["sites"] == ["instagram", "shorts"]
+    heaven = [i["code"] for i in found["items"] if i["entry"] == 0]
+    assert set(heaven) == {"OWN001", "ADAMS1", "ADAMS2"}  # the cat video doesn't fit
+    assert found["message"].startswith("found reels for")
+
+    assert send("songs.txt", b"Bryan Adams").status_code == 400
+    assert send("scan.pdf", pdf([])).status_code == 422  # a picture, no text
+    assert send("songs.pdf", songs, sites="tiktok").status_code == 422
+    shorts = send("songs.pdf", songs, sites="shorts").json()
+    assert shorts["sites"] == ["shorts"]
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(
