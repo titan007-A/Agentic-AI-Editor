@@ -41,7 +41,8 @@ def test_the_server_keeps_a_mac_awake_while_it_runs(monkeypatch):
     monkeypatch.setattr(cli.subprocess, "Popen", lambda cmd: started.append(cmd))
     monkeypatch.setattr(cli.sys, "platform", "darwin")
     assert cli.main(["serve"]) == 0
-    assert started == [["/usr/bin/caffeinate", "-s", "-w", str(os.getpid())]] and served == ["app"]
+    assert started == [["/usr/bin/caffeinate", "-i", "-s", "-w", str(os.getpid())]]
+    assert served == ["app"]
 
     started.clear()
     monkeypatch.setattr(cli.sys, "platform", "linux")
