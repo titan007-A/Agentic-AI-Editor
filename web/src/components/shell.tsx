@@ -20,6 +20,7 @@ const guard = (event: { preventDefault: () => void }) => {
 const LINKS = [
   { href: "/", label: "Jobs" },
   { href: "/autopilot/", label: "Autopilot" },
+  { href: "/research/", label: "Researcher" },
   { href: "/presets/", label: "Presets" },
   { href: "/system/", label: "System" },
 ];

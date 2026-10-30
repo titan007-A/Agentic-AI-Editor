@@ -84,6 +84,47 @@ export type Job = {
   unnamed: string[];
 };
 
+export type ResearchItem = {
+  id: number;
+  rank: number;
+  code: string;
+  url: string;
+  /** The search that found it first. */
+  query: string;
+  account: string;
+  caption: string;
+  likes: number | null;
+  comments: number | null;
+  posted_at: string | null;
+  thumbnail: string;
+  /** 0-1: how well it fits the description; null when the model couldn't rate it. */
+  relevance: number | null;
+  why: string;
+  /** 0-1: how far it spread among the reels found. */
+  virality: number;
+  score: number;
+  /** Shown by an earlier research. */
+  seen: boolean;
+  /** Edited since. */
+  used: boolean;
+};
+
+export type Research = {
+  id: string;
+  description: string;
+  status: "queued" | "running" | "done" | "failed";
+  message: string;
+  progress: number;
+  queries: string[];
+  /** Reels found but left out, edited before. */
+  used: number;
+  error: string | null;
+  created_at: string;
+  found: number;
+  owner: string | null;
+  items: ResearchItem[];
+};
+
 export type Me = {
   user: string;
   id: string;
@@ -219,6 +260,10 @@ export const api = {
   output: (outputId: number) => request<Job>("GET", `/outputs/${outputId}`),
   writeCaption: (outputId: number, named?: { song: string; artist: string } | { topic: string }) =>
     request<Job>("POST", `/outputs/${outputId}/caption`, named),
+  researches: () => request<Research[]>("GET", "/research"),
+  research: (id: string) => request<Research>("GET", `/research/${id}`),
+  startResearch: (description: string) => request<Research>("POST", "/research", { description }),
+  deleteResearch: (id: string) => request("DELETE", `/research/${id}`),
   accounts: () => request<Account[]>("GET", "/admin/users"),
   createAccount: (username: string, password: string) =>
     request<Account>("POST", "/admin/users", { username, password }),

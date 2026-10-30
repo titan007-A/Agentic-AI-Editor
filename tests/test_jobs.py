@@ -129,3 +129,37 @@ def test_a_restart_settles_captions_that_were_being_written(tmp_path, monkeypatc
     with Session() as db:
         statuses = [o.caption_status for o in db.get(Job, "done").outputs]
     assert statuses == ["failed", "queued", "done"] and asked == [2]
+
+
+def test_a_restart_settles_researches_like_jobs(tmp_path, monkeypatch):
+    from agentic_editor.db import Research
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add_all([
+            Research(id="searching", description="x", status="running"),
+            Research(id="waiting", description="x"),
+            Research(id="lost", description="x"),
+        ])  # fmt: skip
+        db.commit()
+    queue = [SimpleNamespace(name=jobs.RESEARCH, args=("waiting",))]
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue))
+    asked = []
+    monkeypatch.setattr(jobs, "find_reels", asked.append)
+
+    jobs.recover(Session)
+
+    with Session() as db:
+        assert db.get(Research, "searching").status == "failed"
+        assert db.get(Research, "searching").error == jobs.INTERRUPTED
+    assert asked == ["lost"]
+
+
+def test_reels_are_known_by_code_among_a_job_s_sources():
+    sources = [
+        "https://www.instagram.com/reel/DcafVd6BocI/?igsh=x",
+        "https://www.instagram.com/p/CAjcakIDpkV/",
+        "https://www.youtube.com/watch?v=abc",
+        "upload:0123456789abcdef0123/video.mp4",
+    ]
+    assert jobs.reel_codes(sources) == {"DcafVd6BocI", "CAjcakIDpkV"}

@@ -205,6 +205,58 @@ class StyleDraft(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class Research(Base):
+    """A search for Instagram reels that fit a description (see research.py)."""
+
+    __tablename__ = "research"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    description: Mapped[str] = mapped_column(Text)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
+    progress: Mapped[float] = mapped_column(default=0.0)
+    queries: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Reels found but left out because they were edited already.
+    used: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    items: Mapped[list["ResearchItem"]] = relationship(
+        back_populates="research", cascade="all, delete-orphan", order_by="ResearchItem.rank"
+    )
+
+
+class ResearchItem(Base):
+    """A reel a research found, in its place in the ranking."""
+
+    __tablename__ = "research_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    research_id: Mapped[str] = mapped_column(
+        ForeignKey("research.id", ondelete="CASCADE"), index=True
+    )
+    rank: Mapped[int]
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    url: Mapped[str] = mapped_column(Text)
+    query: Mapped[str] = mapped_column(Text, default="")
+    account: Mapped[str] = mapped_column(Text, default="")
+    caption: Mapped[str] = mapped_column(Text, default="")
+    likes: Mapped[int | None]
+    comments: Mapped[int | None]
+    posted_at: Mapped[datetime | None]
+    thumbnail: Mapped[str] = mapped_column(Text, default="")
+    # 0-1 each: how well it fits (None when the model couldn't rate it), how far it spread
+    # among the reels found, and the two together.
+    relevance: Mapped[float | None]
+    why: Mapped[str] = mapped_column(Text, default="")
+    virality: Mapped[float] = mapped_column(default=0.0)
+    score: Mapped[float] = mapped_column(default=0.0)
+    seen: Mapped[bool] = mapped_column(default=False)  # shown by an earlier research
+
+    research: Mapped[Research] = relationship(back_populates="items")
+
+
 class Setting(Base):
     __tablename__ = "settings"
 
