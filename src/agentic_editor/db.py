@@ -243,7 +243,17 @@ class Research(Base):
         ForeignKey("research_accounts.id", ondelete="SET NULL"), index=True
     )
     handle: Mapped[str] = mapped_column(Text, default="")  # kept if the account is removed
+    # A follow-up asked for in an earlier research's chat ("more Italian").
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("research.id", ondelete="SET NULL"), index=True
+    )
+    # "asking": the model thinks of questions (none yet), then waits for the answers;
+    # then queued, running, done or failed like a job.
     status: Mapped[str] = mapped_column(String(16), default="queued")
+    # The questions asked before searching, [{"question", "choices"}], and the answers
+    # given, [{"question", "answer"}]: they become part of what to find.
+    questions: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    answers: Mapped[list[dict]] = mapped_column(JSON, default=list)
     message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
     progress: Mapped[float] = mapped_column(default=0.0)
     brief: Mapped[str] = mapped_column(Text, default="")  # the request as the model read it
@@ -260,6 +270,28 @@ class Research(Base):
     items: Mapped[list["ResearchItem"]] = relationship(
         back_populates="research", cascade="all, delete-orphan", order_by="ResearchItem.rank"
     )
+    messages: Mapped[list["ResearchMessage"]] = relationship(
+        back_populates="research", cascade="all, delete-orphan", order_by="ResearchMessage.id"
+    )
+
+
+class ResearchMessage(Base):
+    """One line of the chat on a finished research: the person's, or the researcher's
+    answer, which may start a follow-up research."""
+
+    __tablename__ = "research_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    research_id: Mapped[str] = mapped_column(
+        ForeignKey("research.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))  # "user" or "researcher"
+    text: Mapped[str] = mapped_column(Text)
+    answered: Mapped[bool] = mapped_column(default=False)  # a person's line, once answered
+    follow_up_id: Mapped[str | None] = mapped_column(String(12))  # the research it started
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+    research: Mapped[Research] = relationship(back_populates="messages")
 
 
 class ResearchItem(Base):

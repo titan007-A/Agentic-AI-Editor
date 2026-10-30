@@ -821,11 +821,85 @@ def fake_research(monkeypatch, env, broken=False):
             account_id, env.sessions, env.settings, ResearchRouter(), find, info
         ),
     )
+    monkeypatch.setattr(
+        jobs,
+        "ask_questions",
+        lambda research_id: jobs.run_questions(
+            research_id, env.sessions, env.settings, ResearchRouter(), find, info
+        ),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "answer_chat",
+        lambda message_id: jobs.run_chat(message_id, env.sessions, env.settings, ResearchRouter()),
+    )
+
+
+def test_the_researcher_asks_first_and_the_answers_become_part_of_the_research(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    started = env.client.post("/api/research", json={"description": "Bryan Adams"}).json()
+    asking = env.client.get(f"/api/research/{started['id']}").json()
+    assert asking["status"] == "asking" and asking["message"] == "a few questions first"
+    assert asking["questions"] == [
+        {"question": "Live or studio?", "choices": ["Live", "Studio"]},
+        {"question": "Which era?", "choices": ["80s", "90s"]},
+    ]
+    answers = {
+        "answers": [
+            {"question": "Live or studio?", "answer": "Live"},
+            {"question": "Which era?", "answer": ""},  # left blank: not kept
+            {"question": "Not asked", "answer": "x"},  # not one of its questions
+        ]
+    }
+    answered = env.client.post(f"/api/research/{started['id']}/answers", json=answers)
+    assert answered.status_code == 200, answered.text
+    found = env.client.get(f"/api/research/{started['id']}").json()
+    assert found["status"] == "done" and found["answers"] == [
+        {"question": "Live or studio?", "answer": "Live"}
+    ]
+    again = env.client.post(f"/api/research/{started['id']}/answers", json=answers)
+    assert again.status_code == 409  # answered already
+
+    # Skipped: no answers, searched all the same.
+    other = env.client.post("/api/research", json={"description": "Queen"}).json()
+    skipped = env.client.post(f"/api/research/{other['id']}/answers", json={}).json()
+    assert skipped["answers"] == []
+    assert env.client.get(f"/api/research/{other['id']}").json()["status"] == "done"
+
+
+def test_the_chat_answers_from_the_reasoning_or_starts_a_follow_up(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    body = {"description": "Bryan Adams live", "skip_questions": True}
+    found = env.client.post("/api/research", json=body).json()
+    asked = env.client.post(f"/api/research/{found['id']}/chat", json={"text": "why #1?"})
+    assert asked.status_code == 200, asked.text
+    chat = env.client.get(f"/api/research/{found['id']}").json()["messages"]
+    assert [(m["role"], m["text"]) for m in chat] == [
+        ("user", "why #1?"),
+        ("researcher", "#1 fits best: fits."),
+    ]
+    assert chat[0]["answered"] and chat[1]["follow_up_id"] is None
+
+    env.client.post(f"/api/research/{found['id']}/chat", json={"text": "older concerts"})
+    chat = env.client.get(f"/api/research/{found['id']}").json()["messages"]
+    assert chat[-1]["text"] == "Looking for older Bryan Adams concerts."
+    follow_up = env.client.get(f"/api/research/{chat[-1]['follow_up_id']}").json()
+    assert follow_up["parent_id"] == found["id"]
+    assert follow_up["description"] == "Bryan Adams live concerts from the 1980s"
+    # It never shows the reels the first one did.
+    assert follow_up["status"] == "done" and follow_up["items"] == []
+    assert follow_up["left_out"]["shown before"] == 3
+
+    asking = env.client.post("/api/research", json={"description": "Queen"}).json()
+    early = env.client.post(f"/api/research/{asking['id']}/chat", json={"text": "hi"})
+    assert early.status_code == 409  # chat opens once it is done
 
 
 def test_a_research_ranks_reels_that_fit_first_and_never_shows_one_twice(env, monkeypatch):
     fake_research(monkeypatch, env)
-    started = env.client.post("/api/research", json={"description": "Bryan Adams live"})
+    started = env.client.post(
+        "/api/research", json={"description": "Bryan Adams live", "skip_questions": True}
+    )
     assert started.status_code == 200, started.text
     found = env.client.get(f"/api/research/{started.json()['id']}").json()
     # The cat video doesn't fit: left out, not shown at the bottom.
@@ -845,7 +919,9 @@ def test_a_research_ranks_reels_that_fit_first_and_never_shows_one_twice(env, mo
     start(env.client, sources=(first["url"],))
     again = env.client.get(f"/api/research/{found['id']}").json()
     assert again["items"][1]["used"]
-    second = env.client.post("/api/research", json={"description": "Bryan Adams"}).json()
+    second = env.client.post(
+        "/api/research", json={"description": "Bryan Adams", "skip_questions": True}
+    ).json()
     second = env.client.get(f"/api/research/{second['id']}").json()
     assert second["items"] == [] and second["used"] == 1
     assert second["message"] == "found 0 reels; left out 1 that didn't fit and 2 shown before"
@@ -877,7 +953,9 @@ def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(env
     # No description needed: the account says what to find. Its own reel stays out, and
     # each reel says which preset it suits and why.
     assert env.client.post("/api/research", json={"description": ""}).status_code == 422
-    started = env.client.post("/api/research", json={"account_id": account["id"]}).json()
+    started = env.client.post(
+        "/api/research", json={"account_id": account["id"], "skip_questions": True}
+    ).json()
     found = env.client.get(f"/api/research/{started['id']}").json()
     assert found["handle"] == "voiceshq" and found["account_id"] == account["id"]
     assert "OWN001" not in [i["code"] for i in found["items"]]
@@ -910,7 +988,9 @@ def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(env
 
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
-    started = env.client.post("/api/research", json={"description": "Bryan Adams live"}).json()
+    started = env.client.post(
+        "/api/research", json={"description": "Bryan Adams live", "skip_questions": True}
+    ).json()
     failed = env.client.get(f"/api/research/{started['id']}").json()
     assert failed["status"] == "failed" and "didn't answer" in failed["error"]
 

@@ -19,6 +19,7 @@ from agentic_editor.db import (
     Research,
     ResearchAccount,
     ResearchItem,
+    ResearchMessage,
     StyleDraft,
     User,
     make_sessionmaker,
@@ -331,6 +332,121 @@ def run_account_learning(
                 db.commit()
 
 
+def research_context(
+    research_id: str, Session: sessionmaker, settings: Settings, planner, progress, find, info
+) -> research.Context:
+    """Whom a research is for: its account (learned first when that wasn't done in a
+    while) and the presets, or all the owner's presets for a description alone."""
+    with Session() as db:
+        found = db.get(Research, research_id)
+        account = db.get(ResearchAccount, found.account_id) if found.account_id else None
+        user = db.get(User, found.owner_id) if found.owner_id else None
+    available = load_presets(accounts.presets_dir(user, settings.presets_dir))
+    if account is None:
+        return research.Context(presets=research.describe_presets(available))
+    if stale(account.learned_at):
+        learn_account(account.id, Session, planner, progress, find, info)
+    with Session() as db:
+        account = db.get(ResearchAccount, account.id)
+    chosen = {n: p for n, p in available.items() if n in account.presets}
+    return research.Context(
+        handle=account.handle,
+        summary=account.summary,
+        presets=research.describe_presets(chosen or available),
+        own=set(account.own),
+    )
+
+
+def run_questions(
+    research_id: str, Session: sessionmaker, settings: Settings, router=None, find=None, info=None
+) -> None:
+    """Think of the questions to ask before a research. None come (the model can't
+    answer, or the research is gone), and the research goes on without them."""
+
+    def progress(message: str, value: float) -> None:
+        with Session() as db:
+            db.get(Research, research_id).message = message
+            db.commit()
+
+    try:
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        context = research_context(
+            research_id, Session, settings, router.planner, progress, find, info
+        )
+        with Session() as db:
+            description = db.get(Research, research_id).description
+        with router.planner() as llm:
+            questions = research.ask(llm, description, context)
+    except Exception:
+        log.exception("questions for research %s failed", research_id)
+        questions = []
+    with Session() as db:
+        found = db.get(Research, research_id)
+        if found is None or found.status != "asking":
+            return
+        found.questions = questions
+        if questions:
+            found.message = "a few questions first"
+            db.commit()
+            return
+        found.status, found.message = "queued", "waiting for a free slot"
+        db.commit()
+    find_reels(research_id)
+
+
+def run_chat(message_id: int, Session: sessionmaker, settings: Settings, router=None) -> None:
+    """Answer a chat message on a finished research: from the reasoning stored with its
+    reels, or by starting a follow-up research for what it asks, linked to this one, which
+    like any never shows a reel shown before."""
+    with Session() as db:
+        said = db.get(ResearchMessage, message_id)
+        if said is None or said.answered:
+            return
+        found = said.research
+        about = research.describe(found)
+        history = [
+            ("Editor" if m.role == "user" else "Researcher", m.text)
+            for m in found.messages
+            if m.id < message_id
+        ]
+        text, research_id = said.text, found.id
+    follow_up = None
+    try:
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        with router.planner() as llm:
+            reply = research.chat(llm, about, history, text)
+        answer = reply.reply.strip() or "Looking for that now."
+        if reply.kind == "refine" and reply.request.strip():
+            follow_up = reply.request.strip()
+    except Exception:
+        log.exception("chat message %s failed", message_id)
+        answer = "I couldn't answer just now; try again in a minute."
+    with Session() as db:
+        said = db.get(ResearchMessage, message_id)
+        found = db.get(Research, research_id)
+        if said is None or found is None:  # the research was removed meanwhile
+            return
+        said.answered = True
+        line = ResearchMessage(research_id=research_id, role="researcher", text=answer)
+        if follow_up:
+            # The answers stay: they were about what to find, and still are.
+            new = Research(
+                description=follow_up,
+                owner_id=found.owner_id,
+                account_id=found.account_id,
+                handle=found.handle,
+                parent_id=found.id,
+                answers=found.answers,
+            )
+            db.add(new)
+            db.flush()
+            line.follow_up_id = new.id
+        db.add(line)
+        db.commit()
+    if follow_up:
+        find_reels(line.follow_up_id)
+
+
 def run_research(
     research_id: str, Session: sessionmaker, settings: Settings, router=None, find=None, info=None
 ) -> None:
@@ -349,8 +465,9 @@ def run_research(
             found = db.get(Research, research_id)
             found.status = "running"
             db.commit()
-            description, owner = found.description, found.owner_id
-            account = db.get(ResearchAccount, found.account_id) if found.account_id else None
+            owner = found.owner_id
+            # The answers to the questions asked first are part of what to find.
+            description = research.with_answers(found.description, found.answers or [])
             # Reels already edited, or shown by an earlier research, are left out.
             used = reel_codes(db.scalars(select(Job.source).where(Job.owner_id == owner)))
             seen = set(
@@ -360,23 +477,11 @@ def run_research(
                     .where(Research.owner_id == owner, Research.id != research_id)
                 )
             )
-            user = db.get(User, owner) if owner else None
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         options = {k: v for k, v in (("find", find), ("info", info)) if v is not None}
-        available = load_presets(accounts.presets_dir(user, settings.presets_dir))
-        context = research.Context(presets=research.describe_presets(available))
-        if account is not None:
-            if stale(account.learned_at):
-                learn_account(account.id, Session, router.planner, progress, find, info)
-            with Session() as db:
-                account = db.get(ResearchAccount, account.id)
-            chosen = {n: p for n, p in available.items() if n in account.presets}
-            context = research.Context(
-                handle=account.handle,
-                summary=account.summary,
-                presets=research.describe_presets(chosen or available),
-                own=set(account.own),
-            )
+        context = research_context(
+            research_id, Session, settings, router.planner, progress, find, info
+        )
         result = research.run(
             description, router.planner, used, seen, progress, context=context, **options
         )
@@ -460,9 +565,20 @@ def read_account(account_id: str) -> None:
     run_account_learning(account_id, sessions(), get_settings())
 
 
+@huey.task()
+def ask_questions(research_id: str) -> None:
+    run_questions(research_id, sessions(), get_settings())
+
+
+@huey.task()
+def answer_chat(message_id: int) -> None:
+    run_chat(message_id, sessions(), get_settings())
+
+
 PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
 CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__name__
-ACCOUNT = read_account.task_class.__name__
+ACCOUNT, QUESTIONS = read_account.task_class.__name__, ask_questions.task_class.__name__
+CHAT = answer_chat.task_class.__name__
 
 
 def recover(Session: sessionmaker) -> None:
@@ -506,6 +622,17 @@ def recover(Session: sessionmaker) -> None:
         ]
         queued = select(ResearchAccount.id).where(ResearchAccount.learn_status == "queued")
         lost_accounts = [a for a in db.scalars(queued) if (ACCOUNT, a) not in pending]
+        # Asking with no questions yet: they were being thought of. With questions, it
+        # waits for the person, not the queue.
+        thinking = [
+            found.id
+            for found in db.scalars(select(Research).where(Research.status == "asking"))
+            if not found.questions and (QUESTIONS, found.id) not in pending
+        ]
+        waiting = select(ResearchMessage.id).where(
+            ResearchMessage.role == "user", ResearchMessage.answered.is_(False)
+        )
+        lost_messages = [m for m in db.scalars(waiting) if (CHAT, m) not in pending]
         db.commit()
     for job_id in lost_jobs:
         log.info("queueing job %s again", job_id)
@@ -522,3 +649,9 @@ def recover(Session: sessionmaker) -> None:
     for account_id in lost_accounts:
         log.info("queueing the learning of account %s again", account_id)
         read_account(account_id)
+    for research_id in thinking:
+        log.info("queueing the questions of research %s again", research_id)
+        ask_questions(research_id)
+    for message_id in lost_messages:
+        log.info("queueing chat message %s again", message_id)
+        answer_chat(message_id)

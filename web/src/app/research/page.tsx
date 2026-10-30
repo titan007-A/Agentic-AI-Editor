@@ -8,9 +8,12 @@ import { toast } from "sonner";
 
 import { InstagramAccounts, learning } from "@/components/instagram-accounts";
 import { ReelCard } from "@/components/reel-card";
+import { ResearchChat } from "@/components/research-chat";
+import { ResearchQuestions } from "@/components/research-questions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,7 +45,16 @@ function sorted(items: ResearchItem[], order: Order): ResearchItem[] {
   return [...items].sort((a, b) => key(b) - key(a));
 }
 
-const running = (r: Research | null) => r?.status === "queued" || r?.status === "running";
+/** Busy on its own: searching, or thinking of the questions to ask. */
+const running = (r: Research | null) =>
+  r?.status === "queued" ||
+  r?.status === "running" ||
+  (r?.status === "asking" && r.questions.length === 0);
+/** Waiting for the person's answers. */
+const asking = (r: Research | null) => r?.status === "asking" && r.questions.length > 0;
+/** The researcher is answering a chat message. */
+const answering = (r: Research | null) =>
+  !!r?.messages.some((m) => m.role === "user" && !m.answered);
 
 // Of the reels a research gives, how many can be edited at once.
 const MAX_CHOSEN = 5;
@@ -75,6 +87,7 @@ function Researcher() {
   // The account a research is for; "" for a description alone.
   const [forAccount, setForAccount] = useState<string | null>(null);
   const [description, setDescription] = useState("");
+  const [skipQuestions, setSkipQuestions] = useState(false);
   const [busy, setBusy] = useState(false);
   const [order, setOrder] = useState<Order>("best");
   const [all, setAll] = useState(false);
@@ -135,7 +148,9 @@ function Researcher() {
     api
       .research(id)
       .then((next) => {
-        if (last.current?.id === next.id && running(last.current) && !running(next)) {
+        // Finished, or a chat answer that may have started a follow-up: the list changed.
+        const was = last.current?.id === next.id ? last.current : null;
+        if ((running(was) && !running(next)) || (answering(was) && !answering(next))) {
           refreshList();
         }
         last.current = next;
@@ -147,7 +162,7 @@ function Researcher() {
   useEffect(() => {
     load();
   }, [load]);
-  usePolling(load, running(current) ? RUNNING_POLL_MS : null);
+  usePolling(load, running(current) || answering(current) ? RUNNING_POLL_MS : null);
 
   const chosen = picks.of === id ? picks.reels : {};
   const startedHere = started.of === id ? started.jobs : [];
@@ -184,7 +199,11 @@ function Researcher() {
     event.preventDefault();
     setBusy(true);
     try {
-      const started = await api.startResearch(description.trim(), chosenAccount || null);
+      const started = await api.startResearch(
+        description.trim(),
+        chosenAccount || null,
+        skipQuestions,
+      );
       setDescription("");
       await refreshList();
       router.push(`/research/?id=${started.id}`);
@@ -271,6 +290,13 @@ function Researcher() {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={skipQuestions}
+                onCheckedChange={(on) => setSkipQuestions(on === true)}
+              />
+              Skip the questions and search at once
+            </label>
             <Button
               type="submit"
               disabled={busy || (!chosenAccount && description.trim().length < 3)}
@@ -319,6 +345,23 @@ function Researcher() {
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 space-y-1">
               <h2 className="text-lg font-semibold break-words">{named(current)}</h2>
+              {current.parent_id && (
+                <Link
+                  href={`/research/?id=${current.parent_id}`}
+                  className="text-sm text-muted-foreground underline"
+                >
+                  Asked for in an earlier research&apos;s chat
+                </Link>
+              )}
+              {current.answers.length > 0 && (
+                <ul className="text-sm text-muted-foreground">
+                  {current.answers.map((a) => (
+                    <li key={a.question} className="break-words">
+                      {a.question} <span className="text-foreground">{a.answer}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {current.brief && <p className="text-sm break-words">Looked for: {current.brief}</p>}
               {current.status === "done" && (
                 <p className="text-sm text-muted-foreground">
@@ -345,10 +388,22 @@ function Researcher() {
               <Progress value={current.progress * 100} />
               <p className="text-sm">{current.message}</p>
               <p className="text-xs text-muted-foreground">
-                This takes a minute or two: it searches slowly so the engines don&apos;t turn it
-                away.
+                {current.status === "asking"
+                  ? "It thinks of a few questions first; this takes a moment."
+                  : "This takes a few minutes: it searches slowly so the engines don't turn it away."}
               </p>
             </Card>
+          )}
+
+          {asking(current) && (
+            <ResearchQuestions
+              research={current}
+              onAnswered={(next) => {
+                // Its status in the list changes too: asking -> searching.
+                setLoaded(next);
+                refreshList();
+              }}
+            />
           )}
 
           {current.status === "failed" && (
@@ -462,6 +517,8 @@ function Researcher() {
               </ul>
             </Card>
           )}
+
+          {current.status === "done" && <ResearchChat research={current} onSent={setLoaded} />}
         </div>
       )}
     </div>

@@ -180,6 +180,35 @@ def test_a_restart_settles_the_learning_of_instagram_accounts(tmp_path, monkeypa
     assert asked == ["lost"]
 
 
+def test_a_restart_thinks_of_lost_questions_again_and_answers_lost_chat(tmp_path, monkeypatch):
+    from agentic_editor.db import Research, ResearchMessage
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add_all([
+            Research(id="thinking", description="x", status="asking"),
+            Research(id="waiting", description="x", status="asking",
+                     questions=[{"question": "Live?", "choices": ["Yes", "No"]}]),
+            Research(id="done", description="x", status="done"),
+        ])  # fmt: skip
+        db.flush()
+        db.add_all([
+            ResearchMessage(id=1, research_id="done", role="user", text="hi", answered=True),
+            ResearchMessage(id=2, research_id="done", role="researcher", text="hello"),
+            ResearchMessage(id=3, research_id="done", role="user", text="more?"),
+        ])  # fmt: skip
+        db.commit()
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: []))
+    thought, answered = [], []
+    monkeypatch.setattr(jobs, "ask_questions", thought.append)
+    monkeypatch.setattr(jobs, "answer_chat", answered.append)
+
+    jobs.recover(Session)
+
+    # Waiting with its questions asked is the person's turn, not the queue's.
+    assert thought == ["thinking"] and answered == [3]
+
+
 def test_an_account_is_learned_again_after_a_week():
     from datetime import UTC, datetime, timedelta
 

@@ -28,6 +28,17 @@ class Planner:
                 "brief": "Bryan Adams singing live",
                 "queries": ["Bryan Adams live", "#summerof69", "Bryan Adams live", "  "],
             }
+        if "questions" in schema["properties"]:
+            return {"questions": QUESTIONS}
+        if "kind" in schema["properties"]:
+            message = prompt.rsplit("Their message: ", 1)[-1]
+            if message.lower().startswith("why"):
+                return {"kind": "answer", "reply": "#1 fits best: fits.", "request": ""}
+            return {
+                "kind": "refine",
+                "reply": "Looking for older Bryan Adams concerts.",
+                "request": "Bryan Adams live concerts from the 1980s",
+            }
         reels = [line for line in prompt.split("\n") if line[:1].isdigit()]
         return {
             "ratings": [
@@ -44,6 +55,16 @@ class Planner:
 
 # The fields a rating always has, as the model leaves them when the caption doesn't say.
 NAMELESS = {"why": "", "song": "", "artist": "", "matches": "", "preset": "", "preset_why": ""}
+QUESTIONS = [
+    {"question": "Live or studio?", "choices": ["Live", "Studio", " live ", ""]},
+    {"question": "Which era?", "choices": ["80s", "90s"]},
+    {"question": "  ", "choices": ["a", "b"]},  # no question: dropped
+    # The presets decide these: dropped.
+    {"question": "What language should the subtitles be in?", "choices": ["it", "en"]},
+    {"question": "Isolated vocals or the full mix?", "choices": ["Vocals", "Full"]},
+    {"question": "What aspect ratio?", "choices": ["9:16", "1:1"]},
+    {"question": "Short punchy edits or longer clips?", "choices": ["Short", "Long"]},
+]
 
 
 def hit(code, title="", body=""):
@@ -349,3 +370,58 @@ def test_every_reel_gets_a_preset_to_edit_it_with():
     alone = [Reel("C", "", "")]
     research.suggest(alone, context)
     assert alone[0].preset == "voicehq-9x16" and "first preset" in alone[0].preset_why
+
+
+def test_questions_come_with_their_choices_each_once():
+    context = research.Context(handle="voiceshq", summary="Isolated vocals.", presets={"v": "V"})
+    llm = Planner()
+    asked = research.ask(llm, "muje italian gaane", context)
+    assert asked == [
+        {"question": "Live or studio?", "choices": ["Live", "Studio"]},
+        {"question": "Which era?", "choices": ["80s", "90s"]},
+    ]
+    assert "@voiceshq, which posts: Isolated vocals." in llm.asked[0]
+    assert "Their request: muje italian gaane" in llm.asked[0]
+    assert research.ask(Planner(broken=True), "x") == []  # the research goes on without
+
+
+def test_the_answers_are_part_of_what_to_find():
+    answers = [
+        {"question": "Live or studio?", "answer": "Live"},
+        {"question": "Which era?", "answer": "  "},
+    ]
+    assert research.with_answers("Bryan Adams", answers) == (
+        "Bryan Adams\nTheir answers to the researcher's questions:\n- Live or studio? Live"
+    )
+    assert research.with_answers("", answers).startswith("Their answers")
+    assert research.with_answers("Bryan Adams", []) == "Bryan Adams"
+
+
+def test_a_model_that_cant_plan_searches_the_request_without_the_answers():
+    asked = research.with_answers("Bryan Adams", [{"question": "Live?", "answer": "Live"}])
+    assert research.plan(Planner(broken=True), asked) == ("", ["Bryan Adams"])
+    context = research.Context(handle="voiceshq", presets={"v": "Vocals only; isolated"})
+    answers_only = research.with_answers("", [{"question": "Live?", "answer": "Live"}])
+    assert research.plan(Planner(broken=True), answers_only, context)[1][0] == "voiceshq"
+
+
+def test_the_chat_is_told_each_pick_with_its_reasoning():
+    from types import SimpleNamespace
+
+    item = SimpleNamespace(
+        rank=0, handle="attic", account="Attic", song="Heaven - Bryan Adams", relevance=0.9,
+        why="live and loud", matches="live rock", preset="v", preset_why="vocals", likes=900,
+        comments=12, per_day=30.5, virality=0.8, score=0.81, caption="Heaven, live 1985",
+    )  # fmt: skip
+    found = SimpleNamespace(
+        brief="Bryan Adams live", handle="voiceshq", description="", queries=["Bryan Adams live"],
+        answers=[{"question": "Live or studio?", "answer": "Live"}], left_out={"didn't fit": 3},
+        considered=9, items=[item],
+    )  # fmt: skip
+    about = research.describe(found)
+    assert "What was looked for: Bryan Adams live" in about
+    assert "- Live or studio? Live" in about and "3 didn't fit" in about
+    assert "#1 by @attic: song Heaven - Bryan Adams; fit 9/10 (live and loud)" in about
+    assert "900 likes, 12 comments, 30.5 a day; viral 80%; score 0.81" in about
+    reply = research.chat(Planner(), about, [("Editor", "hi")], "why #1?")
+    assert reply.kind == "answer" and reply.reply == "#1 fits best: fits."
