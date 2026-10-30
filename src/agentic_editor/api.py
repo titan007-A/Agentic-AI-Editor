@@ -99,6 +99,11 @@ class RegenerateRequest(BaseModel):
     notes: str | None = None
 
 
+class LabelsRequest(BaseModel):
+    # Preset (file) name -> the name shown for it, for the admin and every employee.
+    labels: dict[str, str]
+
+
 class KeepRequest(BaseModel):
     # Days a finished job and its videos are kept; 0 keeps them until deleted by hand.
     keep_days: int = Field(ge=0, le=cleanup.MAX_KEEP_DAYS)
@@ -716,6 +721,50 @@ def create_app(
     def preset_schema(_: User) -> dict:
         return Preset.model_json_schema()
 
+    def everyone(session: Session) -> list[Account]:
+        """The admins and every employee: whose preset folders a rename reaches."""
+        return list(session.scalars(select(Account).order_by(Account.created_at)))
+
+    def relabel(session: Session, name: str, label: str) -> list[str]:
+        """Shows the preset `name` as `label` for everyone who has it: who that is. Only the
+        name shown changes; each one's copy keeps its own settings."""
+        renamed, folders = [], set()
+        for account in everyone(session):
+            folder = presets_dir(account)
+            if folder in folders:
+                continue  # every admin shares one folder
+            folders.add(folder)
+            found = load_presets(folder).get(name)
+            if found is not None and found.label != label:
+                save_preset(found.model_copy(update={"label": label}), folder)
+                renamed.append(account.username)
+        return renamed
+
+    @app.get("/api/presets/names")
+    def preset_names(_: Admin, session: DB) -> list[dict]:
+        """Every preset anyone has, once: its name shown (the admin's, else the first
+        employee's) and who has it."""
+        found: dict[str, dict] = {}
+        seen = set()
+        for account in everyone(session):
+            folder = presets_dir(account)
+            if folder in seen:
+                continue
+            seen.add(folder)
+            for name, preset in load_presets(folder).items():
+                entry = found.setdefault(name, {"name": name, "label": preset.label, "who": []})
+                entry["who"].append(account.username)
+        return sorted(found.values(), key=lambda e: e["label"].casefold())
+
+    @app.put("/api/presets/names")
+    def rename_presets(body: LabelsRequest, _: Admin, session: DB) -> list[dict]:
+        labels = {name: " ".join(label.split()) for name, label in body.labels.items()}
+        if any(not label or len(label) > 120 for label in labels.values()):
+            raise HTTPException(422, "a preset's name can't be empty or over 120 letters")
+        for name, label in labels.items():
+            relabel(session, name, label)
+        return preset_names(_, session)
+
     @app.put("/api/presets/{name}")
     def put_preset(
         name: str, body: dict, account: User, session: DB, owner: str | None = None
@@ -725,7 +774,12 @@ def create_app(
             preset = Preset.model_validate({**body, "name": name})
         except ValidationError as exc:
             raise HTTPException(422, json.loads(exc.json(include_url=False))) from exc
+        before = presets(target).get(name)
         save_preset(preset, presets_dir(target))
+        # The admin renaming one of their own presets renames it for every employee too.
+        own = target is not None and target.role == accounts.ADMIN
+        if own and before is not None and before.label != preset.label:
+            relabel(session, name, preset.label)
         return preset.model_dump(mode="json")
 
     @app.delete("/api/presets/{name}")

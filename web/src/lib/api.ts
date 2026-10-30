@@ -273,6 +273,9 @@ export type Account = {
 
 export type JobEvent = { stage: string; message: string; progress: number; time: string };
 
+/** A preset as it is named for everyone who has it (the admin's rename card). */
+export type PresetName = { name: string; label: string; who: string[] };
+
 // Presets are edited as plain objects; the server validates them against its schema.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Preset = { name: string; label: string; platform: string } & Record<string, any>;
@@ -378,6 +381,9 @@ export const api = {
   styleDraft: (id: string) => request<StyleDraft>("GET", `/styles/${id}`),
   jobs: () => request<Job[]>("GET", "/jobs"),
   job: (id: string) => request<Job>("GET", `/jobs/${id}`),
+  presetNames: () => request<PresetName[]>("GET", "/presets/names"),
+  renamePresets: (labels: Record<string, string>) =>
+    request<PresetName[]>("PUT", "/presets/names", { labels }),
   deleteJob: (id: string) => request("DELETE", `/jobs/${id}`),
   clearJobs: () => request<{ deleted: number; freed_mb: number }>("POST", "/jobs/clear"),
   storage: () => request<{ keep_days: number }>("GET", "/system/storage"),
