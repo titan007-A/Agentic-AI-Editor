@@ -17,6 +17,7 @@ import httpx
 
 from agentic_editor import (
     agent,
+    caption,
     download,
     ffmpeg,
     framing,
@@ -666,13 +667,24 @@ def edit(
     # A preset that names the song and artist takes them from the notes or the video's
     # name, and so do its reel's title and post caption, rather than the planner's guess,
     # which can name the wrong artist; its own fields come from the notes or the name.
-    # A preset with auto_name falls back to the sound, heard once for them all.
+    # A preset with auto_name falls back to the sound, heard once for them all, and when
+    # Shazam doesn't know it (a live cover on a TV show), to what the post's caption says.
     named, songs = [], {}
 
     @functools.cache
     def heard() -> names.Song | None:
         progress("analyze", "recognising the song from its sound")
-        return shazam.song(source.path, work_dir)
+        if found := shazam.song(source.path, work_dir):
+            return found
+        if not source.description.strip():
+            return None
+        progress("analyze", "reading the song from the post's caption")
+        try:
+            with router.planner() as llm:
+                return caption.performed_in(llm, source.title, source.description)
+        except (LLMError, httpx.HTTPError) as exc:
+            log.warning("couldn't read the song from the caption: %s", exc)
+            return None
 
     for preset in presets:
         hear = heard if preset.auto_name else None

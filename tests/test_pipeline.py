@@ -155,7 +155,9 @@ class Offline:
         self.vision_open = False
 
 
-def edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken=(), calls=None, notes=None):
+def edit_offline(
+    monkeypatch, tmp_path, make_analysis, presets, broken=(), calls=None, notes=None, description=""
+):
     """pipeline.edit with analysis, planning and rendering faked; rendering `broken`
     versions raises. `calls` collects (what, whether the vision model was open)."""
     calls = [] if calls is None else calls
@@ -185,7 +187,7 @@ def edit_offline(monkeypatch, tmp_path, make_analysis, presets, broken=(), calls
     monkeypatch.setattr(pipeline.faces, "detect", detect)
     monkeypatch.setattr(pipeline.compose, "picture_area", lambda *args: (0, 0, 1920, 1080))
     settings = type("S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path})
-    source = download.Source(path=tmp_path / "source.mp4", title="Talk")
+    source = download.Source(path=tmp_path / "source.mp4", title="Talk", description=description)
     work = tmp_path / "cache" / "abc"
     return pipeline.edit(source, work, presets, settings, None, notes, lambda *args: None, "run1")
 
@@ -385,6 +387,30 @@ def test_a_failed_vision_answer_is_asked_again_next_time(monkeypatch, tmp_path, 
     assert list(json.loads((tmp_path / "subjects-m_4b.json").read_text())) == ["2.000"]
     pipeline.subject_samples(vision, tmp_path / "v.mp4", [1.0, 2.0], analysis, settings, tmp_path)
     assert asked == [[1.0, 2.0], [1.0]]
+
+
+def test_a_live_cover_shazam_doesnt_know_is_named_from_the_post_s_caption(
+    make_analysis, monkeypatch, tmp_path
+):
+    block = {"text": "Song: {song}\nArtist: {artist}", "size": 40, "anchor": "top", "offset": 100}
+    preset = Preset(name="v", label="v", min_duration=4, max_duration=8,
+                    captions={"enabled": False}, text_blocks=[block], auto_name=True)  # fmt: skip
+    read = []
+
+    def performed_in(llm, title, description):
+        read.append(description)
+        return ("Signed, Sealed, Delivered I'm Yours", "Fantasia Barrino")
+
+    monkeypatch.setattr(pipeline.caption, "performed_in", performed_in)
+    about = "Fantasia Barrino chose 'Signed, Sealed, Delivered I'm Yours' on American Idol"
+    result = edit_offline(monkeypatch, tmp_path, make_analysis, [preset], description=about)
+    assert [o.song for o in result.outputs] == [
+        ("Signed, Sealed, Delivered I'm Yours", "Fantasia Barrino")
+    ]
+    assert read == [about]
+    # No caption to read: the job asks for the name, saying where it looked.
+    with pytest.raises(RuntimeError, match="neither its sound nor its post's caption told"):
+        edit_offline(monkeypatch, tmp_path, make_analysis, [preset])
 
 
 def test_auto_name_hears_the_song_once_for_every_preset(make_analysis, monkeypatch, tmp_path):
