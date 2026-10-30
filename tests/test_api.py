@@ -1088,6 +1088,26 @@ def test_feedback_on_reels_teaches_later_researches(env, monkeypatch):
     )
 
 
+def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    asked = []
+    find = jobs.research.search
+
+    def search(queries, find_, pause=None, progress=None, sites=("instagram",)):
+        asked.append(sites)
+        return find(queries, find_, pause, progress, sites)
+
+    monkeypatch.setattr(jobs.research, "search", search)
+    both = env.client.post("/api/research", json={"description": "Queen", "skip_questions": True})
+    assert both.json()["sites"] == ["instagram", "shorts"] and asked[-1] == ("instagram", "shorts")
+    body = {"description": "Queen", "skip_questions": True, "sites": ["shorts", "shorts"]}
+    shorts = env.client.post("/api/research", json=body).json()
+    assert shorts["sites"] == ["shorts"] and asked[-1] == ("shorts",)
+    for sites in ([], ["tiktok"]):
+        body = {"description": "Queen", "sites": sites}
+        assert env.client.post("/api/research", json=body).status_code == 422
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(

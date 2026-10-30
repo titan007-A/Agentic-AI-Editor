@@ -449,8 +449,8 @@ def test_the_chat_is_told_each_pick_with_its_reasoning():
 
     item = SimpleNamespace(
         rank=0, code="ADAMS1", handle="attic", account="Attic", song="Heaven - Bryan Adams",
-        relevance=0.9, why="live and loud", matches="live rock", preset="v", preset_why="vocals", likes=900,
-        comments=12, per_day=30.5, virality=0.8, score=0.81, caption="Heaven, live 1985",
+        relevance=0.9, why="live and loud", matches="live rock", preset="v", preset_why="vocals",
+        likes=900, comments=12, per_day=30.5, virality=0.8, score=0.81, caption="Heaven, live 1985",
     )  # fmt: skip
     found = SimpleNamespace(
         brief="Bryan Adams live", handle="voiceshq", description="", queries=["Bryan Adams live"],

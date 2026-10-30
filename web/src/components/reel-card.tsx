@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, ExternalLink, Heart, ImageOff, Lightbulb, MessageCircle } from "lucide-react";
+import { Copy, ExternalLink, Eye, Heart, ImageOff, Lightbulb, MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -24,6 +24,9 @@ function ago(when: string): string {
   if (days < 730) return `${Math.round(days / 30)} months ago`;
   return `${Math.round(days / 365)} years ago`;
 }
+
+/** A YouTube Short rather than an Instagram reel (see research.YOUTUBE). */
+export const isShort = (item: ResearchItem) => item.code.startsWith("yt:");
 
 /** The model's words ended with one full stop, whether they came with one or not. */
 const ended = (text: string) => text.replace(/[.\s]+$/, "") + ".";
@@ -53,7 +56,9 @@ export function reasons(item: ResearchItem, research: Research, presets: Preset[
       : "None of your presets stood out for it.",
   );
   if (item.likes === null) {
-    lines.push("Instagram didn't show its likes without signing in, so it counted as not viral.");
+    lines.push(
+      `${isShort(item) ? "YouTube" : "Instagram"} didn't show its likes without signing in, so it counted as not viral.`,
+    );
   } else {
     const reactions = `${compact.format(item.likes)} likes${
       item.comments !== null ? ` and ${compact.format(item.comments)} comments` : ""
@@ -127,7 +132,7 @@ export function ReelCard({
         target="_blank"
         rel="noreferrer"
         className="relative block aspect-[4/5] bg-muted"
-        aria-label={`Open the reel by ${item.account || "this account"} on Instagram`}
+        aria-label={`Open the ${isShort(item) ? "Short" : "reel"} by ${item.account || "this account"} on ${isShort(item) ? "YouTube" : "Instagram"}`}
       >
         {broken ? (
           <span className="flex h-full items-center justify-center text-muted-foreground">
@@ -150,12 +155,17 @@ export function ReelCard({
       <div className="space-y-2 p-3">
         <div className="flex items-baseline justify-between gap-2">
           <p className="min-w-0 truncate font-medium">
-            {item.account || "Instagram reel"}
+            {item.account || (isShort(item) ? "YouTube Short" : "Instagram reel")}
             {item.handle && (
               <span className="ml-1 text-xs font-normal text-muted-foreground">@{item.handle}</span>
             )}
           </p>
           <p className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            {item.views !== null && (
+              <span className="flex items-center gap-0.5" title="views">
+                <Eye className="size-3" /> {compact.format(item.views)}
+              </span>
+            )}
             {item.likes !== null && (
               <span className="flex items-center gap-0.5">
                 <Heart className="size-3" /> {compact.format(item.likes)}
@@ -172,6 +182,7 @@ export function ReelCard({
           <Badge variant={(item.relevance ?? 0.5) >= 0.6 ? "default" : "outline"}>
             Fit {item.relevance === null ? "?" : percent(item.relevance)}
           </Badge>
+          {isShort(item) && <Badge variant="outline">YouTube Short</Badge>}
           <Badge variant="secondary">Viral {percent(item.virality)}</Badge>
           {item.posted_at && <Badge variant="outline">{ago(item.posted_at)}</Badge>}
           {item.preset && (
