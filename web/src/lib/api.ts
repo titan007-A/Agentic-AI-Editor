@@ -121,13 +121,34 @@ export type ResearchItem = {
   used: boolean;
 };
 
+/** A question the researcher asks before searching, with suggested answers. */
+export type ResearchQuestion = { question: string; choices: string[] };
+
+export type ResearchAnswer = { question: string; answer: string };
+
+/** A line of the chat on a research; the researcher's may have started a follow-up. */
+export type ResearchMessage = {
+  id: number;
+  role: "user" | "researcher";
+  text: string;
+  answered: boolean;
+  follow_up_id: string | null;
+  created_at: string;
+};
+
 export type Research = {
   id: string;
   /** What to find; for an account, an optional focus. */
   description: string;
   account_id: string | null;
   handle: string;
-  status: "queued" | "running" | "done" | "failed";
+  /** The research whose chat asked for this one. */
+  parent_id: string | null;
+  /** "asking": thinking of questions (none yet), then waiting for the answers. */
+  status: "asking" | "queued" | "running" | "done" | "failed";
+  questions: ResearchQuestion[];
+  answers: ResearchAnswer[];
+  messages: ResearchMessage[];
   message: string;
   progress: number;
   /** The request as the model understood it, in English. */
@@ -302,8 +323,16 @@ export const api = {
     request<Job>("POST", `/outputs/${outputId}/caption`, named),
   researches: () => request<Research[]>("GET", "/research"),
   research: (id: string) => request<Research>("GET", `/research/${id}`),
-  startResearch: (description: string, accountId: string | null = null) =>
-    request<Research>("POST", "/research", { description, account_id: accountId }),
+  startResearch: (description: string, accountId: string | null = null, skipQuestions = false) =>
+    request<Research>("POST", "/research", {
+      description,
+      account_id: accountId,
+      skip_questions: skipQuestions,
+    }),
+  answerResearch: (id: string, answers: ResearchAnswer[]) =>
+    request<Research>("POST", `/research/${id}/answers`, { answers }),
+  chatOnResearch: (id: string, text: string) =>
+    request<Research>("POST", `/research/${id}/chat`, { text }),
   deleteResearch: (id: string) => request("DELETE", `/research/${id}`),
   instagramAccounts: () => request<InstagramAccount[]>("GET", "/research/accounts"),
   addInstagramAccount: (handle: string, presets: string[]) =>

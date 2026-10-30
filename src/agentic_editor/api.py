@@ -35,6 +35,7 @@ from agentic_editor.db import (
     Output,
     Research,
     ResearchAccount,
+    ResearchMessage,
     Setting,
     StyleDraft,
 )
@@ -113,6 +114,30 @@ class ResearchRequest(BaseModel):
     # What to find; for an account, an optional focus.
     description: str = Field(default="", max_length=1000)
     account_id: str | None = None
+    # Search at once, without the questions the researcher asks first.
+    skip_questions: bool = False
+
+
+class Answer(BaseModel):
+    question: str = Field(max_length=300)
+    answer: str = Field(default="", max_length=500)
+
+
+class AnswersRequest(BaseModel):
+    answers: list[Answer] = Field(default=[], max_length=12)  # none: the questions skipped
+
+
+class ChatRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class ResearchMessageView(BaseModel):
+    id: int
+    role: str
+    text: str
+    answered: bool
+    follow_up_id: str | None
+    created_at: datetime
 
 
 class ResearchAccountRequest(BaseModel):
@@ -169,9 +194,12 @@ class ResearchView(BaseModel):
     description: str
     account_id: str | None
     handle: str
+    parent_id: str | None
     status: str
     message: str
     progress: float
+    questions: list[dict]
+    answers: list[dict]
     brief: str
     queries: list[str]
     used: int
@@ -184,6 +212,7 @@ class ResearchView(BaseModel):
     # Shown to the admin: the employee who asked for it.
     owner: str | None = None
     items: list[ResearchItemView] = []
+    messages: list[ResearchMessageView] = []
 
 
 class FeedRequest(BaseModel):
@@ -722,7 +751,7 @@ def create_app(
     def research_view(
         found: Research, account: Account, session: Session, items: bool = False
     ) -> ResearchView:
-        fields = ResearchView.model_fields.keys() - {"found", "owner", "items"}
+        fields = ResearchView.model_fields.keys() - {"found", "owner", "items", "messages"}
         view = ResearchView(
             **{k: getattr(found, k) for k in fields},
             found=len(found.items),
@@ -735,6 +764,10 @@ def create_app(
             view.items = [
                 ResearchItemView(**{k: getattr(i, k) for k in names}, used=i.code in used)
                 for i in found.items
+            ]
+            view.messages = [
+                ResearchMessageView(**{k: getattr(m, k) for k in ResearchMessageView.model_fields})
+                for m in found.messages
             ]
         return view
 
@@ -829,10 +862,47 @@ def create_app(
             account_id=body.account_id or None,
             handle=handle,
         )
+        if not body.skip_questions:
+            found.status, found.message = "asking", "thinking of a few questions"
         session.add(found)
+        session.commit()
+        if body.skip_questions:
+            jobs.find_reels(found.id)
+        else:
+            jobs.ask_questions(found.id)
+        return research_view(found, account, session)
+
+    @app.post("/api/research/{research_id}/answers")
+    def answer_questions(
+        research_id: str, body: AnswersRequest, account: User, session: DB
+    ) -> ResearchView:
+        found = find_research(research_id, session, account)
+        if found.status != "asking" or not found.questions:
+            raise HTTPException(409, "the research isn't waiting for answers")
+        asked = {q["question"] for q in found.questions}
+        found.answers = [
+            a.model_dump() for a in body.answers if a.question in asked and a.answer.strip()
+        ]
+        found.status, found.message = "queued", "waiting for a free slot"
         session.commit()
         jobs.find_reels(found.id)
         return research_view(found, account, session)
+
+    @app.post("/api/research/{research_id}/chat")
+    def chat_on_research(
+        research_id: str, body: ChatRequest, account: User, session: DB
+    ) -> ResearchView:
+        found = find_research(research_id, session, account)
+        if found.status != "done":
+            raise HTTPException(409, "chat opens once the research is done")
+        if any(m.role == "user" and not m.answered for m in found.messages):
+            raise HTTPException(409, "the researcher is still answering")
+        said = ResearchMessage(research_id=found.id, role="user", text=body.text.strip())
+        session.add(said)
+        session.commit()
+        jobs.answer_chat(said.id)
+        session.refresh(found)
+        return research_view(found, account, session, items=True)
 
     @app.get("/api/research")
     def list_research(account: User, session: DB) -> list[ResearchView]:

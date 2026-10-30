@@ -229,6 +229,11 @@ Hinglish too), ranked by how well they fit and how viral they are:
   it posts (artists, eras, languages, format, captions, what got the most likes). This is
   done when the account is added, on "Learn again", and before a research when it is a
   week old. With none of its reels found, a research goes by the presets.
+- **Questions first.** Before searching, the researcher asks up to 6 short questions whose
+  answers change what to find (live or studio, eras, languages, vocals only or the full
+  mix, which preset, how recent), each with suggested answers to tap and room for your
+  own words. The answers become part of the request; "Skip questions" (or the box on the
+  form) searches at once.
 - **Understanding first.** The planning model writes a one-line English brief of what to
   find (from the account, its presets and an optional focus, or from the description) and
   about 15 searches for it: artists, songs, concerts, hashtags, languages. The request's
@@ -252,6 +257,11 @@ Hinglish too), ranked by how well they fit and how viral they are:
   day, and its score against the best reel left out.
 - Choose up to 5 to edit: each comes with the preset it suits (change it if you like),
   and "Edit selected" starts a job for each, listed on the research with links.
+- **Chat.** Under a finished research, ask the researcher about its picks ("why #2?",
+  "which is the most viral?"), answered from the reasoning it stored, in the language you
+  wrote in; or ask for something else ("more Italian", "older concerts") and it starts a
+  follow-up research, linked both ways, which keeps the earlier answers and never shows a
+  reel shown before.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.

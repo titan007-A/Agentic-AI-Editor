@@ -25,6 +25,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -50,6 +51,7 @@ RATE_BATCH = 10
 # also finds what only shares a word with the request.
 MIN_FIT = 0.5
 MIN_QUERIES = 8  # fewer from the model, and it is asked once more
+MAX_QUESTIONS = 6  # asked before a research
 # Relevance leads: a reel that doesn't fit stays low however viral, and among those that
 # fit the viral ones come first.
 VIRAL_SHARE = 0.5
@@ -147,6 +149,22 @@ class Summary(BaseModel):
     summary: str = Field(max_length=1500)
 
 
+class Question(BaseModel):
+    question: str = Field(max_length=200)
+    choices: list[str] = Field(min_length=2, max_length=5)
+
+
+class Questions(BaseModel):
+    questions: list[Question] = Field(min_length=1, max_length=8)
+
+
+class Reply(BaseModel):
+    # All required, as for ratings: the model leaves out what it may.
+    kind: Literal["answer", "refine"]
+    reply: str = Field(max_length=800)
+    request: str = Field(max_length=400)
+
+
 # How searches are written, for a request and for an account alike.
 SEARCHES = (
     "Then write {count} short web searches (2-6 words each) that find reels of exactly that: "
@@ -195,6 +213,28 @@ RATE = (
     "still an Italian song. A preset's language is the text the editor adds, not something "
     "the reel must have.\n\n"
     "What they want: {wish}\n\nTheir presets:\n{presets}\n\nReels:\n{reels}"
+)
+ASK = (
+    "You find Instagram reels for a video editor who reposts and edits them. Before "
+    "searching, ask them up to {count} short questions whose answers would change which "
+    "reels to find: for example live or studio, which eras, which languages or countries, "
+    "isolated vocals or the full mix, which of their presets it is for, how recent or how "
+    "viral, artists to include or to avoid. Don't ask what they already said. Give each "
+    "question 2-5 suggested answers of a few words. Write in plain English, even when they "
+    "wrote in Hindi or Hinglish.\n\n{about}"
+)
+CHAT = (
+    "You are the researcher who found these Instagram reels for a video editor. Below is "
+    "what you looked for and why you gave each reel. They wrote a message.\n"
+    "- If they ask about the reels (why one, which is the most viral, which suits a "
+    "preset...), set kind 'answer': answer in reply from what is below only, short and "
+    "plain, naming reels by their number; request ''.\n"
+    "- If they want other or more reels ('more Italian', 'older concerts', 'no Michael "
+    "Jackson'), set kind 'refine': in request, one English sentence of what a new research "
+    "should find, keeping what still holds of what was looked for; in reply, one line "
+    "saying what you will look for.\n"
+    "Reply in the language they wrote in.\n\n{about}\n\nThe chat so far:\n{history}\n\n"
+    "Their message: {message}"
 )
 LEARN = (
     "These are reels the Instagram account @{handle} posted, with their likes. In a few "
@@ -285,6 +325,93 @@ def plan(llm, description: str, context: Context | None = None) -> tuple[str, li
 def _tidy(queries: list[str]) -> list[str]:
     tidy = (" ".join(q.replace("#", " ").split()) for q in queries)
     return list(dict.fromkeys(q for q in tidy if q))
+
+
+def _about(description: str, context: Context) -> str:
+    """Whom a research is for and what they asked, as the model is told it."""
+    parts = []
+    if context.handle:
+        summary = context.summary or "(not known yet)"
+        parts.append(f"They run the Instagram account @{context.handle}, which posts: {summary}")
+    if description.strip():
+        parts.append(f"Their request: {description.strip()}")
+    parts.append(f"Their presets:\n{_preset_lines(context.presets)}")
+    return "\n\n".join(parts)
+
+
+def ask(llm, description: str, context: Context | None = None) -> list[dict]:
+    """A few questions whose answers change which reels to find, each with suggested
+    answers; none when the model can't answer (the research then goes on without)."""
+    prompt = ASK.format(count=MAX_QUESTIONS, about=_about(description, context or Context()))
+    try:
+        reply = parse(
+            Questions,
+            llm.chat_json([{"role": "user", "content": prompt}], Questions.model_json_schema()),
+        )
+    except LLMError as exc:
+        log.warning("couldn't think of questions: %s", exc)
+        return []
+    asked = []
+    for q in reply.questions[:MAX_QUESTIONS]:
+        once: dict[str, str] = {}  # each choice once, whatever its case, as first written
+        for choice in (c.strip() for c in q.choices):
+            if choice:
+                once.setdefault(choice.casefold(), choice)
+        choices = list(once.values())
+        if q.question.strip() and choices:
+            asked.append({"question": q.question.strip(), "choices": choices})
+    return asked
+
+
+def with_answers(description: str, answers: list[dict]) -> str:
+    """The request with the answers to the questions after it, for planning and rating."""
+    lines = [
+        f"- {a['question']} {a['answer'].strip()}" for a in answers if a.get("answer", "").strip()
+    ]
+    if not lines:
+        return description
+    answered = "Their answers to the researcher's questions:\n" + "\n".join(lines)
+    return f"{description.strip()}\n{answered}" if description.strip() else answered
+
+
+def describe(found) -> str:
+    """A finished research (the database's) as the chat model is told it: what was looked
+    for, and each pick with the reasoning stored for it."""
+    lines = [f"What was looked for: {found.brief or found.description or '(not known)'}"]
+    if found.handle:
+        lines.append(f"For the Instagram account @{found.handle}")
+    if found.description:
+        lines.append(f"Their request: {found.description}")
+    lines += [f"- {a['question']} {a['answer']}" for a in found.answers or []]
+    if found.queries:
+        lines.append("Searches made: " + "; ".join(found.queries))
+    if found.left_out:
+        left = ", ".join(f"{n} {why}" for why, n in found.left_out.items())
+        lines.append(f"Reels found but not given: {left}")
+    lines.append(f"Reels rated: {found.considered}; given, best first:")
+    for item in found.items:
+        who = f"@{item.handle}" if item.handle else item.account or "?"
+        fit = "?" if item.relevance is None else f"{round(item.relevance * 10)}/10"
+        lines.append(
+            f"#{item.rank + 1} by {who}: song {item.song or '?'}; fit {fit} ({item.why}); "
+            f"matches {item.matches or '?'}; preset {item.preset or '-'} ({item.preset_why}); "
+            f"{item.likes if item.likes is not None else '?'} likes, "
+            f"{item.comments if item.comments is not None else '?'} comments, "
+            f"{item.per_day if item.per_day is not None else '?'} a day; "
+            f"viral {round(item.virality * 100)}%; score {item.score:.2f}; "
+            f"caption: {_short(item.caption, 160)}"
+        )
+    return "\n".join(lines)
+
+
+def chat(llm, about: str, history: list[tuple[str, str]], message: str) -> Reply:
+    """The researcher's answer to a chat message on a research `about` (see describe):
+    an answer from its reasoning, or a request for a follow-up research."""
+    said = "\n".join(f"{who}: {text}" for who, text in history) or "(nothing yet)"
+    prompt = CHAT.format(about=about, history=said, message=message)
+    return parse(
+        Reply, llm.chat_json([{"role": "user", "content": prompt}], Reply.model_json_schema())
+    )
 
 
 def _engines(query: str, count: int) -> list[dict]:
