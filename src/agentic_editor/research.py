@@ -1,5 +1,5 @@
-"""The researcher: Instagram reels for what a person describes, ranked by how well they fit
-it and how far they have spread.
+"""The researcher: Instagram reels and YouTube Shorts for what a person describes, ranked by
+how well they fit it and how far they have spread.
 
 Instagram has no open search, so it is searched the way a chat assistant does: web search
 engines with "site:instagram.com/reel ..." (the `ddgs` library, free, no key, over several
@@ -8,7 +8,9 @@ looked up with yt-dlp without signing in (account, caption, likes, comments, dat
 and length aren't given then), and the planning model rates how well each fits.
 
 Engines index only part of Instagram, mostly popular reels a few days old or more, so a
-research finds plenty, never everything.
+research finds plenty, never everything. YouTube is searched the same way
+("site:youtube.com/shorts ..."), for Shorts only: a link to a video, or one YouTube says is
+longer than a Short, is left out.
 
 A research can be for one of the owner's Instagram accounts: the account is learned first
 (its own reels, found the same way, and what the planning model reads in them), and the
@@ -39,7 +41,16 @@ log = logging.getLogger(__name__)
 
 # A reel's link, also one under an account ("instagram.com/<name>/reel/<code>").
 REEL = re.compile(r"https?://(?:www\.|m\.)?instagram\.com/(?:[\w.]+/)?(?:reels?|p)/([\w-]{5,})")
-SITE = "site:instagram.com/reel"
+# A YouTube video's link; a research takes only Shorts ("/shorts/"), but an edited one may
+# have been given as a watch link too.
+VIDEO = re.compile(
+    r"https?://(?:www\.|m\.)?(?:youtube\.com/(?:shorts/|watch\?v=)|youtu\.be/)([\w-]{11})"
+)
+YOUTUBE = "yt:"  # a Short's code is this and its video id: Instagram codes have no colon
+# Where a research searches, as the engines are asked.
+SITES = {"instagram": "site:instagram.com/reel", "shorts": "site:youtube.com/shorts"}
+SITE = SITES["instagram"]
+MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
 MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
@@ -76,8 +87,10 @@ class Reel:
     comments: int | None = None
     posted: datetime | None = None
     thumbnail: str = ""
-    handle: str = ""  # the account's Instagram name, from the lookup
+    handle: str = ""  # the account's Instagram name (a YouTube channel's), from the lookup
     looked_up: bool = False
+    views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
+    long: bool = False  # a YouTube video, not a Short: left out
     relevance: float | None = None  # 0-1, None when the model couldn't rate it
     why: str = ""
     song: str = ""  # "Song - Artist" when the model could tell
@@ -89,6 +102,10 @@ class Reel:
     virality: float = 0.0  # 0-1 within this research
     score: float = 0.0
     seen: bool = False  # shown by an earlier research
+
+    @property
+    def short(self) -> bool:
+        return self.code.startswith(YOUTUBE)
 
 
 @dataclass
@@ -102,7 +119,7 @@ class Result:
     repeats: int = 0  # shown by an earlier research, so left out
     considered: int = 0  # reels looked up and rated
     # Reels found but not given, by why: "edited", "shown before", "the account's own",
-    # "didn't fit", "hidden account", "same account".
+    # "didn't fit", "hidden account", "not a Short", "same account".
     left_out: dict[str, int] = field(default_factory=dict)
     cutoff: float | None = None  # the best score of the reels that fit but weren't given
 
@@ -203,7 +220,8 @@ PLAN_FOR = (
     "Hinglish, comes first. " + SEARCHES
 )
 RATE = (
-    "Rate how well each Instagram reel fits what the editor wants, from its account, caption "
+    "Rate how well each reel (an Instagram reel or a YouTube Short) fits what the editor "
+    "wants, from its account, caption "
     "and search snippet. Judge only the content asked for, not popularity: music of another "
     "language or country than the one asked for is 0, and so is a reel that only shares a "
     "word or a place name with the request. For each reel give:\n"
@@ -266,11 +284,17 @@ LEARN = (
 
 
 def code_of(link: str) -> str | None:
-    match = REEL.match(link.strip())
-    return match.group(1) if match else None
+    """An Instagram reel's code, or "yt:" and a YouTube video's id."""
+    if match := REEL.match(link.strip()):
+        return match.group(1)
+    if match := VIDEO.match(link.strip()):
+        return YOUTUBE + match.group(1)
+    return None
 
 
 def reel_url(code: str) -> str:
+    if code.startswith(YOUTUBE):
+        return f"https://www.youtube.com/shorts/{code.removeprefix(YOUTUBE)}"
     return f"https://www.instagram.com/reel/{code}/"
 
 
@@ -440,7 +464,8 @@ def describe(found) -> str:
         who = f"@{item.handle}" if item.handle else item.account or "?"
         fit = "?" if item.relevance is None else f"{round(item.relevance * 10)}/10"
         lines.append(
-            f"#{item.rank + 1} by {who}: song {item.song or '?'}; fit {fit} ({item.why}); "
+            f"#{item.rank + 1} {'YouTube Short' if item.code.startswith(YOUTUBE) else 'reel'}"
+            f" by {who}: song {item.song or '?'}; fit {fit} ({item.why}); "
             f"matches {item.matches or '?'}; preset {item.preset or '-'} ({item.preset_why}); "
             f"{item.likes if item.likes is not None else '?'} likes, "
             f"{item.comments if item.comments is not None else '?'} comments, "
@@ -475,26 +500,35 @@ def _engines(query: str, count: int) -> list[dict]:
 
 
 def search(
-    queries: list[str], find=_engines, pause: float | None = None, progress: Progress | None = None
+    queries: list[str],
+    find=_engines,
+    pause: float | None = None,
+    progress: Progress | None = None,
+    sites: tuple[str, ...] = ("instagram",),
 ) -> tuple[list[Reel], list[str]]:
-    """Reels the searches find, each once, in the order found; and the searches that
-    failed (an engine turned it away, or none answered)."""
+    """Reels the searches find on each of `sites` (see SITES), each once, in the order
+    found; and the searches that failed (an engine turned it away, or none answered)."""
     pause = PAUSE if pause is None else pause
     found: dict[str, Reel] = {}
     failed = []
-    for n, query in enumerate(queries):
+    asked = [(query, site) for query in queries for site in sites]
+    for n, (query, site) in enumerate(asked):
         if n and pause:
             time.sleep(pause)
         if progress:
-            progress(f"searching: {query}", 0.05 + 0.35 * n / len(queries))
+            where = " (YouTube Shorts)" if site == "shorts" else ""
+            progress(f"searching: {query}{where}", 0.05 + 0.35 * n / len(asked))
         try:
-            hits = find(f"{SITE} {query}", PER_QUERY)
+            hits = find(f"{SITES[site]} {query}", PER_QUERY)
         except Exception as exc:  # the engines are third parties: one failing is one less
-            log.warning("search %r failed: %s", query, exc)
+            log.warning("search %r on %s failed: %s", query, site, exc)
             failed.append(query)
             continue
         for hit in hits:
-            code = code_of(hit.get("href", ""))
+            link = hit.get("href", "")
+            code = code_of(link)
+            if code and code.startswith(YOUTUBE) and "/shorts/" not in link:
+                continue  # a video, not a Short
             if code and code not in found:
                 found[code] = Reel(
                     code=code,
@@ -539,9 +573,19 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
         except Exception as exc:
             log.info("couldn't look up %s: %s", reel.url, str(exc)[:200])
             return
-        reel.account = meta.get("uploader") or meta.get("channel") or ""
-        reel.handle = (meta.get("channel") or "").lower()
-        reel.caption = (meta.get("description") or meta.get("title") or "")[:1000]
+        if reel.short:
+            # A Short is vertical and at most MAX_SHORT long; YouTube says which it is.
+            kind, length = meta.get("media_type"), meta.get("duration") or 0
+            reel.long = kind not in (None, "short") or length > MAX_SHORT
+            reel.account = meta.get("channel") or meta.get("uploader") or ""
+            reel.handle = (meta.get("uploader_id") or "").removeprefix("@").lower()
+            title, about = meta.get("title") or "", meta.get("description") or ""
+            reel.caption = "\n".join(t for t in (title, about) if t)[:1000]
+            reel.views = _count(meta.get("view_count"))
+        else:
+            reel.account = meta.get("uploader") or meta.get("channel") or ""
+            reel.handle = (meta.get("channel") or "").lower()
+            reel.caption = (meta.get("description") or meta.get("title") or "")[:1000]
         reel.likes = _count(meta.get("like_count"))
         reel.comments = _count(meta.get("comment_count"))
         if stamp := meta.get("timestamp"):
@@ -579,7 +623,8 @@ def rate(
     for start in range(0, len(reels), batch):
         group = reels[start : start + batch]
         lines = "\n".join(
-            f"{n}. account: {r.account or '?'} | caption: {_short(r.caption or r.title, 300)}"
+            f"{n}. {'YouTube Short' if r.short else 'Instagram reel'}"
+            f" | account: {r.account or '?'} | caption: {_short(r.caption or r.title, 300)}"
             f" | search: {_short(r.snippet, 200)}"
             for n, r in enumerate(group, 1)
         )
@@ -743,6 +788,7 @@ def run(
     info=_info,
     pause: float | None = None,
     context: Context | None = None,
+    sites: tuple[str, ...] = ("instagram",),
 ) -> Result:
     """Search, look up, rate, rank and pick the best few. `planner()` opens the planning
     model, which holds the GPU, so it is opened only to plan and to rate, never while
@@ -753,7 +799,7 @@ def run(
     progress("planning the searches", 0.02)
     with planner() as llm:
         brief, queries = plan(llm, description, context)
-    reels, failed = search(queries, find, pause, progress)
+    reels, failed = search(queries, find, pause, progress, sites)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
     left_out = {
@@ -769,6 +815,8 @@ def run(
         reels = [r for r in reels if r.handle != context.handle]
     left_out["hidden account"] = sum(r.handle in context.hidden for r in reels)
     reels = [r for r in reels if r.handle not in context.hidden]
+    left_out["not a Short"] = sum(r.long for r in reels)
+    reels = [r for r in reels if not r.long]
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:

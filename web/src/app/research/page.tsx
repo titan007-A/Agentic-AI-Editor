@@ -26,6 +26,7 @@ import {
   type Preset,
   type Research,
   type ResearchItem,
+  type Site,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +57,12 @@ const asking = (r: Research | null) => r?.status === "asking" && r.questions.len
 /** The researcher is answering a chat message. */
 const answering = (r: Research | null) =>
   !!r?.messages.some((m) => m.role === "user" && !m.answered);
+
+// Where a research can search, in the order shown and sent.
+const SITES: { site: Site; label: string }[] = [
+  { site: "instagram", label: "Instagram reels" },
+  { site: "shorts", label: "YouTube Shorts" },
+];
 
 // Of the reels a research gives, how many can be edited at once.
 const MAX_CHOSEN = 5;
@@ -89,6 +96,7 @@ function Researcher() {
   const [forAccount, setForAccount] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [skipQuestions, setSkipQuestions] = useState(false);
+  const [sites, setSites] = useState<Site[]>(["instagram", "shorts"]);
   const [busy, setBusy] = useState(false);
   const [order, setOrder] = useState<Order>("best");
   const [all, setAll] = useState(false);
@@ -204,6 +212,7 @@ function Researcher() {
         description.trim(),
         chosenAccount || null,
         skipQuestions,
+        sites,
       );
       setDescription("");
       await refreshList();
@@ -233,9 +242,9 @@ function Researcher() {
       <div>
         <h1 className="font-hand text-4xl font-bold">Researcher</h1>
         <p className="text-sm text-muted-foreground">
-          It searches Instagram through web search engines for reels like your account&apos;s best
-          ones, or for what you describe, and gives the 8 that fit best and are most viral, never
-          one it showed you before. Choose up to 5 of them to edit.
+          It searches Instagram and YouTube Shorts through web search engines for reels like your
+          account&apos;s best ones, or for what you describe, and gives the 8 that fit best and are
+          most viral, never one it showed you before. Choose up to 5 of them to edit.
         </p>
       </div>
 
@@ -295,6 +304,28 @@ function Researcher() {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+            <fieldset className="space-y-1">
+              <legend className="text-sm font-medium">Search</legend>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {SITES.map(({ site, label }) => (
+                  <label key={site} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={sites.includes(site)}
+                      onCheckedChange={(on) =>
+                        setSites(
+                          on
+                            ? SITES.map((s) => s.site).filter(
+                                (s) => s === site || sites.includes(s),
+                              )
+                            : sites.filter((s) => s !== site),
+                        )
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
                 checked={skipQuestions}
@@ -304,7 +335,9 @@ function Researcher() {
             </label>
             <Button
               type="submit"
-              disabled={busy || (!chosenAccount && description.trim().length < 3)}
+              disabled={
+                busy || sites.length === 0 || (!chosenAccount && description.trim().length < 3)
+              }
             >
               <Search /> {busy ? "Starting..." : "Find reels"}
             </Button>

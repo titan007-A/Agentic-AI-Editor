@@ -93,11 +93,13 @@ export type ResearchItem = {
   query: string;
   /** Its display name. */
   account: string;
-  /** Its Instagram name, shown as @handle. */
+  /** Its Instagram name (a YouTube channel's), shown as @handle. */
   handle: string;
   caption: string;
   likes: number | null;
   comments: number | null;
+  /** A YouTube Short's; Instagram doesn't show them. */
+  views: number | null;
   posted_at: string | null;
   thumbnail: string;
   /** 0-1: how well it fits the description; null when the model couldn't rate it. */
@@ -135,6 +137,9 @@ export type Feedback = {
 
 export type HiddenAccount = { handle: string; created_at: string };
 
+/** Where a research searches: Instagram reels, YouTube Shorts. */
+export type Site = "instagram" | "shorts";
+
 /** A question the researcher asks before searching, with suggested answers. */
 export type ResearchQuestion = { question: string; choices: string[] };
 
@@ -156,6 +161,8 @@ export type Research = {
   description: string;
   account_id: string | null;
   handle: string;
+  /** Where it searched. */
+  sites: Site[];
   /** The research whose chat asked for this one. */
   parent_id: string | null;
   /** "asking": thinking of questions (none yet), then waiting for the answers. */
@@ -343,11 +350,17 @@ export const api = {
     request<Job>("POST", `/outputs/${outputId}/caption`, named),
   researches: () => request<Research[]>("GET", "/research"),
   research: (id: string) => request<Research>("GET", `/research/${id}`),
-  startResearch: (description: string, accountId: string | null = null, skipQuestions = false) =>
+  startResearch: (
+    description: string,
+    accountId: string | null = null,
+    skipQuestions = false,
+    sites: Site[] = ["instagram", "shorts"],
+  ) =>
     request<Research>("POST", "/research", {
       description,
       account_id: accountId,
       skip_questions: skipQuestions,
+      sites,
     }),
   answerResearch: (id: string, answers: ResearchAnswer[]) =>
     request<Research>("POST", `/research/${id}/answers`, { answers }),

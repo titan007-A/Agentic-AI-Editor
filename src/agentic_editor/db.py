@@ -255,6 +255,8 @@ class Research(Base):
         ForeignKey("research_accounts.id", ondelete="SET NULL"), index=True
     )
     handle: Mapped[str] = mapped_column(Text, default="")  # kept if the account is removed
+    # Where it searches: "instagram" reels and YouTube "shorts" (see research.SITES).
+    sites: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["instagram"])
     # A follow-up asked for in an earlier research's chat ("more Italian").
     parent_id: Mapped[str | None] = mapped_column(
         ForeignKey("research.id", ondelete="SET NULL"), index=True
@@ -324,6 +326,7 @@ class ResearchItem(Base):
     caption: Mapped[str] = mapped_column(Text, default="")
     likes: Mapped[int | None]
     comments: Mapped[int | None]
+    views: Mapped[int | None]  # a YouTube Short's; Instagram doesn't show them
     posted_at: Mapped[datetime | None]
     thumbnail: Mapped[str] = mapped_column(Text, default="")
     # 0-1 each: how well it fits (None when the model couldn't rate it), how far it spread

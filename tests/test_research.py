@@ -448,9 +448,9 @@ def test_the_chat_is_told_each_pick_with_its_reasoning():
     from types import SimpleNamespace
 
     item = SimpleNamespace(
-        rank=0, handle="attic", account="Attic", song="Heaven - Bryan Adams", relevance=0.9,
-        why="live and loud", matches="live rock", preset="v", preset_why="vocals", likes=900,
-        comments=12, per_day=30.5, virality=0.8, score=0.81, caption="Heaven, live 1985",
+        rank=0, code="ADAMS1", handle="attic", account="Attic", song="Heaven - Bryan Adams",
+        relevance=0.9, why="live and loud", matches="live rock", preset="v", preset_why="vocals",
+        likes=900, comments=12, per_day=30.5, virality=0.8, score=0.81, caption="Heaven, live 1985",
     )  # fmt: skip
     found = SimpleNamespace(
         brief="Bryan Adams live", handle="voiceshq", description="", queries=["Bryan Adams live"],
@@ -460,7 +460,68 @@ def test_the_chat_is_told_each_pick_with_its_reasoning():
     about = research.describe(found)
     assert "What was looked for: Bryan Adams live" in about
     assert "- Live or studio? Live" in about and "3 didn't fit" in about
-    assert "#1 by @attic: song Heaven - Bryan Adams; fit 9/10 (live and loud)" in about
+    assert "#1 reel by @attic: song Heaven - Bryan Adams; fit 9/10 (live and loud)" in about
     assert "900 likes, 12 comments, 30.5 a day; viral 80%; score 0.81" in about
     reply = research.chat(Planner(), about, [("Editor", "hi")], "why #1?")
     assert reply.kind == "answer" and reply.reply == "#1 fits best: fits."
+
+
+@pytest.mark.parametrize(
+    ("link", "code"),
+    [
+        ("https://www.youtube.com/shorts/qOADrQfaGPY", "yt:qOADrQfaGPY"),
+        ("https://youtube.com/shorts/qOADrQfaGPY?feature=share", "yt:qOADrQfaGPY"),
+        ("https://www.youtube.com/watch?v=qOADrQfaGPY", "yt:qOADrQfaGPY"),  # edited from one
+        ("https://youtu.be/qOADrQfaGPY", "yt:qOADrQfaGPY"),
+        ("https://www.youtube.com/@ChiaraTomao", None),
+    ],
+)
+def test_youtube_links_have_codes_too(link, code):
+    assert research.code_of(link) == code
+    if code:
+        assert research.reel_url(code) == "https://www.youtube.com/shorts/qOADrQfaGPY"
+
+
+def test_a_research_finds_youtube_shorts_too_but_never_videos():
+    llm = Planner()
+    asked = []
+
+    def find(query, count):
+        asked.append(query)
+        if query.startswith("site:youtube.com/shorts"):
+            return [
+                {"href": "https://www.youtube.com/shorts/SHORT000001"},
+                {"href": "https://www.youtube.com/shorts/LONGVIDEO01"},  # says it's longer
+                {"href": "https://www.youtube.com/watch?v=WATCHVIDEO1"},  # a video: skipped
+            ]
+        return [hit("ADAMS1")]
+
+    def info(url):
+        if "SHORT000001" in url:
+            return {"channel": "Chiara", "uploader_id": "@ChiaraTomao", "media_type": "short",
+                    "duration": 30, "title": "Bryan Adams live", "description": "Summer of 69",
+                    "view_count": 27885, "like_count": 320}  # fmt: skip
+        if "LONGVIDEO01" in url:
+            return {"channel": "Full", "uploader_id": "@full", "media_type": "video",
+                    "duration": 600, "title": "Bryan Adams full concert"}  # fmt: skip
+        return {"channel": "attic", "description": "Bryan Adams live", "like_count": 900}
+
+    result = research.run(
+        "Bryan Adams live", lambda: nullcontext(llm), set(), set(), lambda *a: None, find, info,
+        0, sites=("instagram", "shorts"),
+    )  # fmt: skip
+    assert sorted(r.code for r in result.reels) == ["ADAMS1", "yt:SHORT000001"]
+    assert result.left_out == {"not a Short": 1}
+    assert {q.split(" ")[0] for q in asked} == {research.SITE, "site:youtube.com/shorts"}
+    short = next(r for r in result.reels if r.short)
+    assert (short.account, short.handle, short.views, short.likes) == (
+        "Chiara",
+        "chiaratomao",
+        27885,
+        320,
+    )
+    assert short.url == "https://www.youtube.com/shorts/SHORT000001"
+    assert short.caption == "Bryan Adams live\nSummer of 69"
+    rate_prompt = llm.asked[-1]
+    assert "YouTube Short | account: Chiara" in rate_prompt
+    assert "Instagram reel | account: attic" in rate_prompt

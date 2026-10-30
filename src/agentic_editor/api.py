@@ -119,6 +119,10 @@ class ResearchRequest(BaseModel):
     account_id: str | None = None
     # Search at once, without the questions the researcher asks first.
     skip_questions: bool = False
+    # Where to search: Instagram reels, YouTube Shorts, or both.
+    sites: list[Literal["instagram", "shorts"]] = Field(
+        default=["instagram", "shorts"], min_length=1, max_length=2
+    )
 
 
 class Answer(BaseModel):
@@ -177,6 +181,7 @@ class ResearchItemView(BaseModel):
     caption: str
     likes: int | None
     comments: int | None
+    views: int | None  # a YouTube Short's
     posted_at: datetime | None
     thumbnail: str
     relevance: float | None
@@ -212,6 +217,7 @@ class ResearchView(BaseModel):
     description: str
     account_id: str | None
     handle: str
+    sites: list[str]
     parent_id: str | None
     status: str
     message: str
@@ -890,6 +896,7 @@ def create_app(
             owner_id=account.id,
             account_id=body.account_id or None,
             handle=handle,
+            sites=list(dict.fromkeys(body.sites)),
         )
         if not body.skip_questions:
             found.status, found.message = "asking", "thinking of a few questions"

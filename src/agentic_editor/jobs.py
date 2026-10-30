@@ -476,6 +476,7 @@ def run_chat(message_id: int, Session: sessionmaker, settings: Settings, router=
                 handle=found.handle,
                 parent_id=found.id,
                 answers=found.answers,
+                sites=found.sites,
             )
             db.add(new)
             db.flush()
@@ -504,7 +505,7 @@ def run_research(
             found = db.get(Research, research_id)
             found.status = "running"
             db.commit()
-            owner = found.owner_id
+            owner, sites = found.owner_id, tuple(found.sites or ["instagram"])
             # The answers to the questions asked first are part of what to find.
             description = research.with_answers(found.description, found.answers or [])
             # Reels already edited, or shown by an earlier research, are left out.
@@ -522,7 +523,14 @@ def run_research(
             research_id, Session, settings, router.planner, progress, find, info
         )
         result = research.run(
-            description, router.planner, used, seen, progress, context=context, **options
+            description,
+            router.planner,
+            used,
+            seen,
+            progress,
+            context=context,
+            sites=sites,
+            **options,
         )
         with Session() as db:
             found = db.get(Research, research_id)
@@ -541,6 +549,7 @@ def run_research(
                         caption=reel.caption or reel.snippet or reel.title,
                         likes=reel.likes,
                         comments=reel.comments,
+                        views=reel.views,
                         posted_at=reel.posted,
                         thumbnail=reel.thumbnail,
                         relevance=reel.relevance,

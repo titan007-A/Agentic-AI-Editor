@@ -224,8 +224,9 @@ The Autopilot page in the web app watches feeds and edits each new video once:
 
 ## Researcher
 
-The Researcher page finds Instagram reels like those of an Instagram account you post on,
-or for what you describe ("80s rock singers live on stage, Bryan Adams, Queen", in
+The Researcher page finds Instagram reels and YouTube Shorts like those of an Instagram
+account you post on, or for what you describe ("80s rock singers live on stage, Bryan
+Adams, Queen", in
 Hinglish too), ranked by how well they fit and how viral they are:
 
 - **Your Instagram accounts.** Each person saves their own accounts (@name or the profile
@@ -274,6 +275,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
   these", "fewer like these"); for a description alone only those you didn't want, since
   its topic is another each time. "Never show @x again" hides an account from all your
   researches; hidden accounts are listed on the page, each with a button to show it again.
+- **YouTube Shorts.** "Search" on the form picks Instagram reels, YouTube Shorts or both
+  (both by default). Shorts are found the same way ("site:youtube.com/shorts ...") and
+  rated and ranked with the reels; a link to a full video, or one YouTube says is longer
+  than 3 minutes, is left out. A Short's card shows its views and a "YouTube Short" badge.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.
