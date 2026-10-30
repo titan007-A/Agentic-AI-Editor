@@ -1,11 +1,11 @@
 "use client";
 
-import { Search, Trash2 } from "lucide-react";
+import { Scissors, Search, Trash2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { ReelCard } from "@/components/reel-card";
+import { EditDialog, ReelCard } from "@/components/reel-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 
 const RUNNING_POLL_MS = 3000;
 const SHOWN_RESEARCHES = 6;
+const PICK = 5; // reels picked at most from a research, to edit together
 
 type Order = "best" | "fit" | "viral";
 const ORDERS: { key: Order; label: string }[] = [
@@ -45,6 +46,15 @@ function Researcher() {
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [order, setOrder] = useState<Order>("best");
+  // Reels picked to edit together, at most PICK, kept for the research they were picked in.
+  const [picks, setPicks] = useState<{ research: string; ids: number[] }>({
+    research: "",
+    ids: [],
+  });
+  const picked = picks.research === id ? picks.ids : [];
+  const setPicked = (next: (now: number[]) => number[]) =>
+    setPicks({ research: id, ids: next(picked) });
+  const [editing, setEditing] = useState(false);
   const [all, setAll] = useState(false);
 
   const refreshList = useCallback(
@@ -262,11 +272,45 @@ function Researcher() {
                   </Button>
                 ))}
               </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-muted-foreground">
+                  Picked {picked.length} of {PICK}
+                </span>
+                <Button size="sm" disabled={picked.length === 0} onClick={() => setEditing(true)}>
+                  <Scissors /> Edit picked
+                </Button>
+                {picked.length > 0 && (
+                  <Button size="sm" variant="ghost" onClick={() => setPicked(() => [])}>
+                    Clear
+                  </Button>
+                )}
+              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {sorted(current.items, order).map((item) => (
-                  <ReelCard key={item.id} item={item} presets={presets} />
+                  <ReelCard
+                    key={item.id}
+                    item={item}
+                    presets={presets}
+                    picked={picked.includes(item.id)}
+                    full={picked.length >= PICK}
+                    onPick={() =>
+                      setPicked((now) =>
+                        now.includes(item.id)
+                          ? now.filter((id) => id !== item.id)
+                          : now.length < PICK
+                            ? [...now, item.id]
+                            : now,
+                      )
+                    }
+                  />
                 ))}
               </div>
+              <EditDialog
+                items={current.items.filter((i) => picked.includes(i.id))}
+                presets={presets}
+                open={editing}
+                onOpenChange={setEditing}
+              />
             </>
           )}
         </div>

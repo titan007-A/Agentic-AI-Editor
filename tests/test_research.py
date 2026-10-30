@@ -24,7 +24,10 @@ class Planner:
         if self.broken:
             raise LLMError("no answer")
         if "queries" in schema["properties"]:
-            return {"queries": ["Bryan Adams live", "#summerof69", "Bryan Adams live", "  "]}
+            return {
+                "brief": "Bryan Adams singing live",
+                "queries": ["Bryan Adams live", "#summerof69", "Bryan Adams live", "  "],
+            }
         reels = [line for line in prompt.split("\n") if line[:1].isdigit()]
         return {
             "ratings": [
@@ -53,16 +56,16 @@ def test_a_reel_is_known_by_its_code_however_it_is_linked(link, code):
     assert research.code_of(link) == code
 
 
-def test_the_description_is_searched_with_the_model_s_searches():
+def test_the_request_is_understood_and_searched_with_the_model_s_searches():
     llm = Planner()
-    assert research.plan(llm, "Bryan Adams live, 80s rock") == [
-        "Bryan Adams live, 80s rock",
-        "Bryan Adams live",
-        "summerof69",
-    ]
-    assert "Bryan Adams live, 80s rock" in llm.asked[0]
-    # A model that can't answer still leaves the description to search.
-    assert research.plan(Planner(broken=True), "Bryan Adams live") == ["Bryan Adams live"]
+    brief, queries = research.plan(llm, "muje Bryan Adams ke live gaane dundh de")
+    assert brief == "Bryan Adams singing live"
+    # The request's own words aren't searched ("gaane" finds Hindi songs), and too few
+    # searches are asked for once more.
+    assert queries == ["Bryan Adams live", "summerof69"]
+    assert len(llm.asked) == 2 and "muje Bryan Adams" in llm.asked[0]
+    # A model that can't answer still leaves the request to search.
+    assert research.plan(Planner(broken=True), "Bryan Adams live") == ("", ["Bryan Adams live"])
 
 
 def test_searches_find_each_reel_once_and_go_on_past_a_failing_engine():
@@ -154,10 +157,11 @@ def test_a_research_finds_rates_and_ranks_leaving_out_what_was_edited():
         info=info,
         pause=0,
     )
-    assert [r.code for r in result.reels] == ["ADAMS1", "SEEN01", "OTHER1"]
-    assert result.used == 1 and result.queries[0] == "Bryan Adams live"
-    assert [r.seen for r in result.reels] == [False, True, False]
-    assert result.reels[0].relevance == 0.9 and result.reels[-1].relevance == 0.1
+    # Edited, shown before and unrelated (a viral cat video) are all left out.
+    assert [r.code for r in result.reels] == ["ADAMS1"]
+    assert (result.used, result.repeats, result.unrelated) == (1, 1, 1)
+    assert result.queries[0] == "Bryan Adams live" and result.brief == "Bryan Adams singing live"
+    assert result.reels[0].relevance == 0.9
     assert len(opened) == 2  # the model holds the GPU only to plan and to rate
     assert steps == sorted(steps)
 
@@ -188,3 +192,10 @@ def test_an_empty_search_is_no_reels_but_a_failing_engine_is_a_failure(monkeypat
     monkeypatch.setattr(ddgs, "DDGS", Engines)
     reels, failed = research.search(["empty", "busy"], pause=0)
     assert reels == [] and failed == ["busy"]
+
+
+def test_one_account_fills_at_most_two_of_the_eight():
+    ranked = [Reel(f"A{n}", "", "", account="VoicesHQ") for n in range(4)]
+    ranked += [Reel(f"B{n}", "", "", account="") for n in range(10)]
+    kept = research.best(ranked)
+    assert [r.code for r in kept] == ["A0", "A1", "B0", "B1", "B2", "B3", "B4", "B5"]

@@ -30,10 +30,16 @@ REEL = re.compile(r"https?://(?:www\.|m\.)?instagram\.com/(?:[\w.]+/)?(?:reels?|
 SITE = "site:instagram.com/reel"
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
-MAX_REELS = 60  # reels looked up and rated, in the order the searches found them
+MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
+SHOWN = 8  # the best this many are kept: the owner picks the ones to edit from them
+PER_ACCOUNT = 2  # of them at most from one account, so one page doesn't fill the research
 PAUSE = 1.0  # seconds between searches, so the engines don't turn it away
 LOOKUPS = 4  # reels looked up at once
 RATE_BATCH = 10
+# Reels the model rates below this fit are left out, not shown at the bottom: a search
+# also finds what only shares a word with the request.
+MIN_FIT = 0.5
+MIN_QUERIES = 8  # fewer from the model, and it is asked once more
 # Relevance leads: a reel that doesn't fit stays low however viral, and among those that
 # fit the viral ones come first.
 VIRAL_SHARE = 0.5
@@ -68,9 +74,13 @@ class Result:
     reels: list[Reel]
     used: int = 0  # found but already edited, so left out
     failed_searches: list[str] = field(default_factory=list)
+    brief: str = ""  # the request as the model understood it, in English
+    unrelated: int = 0  # rated below MIN_FIT, so left out
+    repeats: int = 0  # shown by an earlier research, so left out
 
 
 class Searches(BaseModel):
+    brief: str = Field(max_length=400)  # required: left optional, the model skipped it
     queries: list[str] = Field(min_length=1, max_length=MAX_QUERIES * 2)
 
 
@@ -85,17 +95,25 @@ class Ratings(BaseModel):
 
 
 PLAN = (
-    "You find Instagram reels for a video editor who reposts and edits them. From what they "
-    "describe, write {count} short web searches (2-6 words each) that would find such reels: "
-    "the artists, songs, concerts, eras, genres, hashtags (without #) and the words people "
-    "use in captions, also in the languages the description asks for. Vary them so they find "
-    "different reels; don't add 'instagram' or 'reel'.\n\nWhat they want: {description}"
+    "You find Instagram reels for a video editor who reposts and edits them. Their request "
+    "may be in Hindi, Hinglish or any language ('gaane' means songs, 'dundh' find, 'bdia' "
+    "good). First write `brief`: in one English sentence, exactly what content they want "
+    "(the music, artists or topic, its language or country, live or studio, any era). "
+    "Then write {count} short web searches (2-6 words each) that find reels of exactly that: "
+    "name real, well-known artists and songs of it (for Italian songs, say, Ricchi e Poveri "
+    "'Sarà perché ti amo', Eros Ramazzotti, Laura Pausini), its genres, hashtags (without #) "
+    "and the words people write in captions about it, in the content's own language too. "
+    "Every search must be about the requested content on its own: never a bare city or "
+    "place name, never a word of the request's language (such as 'gaane') unless the "
+    "content is in that language. Vary them so they find different reels; don't add "
+    "'instagram' or 'reel'.\n\nTheir request: {description}"
 )
 RATE = (
     "Rate how well each Instagram reel fits what the editor wants, from its account, caption "
     "and search snippet: 10 = exactly it, 5 = related, 0 = unrelated. Judge only the content "
-    "asked for, not popularity. Give one short reason each.\n\nWhat they want: {description}"
-    "\n\nReels:\n{reels}"
+    "asked for, not popularity: music of another language or country than the one asked for "
+    "is 0, and so is a reel that only shares a word or a place name with the request. Give "
+    "one short reason each.\n\nWhat they want: {description}\n\nReels:\n{reels}"
 )
 
 
@@ -108,19 +126,30 @@ def reel_url(code: str) -> str:
     return f"https://www.instagram.com/reel/{code}/"
 
 
-def plan(llm, description: str) -> list[str]:
-    """Searches for the description, the description itself first; just that one when the
-    model can't answer."""
-    queries = [description.strip()[:120]]
-    try:
-        prompt = PLAN.format(count=MAX_QUERIES - 1, description=description.strip())
-        messages = [{"role": "user", "content": prompt}]
-        reply = parse(Searches, llm.chat_json(messages, Searches.model_json_schema()))
+def plan(llm, description: str) -> tuple[str, list[str]]:
+    """The request as the model understood it, in English, and the searches for it. The
+    request itself, in whatever words, isn't searched ("italian gaane" finds Hindi songs),
+    unless the model can't answer at all."""
+    brief, queries = "", []
+    prompt = PLAN.format(count=MAX_QUERIES, description=description.strip())
+    messages = [{"role": "user", "content": prompt}]
+    for _ in range(2):
+        try:
+            reply = parse(Searches, llm.chat_json(messages, Searches.model_json_schema()))
+        except LLMError as exc:
+            log.warning("couldn't plan searches: %s", exc)
+            continue
+        brief = brief or reply.brief.strip()
         queries += reply.queries
-    except LLMError as exc:
-        log.warning("couldn't plan searches, searching the description alone: %s", exc)
+        if len(_tidy(queries)) >= MIN_QUERIES:
+            break
+    queries = _tidy(queries) or _tidy([description[:120]])
+    return brief, queries[:MAX_QUERIES]
+
+
+def _tidy(queries: list[str]) -> list[str]:
     tidy = (" ".join(q.replace("#", " ").split()) for q in queries)
-    return list(dict.fromkeys(q for q in tidy if q))[:MAX_QUERIES]
+    return list(dict.fromkeys(q for q in tidy if q))
 
 
 def _engines(query: str, count: int) -> list[dict]:
@@ -278,6 +307,20 @@ def rank(reels: list[Reel]) -> list[Reel]:
     return sorted(reels, key=lambda r: r.score, reverse=True)
 
 
+def best(ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT) -> list[Reel]:
+    """The first `count` of the ranked reels, at most `per_account` from one account."""
+    kept, by = [], {}
+    for r in ranked:
+        key = r.account.casefold()
+        if key and by.get(key, 0) >= per_account:
+            continue
+        by[key] = by.get(key, 0) + 1
+        kept.append(r)
+        if len(kept) == count:
+            break
+    return kept
+
+
 def run(
     description: str,
     planner: Callable,
@@ -290,22 +333,34 @@ def run(
 ) -> Result:
     """Search, look up, rate and rank. `planner()` opens the planning model, which holds
     the GPU, so it is opened only to plan and to rate, never while waiting on the web.
-    Reels in `used` (already edited) are left out; those in `seen` are marked."""
+    Reels in `used` (already edited) and in `seen` (shown by an earlier research) are left
+    out, so each research brings new ones."""
     progress("planning the searches", 0.02)
     with planner() as llm:
-        queries = plan(llm, description)
+        brief, queries = plan(llm, description)
     reels, failed = search(queries, find, pause, progress)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
-    fresh = [r for r in reels if r.code not in used]
-    skipped, reels = len(reels) - len(fresh), fresh[:MAX_REELS]
+    fresh = [r for r in reels if r.code not in used and r.code not in seen]
+    skipped = sum(r.code in used for r in reels)
+    repeats = sum(r.code in seen and r.code not in used for r in reels)
+    reels = fresh[:MAX_REELS]
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:
-            rate(llm, description, reels)
-    for r in reels:
-        r.seen = r.code in seen
-    spread(reels)
-    return Result(queries, rank(reels), used=skipped, failed_searches=failed)
+            # The brief says it plainly; the request keeps what the brief may have lost.
+            wanted = f"{brief} (their words: {description.strip()})" if brief else description
+            rate(llm, wanted, reels)
+    fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
+    spread(fitting)
+    return Result(
+        queries,
+        best(rank(fitting)),
+        used=skipped,
+        failed_searches=failed,
+        brief=brief,
+        unrelated=len(reels) - len(fitting),
+        repeats=repeats,
+    )

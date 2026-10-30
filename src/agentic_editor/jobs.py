@@ -284,7 +284,7 @@ def run_research(
             found.status = "running"
             db.commit()
             description, owner = found.description, found.owner_id
-            # Reels already edited are left out; ones an earlier research showed are marked.
+            # Reels already edited, or shown by an earlier research, are left out.
             used = reel_codes(db.scalars(select(Job.source).where(Job.owner_id == owner)))
             seen = set(
                 db.scalars(
@@ -321,6 +321,16 @@ def run_research(
                 )
             count = len(result.reels)
             found.message = f"found {count} reel{'' if count == 1 else 's'}"
+            left = [
+                f"{n} {what}"
+                for n, what in (
+                    (result.unrelated, "that didn't fit"),
+                    (result.repeats, "shown before"),
+                )
+                if n
+            ]
+            if left:
+                found.message += f"; left out {' and '.join(left)}"
             if result.failed_searches:
                 found.message += f"; {len(result.failed_searches)} searches got no answer"
             found.status, found.progress = "done", 1.0
