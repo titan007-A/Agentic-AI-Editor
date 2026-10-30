@@ -423,8 +423,10 @@ def run_chat(message_id: int, Session: sessionmaker, settings: Settings, router=
         answer = "I couldn't answer just now; try again in a minute."
     with Session() as db:
         said = db.get(ResearchMessage, message_id)
-        said.answered = True
         found = db.get(Research, research_id)
+        if said is None or found is None:  # the research was removed meanwhile
+            return
+        said.answered = True
         line = ResearchMessage(research_id=research_id, role="researcher", text=answer)
         if follow_up:
             # The answers stay: they were about what to find, and still are.
