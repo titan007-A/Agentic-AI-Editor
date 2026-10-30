@@ -8,6 +8,7 @@ import math
 import re
 import secrets
 import signal
+import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -1159,14 +1160,26 @@ def create_app(
             feeds = feeds.where(Feed.owner_id == account.id)
         return [feed_view(f) for f in session.scalars(feeds.order_by(Feed.id))]
 
+    def look_now(feed: Feed, session: Session) -> None:
+        """Check a feed now. An Instagram account takes a minute to look through (see
+        autopilot.instagram_entries), so its check runs on its own while the page polls."""
+        if feed.kind == "link" and autopilot.instagram_handle(feed.location):
+            feed.last_result = "looking for the account's reels; this takes a minute"
+            session.commit()
+            threading.Thread(
+                target=autopilot.check, args=(feed.id, make_session, jobs.process), daemon=True
+            ).start()
+        else:
+            autopilot.check(feed.id, make_session, jobs.process)
+        session.expire_all()
+
     @app.post("/api/feeds")
     def create_feed(body: FeedRequest, account: User, session: DB) -> FeedView:
         feed = Feed(**checked_feed(body, account).model_dump(), owner_id=account.id)
         session.add(feed)
         session.commit()
         # Look at once: what is already there is noted now, before anything new arrives.
-        autopilot.check(feed.id, make_session, jobs.process)
-        session.expire_all()
+        look_now(feed, session)
         return feed_view(find_feed(feed.id, session, account))
 
     @app.put("/api/feeds/{feed_id}")
@@ -1189,9 +1202,7 @@ def create_app(
 
     @app.post("/api/feeds/{feed_id}/check")
     def check_feed(feed_id: int, account: User, session: DB) -> FeedView:
-        find_feed(feed_id, session, account)
-        autopilot.check(feed_id, make_session, jobs.process)
-        session.expire_all()
+        look_now(find_feed(feed_id, session, account), session)
         return feed_view(find_feed(feed_id, session, account))
 
     @app.get("/api/piles")
