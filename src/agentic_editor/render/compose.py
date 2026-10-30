@@ -10,10 +10,11 @@ from pathlib import Path
 from agentic_editor import ffmpeg, framing, subtitles
 from agentic_editor.analysis import layout, onscreen
 from agentic_editor.analysis.faces import Sample
+from agentic_editor.analysis.subjects import Subject
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis
 from agentic_editor.backends import Backends, encoder_args
-from agentic_editor.edl import EDL, Cue
+from agentic_editor.edl import EDL, Clip, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
@@ -89,6 +90,45 @@ def moving_part(
         min(math.ceil(found[1] / scale), size[1]),
         layout.plainer_side(frames, found, top, bottom),
     )
+
+
+ACTION_FPS = 6  # frames a second the action is looked for in
+ACTION_PAD = 0.06  # of the picture, added around the action so a falling arm isn't grazed
+
+
+def action_subjects(
+    video: Path,
+    clip_start: float,
+    clip_end: float,
+    cuts: list[float],
+    size: tuple[int, int],
+    picture: tuple[int, int, int, int],
+) -> list[tuple[float, float, Subject]]:
+    """For each camera shot (start, end), where its action happens, as a must-keep box in
+    source pixels: the framing then keeps the whole fail in the crop, not just a face."""
+    small = (LAYOUT_WIDTH, round(LAYOUT_WIDTH * size[1] / size[0] / 2) * 2)
+    scale = small[0] / size[0]
+    px, py, pw, ph = picture
+    left, top = round(px * scale), round(py * scale)
+    right, bottom = round((px + pw) * scale), round((py + ph) * scale)
+    found = []
+    for start, end in framing.shot_bounds(Clip(start=clip_start, end=clip_end), cuts):
+        count = max(2, round((end - start) * ACTION_FPS))
+        frames = layout.sample(video, end - start, count, small, get_settings().ffmpeg_bin,
+                               start=start)  # fmt: skip
+        box = layout.action_box(frames[:, top:bottom, left:right])
+        if box is None:
+            continue
+        x0, y0, x1, y1 = box
+        pad_x, pad_y = ACTION_PAD * pw, ACTION_PAD * ph
+        found.append((start, end, Subject(
+            kind="other", label="action", keep=True,
+            x0=max(px, math.floor((left + x0) / scale - pad_x)),
+            y0=max(py, math.floor((top + y0) / scale - pad_y)),
+            x1=min(px + pw, math.ceil((left + x1) / scale + pad_x)),
+            y1=min(py + ph, math.ceil((top + y1) / scale + pad_y)),
+        )))  # fmt: skip
+    return found
 
 
 def picture_area(

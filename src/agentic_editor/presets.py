@@ -160,6 +160,9 @@ class Framing(Strict):
         "takes when it isn't cropped (mode none)",
     )
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
+    # Smart framing keeps where the picture moves too, not only faces and the vision
+    # model's must-keep items: for footage whose point is an action (a fall, a trick).
+    keep_action: bool = False
     text_gap_above: int | None = 0
     text_gap_below: int | None = 130
     # Rounded corners on a picture shown whole, filled with corner_color (the background

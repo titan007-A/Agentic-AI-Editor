@@ -405,6 +405,13 @@ def smart_framing(
     width = framing.crop_width(content, preset.size)
     times = framing.view_times(clip, analysis.scenes)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
+    if preset.framing.keep_action:
+        size = (analysis.width, analysis.height)
+        actions = compose.action_subjects(video, clip.start, clip.end, analysis.scenes, size,
+                                          content)  # fmt: skip
+        samples = [
+            (t, [*items, *(box for a, b, box in actions if a <= t < b)]) for t, items in samples
+        ]
     seen = framing.views(samples, face_samples, content, analysis.width)
     if not edl.shots:
         # Cropped top and bottom: a still image above or below the clip counts less.

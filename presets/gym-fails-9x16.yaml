@@ -25,7 +25,10 @@ one_liner:
     skipped leg day for 6 months", "He really thought he had that one 😭". About what goes
     wrong in this video; no names, never mocking someone's body or a real injury.
 framing:
-  mode: none
+  # Cropped to fill the frame, keeping wherever the picture moves (the fail) as well as
+  # the people; too wide to crop, it shows more rather than cut the fail.
+  mode: smart
+  keep_action: true
   background: "#000000"
   crop_black_bars: true
 audio:
