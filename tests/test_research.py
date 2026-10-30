@@ -31,10 +31,19 @@ class Planner:
         reels = [line for line in prompt.split("\n") if line[:1].isdigit()]
         return {
             "ratings": [
-                {"n": n, "relevance": 9 if "Bryan Adams" in line else 1, "why": "fits"}
+                {
+                    **NAMELESS,
+                    "n": n,
+                    "relevance": 9 if "Bryan Adams" in line else 1,
+                    "why": "fits",
+                }
                 for n, line in enumerate(reels, 1)
             ]
         }
+
+
+# The fields a rating always has, as the model leaves them when the caption doesn't say.
+NAMELESS = {"why": "", "song": "", "artist": "", "matches": "", "preset": "", "preset_why": ""}
 
 
 def hit(code, title="", body=""):
@@ -183,19 +192,20 @@ def test_one_account_fills_at_most_two_of_the_eight_but_a_song_may_come_again():
         reel("C3", "", "", 0.55, "No Handle"),
         reel("D1", "", "", 0.5),  # nothing known of its account: no cap
         reel("D2", "", "", 0.45),
+        reel("B2", "other", "Heaven - Bryan Adams", 0.42),  # a third reel of Heaven
         reel("E1", "vault", "Caruso - Lucio Dalla", 0.4),
         reel("E2", "vault", "Felicità - Al Bano", 0.3),
     ]
     picked, passed, cutoff = research.pick(ranked)
     assert [r.code for r in picked] == ["A1", "A2", "B1", "C1", "C2", "D1", "D2", "E1"]
-    assert passed == {"same account": 2} and cutoff == 0.3
+    assert passed == {"same account": 2, "same song": 1} and cutoff == 0.3
 
 
 def test_the_rated_song_and_artist_are_named_together():
     class Rater:
         def chat_json(self, messages, schema, **kwargs):
-            first = {"n": 1, "relevance": 8, "song": "Heaven", "artist": "Bryan Adams"}
-            return {"ratings": [first, {"n": 2, "relevance": 8, "artist": "Queen"}]}
+            first = {**NAMELESS, "n": 1, "relevance": 8, "song": "Heaven", "artist": "Bryan Adams"}
+            return {"ratings": [first, {**NAMELESS, "n": 2, "relevance": 8, "artist": "Queen"}]}
 
     reels = [Reel("A", "", ""), Reel("B", "", "")]
     research.rate(Rater(), "80s rock", reels)
@@ -328,3 +338,14 @@ def test_an_empty_search_is_no_reels_but_a_failing_engine_is_a_failure(monkeypat
     monkeypatch.setattr(ddgs, "DDGS", Engines)
     reels, failed = research.search(["empty", "busy"], pause=0)
     assert reels == [] and failed == ["busy"]
+
+
+def test_every_reel_gets_a_preset_to_edit_it_with():
+    context = research.Context(presets={"voicehq-9x16": "vocals", "vocal-music-it-9x16": "it"})
+    reels = [Reel("A", "", "", preset="vocal-music-it-9x16"), Reel("B", "", "")]
+    research.suggest(reels, context)
+    assert [r.preset for r in reels] == ["vocal-music-it-9x16"] * 2
+    assert "chose most" in reels[1].preset_why
+    alone = [Reel("C", "", "")]
+    research.suggest(alone, context)
+    assert alone[0].preset == "voicehq-9x16" and "first preset" in alone[0].preset_why

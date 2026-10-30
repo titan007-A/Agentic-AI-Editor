@@ -14,12 +14,13 @@ A research can be for one of the owner's Instagram accounts: the account is lear
 (its own reels, found the same way, and what the planning model reads in them), and the
 searches and ratings aim at reels like its best ones, for the presets the owner edits it
 with. Each research gives its best few: never a reel shown before, the account's own or
-one already edited, and at most two from one account."""
+one already edited, and at most two from one account or of one song."""
 
 import logging
 import math
 import re
 import time
+from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ PER_QUERY = 30  # results asked of the engines for each search
 MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
 SHOWN = 8  # the best this many are kept: the owner picks the ones to edit from them
 PER_ACCOUNT = 2  # of them at most from one account, so one page doesn't fill the research
+PER_SONG = 2  # and from one song: the owner's "a song may come twice", not seven times
 LEARN_REELS = 24  # reels looked up to find an account's own
 PAUSE = 1.0  # seconds between searches, so the engines don't turn it away
 LOOKUPS = 4  # reels looked up at once
@@ -127,12 +129,14 @@ class Searches(BaseModel):
 class Rating(BaseModel):
     n: int
     relevance: int = Field(ge=0, le=10)
-    why: str = Field(default="", max_length=200)
-    song: str = Field(default="", max_length=120)
-    artist: str = Field(default="", max_length=120)
-    matches: str = Field(default="", max_length=200)
-    preset: str = Field(default="", max_length=80)
-    preset_why: str = Field(default="", max_length=200)
+    # All required: the 9b model leaves out any it may, and then a research can't keep two
+    # reels of one song at most, or explain its picks.
+    why: str = Field(max_length=200)
+    song: str = Field(max_length=120)
+    artist: str = Field(max_length=120)
+    matches: str = Field(max_length=200)
+    preset: str = Field(max_length=80)
+    preset_why: str = Field(max_length=200)
 
 
 class Ratings(BaseModel):
@@ -179,8 +183,9 @@ RATE = (
     "- n: its number\n"
     "- relevance: 10 = exactly it, 5 = related, 0 = unrelated\n"
     "- why: one sentence (under 25 words) on why it fits or doesn't\n"
-    "- song: the song's title when the caption names one, else ''\n"
-    "- artist: the main singer or band it is about, else ''\n"
+    "- song: the song's title whenever the caption or search snippet lets you tell it (if "
+    "your why names it, so does this), else ''\n"
+    "- artist: the main singer or band it is about, whenever you can tell, else ''\n"
     "- matches: a few words on which part of what they want it matches, else ''\n"
     "- preset: the name of the preset it suits best, exactly as listed, else ''\n"
     "- preset_why: a few words on why that preset\n"
@@ -467,28 +472,50 @@ def _same(text: str) -> str:
 
 
 def pick(
-    ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT
+    ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT, per_song: int = PER_SONG
 ) -> tuple[list[Reel], dict[str, int], float | None]:
     """The best `count` of the ranked reels, at most `per_account` from one account (by its
-    Instagram name, its display name when that isn't known), so one page doesn't fill the
-    research; how many were passed over for that, and the best score left. Another reel of
-    a song already given is welcome: only a reel itself is never given twice."""
+    Instagram name, its display name when that isn't known) and `per_song` of one song, so
+    one page or one hit doesn't fill the research; how many were passed over for each, and
+    the best score left. A reel itself is never given twice (see run)."""
     picked: list[Reel] = []
-    passed = 0
+    passed = {"same account": 0, "same song": 0}
     accounts: dict[str, int] = {}
+    songs: dict[str, int] = {}
     rest: list[Reel] = []
     for reel in ranked:
         if len(picked) == count:
             rest.append(reel)
             continue
-        who = _same(reel.handle or reel.account)
+        who, song = _same(reel.handle or reel.account), _same(reel.song)
         if who and accounts.get(who, 0) >= per_account:
-            passed += 1
+            passed["same account"] += 1
+            continue
+        if song and songs.get(song, 0) >= per_song:
+            passed["same song"] += 1
             continue
         picked.append(reel)
         accounts[who] = accounts.get(who, 0) + 1
+        songs[song] = songs.get(song, 0) + 1
     cutoff = rest[0].score if rest else None
-    return picked, {"same account": passed} if passed else {}, cutoff
+    return picked, {k: n for k, n in passed.items() if n}, cutoff
+
+
+def suggest(reels: list[Reel], context: Context) -> None:
+    """A preset for every reel: one the model left without gets the preset it chose most
+    for the others, or the account's first."""
+    if not context.presets:
+        return
+    chosen = Counter(r.preset for r in reels if r.preset)
+    default = chosen.most_common(1)[0][0] if chosen else next(iter(context.presets))
+    for r in reels:
+        if not r.preset:
+            r.preset = default
+            r.preset_why = (
+                "the model didn't choose one; the preset it chose most for the others"
+                if chosen
+                else "the model didn't choose one; the account's first preset"
+            )
 
 
 def learn(
@@ -574,6 +601,7 @@ def run(
             rate(llm, wanted, reels, context=context)
     fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
     left_out["didn't fit"] = len(reels) - len(fitting)
+    suggest(fitting, context)
     spread(fitting)
     picked, passed, cutoff = pick(rank(fitting))
     left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
