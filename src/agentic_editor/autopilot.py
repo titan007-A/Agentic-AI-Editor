@@ -1,10 +1,17 @@
-"""The autopilot: watches folders, playlists and channels and edits each new video once.
+"""The autopilot: watches folders, playlists, channels and Instagram accounts and edits each
+new video once.
 
 Every check lists what a feed holds, starts jobs for videos it hasn't seen (a few at a
 time, and only in its hours), and records every video it starts or passes over, so
 nothing is edited twice. Each video is an ordinary job: one that fails is marked failed
 and the rest carry on. Finished videos land in the ready pile, or in the needs-a-look
 pile when the agent has doubts about them.
+
+An Instagram account can't be listed without signing in (yt-dlp then says "Unable to
+extract data"), so its reels are found the way the researcher finds an account's own: web
+searches for its name, each reel looked up and kept when it is the account's. Search
+engines index only part of Instagram, mostly reels a few days old, so such a feed sees a
+new reel some days after it is posted, and may miss some.
 """
 
 import logging
@@ -19,6 +26,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
+from agentic_editor import research
 from agentic_editor.db import Feed, FeedItem, Job
 
 log = logging.getLogger(__name__)
@@ -60,9 +68,41 @@ def channel_videos(url: str) -> str:
     return url.rstrip("/") + "/videos" if CHANNEL.match(url) else url
 
 
+def instagram_handle(url: str) -> str | None:
+    """The account's name when the link is an Instagram profile ("instagram.com/name")."""
+    if not re.match(r"https?://(www\.|m\.)?instagram\.com/", url.strip()):
+        return None
+    return research.handle_of(url)
+
+
+def instagram_entries(handle: str, find=None, info=None, pause: float | None = None) -> list[Entry]:
+    """An Instagram account's reels the search engines know, newest first."""
+    options = {k: v for k, v in (("find", find), ("pause", pause)) if v is not None}
+    reels, failed = research.search([f'"{handle}"', handle], **options)
+    if not reels and failed:
+        raise RuntimeError("the search engines didn't answer; the next check tries again")
+    reels = reels[: research.LEARN_REELS * 2]
+    research.look_up(reels, **({"info": info} if info else {}))
+    if reels and not any(r.looked_up for r in reels):
+        raise RuntimeError("Instagram didn't show any reel; the next check tries again")
+    own = [r for r in reels if r.handle == handle]
+    own.sort(key=lambda r: r.posted or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return [
+        Entry(
+            key=f"Instagram-{r.code}",
+            title=" ".join((r.caption or r.title or r.code).split())[:80],
+            source=r.url,
+        )
+        for r in own
+    ]
+
+
 def link_entries(url: str) -> list[Entry]:
     """The videos of a playlist or channel, as the site lists them (a channel newest
-    first). A link to a single video is a feed of one."""
+    first), or an Instagram account's reels (see instagram_entries). A link to a single
+    video is a feed of one."""
+    if handle := instagram_handle(url):
+        return instagram_entries(handle)
     from yt_dlp import YoutubeDL
 
     options = {

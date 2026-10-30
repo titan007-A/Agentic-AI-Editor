@@ -2,6 +2,8 @@ import io
 import json
 import os
 import shutil
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -338,6 +340,51 @@ def test_a_feed_moved_somewhere_else_notes_what_is_already_there(env, tmp_path):
     assert env.client.put(f"/api/feeds/{feed['id']}", json=body).status_code == 200
     again = env.client.post(f"/api/feeds/{feed['id']}/check").json()
     assert again["last_result"].startswith("1 video(s) already there") and env.calls == []
+
+
+def test_an_instagram_account_feed_is_looked_through_without_holding_the_page(env, monkeypatch):
+    from agentic_editor import autopilot
+
+    reels = [autopilot.Entry("Instagram-OLD", "Adele old", "https://www.instagram.com/reel/OLD/")]
+    gate = threading.Event()
+
+    def instagram_entries(handle):
+        assert handle == "adele___official"
+        gate.wait(5)  # the search engines take their time: the page has its answer by then
+        return list(reels)
+
+    monkeypatch.setattr(autopilot, "instagram_entries", instagram_entries)
+    body = {
+        "name": "adele",
+        "kind": "link",
+        "location": "https://www.instagram.com/adele___official?cplk=NWl5aXJoMmxpMDV1",
+        "presets": ["square-1x1"],
+    }
+    response = env.client.post("/api/feeds", json=body)
+    assert response.status_code == 200, response.text
+    feed = response.json()
+    assert feed["last_result"] == "looking for the account's reels; this takes a minute"
+
+    def result():
+        for _ in range(100):
+            now = env.client.get("/api/feeds").json()[0]["last_result"]
+            if not now.startswith("looking"):
+                return now
+            time.sleep(0.05)
+        raise AssertionError("the check never finished")
+
+    gate.set()
+    assert result() == "1 video(s) already there; only new ones will be edited"
+    reels.insert(
+        0, autopilot.Entry("Instagram-NEW", "Adele new", "https://www.instagram.com/reel/NEW/")
+    )
+    env.client.post(f"/api/feeds/{feed['id']}/check")
+    assert result() == "started 1 new video(s)"
+    for _ in range(100):  # the job starts once the check has noted it
+        if env.calls:
+            break
+        time.sleep(0.05)
+    assert [c["source"] for c in env.calls] == ["https://www.instagram.com/reel/NEW/"]
 
 
 def test_outputs_with_doubts_need_a_look_until_the_editor_says_otherwise(env):

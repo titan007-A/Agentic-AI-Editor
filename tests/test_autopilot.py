@@ -86,6 +86,45 @@ def test_a_channel_lists_its_videos_not_its_tabs(monkeypatch):
     ]
 
 
+def test_an_instagram_account_is_read_through_the_search_engines_not_yt_dlp():
+    def find(query, count):
+        assert query.endswith("adele___official")
+        links = ["OLDREEL01", "NEWREEL01", "OTHERS001"]
+        return [{"href": f"https://www.instagram.com/reel/{c}/", "title": c} for c in links]
+
+    def info(url):
+        code = url.rstrip("/").rsplit("/", 1)[1]
+        if code == "OTHERS001":  # a fan page naming the account
+            return {"channel": "adele_fans", "description": "Adele cover"}
+        posted = {"OLDREEL01": 1_700_000_000, "NEWREEL01": 1_760_000_000}[code]
+        return {"channel": "adele___official", "description": f"Adele {code}", "timestamp": posted}
+
+    link = "https://www.instagram.com/adele___official?cplk=NWl5aXJoMmxpMDV1"
+    assert autopilot.instagram_handle(link) == "adele___official"
+    assert autopilot.instagram_handle("https://www.instagram.com/reel/DcafVd6BocI/") is None
+    assert autopilot.instagram_handle("https://www.youtube.com/@adele") is None
+    assert autopilot.instagram_entries("adele___official", find, info, pause=0) == [
+        Entry(
+            "Instagram-NEWREEL01", "Adele NEWREEL01", "https://www.instagram.com/reel/NEWREEL01/"
+        ),
+        Entry(
+            "Instagram-OLDREEL01", "Adele OLDREEL01", "https://www.instagram.com/reel/OLDREEL01/"
+        ),
+    ]
+
+    def down(query, count):
+        raise TimeoutError
+
+    with pytest.raises(RuntimeError, match="search engines didn't answer"):
+        autopilot.instagram_entries("adele___official", down, info, pause=0)
+
+    def walled(url):
+        raise RuntimeError("login required")
+
+    with pytest.raises(RuntimeError, match="Instagram didn't show any reel"):
+        autopilot.instagram_entries("adele___official", find, walled, pause=0)
+
+
 def test_hours_can_run_overnight():
     night = Feed(active_from=23, active_to=7)
     day = Feed(active_from=9, active_to=17)
