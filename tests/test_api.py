@@ -748,3 +748,26 @@ def test_a_topic_instead_of_a_song(env, monkeypatch):
     env.client.post(f"/api/outputs/{output_id}/caption", json=song)
     output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
     assert output["caption_topic"] == "" and output["caption_song"] == "Piano Man"
+
+
+def test_a_job_that_couldnt_name_the_song_says_which_presets_need_it(env):
+    made = env.run
+
+    def unnamed(*args, **kwargs):
+        raise RuntimeError(
+            "voicehq-9x16: UnnamedSong: 'Video by x' doesn't say the song and artist; "
+            "add lines 'song: ...' and 'artist: ...' to the notes"
+        )
+
+    env.run = unnamed
+    (job,) = start(env.client, presets=("voicehq-9x16",))
+    failed = env.client.get(f"/api/jobs/{job['id']}").json()
+    assert failed["status"] == "failed" and failed["unnamed"] == ["voicehq-9x16"]
+
+    # The job page sends the name as notes lines; the rest of the work goes on.
+    env.run = made
+    named = {"preset": "voicehq-9x16", "notes": "song: Piano Man\nartist: Billy Joel"}
+    again = env.client.post(f"/api/jobs/{job['id']}/regenerate", json=named).json()
+    done = env.client.get(f"/api/jobs/{again['id']}").json()
+    assert done["status"] == "done" and done["unnamed"] == []
+    assert env.calls[-1]["notes"] == "song: Piano Man\nartist: Billy Joel"

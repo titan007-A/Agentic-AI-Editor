@@ -173,6 +173,10 @@ class OutputView(BaseModel):
     caption_topic: str = ""
 
 
+# A failure line in a job's error (pipeline.edit): "<preset>: UnnamedSong: ...".
+UNNAMED = re.compile(r"([a-z0-9][a-z0-9-]*): UnnamedSong:")
+
+
 class JobView(BaseModel):
     id: str
     source: str
@@ -186,6 +190,8 @@ class JobView(BaseModel):
     parent_id: str | None
     created_at: datetime
     outputs: list[OutputView] = []
+    # Presets that couldn't name the song: the job page asks for it, then regenerates.
+    unnamed: list[str] = []
     # The employee who started it, shown to the admin; None on a member's own list.
     owner: str | None = None
 
@@ -232,6 +238,7 @@ def job_view(job: Job, only: int | None = None, owner: str | None = None) -> Job
         created_at=job.created_at,
         outputs=outputs,
         owner=owner,
+        unnamed=UNNAMED.findall(job.error or ""),
     )
 
 

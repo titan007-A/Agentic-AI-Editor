@@ -80,6 +80,8 @@ export type Job = {
   outputs: Output[];
   /** Who started it, shown to the admin. */
   owner: string | null;
+  /** Presets that couldn't tell which song it is: the job page asks for it. */
+  unnamed: string[];
 };
 
 export type Me = {

@@ -101,3 +101,42 @@ def test_the_preset_s_own_words_come_from_lines_in_the_notes():
     assert filled.text_blocks[1].text == "Día 103 : Canción : 5"
     with pytest.raises(names.MissingField, match=r"'song number: \.\.\.'"):
         names.fill(preset, "IMG_5071", {"day": "103"})
+
+
+def test_a_preset_with_auto_name_hears_the_song_when_nothing_names_it():
+    preset = load_presets(ROOT / "presets")["voicehq-9x16"]
+    heard = []
+
+    def hear():
+        heard.append(1)
+        return "We Will Rock You (Live at Live Aid, Wembley Stadium, 13th July 1985)", "Queen"
+
+    filled = names.fill(preset, "Video by illusive.paradox", {}, hear)
+    assert filled.text_blocks[1].text == "Song: We Will Rock You\nArtist: Queen"
+    # The notes and the name come first; the sound is only asked when they can't say.
+    assert names.song_and_artist("Piano Man - Billy Joel", {}, hear) == ("Piano Man", "Billy Joel")
+    assert names.song_and_artist("x", {"song": "A", "artist": "B"}, hear) == ("A", "B")
+    assert names.song_and_artist("x", {"artist": "Freddie"}, hear) == (
+        "We Will Rock You",
+        "Freddie",
+    )
+    assert len(heard) == 2
+    for take in (
+        "Summer of '69 (Live)",
+        "Summer of '69 - Remastered 2008",
+        "Summer of '69 [Live Edit]",
+    ):
+        assert (
+            names.song_and_artist("x", {}, lambda take=take: (take, "Bryan Adams"))[0]
+            == "Summer of '69"
+        )
+    feat = names.song_and_artist("x", {}, lambda: ("Payphone (feat. Wiz Khalifa)", "Maroon 5"))
+    assert feat == ("Payphone (feat. Wiz Khalifa)", "Maroon 5")
+    with pytest.raises(names.UnnamedSong, match="sound wasn't recognised; add lines 'song: "):
+        names.fill(preset, "Video by illusive.paradox", {}, lambda: None)
+
+
+def test_the_last_notes_line_wins():
+    # A regenerated job's notes are the earlier ones with the new lines after them.
+    given, rest = names.from_notes("song: Wrong\nfaster\nsong: Right", {"song"})
+    assert given == {"song": "Right"} and rest == "faster"
