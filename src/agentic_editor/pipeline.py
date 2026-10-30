@@ -327,7 +327,8 @@ def recheck_framing(
         updated[k] = framing.widen_to(updated[k], span, content, width)
     widened = ", ".join(f"{shots[k].start:.1f}-{shots[k].end:.1f}s" for k in sorted(needed))
     note = f"re-checked {len(checks)} moment(s); widened {widened} where an edge cut something"
-    return framing.harmonize(updated, width, content), [note]
+    shared = not preset.framing.keep_action
+    return framing.harmonize(updated, width, content, shared), [note]
 
 
 def band_framing(
@@ -428,7 +429,7 @@ def smart_framing(
         moving = compose.moving_part(video, clip.start, clip.end, size, content) if tall else None
         shots = framing.frame_shots(
             clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size,
-            analysis.height, moving,
+            analysis.height, moving, shared=not preset.framing.keep_action,
         )  # fmt: skip
         shots, recheck = recheck_framing(
             shots, times, seen, face_samples, content, width, preset, analysis, video,
