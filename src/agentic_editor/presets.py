@@ -95,6 +95,11 @@ class Headline(Strict):
     hint: str = Field(default="", description="how to write it, with examples")
     max_chars: int = Field(default=90, ge=10, le=300)
     uppercase: bool = False
+    # Watch and look up: written once the clip is heard, from what it says and what
+    # Wikipedia says about the film (series, speech) it is from, not the title alone; what
+    # the sources don't back is flagged for a look before posting.
+    research: bool = False
+    language: str = Field(default="en", pattern=r"^[a-z]{2}$")
 
 
 class PostCaption(Strict):

@@ -701,6 +701,13 @@ def edit(
     if not analyses:
         raise errors[0]  # the video itself can't be read: say why, not where it broke later
     presets = [p for p in presets if p.audio.source in analyses]
+    # A headline written by watching the clip waits for what it says.
+    if not given_headline and any(headline.wanted(p) and p.headline.research for p in presets):
+        presets = headlined(router, source, presets, None, instructed, failed, settings,
+                            progress, said=lambda p: said_in(analyses[p.audio.source]),
+                            notes_for=notes_for)  # fmt: skip
+        if not presets:
+            raise RuntimeError("; ".join(failures)) from errors[-1]
 
     silenced: dict[tuple[str, float, float], Analysis] = {}
 
@@ -891,31 +898,54 @@ def headlined(
     failed: Callable[[str, Exception], None],
     settings: Settings,
     progress: Progress,
+    said: Callable[[Preset], str] | None = None,
+    notes_for: dict[str, str | None] | None = None,
 ) -> list[Preset]:
     """The presets with {headline} filled in: the one the notes give, or one the planner
-    writes for each preset from the video's title and description."""
+    writes for each preset from the video's title and description. A preset that writes it
+    by watching the clip (Headline.research) waits for `said`, what the clip says: it is
+    passed over until then, and only it is written once `said` is given."""
     face = compose.text_face(settings, None)
     done = []
     with ExitStack() as stack:
         llm = None
         for preset in presets:
-            if not headline.wanted(preset):
+            researched = preset.headline.research and not given
+            if not headline.wanted(preset) or researched != (said is not None):
                 done.append(preset)
                 continue
+            doubts: list[str] = []
             try:
                 if given:
-                    line, said = given, "from your notes"
+                    line, how = given, "from your notes"
                 else:
                     if llm is None:
                         progress("plan", "writing the headline")
                         llm = stack.enter_context(router.planner())
-                    line, said = headline.write(llm, source, preset), "written from the title"
+                    if said is not None:
+                        cache = settings.cache_dir / "captions"
+                        line, doubts, spoken = headline.write_researched(
+                            llm, source, preset, said(preset), cache
+                        )
+                        how = "written from the clip and Wikipedia"
+                        if spoken and notes_for is not None:
+                            keep = f'Keep the line "{spoken}" in the reel.'
+                            notes_for[preset.name] = " ".join(
+                                filter(None, [notes_for.get(preset.name), keep])
+                            )
+                    else:
+                        line, how = headline.write(llm, source, preset), "written from the title"
             except (LLMError, httpx.HTTPError, headline.NoHeadline) as exc:
                 failed(preset.name, exc)
                 continue
-            decisions[preset.name][0].append(f"headline {said}: {line}")
+            decisions[preset.name][0].append(f"headline {how}: {line}")
+            decisions[preset.name][1].extend(doubts)
             done.append(headline.fill(preset, line, face))
     return done
+
+
+def said_in(analysis: Analysis) -> str:
+    return " ".join(w.text for w in analysis.transcript.words)
 
 
 def confirmed_watermarks(
