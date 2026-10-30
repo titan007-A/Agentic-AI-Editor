@@ -93,7 +93,7 @@ def moving_part(
 
 
 ACTION_FPS = 6  # frames a second the action is looked for in
-ACTION_PAD = 0.06  # of the picture, added around the action so a falling arm isn't grazed
+ACTION_PAD = 0.03  # of the picture, added around the action so a falling arm isn't grazed
 
 
 def action_subjects(
