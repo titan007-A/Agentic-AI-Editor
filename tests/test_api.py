@@ -1137,6 +1137,32 @@ def test_an_account_can_be_researched_for_every_morning(env, monkeypatch):
     assert riya.put(url, json={"hour": 7}).status_code == 404
 
 
+def test_an_account_takes_reels_from_its_source_pages(env, monkeypatch):
+    fake_research(monkeypatch, env)
+    body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
+    account = env.client.post("/api/research/accounts", json=body).json()
+    assert account["sources"] == []
+    url = f"/api/research/accounts/{account['id']}/sources"
+    given = [
+        "@BestVocals",
+        "https://www.youtube.com/@ChiaraTomao/shorts",
+        "https://www.instagram.com/bestvocals/",  # the same page again
+    ]
+    saved = env.client.put(url, json={"sources": given}).json()
+    assert saved["sources"] == ["instagram:bestvocals", "youtube:@ChiaraTomao"]
+    bad = env.client.put(url, json={"sources": ["https://www.youtube.com/watch?v=x"]})
+    assert bad.status_code == 422 and "watch?v=x" in bad.json()["detail"]
+    assert env.client.put(url, json={"sources": ["@a"] * 11}).status_code == 422
+    with env.sessions() as db:
+        found = Research(description="", owner_id=None, account_id=account["id"])
+        db.add(found)
+        db.commit()
+        context = jobs.research_context(
+            found.id, env.sessions, env.settings, None, None, None, None
+        )
+    assert context.sources == ["instagram:bestvocals", "youtube:@ChiaraTomao"]
+
+
 def test_a_research_the_engines_turned_away_fails_with_why(env, monkeypatch):
     fake_research(monkeypatch, env, broken=True)
     started = env.client.post(

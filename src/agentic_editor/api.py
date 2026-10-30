@@ -156,6 +156,11 @@ class ResearchAccountUpdate(BaseModel):
     presets: list[str] = Field(min_length=1, max_length=50)
 
 
+class SourcesRequest(BaseModel):
+    # Instagram @names or profile links, YouTube channel links.
+    sources: list[str] = Field(max_length=research.MAX_SOURCES)
+
+
 class DailyRequest(BaseModel):
     # The hour of the morning research, server time; None turns it off.
     hour: int | None = Field(ge=0, le=23)
@@ -172,6 +177,7 @@ class ResearchAccountView(BaseModel):
     learn_status: str
     learn_message: str
     learn_error: str | None
+    sources: list[str]  # pages it takes reels from: "instagram:name", "youtube:@name"
     daily_hour: int | None  # a research every day at this hour; None when off
     daily_on: date | None  # the day the last one started
     created_at: datetime
@@ -879,6 +885,23 @@ def create_app(
     ) -> ResearchAccountView:
         found = find_instagram(account_id, session, account)
         found.presets = checked_presets(body.presets, account)
+        session.commit()
+        return instagram_view(found)
+
+    @app.put("/api/research/accounts/{account_id}/sources")
+    def set_sources(
+        account_id: str, body: SourcesRequest, account: User, session: DB
+    ) -> ResearchAccountView:
+        found = find_instagram(account_id, session, account)
+        stored = []
+        for given in body.sources:
+            source = research.source_of(given)
+            if source is None:
+                raise HTTPException(
+                    422, f"{given!r} isn't an Instagram @name or a YouTube channel link"
+                )
+            stored.append(source)
+        found.sources = list(dict.fromkeys(stored))
         session.commit()
         return instagram_view(found)
 

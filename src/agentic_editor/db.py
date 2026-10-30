@@ -221,6 +221,9 @@ class ResearchAccount(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     learned_at: Mapped[datetime | None]
     own: Mapped[list[str]] = mapped_column(JSON, default=list)  # its own reels' codes
+    # Pages the owner takes reels from, "instagram:name" or "youtube:@name": every research
+    # for the account looks at their latest too.
+    sources: Mapped[list[str]] = mapped_column(JSON, default=list)
     best: Mapped[list[dict]] = mapped_column(JSON, default=list)  # its best liked
     # Learning runs as a task of its own: idle, queued, running, done or failed.
     learn_status: Mapped[str] = mapped_column(String(16), default="idle")

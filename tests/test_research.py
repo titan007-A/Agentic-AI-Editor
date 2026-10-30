@@ -555,3 +555,50 @@ def test_low_quality_reels_stay_out_and_sd_ranks_below_hd():
     assert (hd.width, hd.height, hd.bitrate, hd.quality) == (1088, 1936, 2474.2, "HD")
     assert sd.quality == "SD" and sd.score < hd.score
     assert research.Reel(code="x", url="", query="").quality == ""  # not known
+
+
+def test_a_research_looks_at_the_accounts_source_pages_too():
+    llm = Planner()
+    asked = []
+
+    def find(query, count):
+        asked.append(query)
+        if query.endswith('"bestvocals"'):  # the source page, by name
+            return [hit("PAGEREEL1"), hit("FANREEL01")]
+        return [hit("ADAMS1")]
+
+    def info(url):
+        code = research.code_of(url)
+        if code.startswith("yt:"):
+            return {"channel": "Chiara", "uploader_id": "@ChiaraTomao", "title": "Bryan Adams",
+                    "media_type": "short", "duration": 30}  # fmt: skip
+        channel = {"PAGEREEL1": "bestvocals", "FANREEL01": "bestvocals_fans"}.get(code, "attic")
+        return {"channel": channel, "description": f"Bryan Adams {code}", "like_count": 100}
+
+    def channel(url, count):
+        assert url == "https://www.youtube.com/@ChiaraTomao/shorts" and count == research.PER_SOURCE
+        return [{"url": "https://www.youtube.com/shorts/CHIARA00001", "title": "Bryan Adams live"},
+                {"url": "https://www.youtube.com/watch?v=NOTASHORT01"}]  # fmt: skip
+
+    context = research.Context(sources=["youtube:@ChiaraTomao", "instagram:bestvocals"])
+    result = research.run(
+        "Bryan Adams", lambda: nullcontext(llm), set(), set(), lambda *a: None, find, info, 0,
+        context, channel=channel,
+    )  # fmt: skip
+    found = {r.code: r.query for r in result.reels}
+    # The page's own reel and the channel's Short; the fan page found by the name isn't kept.
+    assert found == {
+        "yt:CHIARA00001": "from @ChiaraTomao",
+        "PAGEREEL1": "from @bestvocals",
+        "ADAMS1": "Bryan Adams live",
+    }
+
+    def broken(url, count):
+        raise RuntimeError("channel gone")
+
+    context = research.Context(sources=["youtube:@gone"])
+    kept = research.run(
+        "Bryan Adams", lambda: nullcontext(Planner()), set(), set(), lambda *a: None, find, info,
+        0, context, channel=broken,
+    )  # fmt: skip
+    assert [r.code for r in kept.reels] == ["ADAMS1"]  # one page failing costs only its reels

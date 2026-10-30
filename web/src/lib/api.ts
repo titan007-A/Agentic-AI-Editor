@@ -211,6 +211,8 @@ export type InstagramAccount = {
   learn_status: "idle" | "queued" | "running" | "done" | "failed";
   learn_message: string;
   learn_error: string | null;
+  /** Pages it takes reels from: "instagram:name", "youtube:@name". */
+  sources: string[];
   /** A research for it every morning at this hour (server time); null when off. */
   daily_hour: number | null;
   /** The day the last one started. */
@@ -388,6 +390,8 @@ export const api = {
     request<InstagramAccount>("POST", "/research/accounts", { handle, presets }),
   updateInstagramAccount: (id: string, presets: string[]) =>
     request<InstagramAccount>("PUT", `/research/accounts/${id}`, { presets }),
+  setSourcePages: (id: string, sources: string[]) =>
+    request<InstagramAccount>("PUT", `/research/accounts/${id}/sources`, { sources }),
   setDailyResearch: (id: string, hour: number | null) =>
     request<InstagramAccount>("PUT", `/research/accounts/${id}/daily`, { hour }),
   learnInstagramAccount: (id: string) =>

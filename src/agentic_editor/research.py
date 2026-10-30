@@ -54,6 +54,12 @@ MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
 # Picture quality, by the short side of the best version the site offers: below SD is left
 # out (it looks soft once edited at 1080 wide), SD ranks a little lower than HD.
 SD, HD = 480, 720
+# A YouTube channel's link, of any of its tabs.
+CHANNEL = re.compile(
+    r"https?://(?:www\.|m\.)?youtube\.com/(@[\w.-]+|channel/[\w-]+)(?:/\w*)?/?(?:\?.*)?$"
+)
+MAX_SOURCES = 10  # source pages an account may have
+PER_SOURCE = 5  # the latest reels taken from each
 QUALITY = {"HD": 1.0, "SD": 0.85, "": 0.95}  # "" when the site didn't say
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
@@ -95,6 +101,7 @@ class Reel:
     looked_up: bool = False
     views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
     long: bool = False  # a YouTube video, not a Short: left out
+    page: str = ""  # the Instagram source page it was searched for: kept only when its own
     width: int | None = None  # of the best version the site offers
     height: int | None = None
     bitrate: float | None = None  # kbit/s of that version
@@ -149,6 +156,9 @@ class Context:
     summary: str = ""
     presets: dict[str, str] = field(default_factory=dict)
     own: set[str] = field(default_factory=set)
+    # Pages the owner takes reels from ("instagram:name", "youtube:@name"): their latest
+    # are looked at in every research, besides what the searches find.
+    sources: list[str] = field(default_factory=list)
     # What the person's feedback on earlier researches taught: reels they liked (or
     # edited) and didn't want, a line each (see taste_line), and accounts they hid.
     liked: list[str] = field(default_factory=list)
@@ -622,6 +632,55 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
         list(pool.map(one, reels))
 
 
+def source_of(text: str) -> str | None:
+    """A source page as stored: "youtube:@name" (or "youtube:channel/UC...") from a YouTube
+    channel's link, "instagram:name" from an Instagram @name or profile link."""
+    text = text.strip()
+    if match := re.match(CHANNEL, text):
+        return "youtube:" + match.group(1)
+    if handle := handle_of(text):
+        return "instagram:" + handle
+    return None
+
+
+def _channel_shorts(url: str, count: int) -> list[dict]:
+    """A YouTube channel's latest Shorts, newest first, as its Shorts tab lists them."""
+    from yt_dlp import YoutubeDL
+
+    options = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}
+    with YoutubeDL({**options, "playlistend": count, "logger": _Quiet()}) as ydl:
+        return ydl.extract_info(url, download=False).get("entries") or []
+
+
+def from_sources(
+    sources: list[str], find=_engines, pause: float | None = None, channel=_channel_shorts
+) -> list[Reel]:
+    """The latest reels of each source page: a YouTube channel's Shorts tab lists them; an
+    Instagram page can't be listed without signing in, so it is searched for, and what the
+    search finds is kept only when it is the page's own (see run)."""
+    found: dict[str, Reel] = {}
+    for source in sources[:MAX_SOURCES]:
+        kind, name = source.split(":", 1)
+        if kind == "youtube":
+            try:
+                entries = channel(f"https://www.youtube.com/{name}/shorts", PER_SOURCE)
+            except Exception as exc:
+                log.warning("couldn't list %s's Shorts: %s", name, exc)
+                continue
+            for entry in entries:
+                link = entry.get("url") or ""
+                code = code_of(link)
+                if code and "/shorts/" in link and code not in found:  # never a video
+                    title = entry.get("title") or ""
+                    found[code] = Reel(code, reel_url(code), f"from {name}", title=title)
+        else:
+            reels, _ = search([f'"{name}"'], find, pause)
+            for reel in reels[: PER_SOURCE * 2]:  # half of what a search finds is others'
+                reel.query, reel.page = f"from @{name}", name
+                found.setdefault(reel.code, reel)
+    return list(found.values())
+
+
 def _count(value) -> int | None:
     return int(value) if isinstance(value, int | float) and value >= 0 else None
 
@@ -815,6 +874,7 @@ def run(
     pause: float | None = None,
     context: Context | None = None,
     sites: tuple[str, ...] = ("instagram",),
+    channel=_channel_shorts,
 ) -> Result:
     """Search, look up, rate, rank and pick the best few. `planner()` opens the planning
     model, which holds the GPU, so it is opened only to plan and to rate, never while
@@ -828,6 +888,12 @@ def run(
     reels, failed = search(queries, find, pause, progress, sites)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
+    if context.sources:
+        progress("looking at your source pages", 0.42)
+        # The pages first, up to half of what is looked up, so the searches still count.
+        picked = from_sources(context.sources, find, pause, channel)[: MAX_REELS // 2]
+        taken = {r.code for r in picked}
+        reels = picked + [r for r in reels if r.code not in taken]
     left_out = {
         "edited": sum(r.code in used for r in reels),
         "shown before": sum(r.code in seen and r.code not in used for r in reels),
@@ -836,6 +902,7 @@ def run(
     reels = [r for r in reels if r.code not in used | seen | context.own][:MAX_REELS]
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
+    reels = [r for r in reels if not r.page or r.handle == r.page]  # another's, found by name
     if context.handle:
         left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
         reels = [r for r in reels if r.handle != context.handle]

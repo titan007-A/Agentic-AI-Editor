@@ -1,6 +1,6 @@
 "use client";
 
-import { AtSign, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AtSign, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -46,6 +46,82 @@ function PresetChoice({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** A source page as the person knows it: "@name on Instagram", "@name on YouTube". */
+function page(source: string): string {
+  const at = source.indexOf(":");
+  const kind = source.slice(0, at);
+  const name = source.slice(at + 1);
+  const shown = name.startsWith("@") || name.startsWith("channel/") ? name : `@${name}`;
+  return `${shown} on ${kind === "youtube" ? "YouTube" : "Instagram"}`;
+}
+
+/** The pages an account takes reels from: every research for it looks at their latest. */
+function SourcePages({
+  account,
+  act,
+}: {
+  account: InstagramAccount;
+  act: (what: () => Promise<unknown>, done: string) => Promise<boolean>;
+}) {
+  const [adding, setAdding] = useState("");
+  const save = (sources: string[], done: string) =>
+    act(() => api.setSourcePages(account.id, sources), done);
+
+  return (
+    <div className="space-y-1">
+      <p className="text-sm">
+        Source pages{" "}
+        <span className="text-muted-foreground">
+          (their latest reels are looked at in every research)
+        </span>
+      </p>
+      {account.sources.length > 0 && (
+        <ul className="flex flex-wrap gap-1">
+          {account.sources.map((source) => (
+            <li key={source}>
+              <Badge variant="outline" className="gap-1">
+                {page(source)}
+                <button
+                  type="button"
+                  aria-label={`Stop taking reels from ${page(source)}`}
+                  onClick={() =>
+                    save(
+                      account.sources.filter((s) => s !== source),
+                      `${page(source)} removed`,
+                    )
+                  }
+                >
+                  <X className="size-3" />
+                </button>
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!adding.trim()) return;
+          save([...account.sources, adding.trim()], "Source page added").then(
+            (ok) => ok && setAdding(""),
+          );
+        }}
+      >
+        <Input
+          aria-label={`A source page for @${account.handle}`}
+          placeholder="@page or a YouTube channel link"
+          value={adding}
+          onChange={(e) => setAdding(e.target.value)}
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={!adding.trim()}>
+          <Plus /> Add
+        </Button>
+      </form>
     </div>
   );
 }
@@ -140,13 +216,16 @@ function AccountRow({
   const [chosen, setChosen] = useState(account.presets);
   const labels = Object.fromEntries(presets.map((p) => [p.name, p.label]));
 
-  async function act(what: () => Promise<unknown>, done: string) {
+  /** Whether it worked: a failure is shown and leaves what was typed. */
+  async function act(what: () => Promise<unknown>, done: string): Promise<boolean> {
     try {
       await what();
       toast.success(done);
       onChange();
+      return true;
     } catch (err) {
       toast.error(errorText(err));
+      return false;
     }
   }
 
@@ -218,6 +297,7 @@ function AccountRow({
           </Button>
         </div>
       )}
+      <SourcePages account={account} act={act} />
       <label className="flex flex-wrap items-center gap-2 text-sm">
         Research every morning
         <select

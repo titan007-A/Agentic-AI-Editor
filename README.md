@@ -279,6 +279,11 @@ Hinglish too), ranked by how well they fit and how viral they are:
   (both by default). Shorts are found the same way ("site:youtube.com/shorts ...") and
   rated and ranked with the reels; a link to a full video, or one YouTube says is longer
   than 3 minutes, is left out. A Short's card shows its views and a "YouTube Short" badge.
+- **Source pages.** Each of your accounts can list pages to take reels from (an Instagram
+  @name or a YouTube channel link, up to 10). Every research for the account looks at
+  their latest too (5 each): a YouTube channel's Shorts tab lists them; an Instagram page
+  can't be listed without signing in, so it is searched for by name and only its own
+  reels are kept. They are rated and ranked with the rest, never shown twice.
 - **Every morning.** "Research every morning" on an Instagram account starts a research
   for it (Instagram and YouTube Shorts) each day at that hour, server time; one the
   server was off for starts when it is back, the same day. It shows in the list as

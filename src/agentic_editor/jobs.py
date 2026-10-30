@@ -392,6 +392,7 @@ def research_context(
         summary=account.summary,
         presets=research.describe_presets(chosen or available),
         own=set(account.own),
+        sources=list(account.sources or []),
         **learned,
     )
 
