@@ -61,6 +61,13 @@ CHANNEL = re.compile(
 PDF_ENTRIES = 40  # songs one PDF may list
 PER_ENTRY = 4  # reels given for each of them
 PDF_TEXT = 15_000  # characters of a PDF the model reads
+# The words a PDF labels a song's lines with ("Top text:", "Sotto:"), in the languages
+# editors write: which says above the video and which below.
+ABOVE = {"top", "above", "upper", "sopra", "alto", "arriba", "encima", "oben", "haut", "upar",
+         "ऊपर"}  # fmt: skip
+BELOW = {"bottom", "below", "lower", "sotto", "basso", "abajo", "debajo", "unten", "bas",
+         "niche", "नीचे"}  # fmt: skip
+LABEL = re.compile(r"^\W*([^:]{1,30}):")
 MAX_SOURCES = 10  # source pages an account may have
 TREND_DAYS = 14  # the trend radar looks at reels posted, and researches made, this recently
 TRENDING = 10  # reels it shows
@@ -401,7 +408,36 @@ def pdf_entries(llm, text: str) -> list[dict]:
                     "bottom": e.bottom.strip().replace("\\n", "\n"),
                 }
             )
-    return entries
+    return [placed(entry, text) for entry in entries]
+
+
+def _label(line: str) -> str | None:
+    """ "top" or "bottom" for a line the PDF labels as above or below the video."""
+    if match := LABEL.match(line):
+        words = set(re.findall(r"\w+", match.group(1).lower()))
+        if words & ABOVE:
+            return "top"
+        if words & BELOW:
+            return "bottom"
+    return None
+
+
+def placed(entry: dict, text: str) -> dict:
+    """The entry with each line of its words above or below the video as the PDF labels
+    it: the model often runs a "Bottom text:" line into the top. A line found under no
+    label goes with the labelled one before it, and one the PDF doesn't have stays put."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    song = entry["song"].lower()
+    start = next((n for n, line in enumerate(lines) if song and song in line.lower()), 0)
+    where: dict[str, list[str]] = {"top": [], "bottom": []}
+    current = None
+    for place in ("top", "bottom"):
+        for part in filter(None, (p.strip() for p in entry[place].split("\n"))):
+            line = next((line for line in lines[start:] if part in line), None)
+            if line is not None:
+                current = _label(line) or current
+            where[current if line is not None and current else place].append(part)
+    return {**entry, "top": "\n".join(where["top"]), "bottom": "\n".join(where["bottom"])}
 
 
 def describe_presets(presets: dict[str, Preset]) -> dict[str, str]:
@@ -1070,7 +1106,9 @@ def run_pdf(
 ) -> list[tuple[int, Reel]]:
     """For each song a PDF lists (see pdf_entries), the best few reels of it, PER_ENTRY at
     most, as (its entry's number, reel): searched for by singer and song, looked up, rated
-    and ranked as in run, never one edited, shown before, or given for another song."""
+    and ranked as in run, never one edited, shown before, or given for another song. A
+    song nothing fitting turned up for is searched for once more, with other words: the
+    engines give a different few each time."""
     context = context or Context()
     given: list[tuple[int, Reel]] = []
     taken = used | seen | context.own
@@ -1079,27 +1117,36 @@ def run_pdf(
         song, singer = entry["song"], entry["singer"]
         who = " - ".join(x for x in (song, singer) if x)
         progress(f"searching for {who} ({n + 1} of {len(entries)})", 0.05 + 0.9 * n / len(entries))
-        queries = _tidy([f"{singer} {song}", f"{song} {singer} live"])
-        reels, failed = search(queries, find, pause, sites=sites)
-        answered = answered or len(failed) < len(queries) * len(sites)
-        reels = [r for r in reels if r.code not in taken][: MAX_REELS // 4]
-        look_up(reels, info)
-        reels = [
-            r
-            for r in reels
-            if not r.long
-            and r.quality != "low"
-            and r.handle not in context.hidden
-            and not (context.handle and r.handle == context.handle)
-        ]
-        if reels:
-            with planner() as llm:
-                wish = f"reels of the song '{song}' by {singer}, {singer} singing it"
-                rate(llm, wish, reels, context=context)
-        fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
-        suggest(fitting, context)
-        spread(fitting)
-        picked, _, _ = pick(rank(fitting), count=PER_ENTRY)
+        rounds = [[f"{singer} {song}", f"{song} {singer} live"],
+                  [f"{song} {singer} reel", f"{singer} {song} performance"]]  # fmt: skip
+        picked: list[Reel] = []
+        looked: set[str] = set()  # by the first round: not again in the second
+        for queries in rounds:
+            queries = _tidy(queries)
+            reels, failed = search(queries, find, pause, sites=sites)
+            answered = answered or len(failed) < len(queries) * len(sites)
+            reels = [r for r in reels if r.code not in taken | looked][: MAX_REELS // 4]
+            looked |= {r.code for r in reels}
+            look_up(reels, info)
+            reels = [
+                r
+                for r in reels
+                if not r.long
+                and r.quality != "low"
+                and r.handle not in context.hidden
+                and not (context.handle and r.handle == context.handle)
+            ]
+            if reels:
+                with planner() as llm:
+                    wish = f"reels of the song '{song}' by {singer}, {singer} singing it"
+                    rate(llm, wish, reels, context=context)
+            fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
+            suggest(fitting, context)
+            spread(fitting)
+            # All of one song: only the accounts are kept apart.
+            picked, _, _ = pick(rank(fitting), count=PER_ENTRY, per_song=PER_ENTRY)
+            if picked:
+                break
         taken |= {r.code for r in picked}
         given += [(n, r) for r in picked]
     if not answered and entries:
