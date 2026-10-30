@@ -494,7 +494,13 @@ def band_shots(
             Shot(start=clip.start, end=clip.end, x=left, width=picture_width, y=top,
                  height=picture_height, reason="the whole picture fits")
         ]  # fmt: skip
-    lo, hi = holding(lo, hi, height, moving)
+    if moving is not None and moving.bottom - moving.top < height:
+        # Only the clip, shorter than the band: the band's spare rows are its background,
+        # not the edge of the still image.
+        lo, hi = max(lo, moving.top), min(hi, moving.bottom)
+        height = even(hi - lo)
+    else:
+        lo, hi = holding(lo, hi, height, moving)
 
     def head_rows(t0: float, t1: float, core: bool = False) -> list[tuple[float, float]]:
         """Rows the heads cover in [t0, t1): hair to chin, or only the face itself."""

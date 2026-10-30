@@ -361,14 +361,13 @@ def test_the_moving_clip_under_a_still_photo_is_framed_not_the_photo():
     picture = (0, 0, 1080, 1920)
     before = band_shots(clip, [], [], seen, picture, 982, 1920)
     assert before[0].y < 760  # the photo's faces win: the clip is mostly cut
-    clip_rows = Moving(940, 1860, spare="below")
-    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=clip_rows)
-    # The whole clip, and the dark rows under it rather than the photo, as far as the
-    # picture goes: two of its rows are left over above.
-    assert shot.y == 1920 - 982 == 938
-    above = Moving(940, 1860, spare="above")
-    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=above)
-    assert shot.y + 982 == 1860
+    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=Moving(940, 1860))
+    # Only the clip, shorter than the band: the rest of the band is background.
+    assert (shot.y, shot.height) == (940, 920)
+    # A clip taller than the band: the window stays inside it.
+    tall = Moving(600, 1900)
+    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=tall)
+    assert shot.y >= 600 and shot.y + shot.height <= 1900 and shot.height == 982
 
 
 def test_a_tall_crop_holds_the_moving_part():
@@ -381,3 +380,9 @@ def test_a_tall_crop_holds_the_moving_part():
         CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920, moving=Moving(800, 1900)
     )
     assert shot.y >= 800 and shot.y + shot.height <= 1900  # inside the clip, taller than it
+    # A clip shorter than the frame's window: the spare rows from its plainer side.
+    short = Moving(900, 1500, spare="above")
+    (shot,) = tall_shots(
+        CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920, moving=short
+    )
+    assert shot.y + shot.height == 1500
