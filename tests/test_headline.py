@@ -206,8 +206,10 @@ def test_the_song_is_put_in_quotes_however_the_model_wrote_it():
 class Watcher:
     """A planner that says what the clip is from, then writes the headline given."""
 
-    def __init__(self, subject, line, written):
-        self.answers = [{"subject": subject, "line": line}, *({"headline": w} for w in written)]
+    def __init__(self, subject, line, written, sure="yes", named=None):
+        found = {"named": subject if named is None else named, "said_from": subject,
+                 "subject": subject, "sure": sure, "line": line}  # fmt: skip
+        self.answers = [found, *({"headline": w} for w in written)]
         self.asked = []
 
     def chat_json(self, messages, schema, **kwargs):
@@ -278,6 +280,18 @@ def test_a_clip_nothing_tells_of_isnt_guessed(wikipedia, tmp_path):
     llm = Watcher("Nowhere Film", "", ["A scene from Nowhere Film"])
     _, doubts, _ = headline.write_researched(llm, GODFATHER, preset(research=True), "", tmp_path)
     assert doubts == ["headline: Wikipedia has no article on Nowhere Film, so nothing was checked"]
+
+
+def test_a_clip_the_page_labels_with_the_wrong_film_gets_no_headline(wikipedia, tmp_path):
+    # A Scent of a Woman scene captioned The Godfather: its words aren't that film's.
+    llm = Watcher("The Godfather", "", [], sure="no")
+    with pytest.raises(headline.NoHeadline, match="says the clip is from The Godfather, but"):
+        headline.write_researched(llm, GODFATHER, preset(research=True), "Hoo-ah", tmp_path)
+    llm = Watcher("The Godfather", "", ["A scene from The Godfather (1972)"], sure="unsure")
+    _, doubts, _ = headline.write_researched(llm, GODFATHER, preset(research=True), "Hm", tmp_path)
+    assert doubts == [
+        "headline: check the clip is from The Godfather; what it says didn't settle it"
+    ]
 
 
 def test_a_quote_counts_as_said_when_most_of_its_words_were_heard():

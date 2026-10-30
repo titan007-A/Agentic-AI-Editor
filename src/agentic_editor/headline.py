@@ -4,6 +4,7 @@ video's title and description in the way the preset's hint asks."""
 
 import re
 from collections.abc import Callable
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -50,7 +51,8 @@ QUOTE = re.compile(r"[“\"]([^”\"]{3,})[”\"]")
 HEARD = 0.75
 
 IDENTIFY = """A short vertical video is a clip from something people know: a film, a
-series, a speech, a song. Say what it is from.
+series, a speech, a song. Say what it is from. Go by what is said in the clip: a page's
+title and description can name the wrong film.
 
 Title: {title}
 Channel: {uploader}
@@ -58,9 +60,14 @@ Description: {description}
 Said in it (speech recognition, may mishear a word): {said}
 
 Reply with:
-- subject: the film (or series, speech, song) the clip is from, by its title as Wikipedia
-  has it, e.g. "The Godfather"; empty if the title, description and what is said don't
-  tell you, never a guess.
+- named: the film (or series, speech, song) the title or description say it is from;
+  empty if they name none.
+- said_from: the film (or series, speech, song) whose scene the words said in the clip
+  are from, as far as you know that scene's dialogue; empty if you don't know it.
+- subject: the one it is from, by its title as Wikipedia has it, e.g. "The Godfather":
+  said_from when you know it, else named; empty if neither.
+- sure: "yes" only if the words said in the clip are that film's own dialogue as you
+  know it; "no" if they are from another one; "unsure" if you can't tell.
 - line: the best-known line said in the clip, as it is said, mending only a word the
   speech recognition plainly misheard; empty if nothing said in it is a known line."""
 
@@ -81,7 +88,11 @@ Reply with headline."""
 
 
 class Subject(BaseModel):
+    # All required, as for ratings: the model leaves out what it may.
+    named: str
+    said_from: str
     subject: str
+    sure: Literal["yes", "no", "unsure"]
     line: str
 
 
@@ -155,7 +166,16 @@ def write_researched(
             "couldn't tell what the clip is from; write the headline in the notes as "
             "'headline: ...'"
         )
+    # A page that labels a clip with the wrong film is caught by what the clip says: a
+    # headline naming that film would be wrong, so none is written.
+    if found.sure == "no":
+        raise NoHeadline(
+            f"the page says the clip is from {found.named or subject}, but what is said in "
+            "it isn't that film's; write the headline in the notes as 'headline: ...'"
+        )
     doubts = []
+    if found.sure == "unsure":
+        doubts.append(f"headline: check the clip is from {subject}; what it says didn't settle it")
     try:
         sources = caption.gather_topic(subject, preset.headline.language, cache)
         block = caption._sources_block(sources)

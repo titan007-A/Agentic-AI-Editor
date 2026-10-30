@@ -29,8 +29,8 @@ text_blocks:
 headline:
   hint: >-
     The famous line said in the clip, in quotes, then the film and its year, like:
-    “I'm gonna make him an offer he can't refuse” – The Godfather (1972). Give the year
-    only when the sources do. When nothing said in the clip is a famous line, one striking
+    “I'm gonna make him an offer he can't refuse” – The Godfather (1972). The year in full,
+    and only when the sources give it. When nothing said in the clip is a famous line, one striking
     fact about the scene or the film from the sources instead.
   max_chars: 110
   research: true
