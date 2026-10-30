@@ -343,7 +343,8 @@ function Researcher() {
                   onChange={(e) => setPdf(e.target.files?.[0] ?? null)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Each song with its singer, and the words to write above and below its reel: the
+                  Each song with its singer, and the words to write above and below its reel (start
+                  those lines with &quot;Top text:&quot; and &quot;Bottom text:&quot;): the
                   researcher finds reels of each, and the edit writes your words.
                 </p>
               </div>

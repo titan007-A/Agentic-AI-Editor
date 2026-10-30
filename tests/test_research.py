@@ -705,3 +705,66 @@ def test_a_pdf_of_songs_is_read_and_each_song_searched_for():
         research.run_pdf(
             entries, lambda: nullcontext(llm), set(), set(), lambda *a: None, down, pause=0
         )
+
+
+@pytest.mark.parametrize(
+    ("top", "bottom", "placed_top", "placed_bottom"),
+    [
+        # The model ran the "Bottom text:" line into the top.
+        ("Live Aid 1985: the show\nFollow for more", "", "Live Aid 1985: the show",
+         "Follow for more"),
+        # Read right already: kept.
+        ("Il successo del 1977", "Seguici", "Il successo del 1977", "Seguici"),
+        # A label's second line stays with it; words the PDF doesn't have stay put.
+        ("Mina at 32\nsinging live\nFollow for more", "Seguici", "Mina at 32\nsinging live",
+         "Follow for more\nSeguici"),
+    ],
+)  # fmt: skip
+def test_a_pdf_songs_words_go_above_or_below_as_the_pdf_labels_them(
+    top, bottom, placed_top, placed_bottom
+):
+    text = "\n".join([
+        "Songs - Top text: the best ones",  # a heading before the songs: not this song's
+        "1) Queen - Bohemian Rhapsody", "Top text: Live Aid 1985: the show",
+        "Bottom text: Follow for more",
+        "2) Mina - Grande", "- Above: Mina at 32", "singing live", "Below: Follow for more",
+        "3) Tozzi - Ti amo", "Sopra: Il successo del 1977", "Sotto: Seguici",
+    ])  # fmt: skip
+    song = {"Live": "Bohemian Rhapsody", "Il s": "Ti amo", "Mina": "Grande"}[top[:4]]
+    entry = {"singer": "", "song": song, "top": top, "bottom": bottom}
+    assert research.placed(entry, text) == {**entry, "top": placed_top, "bottom": placed_bottom}
+
+
+def test_a_pdf_song_gets_up_to_four_reels_and_is_searched_again_when_none_fit():
+    class Rater:
+        def chat_json(self, messages, schema, **kwargs):
+            reels = [line for line in messages[-1]["content"].split("\n") if line[:1].isdigit()]
+            return {"ratings": [
+                {**NAMELESS, "n": n, "relevance": 9, "why": "fits", "song": "Heaven",
+                 "artist": "Bryan Adams"}
+                for n, _ in enumerate(reels, 1)
+            ]}  # fmt: skip
+
+    asked = []
+
+    def find(query, count):
+        asked.append(query)
+        if "Nobody" in query:
+            # Nothing the first time; the second searches, with other words, find one.
+            return [hit("NOTHING01")] if "performance" in query else []
+        return [hit(f"HEAVEN00{n}") for n in range(6)]
+
+    def info(url):
+        code = research.code_of(url)
+        return {"channel": code.lower(), "description": "Bryan Adams live", "like_count": 100}
+
+    entries = [{"singer": "Bryan Adams", "song": "Heaven", "top": "", "bottom": ""},
+               {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": ""}]  # fmt: skip
+    given = research.run_pdf(
+        entries, lambda: nullcontext(Rater()), set(), set(), lambda *a: None, find, info, 0
+    )
+    assert [(e, r.code) for e, r in given] == [
+        (0, "HEAVEN000"), (0, "HEAVEN001"), (0, "HEAVEN002"), (0, "HEAVEN003"), (1, "NOTHING01")
+    ]  # fmt: skip
+    # Heaven's reels fitted at once: it was searched for once.
+    assert not any("Heaven" in q and "performance" in q for q in asked)
