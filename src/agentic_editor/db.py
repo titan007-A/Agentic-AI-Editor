@@ -251,7 +251,7 @@ class Research(Base):
     # Reels found but left out because they were edited already.
     used: Mapped[int] = mapped_column(default=0)
     considered: Mapped[int] = mapped_column(default=0)  # reels looked up and rated
-    # Reels found but not given, by why ("shown before", "same song"...).
+    # Reels found but not given, by why ("shown before", "didn't fit"...).
     left_out: Mapped[dict] = mapped_column(JSON, default=dict)
     cutoff: Mapped[float | None]  # the best score of the rated reels not given
     error: Mapped[str | None] = mapped_column(Text)

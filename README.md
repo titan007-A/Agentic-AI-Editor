@@ -218,23 +218,40 @@ The Autopilot page in the web app watches feeds and edits each new video once:
 
 ## Researcher
 
-The Researcher page finds Instagram reels for what you describe ("80s rock singers live
-on stage, Bryan Adams, Queen"), ranked by how well they fit and how viral they are:
+The Researcher page finds Instagram reels like those of an Instagram account you post on,
+or for what you describe ("80s rock singers live on stage, Bryan Adams, Queen", in
+Hinglish too), ranked by how well they fit and how viral they are:
 
+- **Your Instagram accounts.** Each person saves their own accounts (@name or the profile
+  link) with the presets they edit for each; nobody else sees them, the admin included.
+  The researcher learns an account: it finds its own reels the same way it finds any
+  (below), keeps those yt-dlp says are the account's, and the planning model writes what
+  it posts (artists, eras, languages, format, captions, what got the most likes). This is
+  done when the account is added, on "Learn again", and before a research when it is a
+  week old. With none of its reels found, a research goes by the presets.
+- **Understanding first.** The planning model writes a one-line English brief of what to
+  find (from the account, its presets and an optional focus, or from the description) and
+  about 15 searches for it: artists, songs, concerts, hashtags, languages. The request's
+  own words aren't searched ("italian gaane" finds Hindi songs).
 - Instagram has no open search, so it searches the way a chat assistant does: web search
   engines with `site:instagram.com/reel ...`, through the free `ddgs` library (several
-  engines, no key). The planning model turns the description into about 15 searches
-  (artists, songs, concerts, hashtags, languages); they run a second apart, so a research
-  takes a minute or a few.
-- Each reel found (up to 60) is looked up with yt-dlp without signing in: account,
-  caption, likes, comments, date and picture. Views and length aren't given then, and a
-  reel Instagram shows only to signed-in people keeps what the search engine said.
-- The planning model rates how well each fits (Fit, 0-100%). Viral compares likes and
-  comments, in total and per day since posting, among the reels found. The order is Fit
-  times a virality bonus, so a reel that doesn't fit stays low however viral, and among
-  those that fit the viral ones lead; "Best fit" and "Most viral" sort by one alone.
-- Reels you already edited are left out, ones an earlier research showed are marked.
-  Each card has Edit (pick a preset, and it starts the job), Copy link and Open.
+  engines, no key), a second apart, so a research takes a few minutes.
+- Each reel found (up to 40) is looked up with yt-dlp without signing in: account name
+  and @handle, caption, likes, comments, date and picture. Views and length aren't given
+  then, and a reel Instagram shows only to signed-in people keeps what the search engine
+  said.
+- The planning model rates how well each fits (Fit, 0-100%), by its artist and song
+  rather than its caption's language, names the song, says what of the account or request
+  it matches and which of your presets it suits. Below 50% it is left out. Viral compares
+  likes and comments, in total and per day since posting, among the reels found. The
+  order is Fit times a virality bonus, so a reel that doesn't fit stays low however viral.
+- A research gives the best 8, never a reel an earlier research showed, one you edited or
+  the account's own, and at most 2 from one account. Another reel of the same song is
+  fine. "Explain reasoning" under each says why it was chosen: the search that found it,
+  the fit and why, what it matches, the song, the preset and why, likes and comments per
+  day, and its score against the best reel left out.
+- Choose up to 5 to edit: each comes with the preset it suits (change it if you like),
+  and "Edit selected" starts a job for each, listed on the research with links.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.

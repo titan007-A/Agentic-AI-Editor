@@ -169,33 +169,26 @@ def test_a_research_finds_rates_and_ranks_leaving_out_what_was_edited():
     assert steps == sorted(steps)
 
 
-def test_the_best_five_are_varied_one_song_once_two_from_an_account_at_most():
-    def reel(code, handle, song, score):
-        return Reel(code, "", "", handle=handle, song=song, score=score)
+def test_one_account_fills_at_most_two_of_the_eight_but_a_song_may_come_again():
+    def reel(code, handle, song, score, account=""):
+        return Reel(code, "", "", handle=handle, account=account, song=song, score=score)
 
     ranked = [
-        reel("A1", "attic", "Heaven - Bryan Adams", 0.9),
-        reel("A2", "attic", "Summer of 69 - Bryan Adams", 0.85),
-        reel("A3", "attic", "Run to You - Bryan Adams", 0.8),  # a third from attic
-        reel("B1", "rockblog", "heaven – bryan adams", 0.75),  # Heaven again
-        reel("B2", "rockblog", "", 0.7),
-        reel("C1", "", "", 0.65),
-        reel("C2", "vault", "Caruso - Lucio Dalla", 0.6),
-        reel("C3", "vault", "Felicità - Al Bano", 0.5),
+        reel("A1", "attic", "Heaven - Bryan Adams", 0.9, "The Video Attic"),
+        reel("A2", "attic", "Summer of 69 - Bryan Adams", 0.85, "Attic Two"),
+        reel("A3", "attic", "Run to You - Bryan Adams", 0.8),  # a third from @attic
+        reel("B1", "rockblog", "heaven – bryan adams", 0.75),  # another reel of Heaven
+        reel("C1", "", "", 0.65, "No Handle"),  # known by its display name alone
+        reel("C2", "", "", 0.6, "No Handle"),
+        reel("C3", "", "", 0.55, "No Handle"),
+        reel("D1", "", "", 0.5),  # nothing known of its account: no cap
+        reel("D2", "", "", 0.45),
+        reel("E1", "vault", "Caruso - Lucio Dalla", 0.4),
+        reel("E2", "vault", "Felicità - Al Bano", 0.3),
     ]
-    picked, passed, cutoff = research.pick(ranked, count=5)
-    assert [r.code for r in picked] == ["A1", "A2", "B2", "C1", "C2"]
-    assert passed == {"same account": 1, "same song": 1} and cutoff == 0.5
-
-
-def test_no_more_than_two_of_the_five_are_about_one_artist():
-    ranked = [
-        Reel(f"M{n}", "", "", handle=f"page{n}", artist="Michael Jackson", score=1 - n / 10)
-        for n in range(4)
-    ] + [Reel("Q1", "", "", handle="rock", artist="Queen", score=0.5)]
-    picked, passed, _ = research.pick(ranked)
-    assert [r.code for r in picked] == ["M0", "M1", "Q1"]
-    assert passed == {"same artist": 2}
+    picked, passed, cutoff = research.pick(ranked)
+    assert [r.code for r in picked] == ["A1", "A2", "B1", "C1", "C2", "D1", "D2", "E1"]
+    assert passed == {"same account": 2} and cutoff == 0.3
 
 
 def test_the_rated_song_and_artist_are_named_together():

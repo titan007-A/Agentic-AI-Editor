@@ -14,7 +14,7 @@ A research can be for one of the owner's Instagram accounts: the account is lear
 (its own reels, found the same way, and what the planning model reads in them), and the
 searches and ratings aim at reels like its best ones, for the presets the owner edits it
 with. Each research gives its best few: never a reel shown before, the account's own or
-one already edited, and no two of the same song."""
+one already edited, and at most two from one account."""
 
 import logging
 import math
@@ -39,7 +39,7 @@ MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
 MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
 SHOWN = 8  # the best this many are kept: the owner picks the ones to edit from them
-PER_ACCOUNT = 2  # of them at most from one account, or about one artist
+PER_ACCOUNT = 2  # of them at most from one account, so one page doesn't fill the research
 LEARN_REELS = 24  # reels looked up to find an account's own
 PAUSE = 1.0  # seconds between searches, so the engines don't turn it away
 LOOKUPS = 4  # reels looked up at once
@@ -94,7 +94,7 @@ class Result:
     repeats: int = 0  # shown by an earlier research, so left out
     considered: int = 0  # reels looked up and rated
     # Reels found but not given, by why: "edited", "shown before", "the account's own",
-    # "didn't fit", "same account", "same artist", "same song".
+    # "didn't fit", "same account".
     left_out: dict[str, int] = field(default_factory=dict)
     cutoff: float | None = None  # the best score of the reels that fit but weren't given
 
@@ -185,7 +185,10 @@ RATE = (
     "- preset: the name of the preset it suits best, exactly as listed, else ''\n"
     "- preset_why: a few words on why that preset\n"
     "Judge each reel by its own caption: reels found by the same search are often about "
-    "different songs and fit differently.\n\n"
+    "different songs and fit differently. Judge the music by its artist and song, not by "
+    "the language its caption is written in: a Spanish caption about an Italian song is "
+    "still an Italian song. A preset's language is the text the editor adds, not something "
+    "the reel must have.\n\n"
     "What they want: {wish}\n\nTheir presets:\n{presets}\n\nReels:\n{reels}"
 )
 LEARN = (
@@ -466,37 +469,26 @@ def _same(text: str) -> str:
 def pick(
     ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT
 ) -> tuple[list[Reel], dict[str, int], float | None]:
-    """The best `count` of the ranked reels: at most `per_account` from one account and as
-    many about one artist, and one of each song; how many were passed over for each, and
-    the best score left."""
+    """The best `count` of the ranked reels, at most `per_account` from one account (by its
+    Instagram name, its display name when that isn't known), so one page doesn't fill the
+    research; how many were passed over for that, and the best score left. Another reel of
+    a song already given is welcome: only a reel itself is never given twice."""
     picked: list[Reel] = []
-    passed = {"same account": 0, "same artist": 0, "same song": 0}
+    passed = 0
     accounts: dict[str, int] = {}
-    artists: dict[str, int] = {}
-    songs: set[str] = set()
     rest: list[Reel] = []
     for reel in ranked:
         if len(picked) == count:
             rest.append(reel)
             continue
-        who, artist, song = _same(reel.handle or reel.account), _same(reel.artist), _same(reel.song)
+        who = _same(reel.handle or reel.account)
         if who and accounts.get(who, 0) >= per_account:
-            passed["same account"] += 1
-            continue
-        if artist and artists.get(artist, 0) >= per_account:
-            passed["same artist"] += 1
-            continue
-        if song and song in songs:
-            passed["same song"] += 1
+            passed += 1
             continue
         picked.append(reel)
         accounts[who] = accounts.get(who, 0) + 1
-        if artist:
-            artists[artist] = artists.get(artist, 0) + 1
-        if song:
-            songs.add(song)
     cutoff = rest[0].score if rest else None
-    return picked, {k: v for k, v in passed.items() if v}, cutoff
+    return picked, {"same account": passed} if passed else {}, cutoff
 
 
 def learn(
