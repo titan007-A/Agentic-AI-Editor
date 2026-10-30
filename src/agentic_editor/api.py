@@ -182,6 +182,10 @@ class ResearchItemView(BaseModel):
     likes: int | None
     comments: int | None
     views: int | None  # a YouTube Short's
+    width: int | None  # the best version the site offers
+    height: int | None
+    bitrate: float | None  # kbit/s
+    duration: float | None  # seconds, when the site says (YouTube does)
     posted_at: datetime | None
     thumbnail: str
     relevance: float | None

@@ -100,6 +100,11 @@ export type ResearchItem = {
   comments: number | null;
   /** A YouTube Short's; Instagram doesn't show them. */
   views: number | null;
+  /** The best version the site offers: its picture, kbit/s and (YouTube's) seconds. */
+  width: number | null;
+  height: number | null;
+  bitrate: number | null;
+  duration: number | null;
   posted_at: string | null;
   thumbnail: string;
   /** 0-1: how well it fits the description; null when the model couldn't rate it. */

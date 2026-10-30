@@ -525,3 +525,33 @@ def test_a_research_finds_youtube_shorts_too_but_never_videos():
     rate_prompt = llm.asked[-1]
     assert "YouTube Short | account: Chiara" in rate_prompt
     assert "Instagram reel | account: attic" in rate_prompt
+
+
+def test_low_quality_reels_stay_out_and_sd_ranks_below_hd():
+    llm = Planner()
+
+    def find(query, count):
+        return [hit("HDREEL001"), hit("SDREEL001"), hit("LOWREEL01")]
+
+    sizes = {"HDREEL001": (1088, 1936), "SDREEL001": (540, 960), "LOWREEL01": (240, 426)}
+
+    def info(url):
+        code = research.code_of(url)
+        width, height = sizes[code]
+        formats = [
+            {"width": width // 2, "height": height // 2, "tbr": 300},
+            {"width": width, "height": height, "tbr": 2474.2},
+            {"vcodec": "none", "tbr": 128},  # audio alone
+        ]
+        return {"channel": code.lower(), "description": "Bryan Adams live", "like_count": 900,
+                "formats": formats}  # fmt: skip
+
+    result = research.run(
+        "Bryan Adams live", lambda: nullcontext(llm), set(), set(), lambda *a: None, find, info, 0
+    )
+    assert [r.code for r in result.reels] == ["HDREEL001", "SDREEL001"]
+    assert result.left_out == {"low quality": 1}
+    hd, sd = result.reels
+    assert (hd.width, hd.height, hd.bitrate, hd.quality) == (1088, 1936, 2474.2, "HD")
+    assert sd.quality == "SD" and sd.score < hd.score
+    assert research.Reel(code="x", url="", query="").quality == ""  # not known
