@@ -324,3 +324,41 @@ def moving_rows(frames: np.ndarray, top: int, bottom: int) -> tuple[int, int] | 
     if (share < STILL_ROW).mean() < STILL_PART:
         return None
     return top + run[0], top + run[1]
+
+
+# Where the action is (framing.keep_action): pixels that change by this many grey levels
+# from one frame to the next move; a frame pair where most of the picture changes is a cut
+# or the camera swinging, which says nothing about where the action is; and the action
+# spans the columns and rows holding at least this share of the busiest one's movement.
+ACTION_LEVEL = 24
+ACTION_GLOBAL = 0.5
+ACTION_SHARE = 0.25
+
+
+def action_box(frames: np.ndarray) -> tuple[int, int, int, int] | None:
+    """The box (x0, y0, x1, y1, in the frames' pixels) holding the movement across these
+    consecutive frames: a person falling, a bar dropping. None when nothing moves."""
+    if len(frames) < 2:
+        return None
+    grey = frames.astype(np.float32).mean(axis=3)
+    moved = np.abs(np.diff(grey, axis=0)) > ACTION_LEVEL
+    moved = moved[moved.mean(axis=(1, 2)) < ACTION_GLOBAL]
+    if not len(moved):
+        return None
+    height, width = moved.shape[1:]
+    # A blurred, enlarged copy of the picture filling the sides (or top and bottom) moves
+    # with it but has little fine detail: its movement isn't action.
+    detail = np.abs(np.diff(grey, axis=2))[:, :-1, :] + np.abs(np.diff(grey, axis=1))[:, :, :-1]
+    detail = np.pad(detail.mean(axis=0), ((0, 1), (0, 1)), mode="edge")
+    sharp_cols = detail.mean(axis=0) >= BLURRED * np.percentile(detail.mean(axis=0), 90)
+    sharp_rows = detail.mean(axis=1) >= BLURRED * np.percentile(detail.mean(axis=1), 90)
+    moved = moved & sharp_rows[None, :, None] & sharp_cols[None, None, :]
+    spans = []
+    for energy, size in ((moved.sum(axis=(0, 1)), width), (moved.sum(axis=(0, 2)), height)):
+        energy = ndimage.uniform_filter1d(energy.astype(np.float32), max(1, size // 30))
+        if energy.max() <= 0:
+            return None
+        busy = np.flatnonzero(energy >= ACTION_SHARE * energy.max())
+        spans.append((int(busy[0]), int(busy[-1]) + 1))
+    (x0, x1), (y0, y1) = spans
+    return x0, y0, x1, y1

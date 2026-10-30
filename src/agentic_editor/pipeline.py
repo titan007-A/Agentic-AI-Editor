@@ -278,6 +278,12 @@ def written_text(
     return edl.model_copy(update={**update, "decisions": decisions, "doubts": doubts})
 
 
+def without_text(items: list[subjects.Subject]) -> list[subjects.Subject]:
+    """Must-keep items but text: for footage whose point is the action (keep_action), text
+    burned into it is another page's caption or name, better cropped away than kept."""
+    return [s for s in items if s.kind != "text"]
+
+
 def recheck_framing(
     shots: list[Shot],
     sampled: list[float],
@@ -309,7 +315,8 @@ def recheck_framing(
                 shot, seen, face_samples, content, analysis.width, preset.framing.smoothing
             )
             x = min(path, key=lambda p: abs(p[0] - (t - shot.start)))[1]
-        spans = framing.keep_spans(found[t], face_samples, t, analysis.width)
+        items = without_text(found[t]) if preset.framing.keep_action else found[t]
+        spans = framing.keep_spans(items, face_samples, t, analysis.width)
         cut = framing.crossing(spans, x, shot.width)
         if cut:
             needed[k] = framing.union([*cut, *([needed[k]] if k in needed else [])])
@@ -320,7 +327,8 @@ def recheck_framing(
         updated[k] = framing.widen_to(updated[k], span, content, width)
     widened = ", ".join(f"{shots[k].start:.1f}-{shots[k].end:.1f}s" for k in sorted(needed))
     note = f"re-checked {len(checks)} moment(s); widened {widened} where an edge cut something"
-    return framing.harmonize(updated, width, content), [note]
+    shared = not preset.framing.keep_action
+    return framing.harmonize(updated, width, content, shared), [note]
 
 
 def band_framing(
@@ -405,6 +413,14 @@ def smart_framing(
     width = framing.crop_width(content, preset.size)
     times = framing.view_times(clip, analysis.scenes)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
+    if preset.framing.keep_action:
+        size = (analysis.width, analysis.height)
+        actions = compose.action_subjects(video, clip.start, clip.end, analysis.scenes, size,
+                                          content)  # fmt: skip
+        samples = [
+            (t, [*without_text(items), *(box for a, b, box in actions if a <= t < b)])
+            for t, items in samples
+        ]
     seen = framing.views(samples, face_samples, content, analysis.width)
     if not edl.shots:
         # Cropped top and bottom: a still image above or below the clip counts less.
@@ -413,7 +429,7 @@ def smart_framing(
         moving = compose.moving_part(video, clip.start, clip.end, size, content) if tall else None
         shots = framing.frame_shots(
             clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size,
-            analysis.height, moving,
+            analysis.height, moving, shared=not preset.framing.keep_action,
         )  # fmt: skip
         shots, recheck = recheck_framing(
             shots, times, seen, face_samples, content, width, preset, analysis, video,

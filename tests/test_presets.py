@@ -105,3 +105,8 @@ def test_a_banner_offset_past_the_frame_is_pulled_back_inside_it():
 
     assert banner_top("top", 1900, 83, 1920, []) == 1920 - 83
     assert banner_top("top", 300, 2000, 1920, []) == 0
+    # A banner kept where it is put ignores the faces it would otherwise avoid: the
+    # caller passes no rows for it (OneLiner.fixed).
+    faces = [(0.0, [(200, 400)])]
+    assert banner_top("top", 230, 100, 1920, faces) != 230
+    assert banner_top("top", 230, 100, 1920, []) == 230

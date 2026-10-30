@@ -386,3 +386,19 @@ def test_a_tall_crop_holds_the_moving_part():
         CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920, moving=short
     )
     assert shot.y + shot.height == 1500
+
+
+def test_shots_of_a_compilation_keep_their_own_widths():
+    from agentic_editor.framing import harmonize
+
+    narrow = Shot(start=0, end=2, x=600, width=606, follow=False, reason="")
+    wide = Shot(start=2, end=10, x=0, width=1920, follow=False, reason="too wide")
+    assert [s.width for s in harmonize([narrow, wide], 606, FULL)] == [1920, 1920]
+    assert [s.width for s in harmonize([narrow, wide], 606, FULL, shared=False)] == [606, 1920]
+
+
+def test_an_action_box_keeps_the_whole_fail_in_the_crop():
+    fall = Subject(kind="other", label="action", x0=1300, y0=100, x1=1700, y1=1000, keep=True)
+    head = face_at(10.5, 400)
+    (shot,) = frame([(10.5, [fall])], faces=[head])
+    assert shot.x <= 400 - 84 and shot.x + shot.width >= 1700  # the head and the fall

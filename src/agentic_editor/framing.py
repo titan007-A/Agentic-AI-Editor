@@ -248,6 +248,7 @@ def frame_shots(
     frame: tuple[int, int],
     src_height: int | None = None,
     moving: Moving | None = None,
+    shared: bool = True,
 ) -> list[Shot]:
     width = crop_width(content, frame)
     if width >= content[2]:
@@ -281,7 +282,7 @@ def frame_shots(
             for group, (a, b) in zip(groups, itertools.pairwise(edges), strict=True)
         ]
         shots += absorb_short(parts)
-    return harmonize(shots, width, content)
+    return harmonize(shots, width, content, shared)
 
 
 def absorb_short(parts: list[Shot]) -> list[Shot]:
@@ -307,11 +308,13 @@ def absorb_short(parts: list[Shot]) -> list[Shot]:
     return parts
 
 
-def harmonize(shots: list[Shot], width: int, content: Content) -> list[Shot]:
+def harmonize(shots: list[Shot], width: int, content: Content, shared: bool = True) -> list[Shot]:
     """Give every widened shot the same width, and every shot that width when most of the
-    reel needs it, re-centred on where each window was so nothing it held is lost."""
+    reel needs it, re-centred on where each window was so nothing it held is lost. Not
+    `shared`, each shot keeps its own: a compilation's shots are different clips, and one
+    wide fail shouldn't shrink the rest."""
     wide = [s for s in shots if s.width > width]
-    if not wide:
+    if not wide or not shared:
         return shots
     target = max(s.width for s in wide)
     total = sum(s.end - s.start for s in shots)
