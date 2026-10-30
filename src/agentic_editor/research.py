@@ -219,13 +219,20 @@ ASK = (
     "You find Instagram reels for a video editor who reposts and edits them. Before "
     "searching, ask them up to {count} short questions whose answers would change which "
     "reels to find: for example live or studio, which eras, which languages or countries, "
-    "which of their presets it is for, well-known hits or hidden gems, artists to include "
-    "or to avoid. Don't ask what they already said, nor about length, editing or the "
-    "sound: their presets decide those. Give each question 2-5 suggested answers of a few "
-    "words, each a direct answer to that question that fits their request: artists you "
-    "suggest must really match it (Italian artists for Italian songs). Reels are found "
-    "days to years after they are posted, so never offer the last day or hours. Write in "
-    "plain English, even when they wrote in Hindi or Hinglish.\n\n{about}"
+    "which of their presets it is for, well-known hits or hidden gems, which artists or "
+    "songs. Don't ask what they already said. Never ask about captions, subtitles, text, "
+    "format, aspect ratio, length, isolated vocals, instruments or editing: their presets "
+    "decide those. Give each question 2-5 suggested answers of a few words, each a direct "
+    "answer to that question that fits their request: artists you suggest must really "
+    "match it (Italian artists for Italian songs). Reels are found days to years after "
+    "they are posted, so never offer the last day or hours. Write the questions and the "
+    "answers in English, whatever language they wrote in.\n\n{about}"
+)
+# What the presets decide; the model asks about it anyway at times.
+EDITING = re.compile(
+    r"\b(subtitles?|captions?|on-screen|text|aspect|ratio|vertical|format|length|duration|"
+    r"seconds|isolated|instruments?|instrumental|a ?cappella|edit(ed|ing)?|fonts?)\b",
+    re.IGNORECASE,
 )
 CHAT = (
     "You are the researcher who found these Instagram reels for a video editor. Below is "
@@ -364,7 +371,7 @@ def ask(llm, description: str, context: Context | None = None) -> list[dict]:
             if choice:
                 once.setdefault(choice.casefold(), choice)
         choices = list(once.values())
-        if q.question.strip() and choices:
+        if q.question.strip() and choices and not EDITING.search(q.question):
             asked.append({"question": q.question.strip(), "choices": choices})
     return asked
 

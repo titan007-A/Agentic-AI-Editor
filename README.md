@@ -230,10 +230,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
   done when the account is added, on "Learn again", and before a research when it is a
   week old. With none of its reels found, a research goes by the presets.
 - **Questions first.** Before searching, the researcher asks up to 6 short questions whose
-  answers change what to find (live or studio, eras, languages, vocals only or the full
-  mix, which preset, how recent), each with suggested answers to tap and room for your
-  own words. The answers become part of the request; "Skip questions" (or the box on the
-  form) searches at once.
+  answers change what to find (live or studio, eras, languages, artists, hits or hidden
+  gems, which preset), each with suggested answers to tap and room for your own words;
+  never about what the presets decide (captions, format, length, the sound). The answers
+  become part of the request; "Skip questions" (or the box on the form) searches at once.
 - **Understanding first.** The planning model writes a one-line English brief of what to
   find (from the account, its presets and an optional focus, or from the description) and
   about 15 searches for it: artists, songs, concerts, hashtags, languages. The request's

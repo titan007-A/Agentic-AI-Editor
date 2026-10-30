@@ -59,6 +59,10 @@ QUESTIONS = [
     {"question": "Live or studio?", "choices": ["Live", "Studio", " live ", ""]},
     {"question": "Which era?", "choices": ["80s", "90s"]},
     {"question": "  ", "choices": ["a", "b"]},  # no question: dropped
+    # The presets decide these: dropped.
+    {"question": "What language should the subtitles be in?", "choices": ["it", "en"]},
+    {"question": "Isolated vocals or the full mix?", "choices": ["Vocals", "Full"]},
+    {"question": "What aspect ratio?", "choices": ["9:16", "1:1"]},
 ]
 
 
