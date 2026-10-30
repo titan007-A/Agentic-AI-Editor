@@ -369,7 +369,9 @@ def band_framing(
         else "the whole picture fits between the text"
     )
     if moving is not None:
-        note += f"; framed on the moving part, rows {moving[0]}-{moving[1]}, not the still image"
+        note += (
+            f"; framed on the moving part, rows {moving.top}-{moving.bottom}, not the still image"
+        )
     decisions = [
         d
         for d in edl.decisions

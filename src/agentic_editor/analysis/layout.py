@@ -295,6 +295,20 @@ def lines(mask: np.ndarray) -> list[Line]:
     return found
 
 
+def plainer_side(frames: np.ndarray, rows: tuple[int, int], top: int, bottom: int) -> str:
+    """Which of the still rows next to the moving `rows`, "above" or "below", hold less
+    detail: a window taller than the moving part shows a dark strip there rather than the
+    edge of a photo's caption."""
+    reach = max(1, (bottom - top) // 10)
+    grey = np.median(frames.astype(np.float32).mean(axis=3), axis=0)
+    detail = np.abs(np.diff(grey, axis=1)).mean(axis=1)
+    above = detail[max(top, rows[0] - reach) : rows[0]]
+    below = detail[rows[1] : min(bottom, rows[1] + reach)]
+    if not len(above) or not len(below):
+        return "above" if len(above) else "below"
+    return "above" if above.mean() < below.mean() else "below"
+
+
 def moving_rows(frames: np.ndarray, top: int, bottom: int) -> tuple[int, int] | None:
     """The rows between `top` and `bottom` where a picture that is partly a still image
     moves, as rows of the frames; None when it all moves, as a normal video does, or

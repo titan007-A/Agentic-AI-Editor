@@ -122,3 +122,10 @@ def test_a_normal_video_or_a_still_image_has_no_moving_part():
     assert layout.moving_rows(_photo_over_clip(192), 0, 192) is None  # nothing moves
     # A thin strip of changing lyrics on a still image isn't a clip.
     assert layout.moving_rows(_photo_over_clip(170), 0, 192) is None
+
+
+def test_spare_rows_go_to_the_plainer_side_of_the_moving_part():
+    reel = _photo_over_clip(80)
+    reel[:, 180:] = 0  # a dark strip under the clip; the photo above is busy
+    assert layout.plainer_side(reel, (80, 180), 0, 192) == "below"
+    assert layout.plainer_side(reel, (80, 192), 0, 192) == "above"  # nothing below

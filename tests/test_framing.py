@@ -2,6 +2,7 @@ from agentic_editor.analysis.faces import Face
 from agentic_editor.analysis.subjects import Subject
 from agentic_editor.edl import Clip, Shot
 from agentic_editor.framing import (
+    Moving,
     View,
     absorb_short,
     check_times,
@@ -360,8 +361,14 @@ def test_the_moving_clip_under_a_still_photo_is_framed_not_the_photo():
     picture = (0, 0, 1080, 1920)
     before = band_shots(clip, [], [], seen, picture, 982, 1920)
     assert before[0].y < 760  # the photo's faces win: the clip is mostly cut
-    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=(940, 1860))
-    assert shot.y <= 940 and shot.y + 982 >= 1860  # the whole clip, a little of the photo
+    clip_rows = Moving(940, 1860, spare="below")
+    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=clip_rows)
+    # The whole clip, and the dark rows under it rather than the photo, as far as the
+    # picture goes: two of its rows are left over above.
+    assert shot.y == 1920 - 982 == 938
+    above = Moving(940, 1860, spare="above")
+    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=above)
+    assert shot.y + 982 == 1860
 
 
 def test_a_tall_crop_holds_the_moving_part():
@@ -371,6 +378,6 @@ def test_a_tall_crop_holds_the_moving_part():
     (shot,) = tall_shots(CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920)
     assert shot.y < 400  # without knowing, the photo's face
     (shot,) = tall_shots(
-        CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920, moving=(800, 1900)
+        CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920, moving=Moving(800, 1900)
     )
     assert shot.y >= 800 and shot.y + shot.height <= 1900  # inside the clip, taller than it

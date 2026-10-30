@@ -44,6 +44,17 @@ Span = tuple[float, float]
 
 
 @dataclass(frozen=True)
+class Moving:
+    """The rows of a picture that move when part of it is a still image (a photo above a
+    clip), and where a window taller than them takes its spare rows: "above" or "below",
+    the plainer side."""
+
+    top: int
+    bottom: int
+    spare: str = "below"
+
+
+@dataclass(frozen=True)
 class View:
     """What must stay in frame at one moment, as a horizontal span in source pixels."""
 
@@ -236,7 +247,7 @@ def frame_shots(
     src_width: int,
     frame: tuple[int, int],
     src_height: int | None = None,
-    moving: Span | None = None,
+    moving: Moving | None = None,
 ) -> list[Shot]:
     width = crop_width(content, frame)
     if width >= content[2]:
@@ -332,7 +343,7 @@ def harmonize(shots: list[Shot], width: int, content: Content) -> list[Shot]:
 def on_moving(
     faces: list[Sample],
     samples: list[tuple[float, list[Subject]]],
-    moving: Span | None,
+    moving: Moving | None,
     src_height: int,
 ) -> tuple[list[Sample], list[tuple[float, list[Subject]]]]:
     """The faces and subjects in the moving part of a picture that is partly a still image
@@ -340,7 +351,7 @@ def on_moving(
     stays, wherever it is."""
     if moving is None:
         return faces, samples
-    y0, y1 = moving
+    y0, y1 = moving.top, moving.bottom
     faces = [(t, [f for f in seen if y0 <= f.cy * src_height < y1]) for t, seen in faces]
     samples = [
         (t, [s for s in items if s.kind == "text" or y0 <= (s.y0 + s.y1) / 2 < y1])
@@ -349,15 +360,23 @@ def on_moving(
     return faces, samples
 
 
-def holding(lo: float, hi: float, height: float, moving: Span | None) -> Span:
+def holding(lo: float, hi: float, height: float, moving: Moving | None) -> Span:
     """The rows within [lo, hi] a window `height` rows tall may take so that it holds the
-    moving part of the picture, or stays inside it when that is taller."""
+    moving part of the picture, its spare rows on the plainer side, or stays inside it
+    when that is taller."""
     if moving is None:
         return lo, hi
-    y0, y1 = moving
-    a, b = (y0, y1) if y1 - y0 >= height else (y1 - height, y0 + height)
-    a, b = max(a, lo), min(b, hi)
-    return (a, b) if b - a >= height else (lo, hi)
+    y0, y1 = moving.top, moving.bottom
+    if y1 - y0 >= height:
+        wanted = [(y0, y1)]
+    else:
+        side = (y0, y0 + height) if moving.spare == "below" else (y1 - height, y1)
+        wanted = [side, (y1 - height, y0 + height)]
+    for a, b in wanted:
+        a, b = max(a, lo), min(b, hi)
+        if b - a >= height:
+            return a, b
+    return lo, hi
 
 
 def tall_shots(
@@ -368,7 +387,7 @@ def tall_shots(
     content: Content,
     frame: tuple[int, int],
     src_height: int,
-    moving: Span | None = None,
+    moving: Moving | None = None,
 ) -> list[Shot]:
     """Shots for a picture as narrow as the frame or narrower. One taller than the frame is
     cropped top and bottom, at its full width, around the heads and must-keep items of each
@@ -442,7 +461,7 @@ def band_shots(
     rows: int,
     src_height: int,
     texts: list[tuple[int, int]] = (),
-    moving: Span | None = None,
+    moving: Moving | None = None,
 ) -> list[Shot]:
     """Shots for a picture shown across the frame's whole width in a band of `rows` source
     rows' height, between a preset's text. Never cropped at the sides: a picture taller
