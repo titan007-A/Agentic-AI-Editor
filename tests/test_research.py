@@ -31,10 +31,19 @@ class Planner:
         reels = [line for line in prompt.split("\n") if line[:1].isdigit()]
         return {
             "ratings": [
-                {"n": n, "relevance": 9 if "Bryan Adams" in line else 1, "why": "fits"}
+                {
+                    "n": n,
+                    "relevance": 9 if "Bryan Adams" in line else 1,
+                    "why": "fits",
+                    **NAMELESS,
+                }
                 for n, line in enumerate(reels, 1)
             ]
         }
+
+
+# The fields a rating always has, as the model leaves them when the caption doesn't say.
+NAMELESS = {"song": "", "artist": "", "preset": ""}
 
 
 def hit(code, title="", body=""):
@@ -195,8 +204,8 @@ def test_one_account_fills_at_most_two_of_the_eight_but_a_song_may_come_again():
 def test_the_rated_song_and_artist_are_named_together():
     class Rater:
         def chat_json(self, messages, schema, **kwargs):
-            first = {"n": 1, "relevance": 8, "song": "Heaven", "artist": "Bryan Adams"}
-            return {"ratings": [first, {"n": 2, "relevance": 8, "artist": "Queen"}]}
+            first = {**NAMELESS, "n": 1, "relevance": 8, "song": "Heaven", "artist": "Bryan Adams"}
+            return {"ratings": [first, {**NAMELESS, "n": 2, "relevance": 8, "artist": "Queen"}]}
 
     reels = [Reel("A", "", ""), Reel("B", "", "")]
     research.rate(Rater(), "80s rock", reels)

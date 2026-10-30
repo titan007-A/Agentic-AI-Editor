@@ -130,10 +130,12 @@ class Rating(BaseModel):
     n: int
     relevance: int = Field(ge=0, le=10)
     why: str = Field(default="", max_length=200)
-    song: str = Field(default="", max_length=120)
-    artist: str = Field(default="", max_length=120)
+    # Required: left optional, the 9b model mostly left them out, and with no song a
+    # research can't keep two reels of one song at most.
+    song: str = Field(max_length=120)
+    artist: str = Field(max_length=120)
     matches: str = Field(default="", max_length=200)
-    preset: str = Field(default="", max_length=80)
+    preset: str = Field(max_length=80)
     preset_why: str = Field(default="", max_length=200)
 
 
@@ -181,8 +183,9 @@ RATE = (
     "- n: its number\n"
     "- relevance: 10 = exactly it, 5 = related, 0 = unrelated\n"
     "- why: one sentence (under 25 words) on why it fits or doesn't\n"
-    "- song: the song's title when the caption names one, else ''\n"
-    "- artist: the main singer or band it is about, else ''\n"
+    "- song: the song's title whenever the caption or search snippet lets you tell it (if "
+    "your why names it, so does this), else ''\n"
+    "- artist: the main singer or band it is about, whenever you can tell, else ''\n"
     "- matches: a few words on which part of what they want it matches, else ''\n"
     "- preset: the name of the preset it suits best, exactly as listed, else ''\n"
     "- preset_why: a few words on why that preset\n"
