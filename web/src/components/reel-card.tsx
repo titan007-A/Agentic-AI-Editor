@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, ExternalLink, Heart, ImageOff, MessageCircle, Scissors } from "lucide-react";
+import { Check, Copy, ExternalLink, Heart, ImageOff, MessageCircle, Scissors } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -33,8 +33,21 @@ function ago(when: string): string {
   return `${Math.round(days / 365)} years ago`;
 }
 
-/** One reel a research found: how well it fits and how far it spread, and ways to use it. */
-export function ReelCard({ item, presets }: { item: ResearchItem; presets: Preset[] }) {
+/** One reel a research found: how well it fits and how far it spread, and ways to use it.
+ * `onPick` picks it for editing with others; `full` says no more can be picked. */
+export function ReelCard({
+  item,
+  presets,
+  picked = false,
+  full = false,
+  onPick,
+}: {
+  item: ResearchItem;
+  presets: Preset[];
+  picked?: boolean;
+  full?: boolean;
+  onPick?: () => void;
+}) {
   const [broken, setBroken] = useState(!item.thumbnail);
   const [editing, setEditing] = useState(false);
 
@@ -48,7 +61,7 @@ export function ReelCard({ item, presets }: { item: ResearchItem; presets: Prese
   }
 
   return (
-    <Card className="gap-0 overflow-hidden p-0">
+    <Card className={cn("gap-0 overflow-hidden p-0", picked && "ring-2 ring-primary")}>
       <a
         href={item.url}
         target="_blank"
@@ -102,7 +115,22 @@ export function ReelCard({ item, presets }: { item: ResearchItem; presets: Prese
         {item.caption && <p className="line-clamp-3 text-sm break-words">{item.caption}</p>}
         {item.why && <p className="text-xs text-muted-foreground">Why: {item.why}</p>}
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button size="sm" onClick={() => setEditing(true)}>
+          {onPick && (
+            <Button
+              size="sm"
+              variant={picked ? "default" : "outline"}
+              aria-pressed={picked}
+              disabled={full && !picked}
+              onClick={onPick}
+            >
+              <Check /> {picked ? "Picked" : "Pick"}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={onPick ? "outline" : "default"}
+            onClick={() => setEditing(true)}
+          >
             <Scissors /> Edit
           </Button>
           <Button size="sm" variant="outline" onClick={copy}>
@@ -115,18 +143,19 @@ export function ReelCard({ item, presets }: { item: ResearchItem; presets: Prese
           </Button>
         </div>
       </div>
-      <EditDialog item={item} presets={presets} open={editing} onOpenChange={setEditing} />
+      <EditDialog items={[item]} presets={presets} open={editing} onOpenChange={setEditing} />
     </Card>
   );
 }
 
-function EditDialog({
-  item,
+/** Edits one reel, or several picked ones, with one preset: a job each. */
+export function EditDialog({
+  items,
   presets,
   open,
   onOpenChange,
 }: {
-  item: ResearchItem;
+  items: ResearchItem[];
   presets: Preset[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -140,9 +169,18 @@ function EditDialog({
     if (!chosen || busy) return;
     setBusy(true);
     try {
-      const [job] = await api.createJobs([item.url], [chosen], notes);
-      toast.success("Job queued");
-      router.push(`/job/?id=${job.id}`);
+      const jobs = await api.createJobs(
+        items.map((i) => i.url),
+        [chosen],
+        notes,
+      );
+      if (jobs.length === 1) {
+        toast.success("Job queued");
+        router.push(`/job/?id=${jobs[0].id}`);
+      } else {
+        toast.success(`${jobs.length} jobs queued`);
+        router.push("/");
+      }
     } catch (err) {
       toast.error(errorText(err));
       setBusy(false);
@@ -153,8 +191,14 @@ function EditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit this reel</DialogTitle>
-          <DialogDescription className="break-all">{item.url}</DialogDescription>
+          <DialogTitle>
+            {items.length === 1 ? "Edit this reel" : `Edit these ${items.length} reels`}
+          </DialogTitle>
+          <DialogDescription className="break-all">
+            {items.length === 1
+              ? items[0].url
+              : "One job each, with the preset and notes chosen here."}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <fieldset className="space-y-2">
@@ -177,9 +221,9 @@ function EditDialog({
             </div>
           </fieldset>
           <div className="space-y-1">
-            <Label htmlFor={`reel-notes-${item.id}`}>Notes for the editor (optional)</Label>
+            <Label htmlFor={`reel-notes-${items[0]?.id}`}>Notes for the editor (optional)</Label>
             <Textarea
-              id={`reel-notes-${item.id}`}
+              id={`reel-notes-${items[0]?.id}`}
               rows={3}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}

@@ -811,31 +811,33 @@ def fake_research(monkeypatch, env, broken=False):
     )
 
 
-def test_a_research_ranks_reels_that_fit_first_and_marks_ones_edited_since(env, monkeypatch):
+def test_a_research_ranks_reels_that_fit_and_brings_new_ones_each_time(env, monkeypatch):
     fake_research(monkeypatch, env)
     started = env.client.post("/api/research", json={"description": "Bryan Adams live"})
     assert started.status_code == 200, started.text
     found = env.client.get(f"/api/research/{started.json()['id']}").json()
-    assert found["status"] == "done" and found["message"] == "found 3 reels"
-    assert [i["code"] for i in found["items"]] == ["ADAMS1", "ADAMS2", "OTHER1"]
+    # The cat video doesn't fit: left out, not shown at the bottom.
+    assert found["status"] == "done"
+    assert found["message"] == "found 2 reels; left out 1 that didn't fit"
+    assert [i["code"] for i in found["items"]] == ["ADAMS1", "ADAMS2"]
     first = found["items"][0]
     assert first["url"] == "https://www.instagram.com/reel/ADAMS1/"
     assert first["relevance"] == 0.9 and first["likes"] == 900 and not first["used"]
     assert found["queries"][0] == "Bryan Adams live"
 
-    # Edited from the Researcher: marked used there, and left out of the next research,
-    # which marks the others as shown before.
+    # Edited from the Researcher: marked used there. The next research brings only new
+    # reels: the edited one and the ones shown before are left out.
     start(env.client, sources=(first["url"],))
     again = env.client.get(f"/api/research/{found['id']}").json()
     assert again["items"][0]["used"]
     second = env.client.post("/api/research", json={"description": "Bryan Adams"}).json()
     second = env.client.get(f"/api/research/{second['id']}").json()
-    assert [i["code"] for i in second["items"]] == ["ADAMS2", "OTHER1"]
-    assert all(i["seen"] for i in second["items"]) and second["used"] == 1
+    assert second["items"] == [] and second["used"] == 1
+    assert second["message"] == "found 0 reels; left out 1 that didn't fit and 1 shown before"
 
     listed = env.client.get("/api/research").json()
     assert [r["id"] for r in listed] == [second["id"], found["id"]]
-    assert listed[0]["found"] == 2 and listed[0]["items"] == []
+    assert listed[1]["found"] == 2 and listed[1]["items"] == []
     assert env.client.delete(f"/api/research/{found['id']}").status_code == 200
     assert env.client.get(f"/api/research/{found['id']}").status_code == 404
 
