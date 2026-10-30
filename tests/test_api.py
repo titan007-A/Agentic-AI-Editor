@@ -1327,3 +1327,56 @@ def test_only_the_admin_sets_how_long_videos_are_kept(env):
     assert env.client.put("/api/system/storage", json={"keep_days": -1}).status_code == 422
     assert riya.put("/api/system/storage", json={"keep_days": 0}).status_code == 403
     assert riya.get("/api/system/storage").status_code == 403
+
+
+def test_the_admin_renames_presets_for_everyone_who_has_them(env):
+    account, riya = employee(env)
+    url = f"/api/presets/vocal-music-it-9x16?owner={account['id']}"
+    hers = env.client.get(f"/api/presets?owner={account['id']}").json()
+    tuned = next(p for p in hers if p["name"] == "vocal-music-it-9x16") | {"max_duration": 99}
+    assert env.client.put(url, json=tuned).status_code == 200
+    # A preset only she has.
+    only = tuned | {"name": "hers-only-9x16", "label": "Hers"}
+    assert riya.put("/api/presets/hers-only-9x16", json=only).status_code == 200
+
+    names = {e["name"]: e for e in env.client.get("/api/presets/names").json()}
+    assert sorted(names["vocal-music-it-9x16"]["who"]) == sorted(["admin", "riya"])
+    assert names["hers-only-9x16"]["who"] == ["riya"]
+
+    renamed = env.client.put(
+        "/api/presets/names",
+        json={"labels": {"vocal-music-it-9x16": "  Voci italiane  ", "hers-only-9x16": "Riya's"}},
+    )
+    assert renamed.status_code == 200
+    mine = {p["name"]: p for p in env.client.get("/api/presets").json()}
+    theirs = {p["name"]: p for p in riya.get("/api/presets").json()}
+    assert mine["vocal-music-it-9x16"]["label"] == "Voci italiane"
+    assert theirs["vocal-music-it-9x16"]["label"] == "Voci italiane"
+    assert theirs["vocal-music-it-9x16"]["max_duration"] == 99  # her own settings stay
+    assert theirs["hers-only-9x16"]["label"] == "Riya's"
+    bad = env.client.put("/api/presets/names", json={"labels": {"hers-only-9x16": " "}})
+    assert bad.status_code == 422
+
+
+def test_renaming_ones_own_preset_in_the_editor_reaches_the_employees(env):
+    account, riya = employee(env)
+    mine = {p["name"]: p for p in env.client.get("/api/presets").json()}
+    edited = mine["square-1x1"] | {"label": "Square, renamed"}
+    assert env.client.put("/api/presets/square-1x1", json=edited).status_code == 200
+    theirs = {p["name"]: p for p in riya.get("/api/presets").json()}
+    assert theirs["square-1x1"]["label"] == "Square, renamed"
+    # Renaming an employee's copy is theirs alone; so is an employee's own rename.
+    hers = theirs["square-1x1"] | {"label": "Only hers"}
+    assert (
+        env.client.put(f"/api/presets/square-1x1?owner={account['id']}", json=hers).status_code
+        == 200
+    )
+    assert riya.put("/api/presets/square-1x1", json=hers | {"label": "Her own"}).status_code == 200
+    mine = {p["name"]: p for p in env.client.get("/api/presets").json()}
+    assert mine["square-1x1"]["label"] == "Square, renamed"
+
+
+def test_only_the_admin_renames_for_everyone(env):
+    _, riya = employee(env)
+    assert riya.get("/api/presets/names").status_code == 403
+    assert riya.put("/api/presets/names", json={"labels": {"square-1x1": "x"}}).status_code == 403
