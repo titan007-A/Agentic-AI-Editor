@@ -26,3 +26,6 @@ CLAUDE.local.md
 
 # Employees' own presets, made on the server.
 presets/people/
+
+# A browser's sign-in for yt-dlp (README: "YouTube asks to sign in").
+*cookies*.txt

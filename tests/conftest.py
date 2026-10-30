@@ -14,6 +14,18 @@ def words_from(spec: str) -> list[Word]:
     return words
 
 
+@pytest.fixture(autouse=True)
+def shazam_hears_nothing(request, monkeypatch):
+    """Shazam is a network service: in a test it recognises nothing, unless the test says
+    what it hears (presets fall back to it by default, see Preset.auto_name). Its own tests
+    fake the network beneath it instead."""
+    from agentic_editor import shazam
+
+    if request.module.__name__.endswith("test_shazam"):
+        return
+    monkeypatch.setattr(shazam, "song", lambda *args, **kwargs: None)
+
+
 @pytest.fixture
 def make_analysis():
     def build(words: list[Word], duration: float, energy: list[float] | None = None, **extra):

@@ -469,6 +469,23 @@ owner's earlier reel tool ran it: each chunk twice, once phase-inverted, average
 median vocal SDR against 8.5 dB, and is faster, but its vocals sounded worse on real reels.
 Only the MDX models read the denoise and overlap settings.
 
+### YouTube asks to sign in
+
+A machine that looks up many videos is sometimes told by YouTube to "confirm you're not a
+bot", and then every YouTube download fails (a newer yt-dlp doesn't help). yt-dlp gets
+past it with the cookies of a browser signed in to YouTube:
+
+1. In a private window, sign in to YouTube with a spare Google account (YouTube may
+   block an account used this way; don't use your own), open youtube.com, and export its
+   cookies to `cookies.txt` with an extension such as "Get cookies.txt LOCALLY", for
+   youtube.com only. Close the private window without signing out.
+2. Copy the file to the server, say `~/Agentic-AI-Editor/youtube-cookies.txt`, and add
+   `COOKIES_FILE=youtube-cookies.txt` to `.env` (a path relative to the repository, or
+   absolute). Restart the server.
+
+Every download, research lookup and feed check then uses them. The file is a sign-in:
+git ignores files named `*cookies*.txt`; keep it that way.
+
 ## Development
 
 ```

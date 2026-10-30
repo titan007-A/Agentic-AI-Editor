@@ -224,8 +224,9 @@ class Preset(Strict):
     one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
     # When neither the video's name nor the notes say the {song} and {artist}, recognise
-    # them from its sound (shazam.py); still nothing, and the job asks for them.
-    auto_name: bool = False
+    # them from its sound (shazam.py); still nothing, and the job asks for them. On unless
+    # a preset turns it off: an Instagram reel's name ("Video by <account>") never says them.
+    auto_name: bool = True
     headline: Headline = Headline()
     post_caption: PostCaption = PostCaption()
     logo: Logo = Logo()

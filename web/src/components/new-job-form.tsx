@@ -8,10 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { filled, PresetFieldInputs, useFieldValues } from "@/components/job-fields";
 import { Textarea } from "@/components/ui/textarea";
 import { UploadList } from "@/components/upload-list";
 import { useUploads } from "@/hooks/use-uploads";
 import { api, errorText, type Job, type Preset } from "@/lib/api";
+import { fieldNotes, presetFields } from "@/lib/preset-fields.mjs";
 
 export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) {
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -21,6 +23,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const fieldValues = useFieldValues();
 
   useEffect(() => {
     api
@@ -37,6 +40,9 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
     ...uploads.sources,
   ];
 
+  const preset = presets.find((p) => chosen.includes(p.name));
+  const fields = preset ? presetFields(preset) : [];
+
   // One preset a job: choosing one replaces the one chosen before.
   function toggle(name: string, on: boolean) {
     setChosen(on ? [name] : []);
@@ -51,7 +57,20 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
     event.preventDefault();
     setBusy(true);
     try {
-      const jobs = await api.createJobs(sources, chosen, notes);
+      let jobs: Job[];
+      if (fields.length) {
+        // A job each, as a number the preset writes counts up from one video to the next.
+        jobs = [];
+        const used: Record<string, number> = {};
+        for (const source of sources) {
+          const given = fieldNotes(fields, fieldValues.values, used);
+          const told = [given, notes.trim()].filter(Boolean).join("\n");
+          jobs.push(...(await api.createJobs([source], chosen, told)));
+        }
+        fieldValues.keep(used);
+      } else {
+        jobs = await api.createJobs(sources, chosen, notes);
+      }
       toast.success(`${jobs.length} job${jobs.length === 1 ? "" : "s"} queued`);
       setLinks("");
       uploads.clear();
@@ -124,6 +143,14 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
             </div>
           </fieldset>
 
+          <PresetFieldInputs
+            fields={fields}
+            values={fieldValues.values}
+            onChange={fieldValues.setValues}
+            videos={sources.length}
+            idPrefix="job-field"
+          />
+
           <div className="space-y-2">
             <Label htmlFor="notes">Notes for the editor (optional)</Label>
             <Textarea
@@ -138,7 +165,13 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
           <Button
             type="submit"
             className="w-full sm:w-auto"
-            disabled={busy || uploads.pending || sources.length === 0 || chosen.length === 0}
+            disabled={
+              busy ||
+              uploads.pending ||
+              sources.length === 0 ||
+              chosen.length === 0 ||
+              !filled(fields, fieldValues.values)
+            }
           >
             {uploads.pending
               ? "Waiting for the uploads..."

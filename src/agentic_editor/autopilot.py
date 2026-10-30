@@ -28,6 +28,7 @@ from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import research
 from agentic_editor.db import Feed, FeedItem, Job
+from agentic_editor.download import signed_in
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def link_entries(url: str) -> list[Entry]:
         "extract_flat": "in_playlist",
         "playlistend": LIST_LIMIT,
     }
-    with YoutubeDL(options) as ydl:
+    with signed_in(options) as options, YoutubeDL(options) as ydl:
         info = ydl.extract_info(channel_videos(url), download=False)
     site = info.get("extractor_key") or "web"
     if info.get("_type") != "playlist":
