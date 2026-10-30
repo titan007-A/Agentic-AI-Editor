@@ -223,6 +223,9 @@ class Preset(Strict):
     title_overlay: TitleOverlay = TitleOverlay()
     one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
+    # When neither the video's name nor the notes say the {song} and {artist}, recognise
+    # them from its sound (shazam.py); still nothing, and the job asks for them.
+    auto_name: bool = False
     headline: Headline = Headline()
     post_caption: PostCaption = PostCaption()
     logo: Logo = Logo()

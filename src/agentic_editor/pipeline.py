@@ -4,6 +4,7 @@ Stages run one model at a time: separation and whisper (child processes), then t
 planning LLM for every preset, then rendering with the vision model reviewing results.
 Each model is unloaded before the next stage starts."""
 
+import functools
 import json
 import logging
 import secrets
@@ -23,6 +24,7 @@ from agentic_editor import (
     hooks,
     names,
     review,
+    shazam,
     silence,
     slots,
     subtitles,
@@ -649,12 +651,20 @@ def edit(
     # A preset that names the song and artist takes them from the notes or the video's
     # name, and so do its reel's title and post caption, rather than the planner's guess,
     # which can name the wrong artist; its own fields come from the notes or the name.
+    # A preset with auto_name falls back to the sound, heard once for them all.
     named, songs = [], {}
+
+    @functools.cache
+    def heard() -> names.Song | None:
+        progress("analyze", "recognising the song from its sound")
+        return shazam.song(source.path, work_dir)
+
     for preset in presets:
+        hear = heard if preset.auto_name else None
         try:
             if names.names_song(preset):
-                songs[preset.name] = names.song_and_artist(source.title, given)
-            named.append(names.fill(preset, source.title, given))
+                songs[preset.name] = names.song_and_artist(source.title, given, hear)
+            named.append(names.fill(preset, source.title, given, hear))
         except (names.UnnamedSong, names.MissingField) as exc:
             failed(preset.name, exc)
     presets = named

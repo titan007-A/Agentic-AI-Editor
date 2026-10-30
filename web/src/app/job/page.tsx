@@ -7,6 +7,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { JobStatus, jobLabel } from "@/components/job-status";
+import { NameSongForm } from "@/components/name-song-form";
 import { OutputCard } from "@/components/output-card";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -129,6 +130,8 @@ function JobDetail() {
           <p className="text-sm whitespace-pre-wrap text-destructive">{job.error}</p>
         </Card>
       )}
+
+      {!active && job.unnamed.length > 0 && <NameSongForm job={job} />}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {job.outputs.map((output) => (
