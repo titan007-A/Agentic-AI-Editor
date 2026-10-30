@@ -236,12 +236,14 @@ def frame_shots(
     src_width: int,
     frame: tuple[int, int],
     src_height: int | None = None,
+    moving: Span | None = None,
 ) -> list[Shot]:
     width = crop_width(content, frame)
     if width >= content[2]:
         return tall_shots(
-            clip, cuts, samples, faces, content, frame, src_height or content[1] + content[3]
-        )
+            clip, cuts, samples, faces, content, frame, src_height or content[1] + content[3],
+            moving,
+        )  # fmt: skip
     seen = views(samples, faces, content, src_width)
     shots: list[Shot] = []
     for start, end in shot_bounds(clip, cuts):
@@ -327,6 +329,37 @@ def harmonize(shots: list[Shot], width: int, content: Content) -> list[Shot]:
     return out
 
 
+def on_moving(
+    faces: list[Sample],
+    samples: list[tuple[float, list[Subject]]],
+    moving: Span | None,
+    src_height: int,
+) -> tuple[list[Sample], list[tuple[float, list[Subject]]]]:
+    """The faces and subjects in the moving part of a picture that is partly a still image
+    (see compose.moving_part): a face in a photo above a clip isn't the one to frame. Text
+    stays, wherever it is."""
+    if moving is None:
+        return faces, samples
+    y0, y1 = moving
+    faces = [(t, [f for f in seen if y0 <= f.cy * src_height < y1]) for t, seen in faces]
+    samples = [
+        (t, [s for s in items if s.kind == "text" or y0 <= (s.y0 + s.y1) / 2 < y1])
+        for t, items in samples
+    ]
+    return faces, samples
+
+
+def holding(lo: float, hi: float, height: float, moving: Span | None) -> Span:
+    """The rows within [lo, hi] a window `height` rows tall may take so that it holds the
+    moving part of the picture, or stays inside it when that is taller."""
+    if moving is None:
+        return lo, hi
+    y0, y1 = moving
+    a, b = (y0, y1) if y1 - y0 >= height else (y1 - height, y0 + height)
+    a, b = max(a, lo), min(b, hi)
+    return (a, b) if b - a >= height else (lo, hi)
+
+
 def tall_shots(
     clip: Clip,
     cuts: list[float],
@@ -335,15 +368,18 @@ def tall_shots(
     content: Content,
     frame: tuple[int, int],
     src_height: int,
+    moving: Span | None = None,
 ) -> list[Shot]:
     """Shots for a picture as narrow as the frame or narrower. One taller than the frame is
     cropped top and bottom, at its full width, around the heads and must-keep items of each
-    shot; when those don't fit one window the whole picture is shown, padded at the sides."""
+    shot; when those don't fit one window the whole picture is shown, padded at the sides.
+    The moving part of a picture that is partly a still image is always in the window."""
     left, top, picture_width, picture_height = content
     height = crop_height(content, frame)
     if height >= picture_height - 1:
         return [Shot(start=clip.start, end=clip.end, x=left, width=picture_width)]
-    lowest = top + picture_height - height
+    faces, samples = on_moving(faces, samples, moving, src_height)
+    lo, hi = holding(top, top + picture_height, height, moving)
     shots = []
     for start, end in shot_bounds(clip, cuts):
         rows = [
@@ -360,13 +396,13 @@ def tall_shots(
             shots.append(Shot(start=start, end=end, x=left, width=picture_width, reason=reason))
             continue
         if whole is None:
-            y = top + (picture_height - height) / 2
+            y = lo + (hi - lo - height) / 2
             reason = "nothing that must stay; centred on the picture"
         else:
             # Some room above the heads, as a camera operator would leave.
             y = max(whole[0] - HEADROOM * height, whole[1] - height)
             reason = "everything that matters fits the frame's height"
-        y = even(min(max(y, top), lowest))
+        y = even(min(max(y, lo), hi - height))
         shots.append(Shot(start=start, end=end, x=left, width=picture_width, y=y, height=height,
                           reason=reason))  # fmt: skip
     whole_share = sum(s.end - s.start for s in shots if s.height is None) / clip.duration
@@ -406,14 +442,17 @@ def band_shots(
     rows: int,
     src_height: int,
     texts: list[tuple[int, int]] = (),
+    moving: Span | None = None,
 ) -> list[Shot]:
     """Shots for a picture shown across the frame's whole width in a band of `rows` source
     rows' height, between a preset's text. Never cropped at the sides: a picture taller
     than the band loses its top and bottom, around the heads and must-keep items of each
     shot. Text the picture brings with it near its top or bottom edge (lyrics, a channel
     name) is cut off too, unless a head is in the way; `texts` are such text rows the
-    caller found some other way, such as watermarks."""
+    caller found some other way, such as watermarks. The `moving` part of a picture that is
+    partly a still image is always in the window, and only its faces count."""
     left, top, picture_width, picture_height = content
+    faces, samples = on_moving(faces, samples, moving, src_height)
     found = [(s.y0, s.y1) for _, items in samples for s in items if s.kind == "text"] + list(texts)
     heads_all = [
         ((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
@@ -436,6 +475,7 @@ def band_shots(
             Shot(start=clip.start, end=clip.end, x=left, width=picture_width, y=top,
                  height=picture_height, reason="the whole picture fits")
         ]  # fmt: skip
+    lo, hi = holding(lo, hi, height, moving)
 
     def head_rows(t0: float, t1: float, core: bool = False) -> list[tuple[float, float]]:
         """Rows the heads cover in [t0, t1): hair to chin, or only the face itself."""

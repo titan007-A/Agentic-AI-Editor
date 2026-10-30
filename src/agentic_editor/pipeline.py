@@ -356,9 +356,11 @@ def band_framing(
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
     marks = [(m.y, m.y + m.height) for m in analysis.watermarks]
     rows = compose.band_rows(preset, band, picture[2])
+    moving = compose.moving_part(video, clip.start, clip.end, size, picture)
     shots = framing.band_shots(
-        clip, analysis.scenes, samples, face_samples, picture, rows, analysis.height, marks
-    )
+        clip, analysis.scenes, samples, face_samples, picture, rows, analysis.height, marks,
+        moving,
+    )  # fmt: skip
     cut = sorted({s.height for s in shots if s.height and s.height < picture[3]})
     note = (
         f"cut the picture's top and bottom to {', '.join(map(str, cut))} of its "
@@ -366,6 +368,8 @@ def band_framing(
         if cut
         else "the whole picture fits between the text"
     )
+    if moving is not None:
+        note += f"; framed on the moving part, rows {moving[0]}-{moving[1]}, not the still image"
     decisions = [
         d
         for d in edl.decisions
@@ -400,9 +404,13 @@ def smart_framing(
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
     seen = framing.views(samples, face_samples, content, analysis.width)
     if not edl.shots:
+        # Cropped top and bottom: a still image above or below the clip counts less.
+        tall = width >= content[2] and framing.crop_height(content, preset.size) < content[3]
+        size = (analysis.width, analysis.height)
+        moving = compose.moving_part(video, clip.start, clip.end, size, content) if tall else None
         shots = framing.frame_shots(
             clip, analysis.scenes, samples, face_samples, content, analysis.width, preset.size,
-            analysis.height,
+            analysis.height, moving,
         )  # fmt: skip
         shots, recheck = recheck_framing(
             shots, times, seen, face_samples, content, width, preset, analysis, video,

@@ -69,6 +69,24 @@ def padded_picture(
     return left, top, right - left, bottom - top
 
 
+def moving_part(
+    video: Path, start: float, end: float, size: tuple[int, int], picture: tuple[int, int, int, int]
+) -> tuple[int, int] | None:
+    """The source rows of `picture` that move, when part of it is a still image (a photo
+    above a clip): the faces to frame are there, not in the photo. None when all of it
+    moves."""
+    small = (LAYOUT_WIDTH, round(LAYOUT_WIDTH * size[1] / size[0] / 2) * 2)
+    frames = layout.sample(
+        video, end - start, LAYOUT_FRAMES, small, get_settings().ffmpeg_bin, start=start
+    )
+    scale = small[1] / size[1]
+    top, bottom = round(picture[1] * scale), round((picture[1] + picture[3]) * scale)
+    found = layout.moving_rows(frames, top, bottom)
+    if found is None:
+        return None
+    return math.floor(found[0] / scale), min(math.ceil(found[1] / scale), size[1])
+
+
 def picture_area(
     video: Path, start: float, end: float, size: tuple[int, int], probes: int = 4
 ) -> tuple[int, int, int, int]:

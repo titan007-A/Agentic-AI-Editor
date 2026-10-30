@@ -100,3 +100,25 @@ def test_a_picture_on_a_blurred_copy_of_itself_is_found():
     assert layout.background(reel) is None
     sharp = rng.integers(0, 255, (10, H, W, 3)).astype(np.uint8)
     assert layout.blurred_fill(sharp) is None
+
+
+def _photo_over_clip(still_rows: int, rows: int = 192, frames: int = 12) -> np.ndarray:
+    rng = np.random.default_rng(1)
+    clip = rng.integers(0, 255, (frames, rows, 108, 3), dtype=np.uint8)
+    clip[:, :still_rows] = rng.integers(0, 255, (1, still_rows, 108, 3), dtype=np.uint8)
+    return clip
+
+
+def test_the_moving_part_of_a_picture_that_is_partly_a_photo():
+    # A photo over the top 80 rows, the clip under it: the clip's rows.
+    assert layout.moving_rows(_photo_over_clip(80), 0, 192) == (80, 192)
+    # Inside the picture only: padding outside it doesn't count.
+    assert layout.moving_rows(_photo_over_clip(80), 40, 192) == (80, 192)
+
+
+def test_a_normal_video_or_a_still_image_has_no_moving_part():
+    assert layout.moving_rows(_photo_over_clip(0), 0, 192) is None  # it all moves
+    assert layout.moving_rows(_photo_over_clip(20), 0, 192) is None  # a sliver is still
+    assert layout.moving_rows(_photo_over_clip(192), 0, 192) is None  # nothing moves
+    # A thin strip of changing lyrics on a still image isn't a clip.
+    assert layout.moving_rows(_photo_over_clip(170), 0, 192) is None

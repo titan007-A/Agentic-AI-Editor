@@ -346,3 +346,31 @@ def test_a_move_where_the_source_has_no_cut_glides():
     )
     shots = band_shots(clip, [], [], face, (0, 0, 1080, 1920), 900, 1920)
     assert len(shots) == 2 and shots[1].glide
+
+
+def test_the_moving_clip_under_a_still_photo_is_framed_not_the_photo():
+    # vanshaj's song story: a photo of two big faces over rows 0-760, the studio clip with a
+    # small face under it, and a band 982 rows tall.
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=10)
+    photo = [Face(cx=cx, cy=0.2, width=0.3, height=0.15, score=0.9) for cx in (0.25, 0.75)]
+    studio = Face(cx=0.5, cy=0.75, width=0.1, height=0.05, score=0.9)
+    seen = [(t, [*photo, studio]) for t in (2.0, 5.0, 8.0)]
+    picture = (0, 0, 1080, 1920)
+    before = band_shots(clip, [], [], seen, picture, 982, 1920)
+    assert before[0].y < 760  # the photo's faces win: the clip is mostly cut
+    (shot,) = band_shots(clip, [], [], seen, picture, 982, 1920, moving=(940, 1860))
+    assert shot.y <= 940 and shot.y + 982 >= 1860  # the whole clip, a little of the photo
+
+
+def test_a_tall_crop_holds_the_moving_part():
+    from agentic_editor.framing import tall_shots
+
+    photo = (15.0, [Face(cx=0.5, cy=0.15, width=0.4, height=0.2, score=0.9)])
+    (shot,) = tall_shots(CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920)
+    assert shot.y < 400  # without knowing, the photo's face
+    (shot,) = tall_shots(
+        CLIP, [], [], [photo], (0, 0, 1080, 1920), (1080, 1080), 1920, moving=(800, 1900)
+    )
+    assert shot.y >= 800 and shot.y + shot.height <= 1900  # inside the clip, taller than it
