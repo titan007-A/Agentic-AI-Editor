@@ -219,9 +219,12 @@ def text_gaps(preset: Preset) -> list[int | None]:
 
 def picture_band(preset: Preset, face: Callable[..., text.Face]) -> tuple[int, int] | None:
     """Rows of the frame a picture shown whole goes in: between the preset's text blocks,
-    each left where the preset puts it with its gap to the picture. None when no block
-    limits the picture."""
+    each left where the preset puts it with its gap to the picture, or the rows the
+    preset gives. None when nothing limits the picture."""
     frame = preset.size
+    if preset.framing.picture_rows is not None:
+        top, bottom = preset.framing.picture_rows
+        return math.ceil(top / 2) * 2, bottom // 2 * 2
     top, bottom = 0, frame[1]
     for block, gap in zip(preset.text_blocks, text_gaps(preset), strict=True):
         if gap is None:
