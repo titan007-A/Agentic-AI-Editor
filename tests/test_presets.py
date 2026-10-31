@@ -43,6 +43,14 @@ def test_colors_must_be_hex():
         Preset.model_validate(minimal(captions={"color": "white"}))
 
 
+def test_picture_rows_must_fit_the_frame():
+    framed = Preset.model_validate(minimal(framing={"picture_rows": [430, 1412]}))
+    assert framed.framing.picture_rows == (430, 1412)
+    for rows in ([1412, 430], [-2, 900], [400, 2000], [430, 600]):
+        with pytest.raises(ValidationError, match="picture_rows"):
+            Preset.model_validate(minimal(framing={"picture_rows": rows}))
+
+
 def test_name_must_match_file_name(tmp_path):
     (tmp_path / "other.yaml").write_text("name: test\nlabel: x\nmin_duration: 1\nmax_duration: 2\n")
     with pytest.raises(ValueError, match="must match"):

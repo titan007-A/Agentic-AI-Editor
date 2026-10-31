@@ -13,14 +13,14 @@ hook:
   overlay: false
 text_blocks:
   - text: "Escucha la voz real de los artistas,\nsin Auto-Tune ni instrumentos adicionales"
-    font: OpenSans-ExtraBold
+    font: OpenSans-Bold
     size: 58
     color: "#FFFFFF"
     anchor: top
-    offset: 276
+    offset: 272
     max_shrink: 0.9
   - text: "Síguenos ahora o te perderás\nlas próximas voces reales"
-    font: OpenSans-SemiBold
+    font: OpenSans-Regular
     size: 52
     color: "#FFFFFF"
     anchor: bottom

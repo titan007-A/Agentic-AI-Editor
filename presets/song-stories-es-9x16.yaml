@@ -13,15 +13,15 @@ hook:
   overlay: false
 text_blocks:
   - text: "{headline}"
-    font: Poppins-SemiBold
+    font: Montserrat-SemiBold
     size: 50
     color: "#FFFFFF"
     anchor: top
-    offset: 254
+    offset: 274
     max_width: 820
     max_shrink: 0.8
   - text: "AQUÍ MOSTRAMOS CÓMO SE\nCREARON LAS CANCIONES"
-    font: Poppins-SemiBold
+    font: Montserrat-SemiBold
     size: 50
     color: "#FFFFFF"
     anchor: bottom

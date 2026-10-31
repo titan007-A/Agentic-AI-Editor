@@ -167,6 +167,9 @@ class Framing(Strict):
     keep_action: bool = False
     text_gap_above: int | None = 0
     text_gap_below: int | None = 130
+    # Rows of the frame, top and bottom, a picture shown whole goes in, cut to fill them
+    # at the frame's width, as it would between text blocks: the same picture with no text.
+    picture_rows: tuple[int, int] | None = None
     # Rounded corners on a picture shown whole, filled with corner_color (the background
     # when unset).
     corner_radius: int = Field(default=0, ge=0, le=200)
@@ -299,6 +302,12 @@ class Preset(Strict):
         for name, overlay in (("title_overlay", self.title_overlay), ("one_liner", self.one_liner)):
             if overlay.offset + overlay.size > h:
                 raise ValueError(f"{name}.offset {overlay.offset} puts it off the frame")
+        rows = self.framing.picture_rows
+        if rows is not None and not (rows[0] >= 0 and rows[0] + h // 4 <= rows[1] <= h):
+            raise ValueError(
+                f"framing.picture_rows {list(rows)} must be top, bottom inside the frame, "
+                f"at least {h // 4} px apart"
+            )
         for block in self.text_blocks:
             if block.offset > h or (block.anchor == "top" and block.offset + block.size > h):
                 raise ValueError(f"text block offset {block.offset} puts it off the frame")

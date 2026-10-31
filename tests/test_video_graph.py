@@ -208,6 +208,21 @@ def test_the_picture_goes_between_the_text_where_the_preset_puts_it():
     assert f":(ow-iw)/2:{top}+({bottom - top}-ih)/2:" in fit[1]
 
 
+def test_picture_rows_give_the_band_without_text():
+    from agentic_editor.presets import load_presets
+    from agentic_editor.render import compose
+    from agentic_editor.settings import ROOT, get_settings
+
+    italian = load_presets(ROOT / "presets")["vocal-music-it-9x16"]
+    face = compose.text_face(get_settings(), "it")
+    band = compose.picture_band(italian, face)
+    framing = italian.framing.model_copy(update={"picture_rows": band})
+    plain = italian.model_copy(update={"text_blocks": [], "framing": framing})
+    assert compose.picture_band(plain, face) == band
+    odd = framing.model_copy(update={"picture_rows": (431, 1413)})
+    assert compose.picture_band(plain.model_copy(update={"framing": odd}), face) == (432, 1412)
+
+
 def test_band_windows_move_at_once_on_a_cut_and_ease_inside_a_shot():
     from agentic_editor.render.video import band_rows_expression
 
