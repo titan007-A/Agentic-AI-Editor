@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import secrets
+import shutil
 import signal
 import threading
 from collections.abc import AsyncIterator, Iterator
@@ -25,7 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import accounts, autopilot, cleanup, jobs, research
+from agentic_editor import accounts, autopilot, buffer, cleanup, jobs, research
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
@@ -62,6 +63,7 @@ ASSET_SUFFIXES = {
     "lut": {".cube"},
 }
 ASSET_LIMIT = 300 * 1024 * 1024
+PUB_NAME = re.compile(r"[\w-]{32}\.mp4")
 ASSET_NAME = re.compile(r"[0-9a-f]{12}-\w[\w-]*\.[a-z0-9]+")
 NOTICE_KEY = "usage_notice_accepted"
 ORIGINAL_NAME = ".name"  # next to an upload: the file name it was sent with
@@ -77,6 +79,18 @@ FAILED_LOGIN_DELAY = 1.0
 class LoginRequest(BaseModel):
     username: str = ""
     password: str
+
+
+class BufferKeyRequest(BaseModel):
+    key: str = Field(min_length=8, max_length=4000)
+
+
+class BufferPostRequest(BaseModel):
+    channels: list[str] = Field(min_length=1)
+    text: str = ""
+    mode: buffer.Mode = "addToQueue"
+    due_at: datetime | None = None
+    first_comment: str = ""
 
 
 class ShareRequest(BaseModel):
@@ -1470,6 +1484,107 @@ def create_app(
         return FileResponse(
             output.path, media_type="video/mp4", filename=f"{name}.mp4" if download else None
         )
+
+    # Posting to Buffer, a prototype for admins: each keeps their own Buffer API key.
+    def buffer_key(account: Account, session: Session) -> str | None:
+        found = session.get(Setting, f"buffer_key:{account.id}")
+        return found.value if found else None
+
+    def channel_views(channels: list[buffer.Channel]) -> list[dict]:
+        return [vars(c) for c in channels]
+
+    @app.get("/api/buffer")
+    async def buffer_status(me: Admin, session: DB) -> dict:
+        key = buffer_key(me, session)
+        if key is None:
+            return {"connected": False, "channels": []}
+        try:
+            channels = await asyncio.to_thread(buffer.channels, key)
+        except buffer.BufferError as exc:
+            return {"connected": True, "channels": [], "error": str(exc)}
+        return {"connected": True, "channels": channel_views(channels)}
+
+    @app.put("/api/buffer")
+    async def connect_buffer(body: BufferKeyRequest, me: Admin, session: DB) -> dict:
+        key = body.key.strip()
+        try:
+            channels = await asyncio.to_thread(buffer.channels, key)
+        except buffer.BufferError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.merge(Setting(key=f"buffer_key:{me.id}", value=key))
+        session.commit()
+        return {"connected": True, "channels": channel_views(channels)}
+
+    @app.delete("/api/buffer")
+    def disconnect_buffer(me: Admin, session: DB) -> dict:
+        found = session.get(Setting, f"buffer_key:{me.id}")
+        if found is not None:
+            session.delete(found)
+            session.commit()
+        return {"ok": True}
+
+    pub_dir = settings.media_dir / "pub"
+
+    def public_link(output: Output, request: Request) -> str:
+        """A link anyone can open, for Buffer to fetch the video from when it posts: an
+        unguessable name for a hard link to the file, so deleting the job keeps it."""
+        base = (settings.public_url or str(request.base_url)).rstrip("/")
+        if not base.startswith("https://"):
+            raise HTTPException(
+                422,
+                "Buffer needs an https link to fetch the video: open the editor at its "
+                "https address, or set PUBLIC_URL in .env",
+            )
+        pub_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{secrets.token_urlsafe(24)}.mp4"
+        try:
+            (pub_dir / name).hardlink_to(output.path)
+        except OSError:
+            shutil.copy2(output.path, pub_dir / name)
+        return f"{base}/api/pub/{name}"
+
+    @app.get("/api/pub/{name}")
+    def public_video(name: str) -> FileResponse:
+        """A video handed to another service; open to anyone with the link."""
+        path = pub_dir / name
+        if not PUB_NAME.fullmatch(name) or not path.is_file():
+            raise HTTPException(404, "no such video")
+        return FileResponse(path, media_type="video/mp4")
+
+    @app.post("/api/outputs/{output_id}/buffer")
+    async def post_to_buffer(
+        output_id: int, body: BufferPostRequest, request: Request, me: Admin, session: DB
+    ) -> dict:
+        output = find_output(output_id, session, me)
+        key = buffer_key(me, session)
+        if key is None:
+            raise HTTPException(409, "connect Buffer first")
+        if body.mode == "customScheduled" and body.due_at is None:
+            raise HTTPException(422, "pick a time to post it")
+        try:
+            channels = {c.id: c for c in await asyncio.to_thread(buffer.channels, key)}
+        except buffer.BufferError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        unknown = [c for c in body.channels if c not in channels]
+        if unknown:
+            raise HTTPException(422, "Buffer doesn't have that channel any more; reload")
+        link = public_link(output, request)
+        due = body.due_at
+        if due is not None and due.tzinfo is None:
+            due = due.replace(tzinfo=UTC)
+        results = []
+        for channel_id in body.channels:
+            channel = channels[channel_id]
+            try:
+                data = buffer.post_input(
+                    channel, link, body.text, body.mode, due, body.first_comment
+                )
+                post = await asyncio.to_thread(buffer.create_post, key, data)
+                results.append({"channel": channel.name, "ok": True, "post": post})
+            except buffer.BufferError as exc:
+                results.append({"channel": channel.name, "ok": False, "error": str(exc)})
+        log.info("buffer: output %s -> %s", output_id, results)
+        return {"results": results, "link": link}
 
     @app.get("/api/outputs/{output_id}/subtitles")
     def subtitles(output_id: int, account: User, session: DB) -> FileResponse:

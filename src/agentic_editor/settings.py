@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     port: int = 8000
     password_hash: str = ""
     secret_key: str = ""
+    # The https address the editor is reached at from outside (https://example.com), for
+    # links other services fetch, such as Buffer's; empty: the address of the request.
+    public_url: str = ""
     database: Path = Path("media/app.db")
     queue_database: Path = Path("media/queue.db")
     web_dir: Path = Path("web/out")
