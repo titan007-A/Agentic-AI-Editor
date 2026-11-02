@@ -12,6 +12,7 @@ notes say what was measured, what was guessed and what was left out.
 """
 
 import difflib
+import io
 import itertools
 import logging
 import math
@@ -30,7 +31,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from scipy import ndimage
 
-from agentic_editor import ffmpeg, slots
+from agentic_editor import assets, ffmpeg, slots
 from agentic_editor.analysis import layout
 from agentic_editor.analysis.layout import Box, Line
 from agentic_editor.analyze import (
@@ -50,12 +51,14 @@ from agentic_editor.presets import (
     Framing,
     Grade,
     Hook,
+    ImageBlock,
     Preset,
     Silence,
     TextBlock,
     TitleOverlay,
 )
 from agentic_editor.render import captions as ass
+from agentic_editor.render import fonts as font_chain
 from agentic_editor.render.audio import integrated_loudness
 from agentic_editor.render.text import EDGE_MARGIN, font_family
 from agentic_editor.router import ModelRouter
@@ -67,6 +70,7 @@ log = logging.getLogger(__name__)
 Progress = Callable[[str, str], None]
 
 LAYOUT_FRAMES = 24
+BRAND_FRAMES = 8  # full-size frames a page's still branding is cut out from
 # Frames are read padded to a square this size. On a tall frame the vision model's boxes
 # drift down the further down the text is, by over a tenth of the height near the bottom;
 # on a square they are a few percent off at most.
@@ -254,6 +258,38 @@ def clean(text: str) -> str:
     return "\n".join(" ".join(line.split()) for line in kept.split("\n") if line.strip())
 
 
+def with_symbols(block: TextBlock, read: str, fonts_dir: Path, font_folder: Path) -> TextBlock:
+    """The block with the emoji and symbols it was read with put back, those a font at
+    hand (Noto, fetched when first needed) can draw; measuring left them out."""
+    lines = block.text.split("\n")
+    read_lines = [" ".join(line.split()) for line in read.split("\n") if line.strip()]
+    if len(read_lines) != len(lines) or any(
+        clean(r) != line for r, line in zip(read_lines, lines, strict=True)
+    ):
+        return block
+    primary = fonts_dir / f"{block.font}.ttf"
+
+    def drawable(ch: str) -> bool:
+        try:
+            font_chain.chain(primary, [ch], font_folder)
+        except (font_chain.MissingGlyphs, OSError, ValueError):
+            return False
+        return True
+
+    kept = "\n".join(
+        "".join(c for c in r if c.isspace() or c in line or drawable(c)) for r, line in
+        zip(read_lines, lines, strict=True)
+    )  # fmt: skip
+    text = "\n".join(" ".join(x.split()) for x in kept.split("\n"))
+    return block.model_copy(update={"text": text})
+
+
+def png_bytes(cut: np.ndarray) -> bytes:
+    out = io.BytesIO()
+    Image.fromarray(cut, "RGBA").save(out, "PNG", optimize=True)
+    return out.getvalue()
+
+
 def _normal(text: str) -> str:
     return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
 
@@ -306,6 +342,11 @@ def group(sightings: list[Sighting]) -> list[list[Sighting]]:
         else:
             home.append(s)
     return groups
+
+
+def _group_box(g: list[Sighting]) -> Box:
+    return (min(s.box[0] for s in g), min(s.box[1] for s in g),
+            max(s.box[2] for s in g), max(s.box[3] for s in g))  # fmt: skip
 
 
 def _inside(box: Box, picture: Box) -> bool:
@@ -949,6 +990,37 @@ def _learn(
         best, fit = agreed
         blocks.append((text_block(best, fit, frame), best, g[0].text))
 
+    # A page's avatar, name and handle on the padding: cut out and kept as pictures.
+    images: list[ImageBlock] = []
+    branded: list[Box] = []
+    if padded and colour is not None:
+        progress("analyze", "looking for the page's branding")
+        stills = [
+            layout.frame_at(
+                source.path, info.duration * (i + 0.5) / BRAND_FRAMES, frame, settings.ffmpeg_bin
+            )
+            for i in range(BRAND_FRAMES)
+        ]
+        stills = [f for f in stills if f is not None]
+        rows = [(m.top, m.bottom) for _, m, _ in blocks]
+        found_marks = layout.branding(np.stack(stills), colour, picture, rows) if stills else []
+        for i, ((x0, y0, x1, y1), cut) in enumerate(found_marks):
+            kept = assets.keep(png_bytes(cut), f"branding-{i + 1}.png", settings.media_dir)
+            images.append(ImageBlock(file=assets.preset_value(kept), x=x0, y=y0, width=x1 - x0))
+            branded.append((x0 / width, y0 / height, x1 / width, y1 / height))
+    in_branding = [
+        (role, g) for role, g in found
+        if role != "fixed" and any(_inside(_group_box(g), b) for b in branded)
+    ]  # fmt: skip
+    found = [(role, g) for role, g in found if (role, g) not in in_branding]
+    if images:
+        words = [quoted(g[0].text) for _, g in in_branding]
+        what = f" ({', '.join(words)})" if words else ""
+        notes.append(
+            f"Branding: {len(images)} still picture(s) cut out of the reel{what}, kept where "
+            "they were. Replace them under \u201cPictures on every video\u201d if they aren't yours"
+        )
+
     # Captions moved off a face can show up as a second group; the main one sets the style.
     caption_groups = sorted((g for role, g in found if role == "captions"), key=len, reverse=True)
     caption_samples = measured(caption_groups[0]) if caption_groups else []
@@ -997,7 +1069,9 @@ def _learn(
 
     # Text that stays.
     text_blocks = []
+    font_folder = settings.models_dir / "fonts"
     for i, (block, _, read) in enumerate(blocks):
+        block = with_symbols(block, read, settings.fonts_dir, font_folder)
         text_blocks.append(block)
         where = f"{block.offset} px from the {block.anchor}"
         notes.append(
@@ -1006,11 +1080,12 @@ def _learn(
         )
         if i in changing:
             notes.append(f"{quoted(block.text)} looks like it changes from video to video: edit it")
-        kept = clean(read)
-        dropped = "".join(dict.fromkeys(c for c in read if c not in kept and not c.isspace()))
+        dropped = "".join(dict.fromkeys(c for c in read if c not in block.text and not c.isspace()))
         if dropped:
-            notes.append(f"Left out {dropped}: the bundled fonts can't draw it")
+            notes.append(f"Left out {dropped}: no font at hand draws it")
     updates["text_blocks"] = text_blocks
+    if images:
+        updates["images"] = images
 
     for role, g in found:
         if role == "source":
@@ -1070,7 +1145,8 @@ def _learn(
         f"{preset.min_duration:.0f}-{preset.max_duration:.0f} s"
     )
     notes.append(
-        "Not learned: logos, music beds, intros and outros; add those yourself if the reel had them"
+        "Not learned: music beds, intros and outros, and branding over the picture itself; "
+        "add those yourself if the reel had them"
     )
     preset = Preset.model_validate({**preset.model_dump(), **_dumped(updates)})
     return Draft(preset, notes)

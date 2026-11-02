@@ -208,7 +208,16 @@ On Autopilot, the Ready and Needs a look piles are grouped by preset, one folder
 The preset editor keeps a small preview in the corner: a still of what the preset makes,
 redrawn a moment after every change (saved or not), on a drawn stand-in video in the shape
 you pick (16:9, 4:3, 1:1, 4:5, 9:16), with sample words for {song}, {artist} and the like.
-Tap it for a bigger view. The preset's logo shows in it too.
+Tap it for a bigger view. The preset's logo and pictures show in it too, and under it
+the preview says what looks wrong ("things to check"): text too long for its width, text
+squeezed for room, text over the video or over other text, pictures off the frame or over
+text, files missing.
+
+"Pictures on every video" places any picture (a page's avatar and name, a badge) at a
+position and width in frame pixels. With text on one side of the video only, the video
+keeps to that text at the gap set, instead of sitting in the middle of the space left.
+"Learn from a reel" cuts a page's still branding (avatar, name, handle) out of the
+reference reel's padding and keeps it as pictures, where it was.
 
 Branding files (logo, intro and outro clips, background music) and LUTs are uploaded from
 the preset editor: each has an Upload button. They are checked (a picture, a video with a

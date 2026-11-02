@@ -5,11 +5,14 @@ import itertools
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.edl import EDL, Clip, CropMode, Shot
 from agentic_editor.ffmpeg import escape_filter_path
 from agentic_editor.presets import Preset
+
+Anchor = Literal["top", "middle", "bottom"]
 
 
 @dataclass
@@ -34,8 +37,10 @@ class Layers:
     fonts_dir: Path | None = None
     crop_commands: dict[int, Path] = field(default_factory=dict)
     black_bars: tuple[int, int, int, int] | None = None
-    # Rows of the frame a picture shown whole goes in, between the preset's text.
+    # Rows of the frame a picture shown whole goes in, between the preset's text, and
+    # which edge of them a picture shorter than the band keeps to.
     picture_band: tuple[int, int] | None = None
+    picture_anchor: Anchor = "middle"
     watermarks: list[Watermark] = field(default_factory=list)
     # Smart framing: the picture's area without black bars, and a follow path per shot.
     content: tuple[int, int, int, int] | None = None
@@ -107,11 +112,12 @@ def frame_chain(
     black_bars: tuple[int, int, int, int] | None,
     picture_width: float = 1.0,
     picture_band: tuple[int, int] | None = None,
+    anchor: Anchor = "middle",
 ) -> list[str]:
     """Filters that turn one source clip into a frame-sized clip."""
     crop, fit = frame_parts(
         mode, source, frame, background, crop_label, commands, black_bars, picture_width,
-        picture_band,
+        picture_band, anchor,
     )  # fmt: skip
     return crop + fit
 
@@ -126,6 +132,7 @@ def frame_parts(
     black_bars: tuple[int, int, int, int] | None,
     picture_width: float = 1.0,
     picture_band: tuple[int, int] | None = None,
+    anchor: Anchor = "middle",
 ) -> tuple[list[str], list[str]]:
     """frame_chain in two parts: what cuts the window out, and what fits it to the frame."""
     src_w, src_h = source
@@ -136,7 +143,7 @@ def frame_parts(
         src_w, src_h = bw, bh
 
     if mode == "none":
-        return crop, band_fit(frame, background, picture_width, picture_band)
+        return crop, band_fit(frame, background, picture_width, picture_band, anchor)
 
     crop_w, crop_h = crop_size((src_w, src_h), frame)
     x = (src_w - crop_w) // 2
@@ -186,12 +193,20 @@ def band_fit(
     background: str,
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
+    anchor: Anchor = "middle",
 ) -> list[str]:
     """Scale a picture shown whole into `band` (rows of the frame, all of it by default)
-    without stretching it, and pad the rest of the frame."""
+    without stretching it, against the band's `anchor` edge, and pad the rest of the frame."""
     width, height = frame
     top, bottom = band or (0, height)
-    y = f"{top}+({bottom - top}-ih)/2" if band else "(oh-ih)/2"
+    if not band:
+        y = "(oh-ih)/2"
+    elif anchor == "top":
+        y = str(top)
+    elif anchor == "bottom":
+        y = f"{bottom}-ih"
+    else:
+        y = f"{top}+({bottom - top}-ih)/2"
     return [
         f"scale={_even(width * picture_width)}:{bottom - top}"
         ":force_original_aspect_ratio=decrease:flags=lanczos",
@@ -315,11 +330,17 @@ def zoom_room(
     return room
 
 
+def _offset(spare: float, anchor: Anchor) -> float:
+    """How far into a band's spare rows a picture starts, by the edge it keeps to."""
+    return 0 if anchor == "top" else spare if anchor == "bottom" else spare / 2
+
+
 def picture_rect(
     size: tuple[int, int],
     frame: tuple[int, int],
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
+    anchor: Anchor = "middle",
 ) -> tuple[int, int, int, int]:
     """Where a picture of `size` shown whole lands in the frame, x0, y0, x1, y1, as
     band_fit places it."""
@@ -328,7 +349,9 @@ def picture_rect(
     box_w, box_h = _even(width * picture_width), bottom - top
     scale = min(box_w / size[0], box_h / size[1])
     w, h = round(size[0] * scale / 2) * 2, round(size[1] * scale / 2) * 2
-    x0, y0 = (width - w) // 2, top + (box_h - h) // 2
+    spare = box_h - h
+    y0 = top + (int(_offset(spare, anchor)) if band else spare // 2)
+    x0 = (width - w) // 2
     return x0, y0, x0 + w, y0 + h
 
 
@@ -338,6 +361,7 @@ def video_band(
     frame: tuple[int, int],
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
+    anchor: Anchor = "middle",
 ) -> tuple[float, float] | None:
     """Rows of the frame covered by the picture when it is letterboxed, else None."""
     if mode != "none":
@@ -347,7 +371,7 @@ def video_band(
     scaled = min(bottom - top, _even(width * picture_width) * source[1] / source[0])
     if scaled >= height - 1:
         return None
-    top += (bottom - top - scaled) / 2
+    top += _offset(bottom - top - scaled, anchor if band else "middle")
     return top, top + scaled
 
 
@@ -385,7 +409,10 @@ def build_graph(
             h = first.height or (layers.content or (0, 0, *source))[3]
             y = band_rows_expression(edl.shots, clip.start)
             crop = [f"crop={first.width}:{h}:{first.x}:'{y}'"]
-            fit = band_fit(frame, background, preset.framing.picture_width, layers.picture_band)
+            fit = band_fit(
+                frame, background, preset.framing.picture_width, layers.picture_band,
+                layers.picture_anchor,
+            )  # fmt: skip
             segment(label, crop, fit)
             continue
         if edl.crop_mode == "smart" and edl.shots:
@@ -411,6 +438,7 @@ def build_graph(
             layers.black_bars,
             preset.framing.picture_width,
             layers.picture_band,
+            layers.picture_anchor,
         )
         segment(label, crop, fit)
     joined = "".join(f"[v{i}]" for i in range(segments))

@@ -108,7 +108,8 @@ def picture_place(
         # Band framing: the frame's width, the source cut top and bottom to fit the band.
         rows = compose.band_rows(preset, band, source[0])
         shown = (source[0], min(source[1], rows))
-        return picture_rect(shown, frame, preset.framing.picture_width, band), shown
+        anchor = compose.picture_anchor(preset)
+        return picture_rect(shown, frame, preset.framing.picture_width, band, anchor), shown
     return picture_rect(source, frame, preset.framing.picture_width, None), source
 
 
@@ -144,6 +145,14 @@ def _caption(canvas: ImageDraw.ImageDraw, preset: Preset, settings: Settings, fa
 
 def render(preset: Preset, settings: Settings, shape: Shape = "16:9") -> bytes:
     """The preview as a JPEG, frame-sized."""
+    return render_checked(preset, settings, shape)[0]
+
+
+def render_checked(
+    preset: Preset, settings: Settings, shape: Shape = "16:9"
+) -> tuple[bytes, list[str]]:
+    """The preview as a JPEG, and what looks wrong in it, in words a person can act on."""
+    notes: list[str] = []
     frame = preset.size
     source = SHAPES[shape]
     face = compose.text_face(settings, None)
@@ -155,6 +164,17 @@ def render(preset: Preset, settings: Settings, shape: Shape = "16:9") -> bytes:
         }
     )
     band = compose.picture_band(shown, face) if preset.framing.mode == "none" else None
+    limiting = (
+        [g for g in compose.text_gaps(shown) if g is not None]
+        if preset.framing.mode == "none" and preset.framing.picture_rows is None
+        else []
+    )
+    if limiting and band is None:
+        notes.append(
+            "The text leaves less than a quarter of the frame for the video, so the video "
+            "ignores it and fills the frame behind the text. Make the text smaller or move it "
+            "nearer the edges."
+        )
     background = preset.framing.background
     if preset.framing.auto_background:
         background = "#2a2433"  # a render tones one from the footage; this stands for it
@@ -173,14 +193,56 @@ def render(preset: Preset, settings: Settings, shape: Shape = "16:9") -> bytes:
             text.place(b, face(b.font, b.text), frame, letterbox, gap)
             for b, gap in zip(shown.text_blocks, compose.text_gaps(shown), strict=True)
         ]
+    inks = [p.band for p in placed]
+    for i, (block, p) in enumerate(zip(shown.text_blocks, placed, strict=True), 1):
+        lines = block.text.split("\n")
+        fitted = text.fit_width(lines, p.font, block.size, block.min_size, block.max_width)
+        widest = max(p.font.length(line, fitted) for line in lines)
+        if widest > block.max_width + 2:
+            notes.append(
+                f"Text {i} is too long: even at its smallest size ({block.min_size}) it is "
+                f"wider than its max width ({block.max_width} px). Shorten it or break the line."
+            )
+        elif p.size < fitted:
+            notes.append(
+                f"Text {i} is squeezed from size {fitted} to {p.size} to keep its gap to the "
+                "video. Lower the gap or move the text nearer the edge."
+            )
+        top, bottom = p.band
+        if preset.framing.mode == "none" and min(bottom, y1) - max(top, y0) > 2:
+            notes.append(
+                f"Text {i} runs over the video by {round(min(bottom, y1) - max(top, y0))} px."
+            )
+        for j in range(i, len(inks)):
+            other = inks[j]
+            if min(bottom, other[1]) - max(top, other[0]) > 2:
+                notes.append(f"Text {i} and text {j + 1} overlap.")
     corners = None
     if preset.framing.mode == "none" and preset.framing.corner_radius:
         corners = ((x0, y0, x1, y1), preset.framing.corner_radius,
                    preset.framing.corner_color or background)  # fmt: skip
     with tempfile.TemporaryDirectory() as folder:
         work = Path(folder)
-        if placed or corners:
-            _lay(image, text.draw(placed, frame, work / "text.png", corners))
+        pictures = []
+        for n, i in enumerate(preset.images, 1):
+            try:
+                path = compose.asset_path(i.file)
+                with Image.open(path) as found:
+                    tall = round(found.height * i.width / found.width)
+            except (OSError, ValueError):
+                notes.append(f"Picture {n}: the file isn't there or isn't a picture; upload it.")
+                continue  # the rest still shows
+            pictures.append((path, i.x, i.y, i.width, i.opacity))
+            box = (i.x, i.y, i.x + i.width, i.y + tall)
+            if box[0] < 0 or box[1] < 0 or box[2] > frame[0] or box[3] > frame[1]:
+                notes.append(f"Picture {n} runs off the edge of the frame.")
+            for k, (top, bottom) in enumerate(inks, 1):
+                if min(bottom, box[3]) - max(top, box[1]) > 2 and _wide_overlap(
+                    placed[k - 1], box, frame[0]
+                ):
+                    notes.append(f"Picture {n} covers part of text {k}.")
+        if placed or corners or pictures:
+            _lay(image, text.draw(placed, frame, work / "text.png", corners, pictures))
         if preset.title_overlay.enabled:
             t = preset.title_overlay
             font = face(t.font, TITLE)
@@ -205,12 +267,19 @@ def render(preset: Preset, settings: Settings, shape: Shape = "16:9") -> bytes:
     if preset.captions.enabled:
         _caption(canvas, preset, settings, face)
 
-    if preset.logo.file:
-        _logo(image, preset)
+    if preset.logo.file and not _logo(image, preset):
+        notes.append("The logo file isn't there or isn't a picture; upload it again.")
 
     out = io.BytesIO()
     image.save(out, "JPEG", quality=82)
-    return out.getvalue()
+    return out.getvalue(), list(dict.fromkeys(notes))
+
+
+def _wide_overlap(block: text.Placed, box: tuple[int, int, int, int], width: int) -> bool:
+    """Whether a picture's columns meet a centred text block's widest line."""
+    wide = max(block.font.length(line, block.size) for line in block.lines)
+    left, right = (width - wide) / 2, (width + wide) / 2
+    return min(right, box[2]) - max(left, box[0]) > 2
 
 
 def _lay(image: Image.Image, layer_file: Path) -> None:
@@ -218,14 +287,14 @@ def _lay(image: Image.Image, layer_file: Path) -> None:
         image.paste(layer, (0, 0), layer)
 
 
-def _logo(image: Image.Image, preset: Preset) -> None:
-    """The logo where a render puts it; a file that can't be found or read is left out."""
+def _logo(image: Image.Image, preset: Preset) -> bool:
+    """The logo where a render puts it; False when the file can't be found or read."""
     logo = preset.logo
     try:
         with Image.open(compose.asset_path(logo.file)) as found:
             mark = found.convert("RGBA")
     except (OSError, ValueError):
-        return
+        return False
     height = max(1, round(mark.height * logo.width / mark.width))
     mark = mark.resize((logo.width, height), Image.Resampling.LANCZOS)
     alpha = mark.getchannel("A").point(lambda a: round(a * logo.opacity))
@@ -233,3 +302,4 @@ def _logo(image: Image.Image, preset: Preset) -> None:
     x = logo.margin if logo.position.endswith("left") else image.width - mark.width - logo.margin
     y = logo.margin if logo.position.startswith("top") else image.height - mark.height - logo.margin
     image.paste(mark, (x, y), mark)
+    return True

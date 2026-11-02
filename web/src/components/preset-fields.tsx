@@ -630,3 +630,58 @@ export function TextBlocks({
     </div>
   );
 }
+
+const IMAGE_FIELDS: Field[] = [
+  { path: "file", label: "Picture", kind: "file", accept: "image" },
+  { path: "x", label: "From the left (px)", kind: "number" },
+  { path: "y", label: "From the top (px)", kind: "number" },
+  { path: "width", label: "Width (px)", kind: "number" },
+  { path: "opacity", label: "Opacity", kind: "number", step: 0.05 },
+];
+const NEW_IMAGE: Obj = { file: "", x: 60, y: 120, width: 300, opacity: 1 };
+
+/** Pictures drawn on every video where the preset puts them: a page's avatar and name,
+ * a badge. The preview shows where they land. */
+export function ImageBlocks({
+  preset,
+  onChange,
+}: {
+  preset: Preset;
+  onChange: (preset: Preset) => void;
+}) {
+  const images: Obj[] = preset.images ?? [];
+  const update = (next: Obj[]) => onChange({ ...preset, images: next });
+
+  return (
+    <div className="space-y-4">
+      {images.map((image, i) => (
+        <div key={i} className="sketch-tile space-y-4 border-dashed p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Picture {i + 1}</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Remove picture ${i + 1}`}
+              onClick={() => update(images.filter((_, j) => j !== i))}
+            >
+              <Trash2 />
+            </Button>
+          </div>
+          <FieldGrid
+            prefix={`image-${i}`}
+            fields={IMAGE_FIELDS}
+            values={image}
+            fonts={[]}
+            nullable={() => false}
+            onChange={(path, value) =>
+              update(images.map((b, j) => (j === i ? setPath(b, path, value ?? "") : b)))
+            }
+          />
+        </div>
+      ))}
+      <Button variant="outline" size="sm" onClick={() => update([...images, NEW_IMAGE])}>
+        <Plus /> Add a picture
+      </Button>
+    </div>
+  );
+}

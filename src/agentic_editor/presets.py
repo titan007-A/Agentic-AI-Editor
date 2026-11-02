@@ -90,6 +90,17 @@ class TextBlock(Strict):
     )
 
 
+class ImageBlock(Strict):
+    """A picture drawn on every frame where the preset puts it, such as a page's avatar
+    and name: a file in the assets (or any path), its top-left corner in frame pixels."""
+
+    file: str = Field(min_length=1)
+    x: int = Field(ge=-4000, le=4000)
+    y: int = Field(ge=-4000, le=4000)
+    width: int = Field(ge=8, le=4096, description="px; the height follows the picture")
+    opacity: float = Field(default=1.0, ge=0, le=1)
+
+
 class Headline(Strict):
     """How the planner writes {headline} in the text blocks for each video, when the
     notes don't give it ("headline: ...")."""
@@ -236,6 +247,7 @@ class Preset(Strict):
     title_overlay: TitleOverlay = TitleOverlay()
     one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
+    images: list[ImageBlock] = []
     # When neither the video's name nor the notes say the {song} and {artist}, recognise
     # them from its sound (shazam.py); still nothing, and the job asks for them. On unless
     # a preset turns it off: an Instagram reel's name ("Video by <account>") never says them.

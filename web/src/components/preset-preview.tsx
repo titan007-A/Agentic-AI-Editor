@@ -37,6 +37,7 @@ export function PresetPreview({ preset }: { preset: Preset }) {
   // What the still on screen was drawn for; it's out of date while that isn't `key`.
   const [drawnFor, setDrawnFor] = useState<string | null>(null);
   const [broken, setBroken] = useState(false);
+  const [notes, setNotes] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   // Only drawn once a preset has loaded in the browser, so window is there.
   const [hidden, setHidden] = useState(() => {
@@ -56,13 +57,14 @@ export function PresetPreview({ preset }: { preset: Preset }) {
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const blob = await presetPreview(JSON.parse(wanted), shape, controller.signal);
-        if (blob === null) {
+        const drawn = await presetPreview(JSON.parse(wanted), shape, controller.signal);
+        if (drawn === null) {
           setBroken(true);
           setDrawnFor(key);
           return;
         }
-        const next = URL.createObjectURL(blob);
+        setNotes(drawn.notes);
+        const next = URL.createObjectURL(drawn.image);
         if (shown.current) URL.revokeObjectURL(shown.current);
         shown.current = next;
         setUrl(next);
@@ -186,6 +188,15 @@ export function PresetPreview({ preset }: { preset: Preset }) {
           >
             {screen(false)}
           </button>
+          {notes.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="w-full rounded-md bg-[#fde7d4] px-1 py-1 text-left text-[11px] leading-tight text-[#9a3412]"
+            >
+              {notes.length === 1 ? "1 thing to check" : `${notes.length} things to check`}
+            </button>
+          )}
           <div className="hidden sm:block">{shapes}</div>
           <button
             type="button"
@@ -213,6 +224,13 @@ export function PresetPreview({ preset }: { preset: Preset }) {
             </DialogDescription>
           </DialogHeader>
           {shapes}
+          {notes.length > 0 && (
+            <ul className="list-disc space-y-1 rounded-md bg-[#fde7d4] py-2 pr-2 pl-6 text-sm text-[#9a3412]">
+              {notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
           {screen(true)}
         </DialogContent>
       </Dialog>
