@@ -4,6 +4,7 @@ import os
 import shutil
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1427,3 +1428,47 @@ def test_the_preset_editor_shows_a_still_of_the_preset_unsaved_changes_and_all(e
     _, riya = employee(env, presets=[])
     assert riya.post("/api/presets/preview", json=preset).status_code == 200
     assert TestClient(env.client.app).post("/api/presets/preview", json=preset).status_code == 401
+
+
+def png_bytes(size=(200, 80), colour=(220, 30, 30, 255)) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGBA", size, colour).save(out, "PNG")
+    return out.getvalue()
+
+
+def test_a_logo_is_uploaded_for_a_preset_and_shows_in_the_preview(env):
+    sent = env.client.post(
+        "/api/assets", data={"kind": "image"}, files={"file": ("Our Logo!.png", png_bytes())}
+    )
+    assert sent.status_code == 200, sent.text
+    path = sent.json()["path"]
+    assert Path(path).name.endswith("-Our-Logo.png") and Path(path).is_file()
+    again = env.client.post(
+        "/api/assets", data={"kind": "image"}, files={"file": ("Our Logo!.png", png_bytes())}
+    )
+    assert again.json()["path"] == path  # stored once, by its content
+    shown = env.client.get(f"/api/assets/{Path(path).name}")
+    assert shown.status_code == 200 and shown.content == png_bytes()
+
+    preset = {p["name"]: p for p in env.client.get("/api/presets").json()}["square-1x1"]
+    logo = {"file": path, "position": "top-right", "opacity": 1.0, "width": 200, "margin": 40}
+    still = env.client.post("/api/presets/preview", json=preset | {"logo": logo})
+    pixel = Image.open(io.BytesIO(still.content)).convert("RGB").getpixel((1080 - 40 - 100, 80))
+    assert pixel[0] > 180 and pixel[1] < 80  # the red logo, in its corner
+
+
+def test_preset_files_are_checked_before_they_are_kept(env):
+    def send(kind, name, content):
+        return env.client.post("/api/assets", data={"kind": kind}, files={"file": (name, content)})
+
+    assert send("image", "logo.gif", png_bytes()).status_code == 400
+    assert send("image", "logo.png", b"not a picture").status_code == 400
+    assert send("lut", "look.cube", b"TITLE nothing").status_code == 400
+    lut = b"LUT_3D_SIZE 2\n" + b"0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n"
+    assert send("lut", "look.cube", lut).status_code == 200
+    assert send("song", "a.mp3", b"x").status_code == 422
+    leftovers = [p.name for p in (env.settings.media_dir / "assets").iterdir()]
+    assert all(not name.startswith(".") for name in leftovers) and len(leftovers) == 1
+    for name in ("../app.db", "x.png", "%2e%2e%2fapp.db"):
+        assert env.client.get(f"/api/assets/{name}").status_code == 404
+    assert TestClient(env.client.app).get("/api/assets/x.png").status_code == 401

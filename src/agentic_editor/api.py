@@ -45,14 +45,24 @@ from agentic_editor.db import (
 )
 from agentic_editor.db import User as Account
 from agentic_editor.download import update_ytdlp
+from agentic_editor.ffmpeg import probe as ffmpeg_probe
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
 from agentic_editor.render import preview
-from agentic_editor.settings import Settings
+from agentic_editor.settings import ROOT, Settings
 
 log = logging.getLogger(__name__)
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
+# Files a preset uses (logo, intro/outro, music, LUT), by what they are for.
+ASSET_SUFFIXES = {
+    "image": {".png", ".jpg", ".jpeg", ".webp"},
+    "video": VIDEO_SUFFIXES,
+    "audio": {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"},
+    "lut": {".cube"},
+}
+ASSET_LIMIT = 300 * 1024 * 1024
+ASSET_NAME = re.compile(r"[0-9a-f]{12}-\w[\w-]*\.[a-z0-9]+")
 NOTICE_KEY = "usage_notice_accepted"
 ORIGINAL_NAME = ".name"  # next to an upload: the file name it was sent with
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
@@ -862,6 +872,76 @@ def create_app(
             Path(file.filename or name).name[:200], encoding="utf-8"
         )
         return {"source": f"{UPLOAD_PREFIX}{name}", "name": file.filename}
+
+    assets_dir = settings.media_dir / "assets"
+
+    def asset_value(path: Path) -> str:
+        """How a preset names an uploaded file: from the project folder when it is in it,
+        as the render looks there for relative names."""
+        path = path.resolve()
+        return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+
+    def check_asset(path: Path, kind: str) -> None:
+        if kind == "image":
+            try:
+                with Image.open(path) as image:
+                    image.verify()
+            except Exception as exc:
+                raise ValueError("this isn't a picture the editor can read") from exc
+        elif kind == "lut":
+            head = path.read_text(encoding="utf-8", errors="replace")[:20000]
+            if "LUT_3D_SIZE" not in head:
+                raise ValueError("this isn't a 3D .cube LUT (no LUT_3D_SIZE line)")
+        else:
+            try:
+                info = ffmpeg_probe(path)
+            except Exception as exc:
+                raise ValueError("this file can't be read as video or sound") from exc
+            if kind == "video" and not info.has_video:
+                raise ValueError("this file has no picture")
+            if kind == "audio" and not info.has_audio:
+                raise ValueError("this file has no sound")
+
+    @app.post("/api/assets")
+    async def upload_asset(
+        file: UploadFile, _: User, kind: Literal["image", "video", "audio", "lut"] = Form()
+    ) -> dict:
+        """A logo, intro/outro clip, music or LUT for a preset, kept under media/assets by
+        its content, so the same file sent twice is stored once."""
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in ASSET_SUFFIXES[kind]:
+            allowed = ", ".join(sorted(ASSET_SUFFIXES[kind]))
+            raise HTTPException(400, f"unsupported file type {suffix or '(none)'}; use {allowed}")
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        partial = assets_dir / f".{secrets.token_hex(8)}.part"
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with partial.open("wb") as out:
+                while chunk := await file.read(4 * 1024 * 1024):
+                    size += len(chunk)
+                    if size > ASSET_LIMIT:
+                        raise HTTPException(413, "files for presets can be up to 300 MB")
+                    digest.update(chunk)
+                    out.write(chunk)
+            try:
+                await asyncio.to_thread(check_asset, partial, kind)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            stem = re.sub(r"[^\w-]+", "-", Path(file.filename or "").stem).strip("-") or kind
+            dest = assets_dir / f"{digest.hexdigest()[:12]}-{stem[:60]}{suffix}"
+            partial.replace(dest)
+        finally:
+            partial.unlink(missing_ok=True)
+        return {"path": asset_value(dest), "name": file.filename}
+
+    @app.get("/api/assets/{name}")
+    def asset_file(name: str, _: User) -> FileResponse:
+        """An uploaded preset file, for the editor to show."""
+        path = assets_dir / name
+        if not ASSET_NAME.fullmatch(name) or not path.is_file():
+            raise HTTPException(404, "no such file")
+        return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
     def check_source(source: str) -> None:
         if source.startswith(UPLOAD_PREFIX):

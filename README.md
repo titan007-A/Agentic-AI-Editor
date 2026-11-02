@@ -198,7 +198,12 @@ On Autopilot, the Ready and Needs a look piles are grouped by preset, one folder
 The preset editor keeps a small preview in the corner: a still of what the preset makes,
 redrawn a moment after every change (saved or not), on a drawn stand-in video in the shape
 you pick (16:9, 4:3, 1:1, 4:5, 9:16), with sample words for {song}, {artist} and the like.
-Tap it for a bigger view. Text, picture band and corners come from the render code itself;
+Tap it for a bigger view. The preset's logo shows in it too.
+
+Branding files (logo, intro and outro clips, background music) and LUTs are uploaded from
+the preset editor: each has an Upload button. They are checked (a picture, a video with a
+picture, a sound file, a .cube LUT), kept in media/assets by their content, and the preset
+names them by that path. A path to a file already on the server can still be typed in. Text, picture band and corners come from the render code itself;
 captions show size and place, their letters can differ a little in the real video.
 
 On People the admin adds employees, sets a new password (which signs them out everywhere)

@@ -205,6 +205,9 @@ def render(preset: Preset, settings: Settings, shape: Shape = "16:9") -> bytes:
     if preset.captions.enabled:
         _caption(canvas, preset, settings, face)
 
+    if preset.logo.file:
+        _logo(image, preset)
+
     out = io.BytesIO()
     image.save(out, "JPEG", quality=82)
     return out.getvalue()
@@ -213,3 +216,20 @@ def render(preset: Preset, settings: Settings, shape: Shape = "16:9") -> bytes:
 def _lay(image: Image.Image, layer_file: Path) -> None:
     with Image.open(layer_file) as layer:
         image.paste(layer, (0, 0), layer)
+
+
+def _logo(image: Image.Image, preset: Preset) -> None:
+    """The logo where a render puts it; a file that can't be found or read is left out."""
+    logo = preset.logo
+    try:
+        with Image.open(compose.asset_path(logo.file)) as found:
+            mark = found.convert("RGBA")
+    except (OSError, ValueError):
+        return
+    height = max(1, round(mark.height * logo.width / mark.width))
+    mark = mark.resize((logo.width, height), Image.Resampling.LANCZOS)
+    alpha = mark.getchannel("A").point(lambda a: round(a * logo.opacity))
+    mark.putalpha(alpha)
+    x = logo.margin if logo.position.endswith("left") else image.width - mark.width - logo.margin
+    y = logo.margin if logo.position.startswith("top") else image.height - mark.height - logo.margin
+    image.paste(mark, (x, y), mark)

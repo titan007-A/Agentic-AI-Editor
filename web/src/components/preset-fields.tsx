@@ -1,6 +1,8 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Upload, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,12 +16,22 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type { Preset } from "@/lib/api";
+import { api, errorText, type AssetKind, type Preset } from "@/lib/api";
 
 type Field =
   | { path: string; label: string; kind: "text" | "textarea" | "color" | "font" | "switch" }
   | { path: string; label: string; kind: "number"; step?: number }
-  | { path: string; label: string; kind: "select"; options: string[] };
+  | { path: string; label: string; kind: "select"; options: string[] }
+  | { path: string; label: string; kind: "file"; accept: AssetKind };
+
+const ACCEPT: Record<AssetKind, string> = {
+  image: ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp",
+  video: ".mp4,.mov,.mkv,.webm,.m4v,.avi,video/*",
+  audio: ".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*",
+  lut: ".cube",
+};
+// Where the editor's uploads are kept; a file there can be shown back by its name.
+const UPLOADED = /(^|\/)media\/assets\/([0-9a-f]{12}-[\w-]+\.[a-z0-9]+)$/;
 
 // Fields the schema allows to be null. An empty input is sent as null rather than "".
 const NULLABLE = new Set([
@@ -136,7 +148,7 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
           "faded",
         ],
       },
-      { path: "grade.lut", label: "LUT file (.cube)", kind: "text" },
+      { path: "grade.lut", label: "LUT file (.cube)", kind: "file", accept: "lut" },
       { path: "grade.strength", label: "Look strength", kind: "number", step: 0.05 },
     ],
   },
@@ -240,7 +252,7 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
   {
     title: "Branding",
     fields: [
-      { path: "logo.file", label: "Logo file", kind: "text" },
+      { path: "logo.file", label: "Logo file", kind: "file", accept: "image" },
       {
         path: "logo.position",
         label: "Logo corner",
@@ -250,9 +262,9 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "logo.opacity", label: "Logo opacity", kind: "number", step: 0.05 },
       { path: "logo.width", label: "Logo width (px)", kind: "number" },
       { path: "logo.margin", label: "Logo margin (px)", kind: "number" },
-      { path: "intro", label: "Intro clip", kind: "text" },
-      { path: "outro", label: "Outro clip", kind: "text" },
-      { path: "music.file", label: "Background music", kind: "text" },
+      { path: "intro", label: "Intro clip", kind: "file", accept: "video" },
+      { path: "outro", label: "Outro clip", kind: "file", accept: "video" },
+      { path: "music.file", label: "Background music", kind: "file", accept: "audio" },
       { path: "music.volume_db", label: "Music volume (dB)", kind: "number" },
       { path: "music.ducking", label: "Duck music under speech", kind: "switch" },
     ],
@@ -378,6 +390,16 @@ function FieldInput({
         </Select>
       );
     }
+    case "file":
+      return (
+        <FileInput
+          id={id}
+          label={field.label}
+          kind={field.accept}
+          value={(value as string | null) ?? null}
+          onChange={(next) => onChange(next ?? empty)}
+        />
+      );
     default:
       return (
         <Input
@@ -387,6 +409,98 @@ function FieldInput({
         />
       );
   }
+}
+
+/** A file a preset uses: sent from this device, or named by its path on the server. */
+function FileInput({
+  id,
+  label,
+  kind,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  kind: AssetKind;
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const picker = useRef<HTMLInputElement>(null);
+  const [sending, setSending] = useState(false);
+  const uploaded = value ? UPLOADED.exec(value)?.[2] : undefined;
+
+  async function send(file: File | undefined) {
+    if (!file) return;
+    setSending(true);
+    try {
+      const { path } = await api.uploadAsset(file, kind);
+      onChange(path);
+      toast.success(`${file.name} added. Save the preset to keep it.`);
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setSending(false);
+      if (picker.current) picker.current.value = "";
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          className="min-w-0 font-mono text-xs"
+          placeholder="none"
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+        />
+        {value && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-11 shrink-0"
+            aria-label={`Remove the ${label.toLowerCase()}`}
+            onClick={() => onChange(null)}
+          >
+            <X />
+          </Button>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-11"
+          disabled={sending}
+          onClick={() => picker.current?.click()}
+        >
+          <Upload /> {sending ? "Uploading..." : value ? "Upload another" : "Upload"}
+        </Button>
+        {kind === "image" && uploaded && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`/api/assets/${uploaded}`}
+            alt={label}
+            className="h-11 max-w-[120px] rounded border bg-[repeating-conic-gradient(#ddd_0%_25%,#fff_0%_50%)] bg-[length:12px_12px] object-contain"
+          />
+        )}
+        {kind !== "image" && uploaded && (
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            {uploaded.slice(13)}
+          </span>
+        )}
+      </div>
+      <input
+        ref={picker}
+        type="file"
+        accept={ACCEPT[kind]}
+        className="hidden"
+        aria-label={`${label} to upload`}
+        onChange={(e) => send(e.target.files?.[0])}
+      />
+    </div>
+  );
 }
 
 function FieldGrid({
