@@ -332,6 +332,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return settle<T>(path, response.status, response.statusText, data);
 }
 
+export type BufferMode = "addToQueue" | "shareNext" | "shareNow" | "customScheduled";
+export type BufferChannel = {
+  id: string;
+  name: string;
+  service: string;
+  avatar: string | null;
+  paused: boolean;
+};
+export type BufferState = { connected: boolean; channels: BufferChannel[]; error?: string };
+export type BufferResult = { channel: string; ok: boolean; post?: string; error?: string };
+
 export type AssetKind = "image" | "video" | "audio" | "lut";
 
 export type PreviewShape = "16:9" | "4:3" | "1:1" | "4:5" | "9:16";
@@ -397,6 +408,20 @@ export const api = {
     request("DELETE", `/presets/${name}${whose(owner)}`),
   sharePreset: (name: string, to: string[]) =>
     request<{ sent_to: string[] }>("POST", `/presets/${name}/share`, { to }),
+  buffer: () => request<BufferState>("GET", "/buffer"),
+  connectBuffer: (key: string) => request<BufferState>("PUT", "/buffer", { key }),
+  disconnectBuffer: () => request("DELETE", "/buffer"),
+  postToBuffer: (
+    outputId: number,
+    body: {
+      channels: string[];
+      text: string;
+      mode: BufferMode;
+      due_at: string | null;
+      first_comment: string;
+    },
+  ) =>
+    request<{ results: BufferResult[]; link: string }>("POST", `/outputs/${outputId}/buffer`, body),
   uploadAsset: (file: File, kind: AssetKind) => {
     const form = new FormData();
     form.append("file", file);

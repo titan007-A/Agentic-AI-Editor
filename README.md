@@ -184,6 +184,16 @@ Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.
 
+### Post to Buffer (prototype, admins)
+
+A finished reel's card has a Buffer button. The first time, paste a Buffer API key (Buffer:
+Settings > API; only the Buffer account's owner can make one); it is kept for that account.
+Pick channels, caption, an Instagram first comment, and when: add to the queue, next in the
+queue, now, or at a time. Instagram posts go as Reels shared to the feed. Buffer takes no
+uploads: it fetches the video from an unguessable link on this editor (/api/pub/...) when
+it posts, so the server must be reachable over https then (set PUBLIC_URL in .env if the
+editor is opened another way) and Cloudflare must let Buffer's fetch through.
+
 ### Accounts
 
 The owner is the admin; employees get accounts of their own. Each employee has presets of

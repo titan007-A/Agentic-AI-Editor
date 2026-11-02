@@ -1472,3 +1472,47 @@ def test_preset_files_are_checked_before_they_are_kept(env):
     for name in ("../app.db", "x.png", "%2e%2e%2fapp.db"):
         assert env.client.get(f"/api/assets/{name}").status_code == 404
     assert TestClient(env.client.app).get("/api/assets/x.png").status_code == 401
+
+
+def test_the_admin_posts_a_finished_reel_to_buffer(env, monkeypatch):
+    from agentic_editor import buffer
+
+    page = buffer.Channel("c1", "My page", "instagram", None, False)
+    monkeypatch.setattr(
+        buffer,
+        "channels",
+        lambda key: (
+            [page]
+            if key == "good-key-123"
+            else (_ for _ in ()).throw(buffer.BufferError("Buffer refused the API key"))
+        ),
+    )
+    sent = []
+    monkeypatch.setattr(buffer, "create_post", lambda key, data: sent.append(data) or "post-1")
+    assert env.client.get("/api/buffer").json() == {"connected": False, "channels": []}
+    assert env.client.put("/api/buffer", json={"key": "wrong-key-1"}).status_code == 422
+    connected = env.client.put("/api/buffer", json={"key": "good-key-123"}).json()
+    assert connected["channels"][0]["name"] == "My page"
+
+    job = start(env.client)[0]["id"]
+    output = env.client.get(f"/api/jobs/{job}").json()["outputs"][0]["id"]
+    body = {"channels": ["c1"], "text": "Caption", "mode": "addToQueue"}
+    plain = env.client.post(f"/api/outputs/{output}/buffer", json=body)
+    assert plain.status_code == 422 and "https" in plain.json()["detail"]  # the test client is http
+    env.settings.public_url = "https://editor.example.com"
+    posted = env.client.post(f"/api/outputs/{output}/buffer", json=body).json()
+    assert posted["results"] == [{"channel": "My page", "ok": True, "post": "post-1"}]
+    link = posted["link"]
+    assert (
+        link.startswith("https://editor.example.com/api/pub/")
+        and sent[0]["assets"][0]["video"]["url"] == link
+    )
+    # Buffer fetches it without signing in.
+    fetched = TestClient(env.client.app).get(link.removeprefix("https://editor.example.com"))
+    assert fetched.status_code == 200 and fetched.headers["content-type"] == "video/mp4"
+    assert TestClient(env.client.app).get("/api/pub/../app.db").status_code == 404
+
+    _, riya = employee(env, presets=[])
+    assert riya.get("/api/buffer").status_code == 403
+    assert env.client.delete("/api/buffer").status_code == 200
+    assert env.client.post(f"/api/outputs/{output}/buffer", json=body).status_code == 409
