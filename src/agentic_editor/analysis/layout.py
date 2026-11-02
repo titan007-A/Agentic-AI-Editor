@@ -362,3 +362,63 @@ def action_box(frames: np.ndarray) -> tuple[int, int, int, int] | None:
         spans.append((int(busy[0]), int(busy[-1]) + 1))
     (x0, x1), (y0, y1) = spans
     return x0, y0, x1, y1
+
+
+BRAND_DIFF = 28  # grey levels from the background past which a still pixel is a mark
+BRAND_JOIN = 0.014  # of the height: marks this close are one piece (avatar, name, handle)
+BRAND_SMALLEST = 0.0003  # of the frame's area in mark pixels: less is noise
+OPAQUE = 96  # grey levels from the background at which a mark's pixel is fully opaque
+
+
+def branding(
+    frames: np.ndarray,
+    colour: tuple[int, int, int],
+    picture: Box,
+    text_rows: list[tuple[int, int]],
+) -> list[tuple[tuple[int, int, int, int], np.ndarray]]:
+    """Still marks on the padding around a picture that aren't the preset's text: a
+    page's avatar, name and handle, a logo. Each comes back as its box in frame pixels
+    (x0, y0, x1, y1) and an RGBA cut-out, see-through where it is background, so it can
+    be laid over the same background again. `frames` are full size; `text_rows` are the
+    rows of text that becomes text blocks, left to them."""
+    count, height, width, _ = frames.shape
+    if count < 3:
+        return []
+    still = frames.astype(np.float32)
+    median = np.median(still, axis=0)
+    spread = still.std(axis=0).max(axis=2)
+    far = np.abs(median - np.array(colour, np.float32)).max(axis=2)
+    mark = (far > BRAND_DIFF) & (spread < STILL * 2)
+    margin = round(0.01 * height)
+    x0, y0, x1, y1 = picture
+    mark[max(0, round(y0 * height) - margin) : round(y1 * height) + margin,
+         max(0, round(x0 * width) - margin) : round(x1 * width) + margin] = False  # fmt: skip
+    for top, bottom in text_rows:
+        mark[max(0, top - margin) : bottom + margin] = False
+    join = max(1, round(BRAND_JOIN * height))
+    joined = ndimage.binary_dilation(mark, np.ones((join, join), bool))
+    labels, _ = ndimage.label(joined)
+    found = []
+    for piece in ndimage.find_objects(labels):
+        if piece is None:
+            continue
+        rows, cols = piece
+        if mark[rows, cols].sum() < BRAND_SMALLEST * height * width:
+            continue
+        inner = np.argwhere(mark[rows, cols])
+        origin = np.array([rows.start, cols.start])
+        top, left = inner.min(axis=0) + origin
+        bottom, right = inner.max(axis=0) + origin + 1
+        if min(bottom - top, right - left) < BRAND_JOIN * height:
+            continue  # a sliver: an edge of the picture or the frame, not a mark
+        pad = 3
+        top, left = max(0, top - pad), max(0, left - pad)
+        bottom, right = min(height, bottom + pad), min(width, right + pad)
+        crop = median[top:bottom, left:right]
+        background_ = np.array(colour, np.float32)
+        alpha = np.clip(np.abs(crop - background_).max(axis=2) / OPAQUE, 0, 1)
+        safe = np.maximum(alpha, 1e-3)[..., None]
+        fore = np.clip(background_ + (crop - background_) / safe, 0, 255)
+        cut = np.dstack([fore, alpha * 255]).round().astype(np.uint8)
+        found.append(((int(left), int(top), int(right), int(bottom)), cut))
+    return sorted(found, key=lambda f: (f[0][1], f[0][0]))

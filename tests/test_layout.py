@@ -165,3 +165,19 @@ def test_a_cut_or_a_swinging_camera_says_nothing_about_the_action():
     reel[5:] = 255 - reel[5:]  # the whole picture changes at frame 5: a cut
     x0, _, x1, _ = layout.action_box(reel)
     assert x0 >= 55 and x1 <= 85
+
+
+def test_a_pages_still_branding_on_the_padding_is_cut_out_but_not_the_text_or_picture():
+    rng = np.random.default_rng(1)
+    frames = np.zeros((6, 400, 240, 3), np.uint8)
+    frames[:, 150:260] = rng.integers(0, 255, (6, 110, 240, 3))  # the moving picture
+    frames[:, 20:60, 20:60] = (230, 60, 30)  # an avatar
+    frames[:, 30:50, 64:200] = 255  # the page's name just beside it
+    frames[:, 90:110, 30:210] = 255  # a tagline, learned as text
+    found = layout.branding(frames, (0, 0, 0), (0.0, 150 / 400, 1.0, 260 / 400), [(90, 110)])
+    assert len(found) == 1  # avatar and name close together are one piece
+    (x0, y0, x1, y1), cut = found[0]
+    assert x0 <= 20 and y0 <= 20 and x1 >= 200 and y1 >= 60 and y1 < 90
+    assert cut.shape == (y1 - y0, x1 - x0, 4)
+    assert cut[25 - y0, 25 - x0, 3] == 255 and tuple(cut[25 - y0, 25 - x0, :3]) == (230, 60, 30)
+    assert cut[55 - y0, 100 - x0, 3] == 0  # background between them is see-through
