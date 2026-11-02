@@ -10,6 +10,7 @@ import { PresetSection, SECTIONS, TextBlocks } from "@/components/preset-fields"
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -64,6 +65,8 @@ function Presets() {
   const [copyName, setCopyName] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // The employees ticked in the send dialog, by account id.
+  const [sendTo, setSendTo] = useState<string[]>([]);
   const [yaml, setYaml] = useState<string | null>(null);
   const [learnOpen, setLearnOpen] = useState(false);
   const [learned, setLearned] = useState<string[]>([]);
@@ -106,12 +109,8 @@ function Presets() {
     if (!draft) return;
     setBusy(true);
     try {
-      const { sent_to } = await api.sharePreset(draft.name);
-      toast.success(
-        sent_to.length
-          ? `${draft.label} sent to ${sent_to.join(", ")}`
-          : "There are no employees to send it to",
-      );
+      const { sent_to } = await api.sharePreset(draft.name, sendTo);
+      toast.success(`${draft.label} sent to ${sent_to.join(", ")}`);
       setShareOpen(false);
     } catch (err) {
       toast.error(errorText(err));
@@ -323,16 +322,35 @@ function Presets() {
     <Dialog open={shareOpen} onOpenChange={setShareOpen}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Send {draft.label} to all employees?</DialogTitle>
+          <DialogTitle>Send {draft.label} to employees</DialogTitle>
           <DialogDescription>
-            {members.map((m) => m.username).join(", ")} get this preset as you saved it. An employee
-            who has a preset called {draft.name} has theirs replaced, with any changes they made to
-            it.
+            Only the employees you tick get this preset, as you saved it; the others don&apos;t see
+            it. One who already has a preset called {draft.name} has theirs replaced, with any
+            changes they made to it.
           </DialogDescription>
         </DialogHeader>
+        <fieldset className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <legend className="sr-only">Employees</legend>
+          {members.map((m) => (
+            <label
+              key={m.id}
+              className="sketch-tile flex min-h-11 cursor-pointer items-center gap-3 p-3 hover:bg-[#fdf3dc]"
+            >
+              <Checkbox
+                checked={sendTo.includes(m.id)}
+                onCheckedChange={(on) =>
+                  setSendTo((now) =>
+                    on === true ? [...now, m.id] : now.filter((id) => id !== m.id),
+                  )
+                }
+              />
+              <span className="text-sm font-medium">{m.username}</span>
+            </label>
+          ))}
+        </fieldset>
         <DialogFooter>
-          <Button onClick={share} disabled={busy}>
-            <Send /> Send
+          <Button onClick={share} disabled={busy || sendTo.length === 0}>
+            <Send /> Send{sendTo.length ? ` to ${sendTo.length}` : ""}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -413,11 +431,14 @@ function Presets() {
                 {me?.role === "admin" && !owner && members.length > 0 && (
                   <Button
                     variant="outline"
-                    onClick={() => setShareOpen(true)}
+                    onClick={() => {
+                      setSendTo([]);
+                      setShareOpen(true);
+                    }}
                     disabled={dirty}
                     title={dirty ? "Save it first" : undefined}
                   >
-                    <Send /> Send to all employees
+                    <Send /> Send to employees
                   </Button>
                 )}
               </>

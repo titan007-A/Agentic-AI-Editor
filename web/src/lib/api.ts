@@ -371,7 +371,8 @@ export const api = {
     request<Preset>("PUT", `/presets/${preset.name}${whose(owner)}`, preset),
   deletePreset: (name: string, owner?: string | null) =>
     request("DELETE", `/presets/${name}${whose(owner)}`),
-  sharePreset: (name: string) => request<{ sent_to: string[] }>("POST", `/presets/${name}/share`),
+  sharePreset: (name: string, to: string[]) =>
+    request<{ sent_to: string[] }>("POST", `/presets/${name}/share`, { to }),
   presetYaml: (name: string, owner?: string | null) =>
     request<{ yaml: string }>("GET", `/presets/${name}/yaml${whose(owner)}`),
   presetSchema: () =>

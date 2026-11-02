@@ -508,17 +508,32 @@ def test_a_job_with_some_versions_failed_is_done_and_says_which(env):
     assert job["error"] == "vocal-music-9x16: RuntimeError: encoder crashed"
 
 
-def employee(env, name="riya", password="employee-pass-1"):
-    """An employee made by the admin, and a client signed in as them."""
+def employee(env, name="riya", password="employee-pass-1", presets=None):
+    """An employee made by the admin, and a client signed in as them. The admin sends them
+    `presets` (every one of the admin's when None)."""
     made = env.client.post("/api/admin/users", json={"username": name, "password": password})
     assert made.status_code == 200, made.text
+    if presets is None:
+        presets = [p["name"] for p in env.client.get("/api/presets").json()]
+    for preset in presets:
+        sent = env.client.post(f"/api/presets/{preset}/share", json={"to": [made.json()["id"]]})
+        assert sent.json()["sent_to"] == [name], sent.text
+    made = next(a for a in env.client.get("/api/admin/users").json() if a["username"] == name)
     client = TestClient(env.client.app)
     login = client.post("/api/login", json={"username": name, "password": password})
     assert login.status_code == 200, login.text
-    return made.json(), client
+    return made, client
 
 
-def test_the_admin_makes_employees_who_start_with_their_own_copy_of_the_presets(env):
+def test_a_new_employee_sees_only_the_presets_the_admin_sends_them(env):
+    account, riya = employee(env, presets=[])
+    assert account["role"] == "member" and account["presets"] == 0
+    assert riya.get("/api/presets").json() == []
+    env.client.post("/api/presets/square-1x1/share", json={"to": [account["id"]]})
+    assert [p["name"] for p in riya.get("/api/presets").json()] == ["square-1x1"]
+
+
+def test_an_employees_copy_of_a_preset_is_their_own(env):
     account, riya = employee(env)
     assert account["role"] == "member" and account["presets"] > 0
     assert riya.get("/api/me").json()["role"] == "member"
@@ -619,6 +634,20 @@ def test_a_job_or_feed_takes_one_preset(env):
         "presets": ["square-1x1", "shorts-9x16"],
     }
     assert env.client.post("/api/feeds", json=feed).status_code == 422
+
+
+def test_the_admin_sends_a_preset_only_to_the_employees_chosen(env):
+    riyas_account, riya = employee(env, "riya", presets=[])
+    _, aman = employee(env, "aman", presets=[])
+    sent = env.client.post("/api/presets/square-1x1/share", json={"to": [riyas_account["id"]]})
+    assert sent.json()["sent_to"] == ["riya"]
+    assert [p["name"] for p in riya.get("/api/presets").json()] == ["square-1x1"]
+    assert aman.get("/api/presets").json() == []
+    me = env.client.get("/api/me").json()["id"]
+    for to in ([], [me], ["no-such-id"]):
+        refused = env.client.post("/api/presets/square-1x1/share", json={"to": to})
+        assert refused.status_code == 422
+    assert aman.get("/api/presets").json() == []
 
 
 def test_the_admin_sends_a_preset_to_every_employee(env):

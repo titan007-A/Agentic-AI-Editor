@@ -68,6 +68,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ShareRequest(BaseModel):
+    to: list[str] | None = None  # employees' account ids; none given: every employee
+
+
 class AccountRequest(BaseModel):
     username: str
     password: str
@@ -791,14 +795,22 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/presets/{name}/share")
-    def share_preset(name: str, me: Admin, session: DB) -> dict:
-        """Copy one of the admin's presets to every employee, replacing theirs of that name:
-        employees' presets are their own copies, so the admin's later changes don't reach
-        them otherwise."""
+    def share_preset(name: str, me: Admin, session: DB, body: ShareRequest | None = None) -> dict:
+        """Copy one of the admin's presets to the chosen employees (all of them when none are
+        named), replacing theirs of that name: employees' presets are their own copies, so
+        the admin's later changes don't reach them otherwise."""
         preset = presets(me).get(name)
         if preset is None:
             raise HTTPException(404, "no such preset")
-        members = list(session.scalars(select(Account).where(Account.role == accounts.MEMBER)))
+        query = select(Account).where(Account.role == accounts.MEMBER)
+        if body is not None and body.to is not None:
+            wanted = set(body.to)
+            if not wanted:
+                raise HTTPException(422, "choose who gets it")
+            query = query.where(Account.id.in_(wanted))
+        members = list(session.scalars(query.order_by(Account.username)))
+        if body is not None and body.to is not None and len(members) != len(set(body.to)):
+            raise HTTPException(422, "send presets only to employees")
         for member in members:
             save_preset(preset, presets_dir(member))
         return {"sent_to": [m.username for m in members]}
