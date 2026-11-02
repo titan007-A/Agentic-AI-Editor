@@ -157,8 +157,9 @@ export default function PeoplePage() {
             </Button>
           </form>
           <p className="mt-3 text-xs text-muted-foreground">
-            They start with a copy of your presets. New accounts are always employees: an admin is
-            only made on the Mac (aiedit user add NAME --admin).
+            They start with no presets: send them the ones they should use from the Presets page.
+            New accounts are always employees: an admin is only made on the Mac (aiedit user add
+            NAME --admin).
           </p>
         </CardContent>
       </Card>

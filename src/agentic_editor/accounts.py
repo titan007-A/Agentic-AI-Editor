@@ -1,7 +1,8 @@
 """Accounts: the admin, who manages everyone, and the employees (members) they create.
 
-Each employee has presets of their own, a copy of the admin's taken when the account is
-made, in a folder under the presets folder; the admin's are the presets folder itself.
+Each employee has presets of their own, in a folder under the presets folder; the admin's
+are the presets folder itself. An employee starts with none: the admin sends them the ones
+they should use, so nobody sees presets meant for someone else.
 """
 
 import re
@@ -61,7 +62,7 @@ def create(
     presets_root: Path,
     password_hash: str | None = None,
 ) -> User:
-    """A new account. A member starts with a copy of the admin's presets."""
+    """A new account. A member starts with an empty presets folder."""
     name = normal(username)
     if not USERNAME.fullmatch(name):
         raise AccountError(
@@ -79,10 +80,7 @@ def create(
     session.add(user)
     session.flush()
     if role == MEMBER:
-        folder = presets_dir(user, presets_root)
-        folder.mkdir(parents=True, exist_ok=True)
-        for path in sorted(presets_root.glob("*.yaml")):
-            shutil.copy2(path, folder / path.name)
+        presets_dir(user, presets_root).mkdir(parents=True, exist_ok=True)
     session.commit()
     return user
 
@@ -101,11 +99,7 @@ def set_role(session: Session, user: User, role: str, presets_root: Path) -> Non
     if user.role == ADMIN and role == MEMBER and len(admins(session)) <= 1:
         raise AccountError("this is the only admin; make another one first")
     if role == MEMBER and user.role == ADMIN:
-        folder = presets_dir(User(id=user.id, role=MEMBER), presets_root)
-        folder.mkdir(parents=True, exist_ok=True)
-        for path in sorted(presets_root.glob("*.yaml")):
-            if not (folder / path.name).exists():
-                shutil.copy2(path, folder / path.name)
+        presets_dir(User(id=user.id, role=MEMBER), presets_root).mkdir(parents=True, exist_ok=True)
     user.role = role
     user.session_version += 1
     session.commit()

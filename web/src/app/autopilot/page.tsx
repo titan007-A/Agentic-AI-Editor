@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, Plus, Send, X } from "lucide-react";
-import { useState } from "react";
+import { Check, Folder, Plus, Send, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { FeedCard } from "@/components/feed-card";
@@ -17,8 +17,8 @@ import { keepIfSame } from "@/lib/poller.mjs";
 type PileName = "ready" | "look";
 
 const REFRESH_MS = 15000;
-// Cards shown at first, and added by each "Show more".
-const PAGE = 12;
+// Cards shown at first in each preset's group, and added by each "Show more".
+const PAGE = 6;
 
 export default function AutopilotPage() {
   const [counts, setCounts] = useState({ ready: 0, look: 0 });
@@ -62,7 +62,7 @@ export default function AutopilotPage() {
 
 function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
   const [jobs, setJobs] = useState<Job[] | null>(null);
-  const [shown, setShown] = useState(PAGE);
+  const [labels, setLabels] = useState<Record<string, string>>({});
 
   usePolling(
     () =>
@@ -72,6 +72,13 @@ function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
         .catch((err) => toast.error(errorText(err))),
     REFRESH_MS,
   );
+
+  useEffect(() => {
+    api
+      .presets()
+      .then((list) => setLabels(Object.fromEntries(list.map((p) => [p.name, p.label]))))
+      .catch(() => {});
+  }, []);
 
   async function decide(outputId: number, verdict: Verdict, message: string) {
     try {
@@ -92,9 +99,46 @@ function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
       </p>
     );
   }
+  // One folder per preset, in the order of each preset's newest video.
+  const groups = new Map<string, Job[]>();
+  for (const job of jobs) {
+    const preset = job.outputs[0]?.preset ?? "";
+    groups.set(preset, [...(groups.get(preset) ?? []), job]);
+  }
+  return (
+    <div className="space-y-8 pt-2">
+      {[...groups].map(([preset, inGroup]) => (
+        <PresetGroup
+          key={preset}
+          label={labels[preset] ?? preset}
+          jobs={inGroup}
+          pile={name}
+          decide={decide}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PresetGroup({
+  label,
+  jobs,
+  pile,
+  decide,
+}: {
+  label: string;
+  jobs: Job[];
+  pile: PileName;
+  decide: (outputId: number, verdict: Verdict, message: string) => void;
+}) {
+  const [shown, setShown] = useState(PAGE);
   const more = jobs.length - shown;
   return (
-    <div className="space-y-6 pt-2">
+    <section className="space-y-3">
+      <h2 className="flex items-center gap-2 font-hand text-2xl font-bold break-words">
+        <Folder className="size-5 shrink-0" aria-hidden />
+        {label} <span className="text-base font-normal text-muted-foreground">({jobs.length})</span>
+      </h2>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {jobs.slice(0, shown).map((job) => {
           const output = job.outputs[0];
@@ -105,7 +149,7 @@ function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
               output={output}
               actions={
                 <>
-                  {name === "look" ? (
+                  {pile === "look" ? (
                     <Button
                       variant="outline"
                       onClick={() => decide(output.id, "approved", "Moved to ready")}
@@ -138,10 +182,10 @@ function Pile({ name, onChange }: { name: PileName; onChange: () => void }) {
           className="w-full sm:w-auto"
           onClick={() => setShown((n) => n + PAGE)}
         >
-          Show more ({more} left)
+          Show more {label} ({more} left)
         </Button>
       )}
-    </div>
+    </section>
   );
 }
 
