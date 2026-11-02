@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import event
 
 from agentic_editor import api, jobs, pipeline, style
@@ -1409,3 +1410,20 @@ def test_only_the_admin_renames_for_everyone(env):
     _, riya = employee(env)
     assert riya.get("/api/presets/names").status_code == 403
     assert riya.put("/api/presets/names", json={"labels": {"square-1x1": "x"}}).status_code == 403
+
+
+def test_the_preset_editor_shows_a_still_of_the_preset_unsaved_changes_and_all(env):
+    preset = {p["name"]: p for p in env.client.get("/api/presets").json()}["vocal-music-it-9x16"]
+    for shape in ("16:9", "9:16"):
+        shown = env.client.post(f"/api/presets/preview?shape={shape}", json=preset)
+        assert shown.status_code == 200 and shown.headers["content-type"] == "image/jpeg"
+        assert Image.open(io.BytesIO(shown.content)).size == (1080, 1920)
+    square = preset | {"resolution": "1080x1080", "aspect_ratio": "1:1"}
+    square = env.client.post("/api/presets/preview", json=square)
+    assert Image.open(io.BytesIO(square.content)).size == (1080, 1080)
+    assert env.client.post("/api/presets/preview?shape=3:2", json=preset).status_code == 422
+    broken = preset | {"text_blocks": [{"text": "no size"}]}
+    assert env.client.post("/api/presets/preview", json=broken).status_code == 422
+    _, riya = employee(env, presets=[])
+    assert riya.post("/api/presets/preview", json=preset).status_code == 200
+    assert TestClient(env.client.app).post("/api/presets/preview", json=preset).status_code == 401

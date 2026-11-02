@@ -332,6 +332,28 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return settle<T>(path, response.status, response.statusText, data);
 }
 
+export type PreviewShape = "16:9" | "4:3" | "1:1" | "4:5" | "9:16";
+
+/** A still of what `preset` makes on a video of `shape`; null when the preset has settings
+ * the server refuses, so the caller keeps showing the last good still. */
+export async function presetPreview(
+  preset: Preset,
+  shape: PreviewShape,
+  signal?: AbortSignal,
+): Promise<Blob | null> {
+  const response = await fetch(`/api/presets/preview?shape=${encodeURIComponent(shape)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(preset),
+    signal,
+  });
+  if (response.status === 401) return toLogin();
+  if (response.status === 422) return null;
+  if (!response.ok) throw new Error(response.statusText);
+  return response.blob();
+}
+
 let loggingIn = false;
 
 /** Off to the login page, which comes back here afterwards. The returned promise never

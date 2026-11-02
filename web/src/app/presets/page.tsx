@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PresetNames } from "@/components/preset-names";
+import { PresetPreview } from "@/components/preset-preview";
 import { useMe } from "@/hooks/use-me";
 import { api, errorText, type Account, type Preset } from "@/lib/api";
 import { guardLeaving } from "@/lib/leave-guard.mjs";
@@ -396,6 +397,7 @@ function Presets() {
       {shareDialog}
       {me?.role === "admin" && <PresetNames onRenamed={() => load(draft?.name)} />}
       {ownerPicker}
+      <PresetPreview preset={draft} />
       <div className="space-y-6 pb-20">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1 space-y-2">

@@ -195,6 +195,12 @@ page ("Whose presets"), or from People.
 
 On Autopilot, the Ready and Needs a look piles are grouped by preset, one folder each.
 
+The preset editor keeps a small preview in the corner: a still of what the preset makes,
+redrawn a moment after every change (saved or not), on a drawn stand-in video in the shape
+you pick (16:9, 4:3, 1:1, 4:5, 9:16), with sample words for {song}, {artist} and the like.
+Tap it for a bigger view. Text, picture band and corners come from the render code itself;
+captions show size and place, their letters can differ a little in the real video.
+
 On People the admin adds employees, sets a new password (which signs them out everywhere)
 and removes them, keeping their jobs or deleting them too. Accounts made there are always
 employees; an admin is made, demoted or removed only on the server:
