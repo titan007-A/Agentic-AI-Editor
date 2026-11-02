@@ -17,7 +17,7 @@ from typing import Annotated, Literal
 
 import yaml
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -47,6 +47,7 @@ from agentic_editor.db import User as Account
 from agentic_editor.download import update_ytdlp
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
+from agentic_editor.render import preview
 from agentic_editor.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -785,6 +786,16 @@ def create_app(
         if own and before is not None and before.label != preset.label:
             relabel(session, name, preset.label)
         return preset.model_dump(mode="json")
+
+    @app.post("/api/presets/preview")
+    async def preview_preset(body: dict, account: User, shape: preview.Shape = "16:9") -> Response:
+        """A still of what the preset being edited makes, unsaved changes and all."""
+        try:
+            preset = Preset.model_validate({"label": "preview", **body, "name": "preview"})
+        except ValidationError as exc:
+            raise HTTPException(422, json.loads(exc.json(include_url=False))) from exc
+        image = await asyncio.to_thread(preview.render, preset, settings, shape)
+        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.delete("/api/presets/{name}")
     def delete_preset(name: str, account: User, session: DB, owner: str | None = None) -> dict:
