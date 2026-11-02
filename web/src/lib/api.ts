@@ -347,13 +347,13 @@ export type AssetKind = "image" | "video" | "audio" | "lut";
 
 export type PreviewShape = "16:9" | "4:3" | "1:1" | "4:5" | "9:16";
 
-/** A still of what `preset` makes on a video of `shape`; null when the preset has settings
- * the server refuses, so the caller keeps showing the last good still. */
+/** A still of what `preset` makes on a video of `shape`, and what looks wrong in it; null
+ * when the preset has settings the server refuses, so the caller keeps the last still. */
 export async function presetPreview(
   preset: Preset,
   shape: PreviewShape,
   signal?: AbortSignal,
-): Promise<Blob | null> {
+): Promise<{ image: Blob; notes: string[] } | null> {
   const response = await fetch(`/api/presets/preview?shape=${encodeURIComponent(shape)}`, {
     method: "POST",
     credentials: "same-origin",
@@ -364,7 +364,11 @@ export async function presetPreview(
   if (response.status === 401) return toLogin();
   if (response.status === 422) return null;
   if (!response.ok) throw new Error(response.statusText);
-  return response.blob();
+  let notes: string[] = [];
+  try {
+    notes = JSON.parse(response.headers.get("X-Preview-Notes") ?? "[]");
+  } catch {}
+  return { image: await response.blob(), notes };
 }
 
 let loggingIn = false;
