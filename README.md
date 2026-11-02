@@ -187,9 +187,13 @@ file, so the same video is never downloaded, separated or transcribed twice.
 ### Accounts
 
 The owner is the admin; employees get accounts of their own. Each employee has presets of
-their own (a copy of the admin's, taken when the account is made) and sees only their own
-jobs, feeds and reels. The admin sees everyone's, with who made each, and manages every
-employee's presets from the Presets page ("Whose presets"), or from People.
+their own and sees only their own jobs, feeds and reels. A new employee starts with no
+presets: the admin sends each preset to the employees who should use it ("Send to employees"
+on the Presets page), so nobody sees presets meant for someone else. The admin sees
+everyone's work, with who made each, and manages every employee's presets from the Presets
+page ("Whose presets"), or from People.
+
+On Autopilot, the Ready and Needs a look piles are grouped by preset, one folder each.
 
 On People the admin adds employees, sets a new password (which signs them out everywhere)
 and removes them, keeping their jobs or deleting them too. Accounts made there are always
