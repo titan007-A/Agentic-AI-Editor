@@ -217,12 +217,19 @@ def place(
 Corners = tuple[tuple[int, int, int, int], int, str]  # picture x0, y0, x1, y1; radius; colour
 
 
+Picture = tuple[Path, int, int, int, float]  # file, x, y, width, opacity
+
+
 def draw(
-    placed: list[Placed], frame: tuple[int, int], dest: Path, corners: Corners | None = None
+    placed: list[Placed],
+    frame: tuple[int, int],
+    dest: Path,
+    corners: Corners | None = None,
+    pictures: list[Picture] = (),
 ) -> Path:
-    """The preset's text on a transparent frame, and the corners that round off the
-    picture under it: drawn here, the overlay that is laid over every frame anyway does
-    it at no cost."""
+    """The preset's text and pictures on a transparent frame, and the corners that round
+    off the picture under it: drawn here, the overlay that is laid over every frame anyway
+    does it at no cost."""
     width, _ = frame
     image = Image.new("RGBA", frame, (0, 0, 0, 0))
     if corners:
@@ -235,6 +242,14 @@ def draw(
         )
         mask = mask.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
         image.paste(Image.new("RGBA", mask.size, colour), (x0, y0), mask)
+    for path, x, y, wide, opacity in pictures:
+        with Image.open(path) as found:
+            mark = found.convert("RGBA")
+        tall = max(1, round(mark.height * wide / mark.width))
+        mark = mark.resize((wide, tall), Image.Resampling.LANCZOS)
+        if opacity < 1:
+            mark.putalpha(mark.getchannel("A").point(lambda a, o=opacity: round(a * o)))
+        image.alpha_composite(mark, (max(0, x), max(0, y)), (max(0, -x), max(0, -y)))
     canvas = ImageDraw.Draw(image)
     for block in placed:
         for i, line in enumerate(block.lines):

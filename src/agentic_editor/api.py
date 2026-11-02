@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import accounts, autopilot, buffer, cleanup, jobs, research
+from agentic_editor import accounts, assets, autopilot, buffer, cleanup, jobs, research
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
@@ -50,7 +50,8 @@ from agentic_editor.ffmpeg import probe as ffmpeg_probe
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
 from agentic_editor.render import preview
-from agentic_editor.settings import ROOT, Settings
+from agentic_editor.render.fonts import MissingGlyphs
+from agentic_editor.settings import Settings
 
 log = logging.getLogger(__name__)
 
@@ -818,8 +819,20 @@ def create_app(
             preset = Preset.model_validate({"label": "preview", **body, "name": "preview"})
         except ValidationError as exc:
             raise HTTPException(422, json.loads(exc.json(include_url=False))) from exc
-        image = await asyncio.to_thread(preview.render, preset, settings, shape)
-        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        try:
+            image, notes = await asyncio.to_thread(preview.render_checked, preset, settings, shape)
+        except MissingGlyphs as exc:
+            raise HTTPException(422, f"The text has letters no font here can draw: {exc}") from exc
+        return Response(
+            image,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-store",
+                # ASCII JSON, so it fits in a header.
+                "X-Preview-Notes": json.dumps(notes),
+                "Access-Control-Expose-Headers": "X-Preview-Notes",
+            },
+        )
 
     @app.delete("/api/presets/{name}")
     def delete_preset(name: str, account: User, session: DB, owner: str | None = None) -> dict:
@@ -887,13 +900,7 @@ def create_app(
         )
         return {"source": f"{UPLOAD_PREFIX}{name}", "name": file.filename}
 
-    assets_dir = settings.media_dir / "assets"
-
-    def asset_value(path: Path) -> str:
-        """How a preset names an uploaded file: from the project folder when it is in it,
-        as the render looks there for relative names."""
-        path = path.resolve()
-        return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+    assets_dir = assets.folder(settings.media_dir)
 
     def check_asset(path: Path, kind: str) -> None:
         if kind == "image":
@@ -942,12 +949,11 @@ def create_app(
                 await asyncio.to_thread(check_asset, partial, kind)
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
-            stem = re.sub(r"[^\w-]+", "-", Path(file.filename or "").stem).strip("-") or kind
-            dest = assets_dir / f"{digest.hexdigest()[:12]}-{stem[:60]}{suffix}"
+            dest = assets_dir / assets.name_for(digest.hexdigest(), file.filename or "", kind)
             partial.replace(dest)
         finally:
             partial.unlink(missing_ok=True)
-        return {"path": asset_value(dest), "name": file.filename}
+        return {"path": assets.preset_value(dest), "name": file.filename}
 
     @app.get("/api/assets/{name}")
     def asset_file(name: str, _: User) -> FileResponse:

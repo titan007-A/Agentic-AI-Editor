@@ -19,6 +19,7 @@ from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
 from agentic_editor.render.video import (
+    Anchor,
     Layers,
     build_graph,
     crop_size,
@@ -239,6 +240,23 @@ def picture_band(preset: Preset, face: Callable[..., text.Face]) -> tuple[int, i
     return math.ceil(top / 2) * 2, bottom // 2 * 2
 
 
+def picture_anchor(preset: Preset) -> Anchor:
+    """The edge of the band a picture shorter than it keeps to: the text's, when text
+    limits it on one side only, so the gap set between them is the gap shown; else the
+    picture sits in the middle."""
+    if preset.framing.picture_rows is not None:
+        return "middle"
+    sides = {
+        b.anchor for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
+        if gap is not None
+    }  # fmt: skip
+    if sides == {"top"}:
+        return "top"
+    if sides == {"bottom"}:
+        return "bottom"
+    return "middle"
+
+
 def band_rows(preset: Preset, band: tuple[int, int], picture_width: int) -> int:
     """Source rows of a picture `picture_width` wide that fill `band` at the frame's width."""
     shown = preset.size[0] * preset.framing.picture_width
@@ -431,13 +449,15 @@ def render(
     if edl.crop_mode == "none":
         # The text where the preset puts it, the picture between at the frame's width.
         layers.picture_band = picture_band(preset, face)
+        layers.picture_anchor = picture_anchor(preset)
     if preset.text_blocks:
         shown_size = source
         if edl.crop_mode == "none" and edl.shots:
             shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
         band = video_band(
-            edl.crop_mode, shown_size, frame, preset.framing.picture_width, layers.picture_band
-        )
+            edl.crop_mode, shown_size, frame, preset.framing.picture_width, layers.picture_band,
+            layers.picture_anchor,
+        )  # fmt: skip
         placed = [
             text.place(b, face(b.font, b.text), frame, band, gap)
             for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
@@ -474,11 +494,16 @@ def render(
         shown_size = source
         if edl.shots:
             shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
-        rect = picture_rect(shown_size, frame, preset.framing.picture_width, layers.picture_band)
+        rect = picture_rect(
+            shown_size, frame, preset.framing.picture_width, layers.picture_band,
+            layers.picture_anchor,
+        )  # fmt: skip
         fill = preset.framing.corner_color or layers.background or preset.framing.background
         corners = (rect, preset.framing.corner_radius, fill)
-    if placed or corners:
-        layers.text_overlay = add_input(text.draw(placed, frame, work_dir / "text.png", corners))
+    pictures = [(asset_path(i.file), i.x, i.y, i.width, i.opacity) for i in preset.images]
+    if placed or corners or pictures:
+        overlay = text.draw(placed, frame, work_dir / "text.png", corners, pictures)
+        layers.text_overlay = add_input(overlay)
 
     if colour.look != "none" or colour.lut:
         lut = asset_path(colour.lut) if colour.lut else None
