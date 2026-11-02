@@ -332,6 +332,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return settle<T>(path, response.status, response.statusText, data);
 }
 
+export type AssetKind = "image" | "video" | "audio" | "lut";
+
 export type PreviewShape = "16:9" | "4:3" | "1:1" | "4:5" | "9:16";
 
 /** A still of what `preset` makes on a video of `shape`; null when the preset has settings
@@ -395,6 +397,12 @@ export const api = {
     request("DELETE", `/presets/${name}${whose(owner)}`),
   sharePreset: (name: string, to: string[]) =>
     request<{ sent_to: string[] }>("POST", `/presets/${name}/share`, { to }),
+  uploadAsset: (file: File, kind: AssetKind) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("kind", kind);
+    return request<{ path: string; name: string }>("POST", "/assets", form);
+  },
   presetYaml: (name: string, owner?: string | null) =>
     request<{ yaml: string }>("GET", `/presets/${name}/yaml${whose(owner)}`),
   presetSchema: () =>
