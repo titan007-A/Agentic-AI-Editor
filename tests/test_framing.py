@@ -402,3 +402,17 @@ def test_an_action_box_keeps_the_whole_fail_in_the_crop():
     head = face_at(10.5, 400)
     (shot,) = frame([(10.5, [fall])], faces=[head])
     assert shot.x <= 400 - 84 and shot.x + shot.width >= 1700  # the head and the fall
+
+
+def test_a_head_seen_for_a_moment_doesnt_keep_the_edge_text_in_the_whole_reel():
+    from agentic_editor.framing import band_shots
+
+    clip = Clip(start=0, end=40)
+    singer = [(t / 5, [Face(cx=0.5, cy=0.3, width=0.2, height=0.2, score=0.9)]) for t in range(200)]
+    # A detector's mistake on a guitar for three looks, reaching the lyric rows.
+    ghost = [
+        (20.0 + i / 5, [Face(cx=0.5, cy=0.79, width=0.4, height=0.6, score=0.6)]) for i in range(3)
+    ]
+    lyrics = [(592, 642), (660, 720)]
+    shots = band_shots(clip, [], [], singer + ghost, (0, 0, 960, 720), 720, 720, lyrics)
+    assert all(s.y + s.height <= 592 for s in shots)  # the lyrics are cut off

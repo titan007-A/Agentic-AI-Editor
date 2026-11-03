@@ -186,11 +186,18 @@ def on_picture(
         if x1 <= x0 or y1 <= y0 or (x1 - x0) * (y1 - y0) < 0.9 * mark.width * mark.height:
             continue
         x0, y0 = math.ceil(x0 / 2) * 2, math.ceil(y0 / 2) * 2
+        parts = []
+        for part in mark.parts:
+            a, b = max(part.x, left), min(part.x + part.width, left + width)
+            if b > a:
+                a = math.ceil(a / 2) * 2
+                parts.append(part.model_copy(update={"x": a, "width": (b - a) // 2 * 2}))
         kept.append(
             mark.model_copy(
-                update={"x": x0, "y": y0, "width": (x1 - x0) // 2 * 2, "height": (y1 - y0) // 2 * 2}
+                update={"x": x0, "y": y0, "width": (x1 - x0) // 2 * 2,
+                        "height": (y1 - y0) // 2 * 2, "parts": parts}
             )
-        )
+        )  # fmt: skip
     return kept
 
 

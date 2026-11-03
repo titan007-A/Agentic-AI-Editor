@@ -73,6 +73,20 @@ def test_watermark_is_blurred_only_while_visible_in_clip_time():
     assert "[w0_0]" in graph and graph.index("[w0_0]") < graph.index("[v0]")
 
 
+def test_lyrics_that_change_width_are_blurred_line_by_line():
+    from agentic_editor.analysis.watermarks import Part
+
+    mark = Watermark(
+        x=100, y=600, width=500, height=50, spans=[(0, 20)], windows=8,
+        parts=[Part(x=200, width=300, spans=[(0, 10)]), Part(x=100, width=500, spans=[(10, 20)])],
+    )  # fmt: skip
+    edl = EDL(clips=[Clip(start=0, end=20)], crop_mode="none")
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(watermarks=[mark]))
+    assert "crop=300:50:200:600" in graph and "crop=500:50:100:600" in graph
+    assert "enable='between(t,0.000,10.000)'" in graph
+    assert "enable='between(t,10.000,20.000)'" in graph
+
+
 def test_clip_without_a_visible_watermark_is_left_alone():
     mark = Watermark(x=100, y=20, width=200, height=60, spans=[(0, 4)], windows=1)
     edl = EDL(clips=[Clip(start=10, end=20)], crop_mode="none")

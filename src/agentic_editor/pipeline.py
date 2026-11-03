@@ -364,6 +364,10 @@ def band_framing(
     times = framing.view_times(clip, analysis.scenes, every=None)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
     marks = [(m.y, m.y + m.height) for m in analysis.watermarks]
+    if not preset.watermarks.cut_text:
+        # The video's own text stays in view: nothing is cut for it.
+        samples = [(t, [s for s in items if s.kind != "text"]) for t, items in samples]
+        marks = []
     rows = compose.band_rows(preset, band, picture[2])
     moving = compose.moving_part(video, clip.start, clip.end, size, picture)
     shots = framing.band_shots(

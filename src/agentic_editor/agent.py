@@ -35,6 +35,8 @@ Setting = Literal[
     "max_seconds",
     "min_seconds",
     "no_watermark_blur",
+    "keep_video_text",
+    "hide_video_text",
     "start_point",
 ]
 
@@ -60,7 +62,7 @@ LANGUAGES = {
 
 # The words a request's quote has to contain to be about that setting at all.
 TOPIC = {
-    "captions_off": r"caption|subtitle|text",
+    "captions_off": r"caption|subtitle|text|lyric",
     "captions_language": r"caption|subtitle|translat|text|language",
     "captions_from_picture": r"caption|subtitle|text|describ|see|show",
     "captions_lyrics": r"lyric|word|sing|caption|subtitle",
@@ -75,7 +77,9 @@ TOPIC = {
     "versions": r"version|variant|option|cop(y|ies)|take|edit",
     "max_seconds": r"\d|second|minute|\bsec|\bmin",
     "min_seconds": r"\d|second|minute|\bsec|\bmin",
-    "no_watermark_blur": r"watermark|logo|blur",
+    "no_watermark_blur": r"water ?mark|logo|blur",
+    "keep_video_text": r"text|lyric|word|water ?mark|logo|blur|hid|show|dikh|cover",
+    "hide_video_text": r"text|lyric|word|water ?mark|logo|blur|hid|cover|chhup|chup",
     "start_point": r"\b(start|begin|open)",
 }
 
@@ -115,8 +119,19 @@ Settings:
 - versions: make several versions; value is how many.
 - max_seconds / min_seconds: a length limit; value is the number of seconds.
 - no_watermark_blur: don't blur watermarks or logos.
+- keep_video_text: keep the text already in the video in view: don't blur it or cut it off.
+- hide_video_text: hide all the text already in the video: blur it or cut it off fully.
 - start_point: the instruction says where the video should start; the moment itself also
   goes in content_notes.
+
+The video's own text (lyrics, logos, usernames already burnt into it) is not captions:
+captions are text this editor adds. "Show the lyrics that are in the video", "don't hide
+them" is keep_video_text; "cover/blur/hide the text in the video" is hide_video_text.
+A line that says NOT to do something ("don't", "no", or in Hinglish "mat", "mt", "nahi",
+"nhi") asks for the opposite: "don't add lyrics" or "lyrics generate mat kar" is
+captions_off, never captions_lyrics. The instruction may be in Hindi or Hinglish.
+The lines were written one after another, each correcting the result of the ones before:
+when a later line disagrees with an earlier one, list only the later one.
 
 content_notes: the editor's own words about which moment to use, where to start or end, or
 what the video is about; empty if the instruction says nothing about that."""
@@ -152,7 +167,7 @@ def _number(text: str) -> float | None:
     return None
 
 
-NEGATION = r"\b(no|not|without|off|remove|skip|don'?t|dont|never)\b"
+NEGATION = r"\b(no|not|without|off|remove|skip|don'?t|dont|never|mat|mt|nahi|nhi|nahin)\b"
 
 
 def named_language(text: str) -> str | None:
@@ -303,6 +318,48 @@ def grounded(request: Request, instruction: str) -> str | None:
     return None
 
 
+# Settings that can't all hold: of a clash, the one asked for last in the instruction wins
+# (regenerating adds the new lines after the old ones, each correcting what came before).
+CLASHES = [
+    {"captions_off", "captions_language"},
+    {"captions_off", "captions_from_picture"},
+    {"captions_off", "captions_lyrics"},
+    {"keep_video_text", "hide_video_text"},
+    {"no_watermark_blur", "hide_video_text"},
+    {"remove_instruments", "keep_music"},
+]
+
+
+def latest(requests: list[Request], instruction: str) -> tuple[list[Request], list[str]]:
+    """The requests without those a later one in the instruction takes back, and a line
+    for each dropped."""
+    said = instruction.lower()
+
+    def at(request: Request) -> int:
+        return said.rfind(request.quote.lower().strip(" .\"'"))
+
+    kept, dropped = [], []
+    for request in requests:
+        later = next(
+            (
+                other
+                for other in requests
+                if other.setting != request.setting
+                and any({request.setting, other.setting} <= c for c in CLASHES)
+                and at(other) > at(request)
+                and grounded(other, instruction) is None
+            ),
+            None,
+        )
+        if later is None:
+            kept.append(request)
+        else:
+            dropped.append(
+                f'from your instruction: "{later.quote}" replaces the earlier "{request.quote}"'
+            )
+    return kept, dropped
+
+
 def apply(
     preset: Preset, requests: list[Request], instruction: str
 ) -> tuple[Preset, list[str], list[str]]:
@@ -324,7 +381,9 @@ def apply(
             target[key] = value
             notes.append(f"from your instruction: {note}")
 
-    for request in map(normalise, requests):
+    requests, dropped = latest(list(map(normalise, requests)), instruction)
+    notes += dropped
+    for request in requests:
         if (problem := grounded(request, instruction)) is not None:
             notes.append(f"ignored a reading of the instruction ({request.setting}): {problem}")
             continue
@@ -377,6 +436,12 @@ def apply(
                     change("max_duration", n, f"maximum raised to {n:g} s to fit")
             case "no_watermark_blur":
                 change("watermarks.blur", False, "watermark blur off")
+            case "keep_video_text":
+                change("watermarks.blur", False, "the video's own text not blurred")
+                change("watermarks.cut_text", False, "the video's own text not cut off")
+            case "hide_video_text":
+                change("watermarks.blur", True, "the video's own text blurred")
+                change("watermarks.cut_text", True, "the video's own text cut off")
             case "start_point":
                 change("hook.optimize", False, "the opening stays where you asked it to start")
         try:

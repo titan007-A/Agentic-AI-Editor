@@ -146,6 +146,13 @@ the words that show it, and the answer counts only if those words are in that li
 reel starts there, `hook.optimize` is off for that job so nothing moves the opening, and
 it ends on the last whole sentence that fits, before any long silence.
 
+Instructions can be in Hindi or Hinglish ("mat", "nahi" turn a thing off). Regenerating adds
+the new notes after the earlier ones, and where two lines clash (lyric captions on, then
+"lyrics generate mat kar"; the video's text kept, then "cover the text in the video"), the
+later line wins and the decisions say which line it replaced. Captions are text the app
+writes; the text already in the video (burnt-in lyrics, logos) is a separate setting:
+keep it in view (no blur, nothing cut for it, `watermarks.cut_text: false`) or hide it.
+
 Every output gets a confidence score. Review issues, a fallback planner, a failed
 translation or caption step, a long stretch without voice, or a reel that came out short
 each lower it and are listed; an output with none of them is marked ready to post, the

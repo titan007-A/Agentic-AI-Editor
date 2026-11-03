@@ -198,3 +198,39 @@ def test_a_long_stretch_without_voice_inside_the_reel_needs_a_look():
     edl = EDL(clips=[Clip(start=60, end=85)])
     score, doubts = confidence(edl, [], "qwen3.5:9b", PRESET, [(70.6, 77.9)])
     assert doubts == ["7s without voice at 11s"] and score < 1.0
+
+
+# An editor's regenerate notes pile up, each line correcting the result of the ones before.
+REGENERATED = (
+    "Lyrics ko dekh ne de usko hid mt kr\n"
+    "Water mark hata de\n"
+    "apne aap se lyrics generate mat kar aur video ke andar ke texts ko puri tarah cover krde"
+)
+
+
+def test_a_later_line_takes_back_what_an_earlier_one_asked_for():
+    changed, notes, _ = apply(
+        PRESET,
+        [
+            ask("captions_lyrics", "Lyrics ko dekh ne de"),
+            ask("keep_video_text", "Lyrics ko dekh ne de usko hid mt kr"),
+            ask("captions_off", "apne aap se lyrics generate mat kar"),
+            ask("hide_video_text", "video ke andar ke texts ko puri tarah cover krde"),
+        ],
+        REGENERATED,
+    )
+    assert not changed.captions.enabled
+    assert changed.watermarks.blur and changed.watermarks.cut_text
+    assert sum("replaces the earlier" in n for n in notes) == 2
+
+
+def test_the_videos_own_text_can_be_kept_in_view():
+    text = "Lyrics ko dekh ne de usko hid mt kr"
+    changed, _, _ = apply(PRESET, [ask("keep_video_text", text)], text)
+    assert not changed.watermarks.blur and not changed.watermarks.cut_text
+    assert changed.captions == PRESET.captions  # the video's lyrics, not ones written for it
+
+
+def test_hinglish_negations_turn_things_off():
+    assert grounded(ask("captions_off", "lyrics generate mat kar"), REGENERATED) is None
+    assert grounded(ask("no_watermark_blur", "watermark mt lga"), "watermark mt lga") is None
