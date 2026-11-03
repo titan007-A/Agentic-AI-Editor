@@ -561,6 +561,43 @@ def test_the_admin_edits_and_deletes_an_employees_presets(env):
     assert preset["name"] not in {p["name"] for p in riya.get("/api/presets").json()}
 
 
+def test_the_admin_ticks_which_presets_one_employee_has(env):
+    account, riya = employee(env, presets=[])
+    mine = [p["name"] for p in env.client.get("/api/presets").json()]
+    assert len(mine) >= 2
+    url = f"/api/admin/users/{account['id']}/presets"
+    assert not any(p["has"] for p in env.client.get(url).json()["presets"])
+    # One of their own, which assigning never touches.
+    own = env.client.get("/api/presets").json()[0] | {"label": "Riya's own"}
+    assert riya.put("/api/presets/riya-own", json=own).status_code == 200
+
+    shown = env.client.put(url, json={"names": mine[:2]}).json()
+    assert [p["name"] for p in shown["presets"] if p["has"]] == mine[:2]
+    assert shown["own"] == [{"name": "riya-own", "label": "Riya's own"}]
+    assert {p["name"] for p in riya.get("/api/presets").json()} == {*mine[:2], "riya-own"}
+
+    # Their edits survive being assigned again; replace brings the admin's version back.
+    edited = riya.get("/api/presets").json()
+    first = next(p for p in edited if p["name"] == mine[0]) | {"label": "Riya's edit"}
+    riya.put(f"/api/presets/{mine[0]}", json=first)
+    env.client.put(url, json={"names": [mine[0]]})
+    labels = {p["name"]: p["label"] for p in riya.get("/api/presets").json()}
+    assert labels == {mine[0]: "Riya's edit", "riya-own": "Riya's own"}
+    env.client.put(url, json={"names": [mine[0]], "replace": True})
+    labels = {p["name"]: p["label"] for p in riya.get("/api/presets").json()}
+    assert labels[mine[0]] != "Riya's edit"
+
+
+def test_presets_are_assigned_only_to_employees_and_only_the_admins(env):
+    account, riya = employee(env, presets=[])
+    me = env.client.get("/api/me").json()
+    url = f"/api/admin/users/{account['id']}/presets"
+    assert env.client.put(url, json={"names": ["nope"]}).status_code == 422
+    assert env.client.get(f"/api/admin/users/{me['id']}/presets").status_code == 422
+    assert riya.get(url).status_code == 403
+    assert riya.put(url, json={"names": []}).status_code == 403
+
+
 def test_an_employee_cant_reach_anyone_elses_presets_or_the_people_page(env):
     first, _ = employee(env, "riya")
     _, aman = employee(env, "aman")

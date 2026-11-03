@@ -271,6 +271,12 @@ export type Account = {
   presets: number;
 };
 
+/** Which of the admin's presets one employee has, and the presets only they have. */
+export type Assigned = {
+  presets: { name: string; label: string; has: boolean }[];
+  own: { name: string; label: string }[];
+};
+
 export type JobEvent = { stage: string; message: string; progress: number; time: string };
 
 /** A preset as it is named for everyone who has it (the admin's rename card). */
@@ -515,6 +521,9 @@ export const api = {
     request<Account>("POST", "/admin/users", { username, password }),
   resetPassword: (id: string, password: string) =>
     request("POST", `/admin/users/${id}/password`, { password }),
+  assignedPresets: (id: string) => request<Assigned>("GET", `/admin/users/${id}/presets`),
+  assignPresets: (id: string, names: string[], replace: boolean) =>
+    request<Assigned>("PUT", `/admin/users/${id}/presets`, { names, replace }),
   removeAccount: (id: string, deleteWork: boolean) =>
     request("DELETE", `/admin/users/${id}?delete_work=${deleteWork}`),
   upload: async (file: File, options: UploadOptions = {}) => {

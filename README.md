@@ -199,7 +199,10 @@ editor is opened another way) and Cloudflare must let Buffer's fetch through.
 The owner is the admin; employees get accounts of their own. Each employee has presets of
 their own and sees only their own jobs, feeds and reels. A new employee starts with no
 presets: the admin sends each preset to the employees who should use it ("Send to employees"
-on the Presets page), so nobody sees presets meant for someone else. The admin sees
+on the Presets page), or ticks one employee's presets on People ("Assign presets": ticked
+ones are copied to them, unticked ones they have are deleted, their own presets are left
+alone, and "replace" refreshes the copies they have with the admin's current version), so
+nobody sees presets meant for someone else. The admin sees
 everyone's work, with who made each, and manages every employee's presets from the Presets
 page ("Whose presets"), or from People.
 

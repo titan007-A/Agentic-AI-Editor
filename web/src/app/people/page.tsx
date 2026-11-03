@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyRound, SlidersHorizontal, Trash2, UserPlus } from "lucide-react";
+import { KeyRound, ListChecks, SlidersHorizontal, Trash2, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -20,7 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useMe } from "@/hooks/use-me";
-import { api, errorText, type Account } from "@/lib/api";
+import { api, errorText, type Account, type Assigned } from "@/lib/api";
 
 const MIN_PASSWORD = 8;
 
@@ -40,6 +40,11 @@ export default function PeoplePage() {
   const [newPassword, setNewPassword] = useState("");
   const [removing, setRemoving] = useState<Account | null>(null);
   const [deleteWork, setDeleteWork] = useState(false);
+  // Assigning presets to one employee: what they have now, and what is ticked.
+  const [assigning, setAssigning] = useState<Account | null>(null);
+  const [assigned, setAssigned] = useState<Assigned | null>(null);
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [replace, setReplace] = useState(false);
 
   const load = useCallback(
     () =>
@@ -89,6 +94,48 @@ export default function PeoplePage() {
       setBusy(false);
     }
   }
+
+  async function openAssign(person: Account) {
+    setAssigning(person);
+    setAssigned(null);
+    setReplace(false);
+    try {
+      const now = await api.assignedPresets(person.id);
+      setAssigned(now);
+      setTicked(new Set(now.presets.filter((p) => p.has).map((p) => p.name)));
+    } catch (err) {
+      toast.error(errorText(err));
+      setAssigning(null);
+    }
+  }
+
+  function tick(name: string, on: boolean) {
+    setTicked((before) => {
+      const next = new Set(before);
+      if (on) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+  }
+
+  async function assign() {
+    if (!assigning || !assigned) return;
+    setBusy(true);
+    try {
+      await api.assignPresets(assigning.id, [...ticked], replace);
+      const count = ticked.size + assigned.own.length;
+      toast.success(`${assigning.username} has ${count} ${count === 1 ? "preset" : "presets"} now`);
+      setAssigning(null);
+      await load();
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Presets the employee has that would be deleted by unticking them.
+  const dropping = assigned?.presets.filter((p) => p.has && !ticked.has(p.name)) ?? [];
 
   async function remove() {
     if (!removing) return;
@@ -157,9 +204,9 @@ export default function PeoplePage() {
             </Button>
           </form>
           <p className="mt-3 text-xs text-muted-foreground">
-            They start with no presets: send them the ones they should use from the Presets page.
-            New accounts are always employees: an admin is only made on the Mac (aiedit user add
-            NAME --admin).
+            They start with no presets: tick the ones they should use with Assign presets on their
+            card below, or send one preset to several people from the Presets page. New accounts are
+            always employees: an admin is only made on the Mac (aiedit user add NAME --admin).
           </p>
         </CardContent>
       </Card>
@@ -183,6 +230,9 @@ export default function PeoplePage() {
               </p>
               {person.role === "member" && (
                 <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => openAssign(person)}>
+                    <ListChecks /> Assign presets
+                  </Button>
                   <Button variant="outline" asChild>
                     <Link href={`/presets/?owner=${person.id}`}>
                       <SlidersHorizontal /> Presets
@@ -223,6 +273,71 @@ export default function PeoplePage() {
           <DialogFooter>
             <Button onClick={reset} disabled={busy || newPassword.length < MIN_PASSWORD}>
               Set password
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assigning !== null} onOpenChange={(open) => !open && setAssigning(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Presets for {assigning?.username}</DialogTitle>
+            <DialogDescription>
+              Ticked presets are copied to them; unticking one deletes their copy. Their copies are
+              their own, so your later changes reach them only when you replace them.
+            </DialogDescription>
+          </DialogHeader>
+          {assigned === null ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTicked(new Set(assigned.presets.map((p) => p.name)))}
+                >
+                  All
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setTicked(new Set())}>
+                  None
+                </Button>
+              </div>
+              <div className="max-h-72 space-y-1 overflow-y-auto">
+                {assigned.presets.map((p) => (
+                  <label key={p.name} className="flex min-h-11 items-center gap-3 text-sm">
+                    <Checkbox
+                      checked={ticked.has(p.name)}
+                      onCheckedChange={(checked) => tick(p.name, checked === true)}
+                    />
+                    <span className="min-w-0 flex-1 break-words">{p.label}</span>
+                    {p.has && <Badge variant="secondary">has it</Badge>}
+                  </label>
+                ))}
+              </div>
+              {assigned.own.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Their own, left as they are: {assigned.own.map((p) => p.label).join(", ")}
+                </p>
+              )}
+              <label className="flex min-h-11 items-center gap-3 text-sm">
+                <Checkbox
+                  checked={replace}
+                  onCheckedChange={(checked) => setReplace(checked === true)}
+                />
+                Replace the copies they already have with your current version
+              </label>
+              {dropping.length > 0 && (
+                <p className="text-sm text-destructive">
+                  Deletes their copy of {dropping.map((p) => p.label).join(", ")}, with any changes
+                  they made to it.
+                </p>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button onClick={assign} disabled={busy || assigned === null}>
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
