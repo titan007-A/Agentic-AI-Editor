@@ -198,7 +198,7 @@ def subject_samples(
     return [(t, found[t]) for t in times]
 
 
-OCR_VERSION = 1
+OCR_VERSION = 2
 TEXT_EVERY = 2.0  # seconds between OCR looks for the picture band's edge text
 
 
@@ -220,7 +220,7 @@ def text_lines(
                 frame = subjects.grab(video, t, views / f"{t:.3f}.jpg", settings.ffmpeg_bin)
                 with Image.open(frame) as picture:
                     scale = analysis.width / picture.width
-                    lines = ocr.read(picture, settings.models_dir)
+                    lines = ocr.read(picture, settings.models_dir, whole_frame=True)
                 known[f"{t:.3f}"] = [
                     subjects.Subject(
                         kind="text",

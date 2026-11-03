@@ -36,7 +36,7 @@ def test_ocr_text_replaces_the_vision_models_and_is_scaled_to_the_source(
     _frames(monkeypatch, tmp_path)
     monkeypatch.setattr(ocr, "available", lambda: True)
     line = ocr.Line(x0=100, y0=300, x1=400, y1=320, text="SABES BIEN", score=0.9)
-    monkeypatch.setattr(ocr, "read", lambda image, root: [line])
+    monkeypatch.setattr(ocr, "read", lambda image, root, whole_frame=False: [line])
     analysis = make_analysis([], 10).model_copy(update={"width": 1920, "height": 1080})
     vision = SimpleNamespace(model="m:4b")
     ((_, items),) = pipeline.subject_samples(
@@ -45,7 +45,7 @@ def test_ocr_text_replaces_the_vision_models_and_is_scaled_to_the_source(
     assert [s.kind for s in items] == ["head", "text"]
     assert (items[1].x0, items[1].y0, items[1].x1, items[1].y1) == (300, 900, 1200, 960)
     assert items[1].label == "SABES BIEN" and items[1].keep
-    assert "2.000" in json.loads((tmp_path / "texts-ocr-v1.json").read_text())
+    assert "2.000" in json.loads((tmp_path / f"texts-ocr-v{pipeline.OCR_VERSION}.json").read_text())
 
 
 def test_without_ocr_the_vision_models_text_stays(monkeypatch, tmp_path, make_analysis):
@@ -53,7 +53,7 @@ def test_without_ocr_the_vision_models_text_stays(monkeypatch, tmp_path, make_an
     _frames(monkeypatch, tmp_path)
     monkeypatch.setattr(ocr, "available", lambda: True)
 
-    def broken(image, root):
+    def broken(image, root, whole_frame=False):
         raise RuntimeError("models can't be fetched")
 
     monkeypatch.setattr(ocr, "read", broken)
@@ -69,7 +69,7 @@ def test_ocr_finds_text_even_without_the_vision_model(monkeypatch, tmp_path, mak
     _frames(monkeypatch, tmp_path)
     monkeypatch.setattr(ocr, "available", lambda: True)
     line = ocr.Line(x0=10, y0=10, x1=200, y1=30, text="@canciones", score=0.95)
-    monkeypatch.setattr(ocr, "read", lambda image, root: [line])
+    monkeypatch.setattr(ocr, "read", lambda image, root, whole_frame=False: [line])
     analysis = make_analysis([], 10).model_copy(update={"width": 640, "height": 360})
     ((_, items),) = pipeline.subject_samples(
         None, tmp_path / "v.mp4", [1.0], analysis, _settings(tmp_path), tmp_path
@@ -178,3 +178,23 @@ def test_the_picture_band_hears_of_edge_text_from_ocr_all_through_the_clip(
                           tmp_path, detections, None)  # fmt: skip
     assert len(looked) >= 4  # every couple of seconds, not once
     assert (1450, 1490) in seen["marks"]
+
+
+def test_what_cant_be_a_line_of_text_is_left_out(monkeypatch, tmp_path):
+    """Legs on a beach read as "LL", 15% of the frame tall; a guitar's fret read as "C"."""
+    found = SimpleNamespace(
+        boxes=[
+            [[100, 519], [140, 519], [140, 710], [100, 710]],
+            [[10, 10], [300, 10], [300, 40], [10, 40]],
+            [[10, 50], [60, 50], [60, 80], [10, 80]],
+            [[10, 90], [60, 90], [60, 120], [10, 120]],
+        ],
+        txts=["LL", "@secretosmilitares", "OK", "C"],
+        scores=[0.93, 0.97, 0.7, 0.99],
+    )
+    monkeypatch.setattr(ocr, "_engine", lambda folder: lambda pixels, **kw: found)
+    lines = ocr.read(Image.new("RGB", (720, 1280)), tmp_path, whole_frame=True)
+    assert [line.text for line in lines] == ["@secretosmilitares"]
+    # A close-up of one line is all line: tall is fine there.
+    lines = ocr.read(Image.new("RGB", (720, 1280)), tmp_path)
+    assert [line.text for line in lines] == ["LL", "@secretosmilitares"]

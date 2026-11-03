@@ -20,6 +20,10 @@ log = logging.getLogger(__name__)
 # Below this the recogniser is guessing: a guitar's fret marker read as "C".
 MIN_SCORE = 0.5
 MIN_LETTERS = 2
+# Two letters are a word only when it is sure: legs on a beach were read as "LL".
+SHORT_SCORE = 0.9
+# Of a whole frame's height: no line of on-screen text is taller than this.
+MAX_LINE = 0.12
 
 _lock = threading.Lock()
 
@@ -65,8 +69,10 @@ def letters(text: str) -> int:
     return sum(c.isalnum() for c in text)
 
 
-def read(image: Path | Image.Image, root: Path) -> list[Line]:
-    """The lines of text in `image` that OCR reads with confidence, in its pixels."""
+def read(image: Path | Image.Image, root: Path, whole_frame: bool = False) -> list[Line]:
+    """The lines of text in `image` that OCR reads with confidence, in its pixels. In a
+    `whole_frame` a line taller than MAX_LINE of it is something else read as letters (a
+    close-up of one line is all line)."""
     picture = image if isinstance(image, Image.Image) else Image.open(image)
     pixels = np.array(picture.convert("RGB"))
     engine = _engine(str(models_dir(root)))
@@ -78,7 +84,11 @@ def read(image: Path | Image.Image, root: Path) -> list[Line]:
     for quad, text, score in zip(result.boxes, result.txts, result.scores, strict=True):
         if score < MIN_SCORE or letters(text) < MIN_LETTERS:
             continue
+        if letters(text) == MIN_LETTERS and score < SHORT_SCORE:
+            continue
         q = np.asarray(quad)
+        if whole_frame and q[:, 1].max() - q[:, 1].min() > MAX_LINE * pixels.shape[0]:
+            continue
         lines.append(
             Line(
                 x0=int(q[:, 0].min()),
