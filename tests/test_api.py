@@ -1553,3 +1553,17 @@ def test_the_admin_posts_a_finished_reel_to_buffer(env, monkeypatch):
     assert riya.get("/api/buffer").status_code == 403
     assert env.client.delete("/api/buffer").status_code == 200
     assert env.client.post(f"/api/outputs/{output}/buffer", json=body).status_code == 409
+
+
+def test_videos_carry_the_name_their_owner_gave_the_preset(env):
+    _, riya = employee(env, presets=["square-1x1"])
+    mine = {p["name"]: p for p in riya.get("/api/presets").json()}
+    riya.put("/api/presets/square-1x1", json=mine["square-1x1"] | {"label": "Iconic Spanish"})
+    (job,) = start(riya, presets=["square-1x1"])
+    shown = riya.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    assert (shown["preset"], shown["preset_label"]) == ("square-1x1", "Iconic Spanish")
+    # The admin, whose own square-1x1 has another name, sees the employee's name for it.
+    admins = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    assert admins["preset_label"] == "Iconic Spanish"
+    listed = {j["id"]: j for j in env.client.get("/api/jobs").json()}
+    assert listed[job["id"]]["outputs"][0]["preset_label"] == "Iconic Spanish"

@@ -395,6 +395,8 @@ class VerdictRequest(BaseModel):
 class OutputView(BaseModel):
     id: int
     preset: str
+    # The preset's name as its owner sees it ("Iconic Spanish"), not its file name.
+    preset_label: str = ""
     duration: float
     title: str
     planner: str
@@ -439,11 +441,17 @@ class JobView(BaseModel):
     owner: str | None = None
 
 
-def job_view(job: Job, only: int | None = None, owner: str | None = None) -> JobView:
+def job_view(
+    job: Job,
+    only: int | None = None,
+    owner: str | None = None,
+    labels: dict[str, str] | None = None,
+) -> JobView:
     outputs = [
         OutputView(
             id=o.id,
             preset=o.preset,
+            preset_label=(labels or {}).get(o.preset, o.preset),
             duration=o.duration,
             title=o.title,
             planner=o.planner,
@@ -603,18 +611,34 @@ def create_app(
         names[None] = first.username if first else "admin"
         return names
 
+    def preset_labels(
+        owner_id: str | None, session: Session, cache: dict | None = None
+    ) -> dict[str, str]:
+        """The names the job's owner gave their presets, by file name. A list passes
+        `cache`, so each owner's presets are read once."""
+        if cache is not None and owner_id in cache:
+            return cache[owner_id]
+        owner = session.get(Account, owner_id) if owner_id else None
+        found = {name: p.label for name, p in presets(owner).items()}
+        if cache is not None:
+            cache[owner_id] = found
+        return found
+
     def view(
         job: Job,
         account: Account,
         session: Session,
         only: int | None = None,
         names: dict[str | None, str] | None = None,
+        labels: dict | None = None,
     ) -> JobView:
         """The job as its viewer sees it: the admin with who started it. A list passes
-        `names` read once, so a long one doesn't look each owner up again."""
+        `names` and `labels` (a cache) read once, so a long one doesn't look each owner
+        up again."""
+        shown = preset_labels(job.owner_id, session, labels)
         if account.role != accounts.ADMIN:
-            return job_view(job, only)
-        return job_view(job, only, (names or owners(session)).get(job.owner_id))
+            return job_view(job, only, labels=shown)
+        return job_view(job, only, (names or owners(session)).get(job.owner_id), shown)
 
     def find_job(job_id: str, session: Session, account: Account) -> Job:
         job = session.get(Job, job_id)
@@ -1399,7 +1423,8 @@ def create_app(
             query = query.where(Job.owner_id == account.id)
         rows = session.scalars(query.order_by(Job.created_at.desc()).limit(200))
         names = owners(session) if account.role == accounts.ADMIN else None
-        return [view(j, account, session, names=names) for j in rows]
+        labels: dict = {}
+        return [view(j, account, session, names=names, labels=labels) for j in rows]
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, account: User, session: DB) -> JobView:
@@ -1737,7 +1762,10 @@ def create_app(
             .limit(PILE_LIMIT)
         )
         names = owners(session) if account.role == accounts.ADMIN else None
-        return [view(o.job, account, session, only=o.id, names=names) for o in outputs]
+        labels: dict = {}
+        return [
+            view(o.job, account, session, only=o.id, names=names, labels=labels) for o in outputs
+        ]
 
     @app.get("/api/outputs/{output_id}")
     def output_detail(output_id: int, account: User, session: DB) -> JobView:

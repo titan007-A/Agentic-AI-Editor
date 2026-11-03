@@ -139,8 +139,13 @@ function Pile({
   }
 
   if (jobs === null) return <p className="text-sm text-muted-foreground">Loading...</p>;
-  const label = (preset: string) => labels[preset] ?? preset;
   const all = folders(jobs);
+  // The name the videos' owner gave the preset, sent with each video; the viewer's own
+  // presets only for videos from an older server.
+  const label = (preset: string) =>
+    all.find((f) => f.preset === preset)?.jobs[0]?.outputs[0]?.preset_label ||
+    labels[preset] ||
+    preset;
 
   if (folder !== null) {
     const opened = all.find((f) => f.preset === folder);

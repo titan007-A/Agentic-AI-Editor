@@ -75,7 +75,7 @@ export function OutputCard({
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2">
           <span className="truncate">
-            {output.preset}
+            {output.preset_label || output.preset}
             {output.edl.variant ? ` · version ${"ABCDE"[output.edl.variant]}` : ""}
           </span>
           <span className="shrink-0 text-xl font-medium text-muted-foreground">
@@ -175,7 +175,7 @@ export function OutputCard({
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Regenerate {output.preset}</DialogTitle>
+                <DialogTitle>Regenerate {output.preset_label || output.preset}</DialogTitle>
               </DialogHeader>
               <div className="space-y-2">
                 <Label htmlFor={`notes-${output.id}`}>What should change?</Label>

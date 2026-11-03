@@ -36,7 +36,7 @@ export function OutputVideo({ output }: { output: Output }) {
       {!started && (
         <button
           type="button"
-          aria-label={`Play ${output.preset}`}
+          aria-label={`Play ${output.preset_label || output.preset}`}
           className="group absolute inset-0 grid place-items-center"
           onClick={play}
         >
