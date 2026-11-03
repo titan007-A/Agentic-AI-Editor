@@ -30,10 +30,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agentic_editor import songlist
 from agentic_editor.download import signed_in
 from agentic_editor.llm import LLMError, parse
 from agentic_editor.presets import Preset
@@ -386,12 +388,20 @@ def read_pdf(data: bytes) -> str:
     from pypdf import PdfReader
 
     pages = PdfReader(io.BytesIO(data)).pages
-    return "\n".join((page.extract_text() or "").strip() for page in pages).strip()
+    # Pages kept apart, so a numbered list's running headers can be told from its entries.
+    return f"\n{songlist.PAGE_BREAK}\n".join(
+        (page.extract_text() or "").strip() for page in pages
+    ).strip()
+
+
+def listed(text: str) -> list[songlist.Listed]:
+    """A PDF's numbered song list, read by rule (see songlist.py); [] when it isn't one."""
+    return songlist.read(text, {"top": ABOVE, "bottom": BELOW})
 
 
 def pdf_entries(llm, text: str) -> list[dict]:
     """The songs a PDF lists, each {"singer", "song", "top", "bottom"}, in its order."""
-    prompt = READ_PDF.format(text=text[:PDF_TEXT])
+    prompt = READ_PDF.format(text=text.replace(songlist.PAGE_BREAK, "")[:PDF_TEXT])
     reply = parse(
         PdfEntries,
         llm.chat_json(
@@ -1105,12 +1115,16 @@ def run_pdf(
     pause: float | None = None,
     context: Context | None = None,
     sites: tuple[str, ...] = ("instagram",),
+    kind: str = "songs",
 ) -> list[tuple[int, Reel]]:
-    """For each song a PDF lists (see pdf_entries), the best few reels of it, PER_ENTRY at
-    most, as (its entry's number, reel): searched for by singer and song, looked up, rated
-    and ranked as in run, never one edited, shown before, or given for another song. A
-    song nothing fitting turned up for is searched for once more, with other words: the
+    """For each item a PDF lists (see pdf_entries), the best few reels of it, PER_ENTRY at
+    most, as (its entry's number, reel): searched for by its name and who or what it is
+    by, looked up, rated and ranked as in run, never one edited, shown before, or given
+    for another item. `kind` says what the list is of ("songs", "films", "military
+    aircraft"...): songs are searched for as performances, anything else as itself. An
+    item nothing fitting turned up for is searched for once more, with other words: the
     engines give a different few each time."""
+    songs = is_songs(kind)
     context = context or Context()
     given: list[tuple[int, Reel]] = []
     taken = used | seen | context.own
@@ -1119,8 +1133,12 @@ def run_pdf(
         song, singer = entry["song"], entry["singer"]
         who = " - ".join(x for x in (song, singer) if x)
         progress(f"searching for {who} ({n + 1} of {len(entries)})", 0.05 + 0.9 * n / len(entries))
-        rounds = [[f"{singer} {song}", f"{song} {singer} live"],
-                  [f"{song} {singer} reel", f"{singer} {song} performance"]]  # fmt: skip
+        if songs:
+            rounds = [[f"{singer} {song}", f"{song} {singer} live"],
+                      [f"{song} {singer} reel", f"{singer} {song} performance"]]  # fmt: skip
+        else:
+            rounds = [[f"{song} {singer}", f"{song} {singer} video"],
+                      [f"{song} reel", f"{song} {singer} clip"]]  # fmt: skip
         picked: list[Reel] = []
         looked: set[str] = set()  # by the first round: not again in the second
         for queries in rounds:
@@ -1140,10 +1158,20 @@ def run_pdf(
             ]
             if reels:
                 with planner() as llm:
-                    wish = f"reels of the song '{song}' by {singer}, {singer} singing it"
+                    wish = (
+                        f"reels of the song '{song}' by {singer}, {singer} singing it"
+                        if songs
+                        else f"reels showing {song}"
+                        + (f" ({singer})" if singer else "")
+                        + f": one of a list of {kind}, the reel about this one itself"
+                    )
                     rate(llm, wish, reels, context=context)
             fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
             suggest(fitting, context)
+            if entry.get("preset"):
+                # The preset the person chose for the song's section (see songlist.py).
+                for r in fitting:
+                    r.preset, r.preset_why = entry["preset"], "the preset chosen for its section"
             spread(fitting)
             # All of one song: only the accounts are kept apart.
             picked, _, _ = pick(rank(fitting), count=PER_ENTRY, per_song=PER_ENTRY)
@@ -1154,3 +1182,268 @@ def run_pdf(
     if not answered and entries:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
     return given
+
+
+class _Pick(BaseModel):
+    sections: list[str]
+    first: int = Field(ge=1)
+    last: int = Field(ge=0)  # 0: to the end
+    year_from: int = Field(ge=0)  # 0: any
+    year_to: int = Field(ge=0)
+    judge: str  # what to check song by song that the choices above can't say; '' if nothing
+    swap: bool
+    line: Literal["top", "bottom", "none"]
+    presets: dict[str, str]
+    understood: str  # one line: what it will do
+
+
+PICK_PROMPT = (
+    "A video editor gives a PDF that lists {kind}, and says in their own words (any "
+    "language) which of them to find reels of and how. Turn what they say into choices.\n"
+    "Sections of the list, with their numbers:\n{sections}\n"
+    "An item of it looks like: {sample}\n"
+    "Their presets (name: what it is called):\n{presets}\n\n"
+    "Their words: {instruction}\n\n"
+    "Give: sections (the section names to research, exactly as listed; all of them if they "
+    "don't say); first and last (the numbers within each section; first 1 and last 0 when "
+    "they don't say; 'the top 30 are done' means first 31); year_from and year_to (0 when "
+    "they don't limit the years); judge (anything else they want songs kept or left out "
+    "by, which only knowing each item can tell, such as 'only female singers' or 'leave out "
+    "Armando Manzanero', written as one English sentence; '' when the choices above say "
+    "it all); swap (true only if they say the name comes after the one it is by in each "
+    "line, as in 'Singer - Song'); "
+    "line (where the words written for each item go: top for above the video, bottom for "
+    "below, none for nowhere; top if they don't say); presets (for each section they give "
+    "a preset for, the preset's name exactly as listed; a section they name by its decade "
+    "or genre is that section); and understood: one short sentence of what you will do, "
+    "in their language and their script (Hinglish written in Latin letters stays in Latin "
+    "letters)."
+)
+JUDGE_PROMPT = (
+    "These items are from a list of {kind} (id | section | number | name | by | year). "
+    "Keep only "
+    "the ones that match: {judge}\nGive the ids to keep.\n\n{songs}"
+)
+JUDGE_BATCH = 80  # songs a judging call looks at
+
+
+class _Kept(BaseModel):
+    keep: list[int]
+
+
+def pdf_choose(
+    llm, instruction: str, listing: list[dict], presets: dict[str, str], kind: str = "songs"
+) -> dict:
+    """What a person's words about a PDF's songs ask for, as the songs to research
+    (`keep`, positions in `listing`) and how: sections, numbers and years are read into
+    choices and applied in code; anything else ("only female singers") is judged song by
+    song. Section and preset names the model gets wrong are dropped, never guessed at."""
+    found = songlist.sections_of(listing)
+    first = listing[0]
+    sample = f"{first['number']}. {first['song']} ({first['year']}) - {first['singer']}"
+    reply = parse(
+        _Pick,
+        llm.chat_json(
+            [
+                {
+                    "role": "user",
+                    "content": PICK_PROMPT.format(
+                        sections="\n".join(
+                            f"- {s['name']} ({s['first']}-{s['last']})" for s in found
+                        ),
+                        sample=sample,
+                        presets="\n".join(f"- {n}: {label}" for n, label in presets.items())
+                        or "- (none)",
+                        instruction=instruction.strip(),
+                        kind=kind,
+                    ),
+                }
+            ],
+            _Pick.model_json_schema(),
+            temperature=0.0,
+        ),
+    )
+    names = [s["name"] for s in found]
+    wanted = [s for s in reply.sections if s in names] or names
+    keep = songlist.pick(
+        listing, wanted, reply.first, reply.last or None, reply.year_from or None,
+        reply.year_to or None,
+    )  # fmt: skip
+    if reply.judge.strip():
+        keep = judged(llm, reply.judge.strip(), listing, keep, kind)
+    return {
+        "keep": keep,
+        "swap": reply.swap,
+        "line": reply.line,
+        "presets": {s: p for s, p in reply.presets.items() if s in names and p in presets},
+        "understood": reply.understood.strip(),
+    }
+
+
+def judged(llm, judge: str, listing: list[dict], keep: list[int], kind: str = "songs") -> list[int]:
+    """The songs at `keep` that match `judge`, asked about JUDGE_BATCH at a time."""
+    out: list[int] = []
+    for start in range(0, len(keep), JUDGE_BATCH):
+        batch = keep[start : start + JUDGE_BATCH]
+        songs = "\n".join(
+            f"{i} | {listing[i]['section']} | {listing[i]['number']} | {listing[i]['song']} | "
+            f"{listing[i]['singer']} | {listing[i]['year'] or '-'}"
+            for i in batch
+        )
+        reply = parse(
+            _Kept,
+            llm.chat_json(
+                [
+                    {
+                        "role": "user",
+                        "content": JUDGE_PROMPT.format(judge=judge, songs=songs, kind=kind),
+                    }
+                ],
+                _Kept.model_json_schema(),
+                temperature=0.0,
+            ),
+        )
+        allowed = set(batch)
+        out += [i for i in dict.fromkeys(reply.keep) if i in allowed]
+    return sorted(out)
+
+
+LIST_WINDOW = 5_000  # characters of a PDF the model reads at a time
+LIST_OVERLAP = 400  # read again at the start of the next window: an entry may be cut
+
+
+class _ListedEntry(BaseModel):
+    section: str = Field(max_length=120)
+    number: int = Field(ge=0)
+    song: str = Field(max_length=160)
+    singer: str = Field(max_length=120)
+    year: str = Field(max_length=4)
+    words: str = Field(max_length=800)
+    top: str = Field(max_length=400)
+    bottom: str = Field(max_length=400)
+
+
+class _ListedPart(BaseModel):
+    entries: list[_ListedEntry] = Field(max_length=80)
+
+
+def is_songs(kind: str) -> bool:
+    return bool(re.search(r"song|music|canci|canzon|chanson|lied|gaan", kind, re.IGNORECASE))
+
+
+def guess_kind(text: str) -> str:
+    """What a PDF lists, as far as its words say: "songs" or, not knowing, "items"; the
+    person names it when it's something else."""
+    words = r"\b(songs?|singers?|canci[oó]n(es)?|canzon[ei]|chansons?|lieder|gaan[ae]|album)\b"
+    return "songs" if re.search(words, text[:20000], re.IGNORECASE) else "items"
+
+
+READ_LIST = (
+    "This is part of a PDF that lists things to find videos of, laid out any way: a list, a "
+    "table, prose. They may be songs, films, people, places, events, products, anything. "
+    "For each item in it give: section (a heading over several of the items, such as a "
+    "decade or genre, as written; '' if the list has none: the PDF's own title or "
+    "introduction is no section), number (its number in the list, 0 if it has none), song "
+    "(the item's name: the song's title, the film's, the person's...), singer (only the "
+    "name of who or what it is by or from: the singer, director, team, maker, without "
+    "words like 'by' or 'directed by'; '' if none), "
+    "year ('' if not given), words (anything written for it, such as a note or the words "
+    "for a video, copied exactly, with \\n between lines; '' if none), top and bottom (only "
+    "words the PDF labels as above or below the video, else ''). Copy everything exactly "
+    "as written, in its language. Leave out headings, introductions and anything that "
+    "isn't an item. An item cut off at the very start or end of this part: leave it out if "
+    "its name is cut.\n\nPart {part} of the PDF:\n{text}"
+)
+
+
+def _windows(text: str) -> list[str]:
+    lines = [line for line in text.replace(songlist.PAGE_BREAK, "").splitlines() if line.strip()]
+    windows, current, size = [], [], 0
+    for line in lines:
+        if current and size + len(line) > LIST_WINDOW:
+            windows.append("\n".join(current))
+            kept, kept_size = [], 0
+            for prev in reversed(current):  # the window's end, read again in the next
+                if kept_size + len(prev) > LIST_OVERLAP:
+                    break
+                kept.insert(0, prev)
+                kept_size += len(prev)
+            current, size = kept, kept_size
+        current.append(line)
+        size += len(line)
+    if current:
+        windows.append("\n".join(current))
+    return windows
+
+
+BY = re.compile(
+    r"^(?:by|from|de|di|von|par|directed by|written by|performed by|sung by|made by)\s+",
+    re.IGNORECASE,
+)
+ALL = "All"  # the section of a list that has none
+
+
+def pdf_listing(llm, text: str, progress: Progress | None = None) -> list[dict]:
+    """Every item a PDF lists, laid out any way, read by the model a window at a time,
+    as songlist.Listed dicts in the PDF's order: for PDFs songlist.read can't read."""
+    out: dict[tuple[str, str, str], dict] = {}
+    given: set[tuple[str, str, str]] = set()  # numbered by the PDF itself
+    windows = _windows(text)
+    for n, window in enumerate(windows):
+        if progress:
+            progress(f"reading the PDF ({n + 1} of {len(windows)})", 0.9 * n / len(windows))
+        reply = parse(
+            _ListedPart,
+            llm.chat_json(
+                [{"role": "user", "content": READ_LIST.format(part=n + 1, text=window)}],
+                _ListedPart.model_json_schema(),
+                temperature=0.0,
+            ),
+        )
+        for e in reply.entries:
+            name, by = e.song.strip(), BY.sub("", e.singer.strip())
+            if not (name or by):
+                continue
+            key = (e.section.strip().casefold(), name.casefold(), by.casefold())
+            words = [w.strip() for w in e.words.replace("\\n", "\n").split("\n") if w.strip()]
+            pairs = (("top", e.top), ("bottom", e.bottom))
+            labelled = {k: v.strip().replace("\\n", "\n") for k, v in pairs if v.strip()}
+            if key in out:
+                # Read twice where windows overlap: the fuller reading stays.
+                if len(" ".join(words)) > len(" ".join(out[key]["lines"])):
+                    out[key]["lines"], out[key]["labelled"] = (
+                        words,
+                        labelled or out[key]["labelled"],
+                    )
+                continue
+            year = e.year.strip()
+            out[key] = {
+                "number": e.number,
+                "section": e.section.strip() or ALL,
+                "song": name,
+                "singer": by,
+                "year": year if year.isdigit() and len(year) == 4 else "",
+                "lines": words,
+                "labelled": labelled,
+            }
+            if e.number:
+                given.add(key)
+    keys = list(out)
+    listing = list(out.values())
+    # A section of one item beside another section is a heading the model took for one
+    # (the PDF's title over its first item): it joins its neighbour's.
+    counts = Counter(e["section"] for e in listing)
+    for i, e in enumerate(listing):
+        if counts[e["section"]] == 1 and len(counts) > 1:
+            near = [listing[j]["section"] for j in (i + 1, i - 1) if 0 <= j < len(listing)]
+            e["section"] = next((s for s in near if counts[s] > 1), e["section"])
+    # The PDF's own numbers stand when a section's run upwards; else (none, or numbers the
+    # model made up) its items are numbered in order.
+    for section in dict.fromkeys(e["section"] for e in listing):
+        members = [(k, e) for k, e in zip(keys, listing, strict=True) if e["section"] == section]
+        numbers = [e["number"] for _, e in members]
+        own = all(k in given for k, _ in members) and all(a < b for a, b in pairwise(numbers))
+        if not own:
+            for n, (_, e) in enumerate(members, 1):
+                e["number"] = n
+    return listing

@@ -291,12 +291,18 @@ class Research(Base):
     mode: Mapped[str] = mapped_column(String(8), default="search")
     pdf_text: Mapped[str] = mapped_column(Text, default="")
     entries: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    # Every song the PDF lists (see songlist.Listed), for the person to choose from while
+    # the research is "choosing"; the chosen ones become `entries`.
+    listing: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    # What a PDF lists ("songs", "films", "military aircraft"...): how its items are searched.
+    kind: Mapped[str] = mapped_column(String(60), default="songs")
     # A follow-up asked for in an earlier research's chat ("more Italian").
     parent_id: Mapped[str | None] = mapped_column(
         ForeignKey("research.id", ondelete="SET NULL"), index=True
     )
-    # "asking": the model thinks of questions (none yet), then waits for the answers;
-    # then queued, running, done or failed like a job.
+    # "asking": the model thinks of questions (none yet), then waits for the answers; a
+    # PDF's is "reading" while the model reads it and "choosing" until the person picks its
+    # songs; then queued, running, done or failed like a job.
     status: Mapped[str] = mapped_column(String(16), default="queued")
     # When a turn took it up: whose research goes next is by who was served last.
     started_at: Mapped[datetime | None]

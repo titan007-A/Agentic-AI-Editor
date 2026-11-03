@@ -32,6 +32,11 @@ class Planner:
             return {"questions": QUESTIONS}
         if "entries" in schema["properties"]:
             assert "Bryan Adams" in prompt  # the PDF's text
+            if "laid out any way" in prompt:  # research.READ_LIST: the whole listing
+                return {"entries": [{"section": "", "number": 0, "song": e["song"],
+                                     "singer": e["singer"], "year": "", "words": "",
+                                     "top": e["top"], "bottom": e["bottom"]}
+                                    for e in PDF_ENTRIES]}  # fmt: skip
             return {"entries": PDF_ENTRIES}
         if "kind" in schema["properties"]:
             message = prompt.rsplit("Their message: ", 1)[-1]
@@ -768,3 +773,133 @@ def test_a_pdf_song_gets_up_to_four_reels_and_is_searched_again_when_none_fit():
     ]  # fmt: skip
     # Heaven's reels fitted at once: it was searched for once.
     assert not any("Heaven" in q and "performance" in q for q in asked)
+
+
+def _listing():
+    return [
+        {"number": n, "section": f"{d}-{d + 9}", "song": f"Song {d} {n}",
+         "singer": "Armando Manzanero" if n == 2 else f"Singer {n}", "year": str(d + n),
+         "lines": [f"Line {n}"], "labelled": {}}
+        for d in (1960, 1970, 1980)
+        for n in range(1, 6)
+    ]  # fmt: skip
+
+
+class _Planner:
+    def __init__(self, pick, kept=None):
+        self.pick, self.kept, self.prompts = pick, kept, []
+
+    def chat_json(self, messages, schema, temperature=0.0):
+        self.prompts.append(messages[0]["content"])
+        return self.pick if len(self.prompts) == 1 else {"keep": self.kept}
+
+
+def test_a_persons_words_about_a_pdf_list_become_checked_choices():
+    from agentic_editor import research
+
+    planner = _Planner({
+        "sections": ["1960-1969", "1970-1979", "the 2000s"], "first": 3, "last": 0,
+        "year_from": 0, "year_to": 0, "judge": "", "swap": False, "line": "top",
+        "presets": {"1960-1969": "p60", "1970-1979": "made-up"},
+        "understood": "60s y 70s, del 3 en adelante",
+    })  # fmt: skip
+    chosen = research.pdf_choose(
+        planner, "sirf 60s aur 70s, top 2 ho chuke", _listing(), {"p60": "Sixties"}
+    )
+    # Sections, numbers and years are applied in code; names that aren't there are dropped.
+    assert chosen["keep"] == [2, 3, 4, 7, 8, 9]
+    assert chosen["presets"] == {"1960-1969": "p60"} and chosen["line"] == "top"
+    assert "1980-1989 (1-5)" in planner.prompts[0] and "p60: Sixties" in planner.prompts[0]
+    assert len(planner.prompts) == 1  # nothing to judge song by song
+
+
+def test_what_only_knowing_each_song_tells_is_judged_song_by_song():
+    from agentic_editor import research
+
+    planner = _Planner({
+        "sections": [], "first": 1, "last": 0, "year_from": 1972, "year_to": 1985,
+        "judge": "leave out Armando Manzanero", "swap": False, "line": "bottom",
+        "presets": {}, "understood": "",
+    }, kept=[5, 7, 8, 99])  # fmt: skip
+    chosen = research.pdf_choose(planner, "72 se 85 tak, Manzanero nahi", _listing(), {})
+    # Years 1972-1985 leave 1970s 2-5 and 1980s 1-5; the judge keeps only what it was shown.
+    assert chosen["keep"] == [7, 8] and chosen["line"] == "bottom"
+    assert "leave out Armando Manzanero" in planner.prompts[1]
+    assert "6 | 1970-1979 | 2 | Song 1970 2 | Armando Manzanero | 1972" in planner.prompts[1]
+
+
+def test_any_pdf_the_rule_cant_read_is_read_by_the_model_whole(monkeypatch):
+    from agentic_editor import research
+
+    monkeypatch.setattr(research, "LIST_WINDOW", 60)
+    monkeypatch.setattr(research, "LIST_OVERLAP", 25)
+    text = "Intro words here\n" + "\n".join(f"Row {n}: some song text {n}" for n in range(6))
+    windows = research._windows(text)
+    assert len(windows) > 1 and all(len(w) <= 60 + 30 for w in windows)
+
+    class Reader:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_json(self, messages, schema, temperature=0.0):
+            self.calls += 1
+            row = lambda n, words: {"section": "", "number": 0, "song": f"Song {n}",  # noqa: E731
+                                    "singer": "Singer", "year": "1985" if n else "85",
+                                    "words": words, "top": "", "bottom": ""}  # fmt: skip
+            # Each window reads song 0 again, the first time cut short.
+            return {"entries": [row(0, "cut" if self.calls == 1 else "the whole line"),
+                                row(self.calls, "")]}  # fmt: skip
+
+    reader = Reader()
+    listing = research.pdf_listing(reader, text)
+    assert listing[0]["lines"] == ["the whole line"]  # the fuller reading stays
+    assert listing[0]["year"] == "" and listing[1]["year"] == "1985"
+    assert [e["number"] for e in listing] == list(range(1, len(listing) + 1))
+    assert {e["section"] for e in listing} == {"All"} and reader.calls == len(windows)
+
+
+def test_a_list_of_anything_is_searched_as_itself_not_as_a_song():
+    from contextlib import nullcontext
+
+    from agentic_editor import research
+
+    asked, wishes = [], []
+
+    def find(query, count):
+        asked.append(query)
+        return [hit("TOPGUN")]
+
+    class Rater(Planner):
+        def chat_json(self, messages, schema, **kwargs):
+            wishes.append(messages[-1]["content"])
+            return super().chat_json(messages, schema, **kwargs)
+
+    entries = [{"song": "Top Gun", "singer": "Tony Scott", "top": "", "bottom": ""}]
+    research.run_pdf(entries, lambda: nullcontext(Rater()), set(), set(), lambda *a: None,
+                     find, lambda url: {"description": "Top Gun"}, 0, kind="films")  # fmt: skip
+    assert "Top Gun Tony Scott" in asked[0] and not any("live" in q for q in asked)
+    assert any("one of a list of films" in w for w in wishes)
+    assert research.is_songs("canciones") and not research.is_songs("military aircraft")
+    assert research.guess_kind("The 600 best Spanish-language songs") == "songs"
+    assert research.guess_kind("Top 100 fighter jets of all time") == "items"
+
+
+def test_a_pdf_title_read_as_a_section_and_by_words_are_tidied():
+    from agentic_editor import research
+
+    class Reader:
+        def chat_json(self, messages, schema, temperature=0.0):
+            row = lambda section, song, by: {"section": section, "number": 1, "song": song,  # noqa: E731
+                                             "singer": by, "year": "", "words": "",
+                                             "top": "", "bottom": ""}  # fmt: skip
+            return {"entries": [row("My favourite war films", "Saving Private Ryan",
+                                    "directed by Steven Spielberg"),
+                                row("", "Dunkirk", "Christopher Nolan"),
+                                row("", "Top Gun", "by Tony Scott")]}  # fmt: skip
+
+    listing = research.pdf_listing(Reader(), "War films\nSaving Private Ryan")
+    assert [(e["section"], e["number"], e["song"], e["singer"]) for e in listing] == [
+        ("All", 1, "Saving Private Ryan", "Steven Spielberg"),
+        ("All", 2, "Dunkirk", "Christopher Nolan"),
+        ("All", 3, "Top Gun", "Tony Scott"),
+    ]

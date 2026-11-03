@@ -363,14 +363,33 @@ Hinglish too), ranked by how well they fit and how viral they are:
   under 480p on its short side it is left out ("low quality"), SD (480-719p) ranks a
   little lower than HD, and its card shows the resolution. A Short's card also shows its
   length, in red when it is shorter than its preset's shortest reel.
-- **From a PDF.** Instead of a description, give a PDF of songs: each with its singer and
-  the words to write above and below its reel, in any layout. The planning model reads
-  the songs and their words exactly as written, and each song is searched for and rated
-  (up to 4 reels each, never one twice). The research shows the reels song by song, with
-  its words; choose a reel for each, and "Edit selected" starts each edit with the notes
-  lines `song:`, `artist:`, `top text:` and `bottom text:`, so the reel shows your words in
-  place of the preset's own above and below the video (in the look of the preset's first
-  block there). A scanned PDF is only pictures and can't be read.
+- **From a PDF.** Instead of a description, give a PDF that lists anything to make reels
+  of (songs, films, people, places, events...), laid out any way. It is read first, and
+  nothing is searched until you choose:
+  - A numbered list ("1. Name (1966) - Singer", a note under each) is read by rule,
+    however long, with each item's number, year, the words under it and its section (the
+    heading above where the numbering starts again at 1: a decade, a genre). Any other
+    layout (a table, prose) is read whole by the planning model, a few pages at a time
+    ("reading").
+  - Then the research waits, "choosing": tick the items to research (all are ticked at
+    first), whole sections at once, or keep only the numbers and years you give (say 31
+    to 100 of each decade); or say it in your own words ("only the 60s to the 90s, the
+    top 30 are done, leave out Manzanero") and the planning model ticks them for you to
+    check: sections, numbers and years are applied in code, anything else (such as "only
+    female singers") is judged item by item. Name what the list is of ("songs" is guessed
+    when the PDF says so): songs are searched for as performances (the singer singing it,
+    live), anything else as itself. Give a preset for each section, say where the words
+    under each item go (above the video, below it, or nowhere; lines labelled "Top
+    text:" or "Bottom text:" go where they say), swap name and singer when the list has
+    them the other way round, and how many items each research takes (30 at first): the
+    chosen items are researched that many at a time, one research after another.
+  - Each item is searched for and rated (up to 4 reels each, never one twice). The
+    research shows the reels item by item, with its words; choose a reel for each (its
+    section's preset is already picked), and "Edit selected" starts each edit with the
+    notes lines `song:` and `artist:` (for songs), `year:` and `top text:`/`bottom
+    text:`, so the reel shows your words in place of the preset's own above and below the
+    video (in the look of the preset's first block there), and `{year}` in a preset is
+    the item's year. A scanned PDF is only pictures and can't be read.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.
