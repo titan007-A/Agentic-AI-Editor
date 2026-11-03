@@ -79,9 +79,10 @@ QUALITY = {"HD": 1.0, "SD": 0.85, "": 0.95}  # "" when the site didn't say
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
 MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
-SHOWN = 8  # the best this many are kept: the owner picks the ones to edit from them
+SHOWN = 10  # the best this many are kept: the owner picks the ones to edit from them
 PER_ACCOUNT = 2  # of them at most from one account, so one page doesn't fill the research
 PER_SONG = 2  # and from one song: the owner's "a song may come twice", not seven times
+PER_ARTIST = 2  # and of one singer or band: liked reels mustn't make it all one artist
 LEARN_REELS = 24  # reels looked up to find an account's own
 PAUSE = 1.0  # seconds between searches, so the engines don't turn it away
 LOOKUPS = 4  # reels looked up at once
@@ -482,14 +483,24 @@ def taste_line(song: str, caption: str, handle: str, reason: str = "") -> str:
     return f"{line}: {reason}" if reason else line
 
 
-def _taste(context: Context) -> str:
-    """What the person's feedback taught, for planning and rating; '' without any."""
+def _taste(context: Context, rating: bool = False) -> str:
+    """What the person's feedback taught, for planning (or `rating`); '' without any.
+    Liked reels show what works for them, not all they want: the owner asked for variety,
+    so the searches keep a share for something else that fits, and the rating doesn't mark
+    a fitting reel down for being unlike them."""
     parts = []
     if context.liked:
-        parts.append(
-            "Reels they liked before (find more like these):\n"
-            + "\n".join(f"- {line}" for line in context.liked)
+        guide = (
+            "Reels they liked before, which show their taste. They also want variety: a "
+            "reel that fits what they want but is unlike these (another artist, song, era "
+            "or style) fits just as well; don't rate it lower for that"
+            if rating
+            else "Reels they liked before, which show their taste. They also want variety: "
+            "make about two thirds of the searches find reels like these, and the rest "
+            "deliberately different ones that still fit what they want (other artists, "
+            "songs, eras or styles than these)"
         )
+        parts.append(f"{guide}:\n" + "\n".join(f"- {line}" for line in context.liked))
     if context.disliked:
         parts.append(
             "Reels they didn't want, with why when they said (find fewer like these):\n"
@@ -821,7 +832,7 @@ def rate(
             context.summary or "(not known: go by the presets)"
         )
         wish = f"{wish}\nThat is, {account}" if wish else account
-    if taste := _taste(context):
+    if taste := _taste(context, rating=True):
         wish = f"{wish}\n\n{taste}"
     for start in range(0, len(reels), batch):
         group = reels[start : start + batch]
@@ -893,6 +904,11 @@ def rank(reels: list[Reel]) -> list[Reel]:
 
 
 def _same(text: str) -> str:
+    """A name as compared with another: "Faithfully - Journey (feat. Steve Perry)" and
+    "faithfully – journey" are one song, "Journey (feat. Steve Perry)" one band with
+    "Journey"."""
+    text = re.sub(r"\s*[(\[][^)\]]*[)\]]", "", text)
+    text = re.sub(r"\s+(?:feat\.?|ft\.?|featuring)\s+.*$", "", text, flags=re.IGNORECASE)
     return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
 
 
@@ -932,16 +948,25 @@ def trends(items: list, now: datetime | None = None) -> tuple[list, list[SongTre
 
 
 def pick(
-    ranked: list[Reel], count: int = SHOWN, per_account: int = PER_ACCOUNT, per_song: int = PER_SONG
+    ranked: list[Reel],
+    count: int = SHOWN,
+    per_account: int = PER_ACCOUNT,
+    per_song: int = PER_SONG,
+    per_artist: int | None = PER_ARTIST,
+    asked: str = "",
 ) -> tuple[list[Reel], dict[str, int], float | None]:
     """The best `count` of the ranked reels, at most `per_account` from one account (by its
-    Instagram name, its display name when that isn't known) and `per_song` of one song, so
-    one page or one hit doesn't fill the research; how many were passed over for each, and
-    the best score left. A reel itself is never given twice (see run)."""
+    Instagram name, its display name when that isn't known), `per_song` of one song and
+    `per_artist` of one singer or band, so one page, one hit or one artist doesn't fill
+    the research, unless the person `asked` for that artist by name ("Adele's songs": all
+    may be Adele's, still no more than `per_song` of one song); how many were passed over
+    for each, and the best score left. A reel itself is never given twice (see run)."""
+    named = f" {_same(asked)} "
     picked: list[Reel] = []
-    passed = {"same account": 0, "same song": 0}
+    passed = {"same account": 0, "same song": 0, "same artist": 0}
     accounts: dict[str, int] = {}
     songs: dict[str, int] = {}
+    artists: dict[str, int] = {}
     rest: list[Reel] = []
     for reel in ranked:
         if len(picked) == count:
@@ -954,9 +979,20 @@ def pick(
         if song and songs.get(song, 0) >= per_song:
             passed["same song"] += 1
             continue
+        artist = _same(reel.artist)
+        wanted = artist and f" {artist} " in named
+        if (
+            per_artist is not None
+            and artist
+            and not wanted
+            and artists.get(artist, 0) >= per_artist
+        ):
+            passed["same artist"] += 1
+            continue
         picked.append(reel)
         accounts[who] = accounts.get(who, 0) + 1
         songs[song] = songs.get(song, 0) + 1
+        artists[artist] = artists.get(artist, 0) + 1
     cutoff = rest[0].score if rest else None
     return picked, {k: n for k, n in passed.items() if n}, cutoff
 
@@ -1088,7 +1124,9 @@ def run(
     left_out["didn't fit"] = len(reels) - len(fitting)
     suggest(fitting, context)
     spread(fitting)
-    picked, passed, cutoff = pick(rank(fitting))
+    # Only the person's own words (and answers) free an artist: the model's brief may name
+    # examples of a genre they didn't ask for.
+    picked, passed, cutoff = pick(rank(fitting), asked=description)
     left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
     return Result(
         queries,
@@ -1174,7 +1212,7 @@ def run_pdf(
                     r.preset, r.preset_why = entry["preset"], "the preset chosen for its section"
             spread(fitting)
             # All of one song: only the accounts are kept apart.
-            picked, _, _ = pick(rank(fitting), count=PER_ENTRY, per_song=PER_ENTRY)
+            picked, _, _ = pick(rank(fitting), count=PER_ENTRY, per_song=PER_ENTRY, per_artist=None)
             if picked:
                 break
         taken |= {r.code for r in picked}

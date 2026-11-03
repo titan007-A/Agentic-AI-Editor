@@ -320,9 +320,12 @@ Hinglish too), ranked by how well they fit and how viral they are:
   it matches and which of your presets it suits. Below 50% it is left out. Viral compares
   likes and comments, in total and per day since posting, among the reels found. The
   order is Fit times a virality bonus, so a reel that doesn't fit stays low however viral.
-- A research gives the best 8, never a reel an earlier research showed, one you edited or
-  the account's own, and at most 2 from one account. Another reel of the same song is
-  fine. "Explain reasoning" under each says why it was chosen: the search that found it,
+- A research gives the best 10, never a reel an earlier research showed, one you edited or
+  the account's own, and at most 2 from one account and 2 of one singer or band. Another
+  reel of the same song is fine. Reels you marked good show your taste, not all you want:
+  about two thirds of the searches look for more like them and the rest for something
+  else that fits (other artists, songs, eras or styles), and a fitting reel isn't rated
+  lower for being unlike them, so a research keeps some variety. "Explain reasoning" under each says why it was chosen: the search that found it,
   the fit and why, what it matches, the song, the preset and why, likes and comments per
   day, and its score against the best reel left out.
 - Choose up to 5 to edit: each comes with the preset it suits (change it if you like),
