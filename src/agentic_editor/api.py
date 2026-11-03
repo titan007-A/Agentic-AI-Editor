@@ -1788,6 +1788,7 @@ def create_app(
                 output.caption_artist = body.artist.strip()
                 output.caption_topic = ""
             output.caption_status, output.caption_notes = "queued", []
+            output.caption_queued_at = datetime.now(UTC)
             session.commit()
             jobs.write_caption(output.id)
         return view(output.job, account, session, only=output.id)

@@ -195,6 +195,9 @@ queued videos, or an autopilot batch, never hold up someone else's single job: t
 accounts take turns. On the Mac (M5 Pro) two workers are right: one x264 encode already
 uses every core (two at once take twice as long), and the models take the GPU in turn.
 
+Post captions take the same turns as jobs: they share the workers and the GPU, so a
+person's queued captions (one after each render) never hold up someone else's job.
+
 Researches run one at a time, in the same kind of turns: the account served longest ago
 first, then the oldest. Two at once search the same sites together, which then refuse
 both (HTTP 429/403), and would hold both workers the jobs need; a research waiting for

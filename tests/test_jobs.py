@@ -5,7 +5,7 @@ import pytest
 
 from agentic_editor import jobs, pipeline
 from agentic_editor.backends import Backends
-from agentic_editor.db import Event, Job, StyleDraft, make_sessionmaker
+from agentic_editor.db import Event, Job, Output, StyleDraft, make_sessionmaker
 from agentic_editor.settings import ROOT, Settings
 
 
@@ -254,11 +254,15 @@ def _order(Session, minute=59):
     taken = []
     # A second apart, as workers take jobs up one after another.
     while (
-        job := jobs.claim(Session, datetime(2026, 11, 3, 10, minute, len(taken), tzinfo=UTC))
+        turn := jobs.claim_turn(Session, datetime(2026, 11, 3, 10, minute, len(taken), tzinfo=UTC))
     ) is not None:
-        taken.append(job)
+        kind, ident = turn
+        taken.append(ident if kind == "job" else f"caption {ident}")
         with Session() as db:
-            db.get(Job, job).status = "done"
+            if kind == "job":
+                db.get(Job, ident).status = "done"
+            else:
+                db.get(Output, ident).caption_status = "done"
             db.commit()
     return taken
 
@@ -289,7 +293,7 @@ def test_an_account_already_running_a_job_waits_for_one_that_isnt(tmp_path):
         db.commit()
     from datetime import UTC, datetime
 
-    assert jobs.claim(Session, datetime(2026, 11, 3, 11, 0, tzinfo=UTC)) == "aman0"
+    assert jobs.claim_turn(Session, datetime(2026, 11, 3, 11, 0, tzinfo=UTC)) == ("job", "aman0")
 
 
 def test_a_turn_runs_the_job_whose_turn_it_is_and_a_spare_turn_does_nothing(tmp_path, monkeypatch):
@@ -427,3 +431,67 @@ def test_a_restart_counts_waiting_research_turns_as_turns(tmp_path, monkeypatch)
     monkeypatch.setattr(jobs, "find_reels", started.append)
     jobs.recover(Session)
     assert started == ["aman0"]  # riya0's turn is in the schedule; only one was missing
+
+
+def _caption(Session, output_id, job_id, owner, minute, status="queued"):
+    from datetime import UTC, datetime
+
+    with Session() as db:
+        job = db.get(Job, job_id) or Job(id=job_id, source="x", presets=["p"], owner_id=owner,
+                                         status="done")  # fmt: skip
+        job.outputs.append(
+            Output(id=output_id, preset="p", path="/x.mp4", duration=1, planner="m", edl={},
+                   caption_status=status,
+                   caption_queued_at=datetime(2026, 11, 3, 10, minute, tzinfo=UTC))
+        )  # fmt: skip
+        db.add(job)
+        db.commit()
+
+
+def test_captions_take_turns_with_jobs_so_one_persons_captions_dont_hold_a_job_up(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    # Rishab's three captions were asked for first; Vanshaj's job comes after them.
+    for n in range(3):
+        _caption(Session, n + 1, f"r{n}", "rishab", n)
+    _queue(Session, ("vanshaj0", "vanshaj", 10))
+    assert _order(Session) == ["caption 1", "vanshaj0", "caption 2", "caption 3"]
+
+
+def test_a_running_caption_counts_as_its_owner_being_served(tmp_path):
+    from datetime import UTC, datetime
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _caption(Session, 1, "r0", "rishab", 0, status="writing")
+    _queue(Session, ("rishab1", "rishab", 1), ("vanshaj0", "vanshaj", 5))
+    turn = jobs.claim_turn(Session, datetime(2026, 11, 3, 11, 0, tzinfo=UTC))
+    assert turn == ("job", "vanshaj0")
+
+
+def test_a_caption_turn_can_run_a_job_and_a_job_turn_a_caption(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _caption(Session, 1, "r0", "rishab", 0, status="writing")
+    _caption(Session, 2, "r1", "rishab", 1)
+    _queue(Session, ("vanshaj0", "vanshaj", 5))
+    monkeypatch.setattr(jobs, "sessions", lambda: Session)
+    monkeypatch.setattr(jobs, "get_settings", lambda: None)
+    ran = []
+    monkeypatch.setattr(jobs, "run_job", lambda ident, *a: ran.append(("job", ident)))
+    monkeypatch.setattr(jobs, "run_caption", lambda ident, *a: ran.append(("caption", ident)))
+    jobs.write_caption.call_local(2)  # made for Rishab's caption; Vanshaj hasn't had a turn
+    jobs.process.call_local("vanshaj0")
+    assert ran == [("job", "vanshaj0"), ("caption", 2)]
+
+
+def test_a_restart_counts_job_and_caption_turns_together(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _caption(Session, 1, "r0", "rishab", 0)
+    _queue(Session, ("vanshaj0", "vanshaj", 5))
+    # Vanshaj's job turn is still queued; one turn, two queued things: one turn was lost.
+    queue = [SimpleNamespace(name=jobs.PROCESS, args=("vanshaj0",))]
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue, scheduled=lambda: []))
+    started, captions = [], []
+    monkeypatch.setattr(jobs, "process", started.append)
+    monkeypatch.setattr(jobs, "write_caption", captions.append)
+    monkeypatch.setattr(jobs, "learn_style", lambda *a: None)
+    jobs.recover(Session)
+    assert started == [] and captions == [1]
