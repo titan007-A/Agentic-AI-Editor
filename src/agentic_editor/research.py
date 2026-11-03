@@ -30,6 +30,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -1436,10 +1437,13 @@ def pdf_listing(llm, text: str, progress: Progress | None = None) -> list[dict]:
         if counts[e["section"]] == 1 and len(counts) > 1:
             near = [listing[j]["section"] for j in (i + 1, i - 1) if 0 <= j < len(listing)]
             e["section"] = next((s for s in near if counts[s] > 1), e["section"])
-    # Items without a number of the PDF's are numbered in order within their section.
-    numbers: dict[str, int] = {}
-    for key, e in zip(keys, listing, strict=True):
-        numbers[e["section"]] = numbers.get(e["section"], 0) + 1
-        if key not in given:
-            e["number"] = numbers[e["section"]]
+    # The PDF's own numbers stand when a section's run upwards; else (none, or numbers the
+    # model made up) its items are numbered in order.
+    for section in dict.fromkeys(e["section"] for e in listing):
+        members = [(k, e) for k, e in zip(keys, listing, strict=True) if e["section"] == section]
+        numbers = [e["number"] for _, e in members]
+        own = all(k in given for k, _ in members) and all(a < b for a, b in pairwise(numbers))
+        if not own:
+            for n, (_, e) in enumerate(members, 1):
+                e["number"] = n
     return listing

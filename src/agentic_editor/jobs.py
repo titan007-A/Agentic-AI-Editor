@@ -774,7 +774,7 @@ def run_pdf_research(
         for rank, (entry, reel) in enumerate(given):
             found.items.append(item_of(reel, rank, entry))
         empty = len(entries) - len({entry for entry, _ in given})
-        found.message = f"found reels for {len(entries) - empty} of {len(entries)} songs"
+        found.message = f"found reels for {len(entries) - empty} of {len(entries)}"
         found.status, found.progress = "done", 1.0
         db.commit()
 

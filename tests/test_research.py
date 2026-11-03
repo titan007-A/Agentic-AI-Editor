@@ -889,7 +889,7 @@ def test_a_pdf_title_read_as_a_section_and_by_words_are_tidied():
 
     class Reader:
         def chat_json(self, messages, schema, temperature=0.0):
-            row = lambda section, song, by: {"section": section, "number": 0, "song": song,  # noqa: E731
+            row = lambda section, song, by: {"section": section, "number": 1, "song": song,  # noqa: E731
                                              "singer": by, "year": "", "words": "",
                                              "top": "", "bottom": ""}  # fmt: skip
             return {"entries": [row("My favourite war films", "Saving Private Ryan",
