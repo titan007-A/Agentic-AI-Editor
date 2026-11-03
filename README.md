@@ -187,6 +187,14 @@ edit. The turns are file locks too, so a command-line run started while the serv
 busy waits its turn rather than running out of GPU memory. Each pasted link becomes its
 own job; progress streams to the browser over server-sent events.
 
+Which queued job runs next is fair, not first come first served: when a worker is free it
+takes the job whose turn it is. People's own jobs go before autopilot's (an autopilot job
+that has waited 30 minutes counts as one of theirs), then the account with the fewest jobs
+running, then the account served longest ago, then the oldest job. So one person's 20
+queued videos, or an autopilot batch, never hold up someone else's single job: the
+accounts take turns. On the Mac (M5 Pro) two workers are right: one x264 encode already
+uses every core (two at once take twice as long), and the models take the GPU in turn.
+
 Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.

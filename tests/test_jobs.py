@@ -227,3 +227,143 @@ def test_reels_are_known_by_code_among_a_job_s_sources():
         "upload:0123456789abcdef0123/video.mp4",
     ]
     assert jobs.reel_codes(sources) == {"DcafVd6BocI", "CAjcakIDpkV"}
+
+
+def _queue(Session, *jobs_, feed_jobs=()):
+    from datetime import UTC, datetime
+
+    from agentic_editor.db import Feed, FeedItem
+
+    with Session() as db:
+        for i, (job_id, owner, minute) in enumerate(jobs_):
+            at = datetime(2026, 11, 3, 10, minute, tzinfo=UTC)
+            db.add(Job(id=job_id, source=f"https://x.test/{i}", presets=["p"], owner_id=owner,
+                       created_at=at))  # fmt: skip
+        if feed_jobs:
+            feed = Feed(name="f", kind="link", location="x", presets=["p"])
+            db.add(feed)
+            db.flush()
+            for job_id in feed_jobs:
+                db.add(FeedItem(feed_id=feed.id, key=job_id, source="x", job_id=job_id))
+        db.commit()
+
+
+def _order(Session, minute=59):
+    from datetime import UTC, datetime
+
+    taken = []
+    # A second apart, as workers take jobs up one after another.
+    while (
+        job := jobs.claim(Session, datetime(2026, 11, 3, 10, minute, len(taken), tzinfo=UTC))
+    ) is not None:
+        taken.append(job)
+        with Session() as db:
+            db.get(Job, job).status = "done"
+            db.commit()
+    return taken
+
+
+def test_one_persons_long_queue_doesnt_hold_up_anyone_else(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    # Riya queues five, then Aman one: Aman's goes second, not sixth, and they take turns.
+    _queue(Session, *[(f"riya{i}", "riya", i) for i in range(5)], ("aman0", "aman", 6),
+           ("aman1", "aman", 7))  # fmt: skip
+    assert _order(Session) == ["riya0", "aman0", "riya1", "aman1", "riya2", "riya3", "riya4"]
+
+
+def test_peoples_own_jobs_go_before_autopilot_until_it_has_waited_too_long(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _queue(Session, ("auto0", "me", 0), ("auto1", "me", 1), ("mine", "me", 20),
+           feed_jobs=["auto0", "auto1"])  # fmt: skip
+    assert _order(Session, minute=25)[0] == "mine"
+    Session = make_sessionmaker(tmp_path / "later.db")
+    _queue(Session, ("auto0", "me", 0), ("mine", "me", 20), feed_jobs=["auto0"])
+    assert _order(Session, minute=45)[0] == "auto0"  # waited 45 minutes: its turn
+
+
+def test_an_account_already_running_a_job_waits_for_one_that_isnt(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _queue(Session, ("riya0", "riya", 0), ("riya1", "riya", 1), ("aman0", "aman", 2))
+    with Session() as db:
+        db.get(Job, "riya0").status = "running"
+        db.commit()
+    from datetime import UTC, datetime
+
+    assert jobs.claim(Session, datetime(2026, 11, 3, 11, 0, tzinfo=UTC)) == "aman0"
+
+
+def test_a_turn_runs_the_job_whose_turn_it_is_and_a_spare_turn_does_nothing(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _queue(Session, ("riya0", "riya", 0), ("riya1", "riya", 1), ("aman0", "aman", 2))
+    with Session() as db:
+        db.get(Job, "riya0").status = "running"
+        db.commit()
+    ran = []
+    monkeypatch.setattr(jobs, "sessions", lambda: Session)
+    monkeypatch.setattr(jobs, "get_settings", lambda: None)
+    monkeypatch.setattr(jobs, "run_job", lambda job_id, *a: ran.append(job_id))
+    jobs.process.call_local("riya1")  # made for riya1, but aman hasn't had a turn
+    assert ran == ["aman0"]
+    with Session() as db:
+        for job_id in ("riya1", "aman0"):
+            db.get(Job, job_id).status = "done"
+        db.commit()
+    jobs.process.call_local("aman0")
+    assert ran == ["aman0"]
+
+
+def test_a_turn_given_to_another_job_runs_only_that_jobs_own_video_presets_and_notes(
+    tmp_path, monkeypatch
+):
+    """Riya's job's turn goes to Aman's (she already has one running): the run gets only
+    Aman's source, notes and presets, his outputs land on his job, and hers is untouched."""
+    import yaml
+
+    from agentic_editor.db import User
+
+    presets_root = tmp_path / "presets"
+    for owner, label in (("riya", "Riya's preset"), ("aman", "Aman's preset")):
+        folder = presets_root / "people" / owner
+        folder.mkdir(parents=True)
+        (folder / "p.yaml").write_text(
+            yaml.safe_dump({"name": "p", "label": label, "min_duration": 1, "max_duration": 60})
+        )
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        for owner in ("riya", "aman"):
+            db.add(User(id=owner, username=owner, password_hash="x"))
+        db.add_all([
+            Job(id="riya-busy", source="https://x.test/riya-0", presets=["p"], owner_id="riya",
+                status="running"),
+            Job(id="riya-next", source="https://x.test/riya-vocals", presets=["p"],
+                owner_id="riya", notes="riya's notes"),
+            Job(id="aman-next", source="https://x.test/aman-vocals", presets=["p"],
+                owner_id="aman", notes="aman's notes"),
+        ])  # fmt: skip
+        db.commit()
+    settings = Settings(presets_dir=presets_root, media_dir=tmp_path / "media")
+    monkeypatch.setattr(jobs, "sessions", lambda: Session)
+    monkeypatch.setattr(jobs, "get_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    seen = {}
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        seen.update(source=source, labels=[p.label for p in presets], notes=notes, run_id=run_id)
+        return pipeline.Result("Aman's song", [])
+
+    real = jobs.run_job
+    monkeypatch.setattr(jobs, "run_job", lambda job_id, S, s: real(job_id, S, s, run))
+    jobs.process.call_local("riya-next")  # riya-next's turn
+
+    assert seen == {
+        "source": "https://x.test/aman-vocals",
+        "labels": ["Aman's preset"],
+        "notes": "aman's notes",
+        "run_id": "aman-next",
+    }
+    with Session() as db:
+        assert db.get(Job, "aman-next").status == "done"
+        assert db.get(Job, "aman-next").title == "Aman's song"
+        riya = db.get(Job, "riya-next")
+        assert (riya.status, riya.title, riya.started_at) == ("queued", "", None)
+        assert db.query(Event).filter_by(job_id="riya-next").count() == 0

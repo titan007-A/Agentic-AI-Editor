@@ -2,12 +2,14 @@
 
 import json
 import logging
+import threading
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
 from huey import SqliteHuey
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import accounts, caption, pipeline, research, style
@@ -15,6 +17,7 @@ from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
     Event,
+    FeedItem,
     HiddenAccount,
     Job,
     Output,
@@ -94,6 +97,72 @@ class Tracker:
             db.commit()
 
 
+# An autopilot job waits behind people's own jobs only this long; then it is one of them.
+AGING = timedelta(minutes=30)
+_claiming = threading.Lock()
+
+
+def _utc(at: datetime) -> datetime:
+    # SQLite hands times back without their zone; they were written in UTC.
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
+def next_job(db, now: datetime) -> Job | None:
+    """The queued job whose turn it is. People's own jobs go before autopilot's (until an
+    autopilot job has waited AGING), then the account with the fewest jobs running goes
+    first, then the one served longest ago, then the oldest job: one person's long queue
+    never holds everyone else up."""
+    queued = db.scalars(select(Job).where(Job.status == "queued")).all()
+    if not queued:
+        return None
+    ids = [j.id for j in queued]
+    automatic = set(db.scalars(select(FeedItem.job_id).where(FeedItem.job_id.in_(ids))))
+    running = Counter(db.scalars(select(Job.owner_id).where(Job.status == "running")))
+    served = dict(
+        db.execute(
+            select(Job.owner_id, func.max(Job.started_at))
+            .where(Job.started_at.is_not(None))
+            .group_by(Job.owner_id)
+        ).all()
+    )
+    never = datetime.min.replace(tzinfo=UTC)
+
+    def turn(job: Job):
+        waited = now - _utc(job.created_at)
+        background = job.id in automatic and waited < AGING
+        last = served.get(job.owner_id)
+        return (
+            background,
+            running[job.owner_id],
+            _utc(last) if last else never,
+            _utc(job.created_at),
+            job.id,
+        )
+
+    return min(queued, key=turn)
+
+
+def claim(Session: sessionmaker, now: datetime | None = None) -> str | None:
+    """Mark the job whose turn it is running and return its id; None when none is queued.
+    Every queued job has one task in the queue, but a task runs whichever job's turn it
+    is when a worker takes it up, not the one it was made for."""
+    with _claiming:
+        while True:
+            with Session() as db:
+                at = now or datetime.now(UTC)
+                job = next_job(db, at)
+                if job is None:
+                    return None
+                taken = db.execute(
+                    update(Job)
+                    .where(Job.id == job.id, Job.status == "queued")
+                    .values(status="running", started_at=at)
+                ).rowcount
+                db.commit()
+                if taken:
+                    return job.id
+
+
 def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline.run) -> None:
     track = Tracker(Session, job_id, 1)
     # Everything is inside the try, the final write too: a job must never stay "running".
@@ -101,6 +170,7 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
         with Session() as db:
             job = db.get(Job, job_id)
             job.status = "running"
+            job.started_at = job.started_at or datetime.now(UTC)
             db.commit()
             source, preset_names, notes = job.source, list(job.presets), job.notes
             owner = db.get(User, job.owner_id) if job.owner_id else None
@@ -677,7 +747,15 @@ def run_research(
 
 @huey.task()
 def process(job_id: str) -> None:
-    run_job(job_id, sessions(), get_settings())
+    """One queued job's turn: runs the job whose turn it is now (see claim), which is
+    `job_id` only when nothing fairer is waiting."""
+    Session = sessions()
+    chosen = claim(Session)
+    if chosen is None:
+        return  # its job was deleted, or run by an earlier turn
+    if chosen != job_id:
+        log.info("job %s's turn went to job %s", job_id, chosen)
+    run_job(chosen, Session, get_settings())
 
 
 @huey.task()
@@ -740,11 +818,11 @@ def recover(Session: sessionmaker) -> None:
             for output_id in db.scalars(select(Output.id).where(Output.caption_status == "queued"))
             if (CAPTION, output_id) not in pending
         ]
-        lost_jobs = [
-            job_id
-            for job_id in db.scalars(select(Job.id).where(Job.status == "queued"))
-            if (PROCESS, job_id) not in pending
-        ]
+        # A turn runs whichever job is due, so what counts is a turn for every queued job.
+        turns = sum(1 for name, _ in pending if name == PROCESS)
+        queued_jobs = list(db.scalars(select(Job.id).where(Job.status == "queued")))
+        unturned = [j for j in queued_jobs if (PROCESS, j) not in pending]
+        lost_jobs = unturned[: max(0, len(queued_jobs) - turns)]
         lost_drafts = [
             draft_id
             for draft_id in db.scalars(select(StyleDraft.id).where(StyleDraft.status == "queued"))
