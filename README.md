@@ -221,7 +221,10 @@ nobody sees presets meant for someone else. The admin sees
 everyone's work, with who made each, and manages every employee's presets from the Presets
 page ("Whose presets"), or from People.
 
-On Autopilot, the Ready and Needs a look piles are grouped by preset, one folder each.
+On Autopilot, the Ready and Needs a look piles show only folders at first, one per preset,
+each with its video count and the newest video's picture. Tapping a folder opens it on its
+videos; "All folders" or the browser's back button closes it, and the address
+(`/autopilot/?tab=look&folder=<preset>`) opens the same folder from a link.
 
 The preset editor keeps a small preview in the corner: a still of what the preset makes,
 redrawn a moment after every change (saved or not), on a drawn stand-in video in the shape

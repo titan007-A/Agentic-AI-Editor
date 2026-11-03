@@ -13,6 +13,8 @@ export type Edl = {
 export type Output = {
   id: number;
   preset: string;
+  /** The preset's name as its owner sees it ("Iconic Spanish"); empty from older servers. */
+  preset_label?: string;
   duration: number;
   title: string;
   planner: string;
