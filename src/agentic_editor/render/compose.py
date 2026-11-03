@@ -522,7 +522,13 @@ def render(
             text.place(b, face(b.font, b.text), frame, band, gap)
             for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
         ]
-        obstacles += [(0.0, edl.duration, *block.band) for block in placed]
+        # A block without words (a spacer that only sets where the picture goes) has no
+        # ink for anything to keep off.
+        obstacles += [
+            (0.0, edl.duration, *p.band)
+            for b, p in zip(preset.text_blocks, placed, strict=True)
+            if b.text.strip()
+        ]
     else:
         placed = []
 

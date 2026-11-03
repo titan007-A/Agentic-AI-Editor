@@ -305,7 +305,9 @@ def render_checked(
         # Like a render: captions that avoid faces also keep off the text and the picture.
         keep_off = []
         if preset.captions.avoid_faces:
-            keep_off = list(inks)
+            keep_off = [
+                ink for b, ink in zip(shown.text_blocks, inks, strict=True) if b.text.strip()
+            ]
             if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]):
                 keep_off.append((y0, y1))
         _caption(canvas, preset, settings, face, keep_off)
