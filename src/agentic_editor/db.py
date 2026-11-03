@@ -60,6 +60,8 @@ class Job(Base):
     progress: Mapped[float] = mapped_column(default=0.0)
     error: Mapped[str | None] = mapped_column(Text)
     parent_id: Mapped[str | None] = mapped_column(String(12))
+    # When a worker took it up: whose turn is next goes by who was served last.
+    started_at: Mapped[datetime | None]
     # Who started it; None for jobs from before accounts, which are the admin's.
     owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
