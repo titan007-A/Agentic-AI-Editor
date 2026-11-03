@@ -48,21 +48,20 @@ def available() -> bool:
     return True
 
 
-def models_dir(root: Path) -> Path:
-    return root / "ocr"
-
-
 @lru_cache
-def _engine(folder: str):
+def _engine():
     from rapidocr import RapidOCR
 
-    # The models download into `folder` on first use (fetch-models does it ahead).
-    Path(folder).mkdir(parents=True, exist_ok=True)
-    return RapidOCR(params={"Global.model_root_dir": folder, "Global.log_level": "warning"})
+    # The models come inside the rapidocr package: nothing to download, nothing to lose
+    # when the environment is rebuilt. Its warnings (one per frame without text) say
+    # nothing worth a log line.
+    return RapidOCR(params={"Global.log_level": "error"})
 
 
 def fetch_model(root: Path) -> None:
-    _engine(str(models_dir(root)))
+    """Load the models once, so a broken install shows at setup rather than in a job.
+    (`root` is where the other models live; OCR's come with its package.)"""
+    _engine()
 
 
 def letters(text: str) -> int:
@@ -75,7 +74,7 @@ def read(image: Path | Image.Image, root: Path, whole_frame: bool = False) -> li
     close-up of one line is all line)."""
     picture = image if isinstance(image, Image.Image) else Image.open(image)
     pixels = np.array(picture.convert("RGB"))
-    engine = _engine(str(models_dir(root)))
+    engine = _engine()
     with _lock:  # one recogniser shared by the job threads
         result = engine(pixels, use_det=True, use_cls=False, use_rec=True)
     if result.boxes is None:
