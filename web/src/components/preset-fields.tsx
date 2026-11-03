@@ -218,6 +218,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     title: "Post caption",
     fields: [
       { path: "post_caption.enabled", label: "Write it after every render", kind: "switch" },
+      {
+        path: "post_caption.about",
+        label: "About (song: the song in it; video: what the video shows, from watching it)",
+        kind: "select",
+        options: ["song", "video"],
+      },
       { path: "post_caption.language", label: "Language (es, en, it...)", kind: "text" },
       { path: "post_caption.style", label: "How to write it (empty: default)", kind: "textarea" },
       { path: "post_caption.min_words", label: "Min words", kind: "number" },

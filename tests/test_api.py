@@ -1567,3 +1567,28 @@ def test_videos_carry_the_name_their_owner_gave_the_preset(env):
     assert admins["preset_label"] == "Iconic Spanish"
     listed = {j["id"]: j for j in env.client.get("/api/jobs").json()}
     assert listed[job["id"]]["outputs"][0]["preset_label"] == "Iconic Spanish"
+
+
+def test_a_preset_about_the_video_writes_from_watching_it_not_from_a_song(env, monkeypatch):
+    from agentic_editor import caption
+
+    fake_captions(monkeypatch, env)
+    preset = env.client.get("/api/presets").json()
+    square = next(p for p in preset if p["name"] == "square-1x1")
+    square["post_caption"] |= {"enabled": True, "about": "video", "style": "about the flyover"}
+    assert env.client.put("/api/presets/square-1x1", json=square).status_code == 200
+    asked = {}
+
+    def from_video(router, settings, source_ref, edl, path, description, headline, wanted):
+        asked.update(source=source_ref, about=wanted.about, style=wanted.style)
+        return caption.Written("Dos Apache sobre la playa 🚁", [], [])
+
+    def no_song(*args):
+        raise AssertionError("a video caption never looks for a song")
+
+    monkeypatch.setattr(jobs, "caption_from_video", from_video)
+    monkeypatch.setattr(caption, "identify", no_song)
+    (job,) = start(env.client, presets=("square-1x1",))
+    output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    assert output["caption"] == "Dos Apache sobre la playa 🚁"
+    assert asked == {"source": "https://x.test/v", "about": "video", "style": "about the flyover"}
