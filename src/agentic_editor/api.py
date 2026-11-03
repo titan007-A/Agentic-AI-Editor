@@ -98,6 +98,12 @@ class ShareRequest(BaseModel):
     to: list[str] | None = None  # employees' account ids; none given: every employee
 
 
+class AssignRequest(BaseModel):
+    names: list[str]  # the admin's presets the employee should have
+    # True: the ones they already have are replaced by the admin's current version too.
+    replace: bool = False
+
+
 class AccountRequest(BaseModel):
     username: str
     password: str
@@ -1805,6 +1811,45 @@ def create_app(
         if account is None:
             raise HTTPException(404, "no such account")
         return account
+
+    def assigned(target: Account, me: Account) -> dict:
+        """The admin's presets, each marked if the employee has it, and the presets only
+        the employee has (theirs alone; assigning never touches them)."""
+        theirs = presets(target)
+        mine = presets(me)
+        return {
+            "presets": [{"name": n, "label": p.label, "has": n in theirs} for n, p in mine.items()],
+            "own": [{"name": n, "label": p.label} for n, p in theirs.items() if n not in mine],
+        }
+
+    def employee(account_id: str, session: Session) -> Account:
+        target = find_account(account_id, session)
+        if target.role != accounts.MEMBER:
+            raise HTTPException(422, "admins share one set of presets: assign to employees")
+        return target
+
+    @app.get("/api/admin/users/{account_id}/presets")
+    def assigned_presets(account_id: str, me: Admin, session: DB) -> dict:
+        return assigned(employee(account_id, session), me)
+
+    @app.put("/api/admin/users/{account_id}/presets")
+    def assign_presets(account_id: str, body: AssignRequest, me: Admin, session: DB) -> dict:
+        """Set which of the admin's presets one employee has: the ticked ones they lack are
+        copied to them (and, with replace, the ones they have are refreshed), and the
+        unticked ones they have are removed. Presets only they have are left alone."""
+        target = employee(account_id, session)
+        mine = presets(me)
+        unknown = sorted(set(body.names) - set(mine))
+        if unknown:
+            raise HTTPException(422, f"no such preset: {', '.join(unknown)}")
+        folder = presets_dir(target)
+        theirs = presets(target)
+        for name, preset in mine.items():
+            if name in body.names and (body.replace or name not in theirs):
+                save_preset(preset, folder)
+            elif name not in body.names and name in theirs:
+                (folder / f"{name}.yaml").unlink(missing_ok=True)
+        return assigned(target, me)
 
     @app.post("/api/admin/users/{account_id}/password")
     def reset_password(account_id: str, body: PasswordRequest, me: Admin, session: DB) -> dict:
