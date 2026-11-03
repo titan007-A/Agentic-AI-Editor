@@ -1646,6 +1646,11 @@ def test_a_numbered_pdf_list_is_chosen_from_by_hand_or_in_words(env, monkeypatch
                 "presets": {"1960-1969": "square-1x1"}, "understood": "4-5 of each"}  # fmt: skip
 
     monkeypatch.setattr(research, "pdf_choose", choose)
+    # No real models, nor the machine's backends, behind the planner asked.
+    from agentic_editor import api as api_module
+
+    monkeypatch.setattr(api_module, "get_backends", lambda: None)
+    monkeypatch.setattr(api_module, "ModelRouter", lambda *args: ResearchRouter())
     read = env.client.post(f"{url}/choose-by-words", json={"words": "sirf 4 aur 5"}).json()
     assert read["keep"] == [3, 4, 8, 9] and asked["words"] == "sirf 4 aur 5"
     assert asked["songs"] == 10 and "square-1x1" in asked["presets"]
