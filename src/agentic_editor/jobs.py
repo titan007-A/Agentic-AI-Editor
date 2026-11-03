@@ -768,9 +768,72 @@ def write_caption(output_id: int) -> None:
     run_caption(output_id, sessions(), get_settings())
 
 
+# How long a research's turn waits before looking again while another research runs.
+RESEARCH_RETRY = 10
+BUSY = "busy"
+
+
+def next_research(db) -> Research | None:
+    """The queued research whose turn it is: the account served longest ago first, then
+    the oldest research, so one person's pile of researches doesn't hold anyone up."""
+    queued = db.scalars(select(Research).where(Research.status == "queued")).all()
+    if not queued:
+        return None
+    served = dict(
+        db.execute(
+            select(Research.owner_id, func.max(Research.started_at))
+            .where(Research.started_at.is_not(None))
+            .group_by(Research.owner_id)
+        ).all()
+    )
+    never = datetime.min.replace(tzinfo=UTC)
+
+    def turn(found: Research):
+        last = served.get(found.owner_id)
+        return (_utc(last) if last else never, _utc(found.created_at), found.id)
+
+    return min(queued, key=turn)
+
+
+def claim_research(Session: sessionmaker, now: datetime | None = None) -> str | None:
+    """Mark the research whose turn it is running and return its id; BUSY while another
+    research runs (one at a time: two at once search the same sites together, which then
+    refuse them, and hold both workers the jobs need); None when none is queued."""
+    with _claiming:
+        while True:
+            with Session() as db:
+                running = select(func.count()).select_from(Research)
+                if db.scalar(running.where(Research.status == "running")):
+                    return BUSY
+                at = now or datetime.now(UTC)
+                found = next_research(db)
+                if found is None:
+                    return None
+                taken = db.execute(
+                    update(Research)
+                    .where(Research.id == found.id, Research.status == "queued")
+                    .values(status="running", started_at=at)
+                ).rowcount
+                db.commit()
+                if taken:
+                    return found.id
+
+
 @huey.task()
 def find_reels(research_id: str) -> None:
-    run_research(research_id, sessions(), get_settings())
+    """One queued research's turn: runs the research whose turn it is (see
+    claim_research), or, while another runs, waits RESEARCH_RETRY seconds in the queue's
+    schedule, holding no worker meanwhile."""
+    Session = sessions()
+    chosen = claim_research(Session)
+    if chosen == BUSY:
+        find_reels.schedule((research_id,), delay=RESEARCH_RETRY)
+        return
+    if chosen is None:
+        return  # removed, or run by an earlier turn
+    if chosen != research_id:
+        log.info("research %s's turn went to research %s", research_id, chosen)
+    run_research(chosen, Session, get_settings())
 
 
 @huey.task()
@@ -800,6 +863,8 @@ def recover(Session: sessionmaker) -> None:
     running will never finish: it is marked failed. One still queued whose task is gone
     (it never reached the queue) is queued again."""
     pending = {(task.name, task.args[0]) for task in huey.pending() if task.args}
+    # A research turn waiting for the running one sits in the schedule, not the queue.
+    pending |= {(task.name, task.args[0]) for task in huey.scheduled() if task.args}
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status == "running")).all():
             job.status, job.error = "failed", INTERRUPTED
@@ -828,10 +893,11 @@ def recover(Session: sessionmaker) -> None:
             for draft_id in db.scalars(select(StyleDraft.id).where(StyleDraft.status == "queued"))
             if (LEARN, draft_id) not in pending
         ]
-        lost_research = [
-            research_id
-            for research_id in db.scalars(select(Research.id).where(Research.status == "queued"))
-            if (RESEARCH, research_id) not in pending
+        # Like jobs: a turn runs whichever research is due, so a turn for each is enough.
+        research_turns = sum(1 for name, _ in pending if name == RESEARCH)
+        queued_research = list(db.scalars(select(Research.id).where(Research.status == "queued")))
+        lost_research = [r for r in queued_research if (RESEARCH, r) not in pending][
+            : max(0, len(queued_research) - research_turns)
         ]
         queued = select(ResearchAccount.id).where(ResearchAccount.learn_status == "queued")
         lost_accounts = [a for a in db.scalars(queued) if (ACCOUNT, a) not in pending]

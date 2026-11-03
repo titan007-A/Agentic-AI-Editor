@@ -22,7 +22,7 @@ def test_a_restart_fails_what_was_running_and_queues_again_what_was_lost(tmp_pat
         ])  # fmt: skip
         db.commit()
     queue = [SimpleNamespace(name=jobs.PROCESS, args=("waiting",))]
-    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue))
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue, scheduled=lambda: []))
     started, learning = [], []
     monkeypatch.setattr(jobs, "process", started.append)
     monkeypatch.setattr(jobs, "learn_style", learning.append)
@@ -118,7 +118,7 @@ def test_a_restart_settles_captions_that_were_being_written(tmp_path, monkeypatc
             )  # fmt: skip
         db.add(job)
         db.commit()
-    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: []))
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: [], scheduled=lambda: []))
     asked = []
     monkeypatch.setattr(jobs, "process", lambda job_id: None)
     monkeypatch.setattr(jobs, "learn_style", lambda draft_id: None)
@@ -143,7 +143,7 @@ def test_a_restart_settles_researches_like_jobs(tmp_path, monkeypatch):
         ])  # fmt: skip
         db.commit()
     queue = [SimpleNamespace(name=jobs.RESEARCH, args=("waiting",))]
-    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue))
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue, scheduled=lambda: []))
     asked = []
     monkeypatch.setattr(jobs, "find_reels", asked.append)
 
@@ -168,7 +168,7 @@ def test_a_restart_settles_the_learning_of_instagram_accounts(tmp_path, monkeypa
         ])  # fmt: skip
         db.commit()
     queue = [SimpleNamespace(name=jobs.ACCOUNT, args=("waiting",))]
-    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue))
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: queue, scheduled=lambda: []))
     asked = []
     monkeypatch.setattr(jobs, "read_account", asked.append)
 
@@ -198,7 +198,7 @@ def test_a_restart_thinks_of_lost_questions_again_and_answers_lost_chat(tmp_path
             ResearchMessage(id=3, research_id="done", role="user", text="more?"),
         ])  # fmt: skip
         db.commit()
-    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: []))
+    monkeypatch.setattr(jobs, "huey", SimpleNamespace(pending=lambda: [], scheduled=lambda: []))
     thought, answered = [], []
     monkeypatch.setattr(jobs, "ask_questions", thought.append)
     monkeypatch.setattr(jobs, "answer_chat", answered.append)
@@ -367,3 +367,63 @@ def test_a_turn_given_to_another_job_runs_only_that_jobs_own_video_presets_and_n
         riya = db.get(Job, "riya-next")
         assert (riya.status, riya.title, riya.started_at) == ("queued", "", None)
         assert db.query(Event).filter_by(job_id="riya-next").count() == 0
+
+
+def _researches(Session, *rows):
+    from datetime import UTC, datetime
+
+    from agentic_editor.db import Research
+
+    with Session() as db:
+        for research_id, owner, minute, status in rows:
+            db.add(Research(id=research_id, owner_id=owner, description="songs", status=status,
+                            created_at=datetime(2026, 11, 3, 10, minute, tzinfo=UTC)))  # fmt: skip
+        db.commit()
+
+
+def test_researches_run_one_at_a_time_and_accounts_take_turns(tmp_path):
+    from datetime import UTC, datetime
+
+    from agentic_editor.db import Research
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _researches(Session, ("riya0", "riya", 0, "queued"), ("riya1", "riya", 1, "queued"),
+                ("riya2", "riya", 2, "queued"), ("aman0", "aman", 3, "queued"))  # fmt: skip
+    order = []
+    for second in range(4):
+        at = datetime(2026, 11, 3, 10, 30, second, tzinfo=UTC)
+        taken = jobs.claim_research(Session, at)
+        assert jobs.claim_research(Session, at) == jobs.BUSY  # one at a time
+        order.append(taken)
+        with Session() as db:
+            db.get(Research, taken).status = "done"
+            db.commit()
+    assert order == ["riya0", "aman0", "riya1", "riya2"]
+    assert jobs.claim_research(Session) is None
+
+
+def test_a_research_turn_waits_in_the_schedule_while_another_runs(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _researches(Session, ("riya0", "riya", 0, "running"), ("aman0", "aman", 1, "queued"))
+    monkeypatch.setattr(jobs, "sessions", lambda: Session)
+    monkeypatch.setattr(jobs, "get_settings", lambda: None)
+    ran, later = [], []
+    monkeypatch.setattr(jobs, "run_research", lambda research_id, *a: ran.append(research_id))
+    monkeypatch.setattr(
+        jobs.find_reels, "schedule", lambda args, delay: later.append((args, delay))
+    )
+    jobs.find_reels.call_local("aman0")
+    assert ran == [] and later == [(("aman0",), jobs.RESEARCH_RETRY)]
+
+
+def test_a_restart_counts_waiting_research_turns_as_turns(tmp_path, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _researches(Session, ("riya0", "riya", 0, "queued"), ("aman0", "aman", 1, "queued"))
+    waiting = [SimpleNamespace(name=jobs.RESEARCH, args=("riya0",))]
+    monkeypatch.setattr(
+        jobs, "huey", SimpleNamespace(pending=lambda: [], scheduled=lambda: waiting)
+    )
+    started = []
+    monkeypatch.setattr(jobs, "find_reels", started.append)
+    jobs.recover(Session)
+    assert started == ["aman0"]  # riya0's turn is in the schedule; only one was missing
