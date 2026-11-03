@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from agentic_editor import (
     agent,
@@ -31,7 +32,7 @@ from agentic_editor import (
     subtitles,
     trim,
 )
-from agentic_editor.analysis import faces, onscreen, subjects, watermarks
+from agentic_editor.analysis import faces, ocr, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
@@ -168,22 +169,78 @@ def subject_samples(
     settings: Settings,
     work_dir: Path,
 ) -> list[tuple[float, list[subjects.Subject]]]:
-    """Vision-model subjects at each time, cached so a re-render doesn't ask again."""
-    if vision is None or not times:
-        return [(t, []) for t in times]
-    cache = work_dir / f"subjects-{vision.model.replace(':', '_').replace('/', '_')}.json"
+    """Subjects at each time, cached so a re-render doesn't ask again: heads, instruments
+    and the rest from the vision model, on-screen text from OCR (the vision model's own text
+    boxes only where OCR can't run here)."""
+    if not times:
+        return []
+    found: dict[float, list[subjects.Subject]] = {t: [] for t in times}
+    if vision is not None:
+        cache = work_dir / f"subjects-{vision.model.replace(':', '_').replace('/', '_')}.json"
+        known = json.loads(cache.read_text()) if cache.exists() else {}
+        missing = [t for t in times if f"{t:.3f}" not in known]
+        if missing:
+            size = (analysis.width, analysis.height)
+            asked = subjects.find(
+                vision, video, missing, size, settings.ffmpeg_bin, work_dir / "views"
+            )
+            for t, items in zip(missing, asked, strict=True):
+                if items is not None:  # a failed answer is asked again next time
+                    known[f"{t:.3f}"] = [s.model_dump() for s in items]
+            cache.write_text(json.dumps(known))
+        found = {
+            t: [subjects.Subject.model_validate(s) for s in known.get(f"{t:.3f}", [])]
+            for t in times
+        }
+    texts = text_lines(video, times, analysis, settings, work_dir)
+    if texts is not None:
+        found = {t: [s for s in found[t] if s.kind != "text"] + texts[t] for t in times}
+    return [(t, found[t]) for t in times]
+
+
+OCR_VERSION = 2
+TEXT_EVERY = 2.0  # seconds between OCR looks for the picture band's edge text
+
+
+def text_lines(
+    video: Path, times: list[float], analysis: Analysis, settings: Settings, work_dir: Path
+) -> dict[float, list[subjects.Subject]] | None:
+    """The text OCR reads at each time, as subjects in source pixels, cached; None where
+    OCR can't run (not installed, its models can't be fetched)."""
+    if not ocr.available():
+        return None
+    cache = work_dir / f"texts-ocr-v{OCR_VERSION}.json"
     known = json.loads(cache.read_text()) if cache.exists() else {}
     missing = [t for t in times if f"{t:.3f}" not in known]
     if missing:
-        size = (analysis.width, analysis.height)
-        found = subjects.find(vision, video, missing, size, settings.ffmpeg_bin, work_dir / "views")
-        for t, items in zip(missing, found, strict=True):
-            if items is not None:  # a failed answer is asked again next time
-                known[f"{t:.3f}"] = [s.model_dump() for s in items]
-        cache.write_text(json.dumps(known))
-    return [
-        (t, [subjects.Subject.model_validate(s) for s in known.get(f"{t:.3f}", [])]) for t in times
-    ]
+        views = work_dir / "views-ocr"
+        views.mkdir(parents=True, exist_ok=True)
+        try:
+            for t in missing:
+                frame = subjects.grab(video, t, views / f"{t:.3f}.jpg", settings.ffmpeg_bin)
+                with Image.open(frame) as picture:
+                    scale = analysis.width / picture.width
+                    lines = ocr.read(picture, settings.models_dir, whole_frame=True)
+                known[f"{t:.3f}"] = [
+                    subjects.Subject(
+                        kind="text",
+                        label=line.text[:80],
+                        x0=round(line.x0 * scale),
+                        y0=round(line.y0 * scale),
+                        x1=round(line.x1 * scale),
+                        y1=round(line.y1 * scale),
+                        keep=True,
+                    ).model_dump()
+                    for line in lines
+                ]
+        except Exception as exc:  # OCR is an improvement, never a reason to fail a job
+            log.warning("no OCR here (%s); the vision model's text boxes are used", exc)
+            return None
+        finally:
+            cache.write_text(json.dumps(known))
+    return {
+        t: [subjects.Subject.model_validate(s) for s in known.get(f"{t:.3f}", [])] for t in times
+    }
 
 
 def translated(
@@ -364,6 +421,11 @@ def band_framing(
     times = framing.view_times(clip, analysis.scenes, every=None)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
     marks = [(m.y, m.y + m.height) for m in analysis.watermarks]
+    # Burnt-in lyrics come and go line by line, so one look a shot misses them: OCR (cheap,
+    # off the GPU) looks every few seconds, and a line along an edge at any moment goes.
+    every = framing.view_times(clip, analysis.scenes, every=TEXT_EVERY)
+    if (texts := text_lines(video, every, analysis, settings, work_dir)) is not None:
+        marks += [(s.y0, s.y1) for items in texts.values() for s in items]
     if not preset.watermarks.cut_text:
         # The video's own text stays in view: nothing is cut for it.
         samples = [(t, [s for s in items if s.kind != "text"]) for t, items in samples]
@@ -1006,14 +1068,20 @@ def confirmed_watermarks(
         log.warning("no vision model; leaving %d possible watermark(s) unblurred", len(candidates))
         return []
     model = vision.model.replace(":", "_").replace("/", "_")
-    cache = work_dir / f"watermarks-v{watermarks.VERSION}-{model}.json"
+    reads = ocr.available()  # decided with OCR's reading or the vision model's: kept apart
+    cache = work_dir / f"watermarks-v{watermarks.VERSION}-{model}{'-ocr' if reads else ''}.json"
     if cache.exists():
         checked = [Watermark.model_validate(m) for m in json.loads(cache.read_text())]
     else:
         progress("analyze", f"checking {len(candidates)} possible watermark(s)")
+
+        def read(close_up: Path) -> str:
+            return " ".join(line.text for line in ocr.read(close_up, settings.models_dir))
+
         checked = watermarks.confirm(
-            vision, video, candidates, settings.ffmpeg_bin, work_dir / "watermark-checks"
-        )
+            vision, video, candidates, settings.ffmpeg_bin, work_dir / "watermark-checks",
+            read if reads else None,
+        )  # fmt: skip
         cache.write_text(json.dumps([m.model_dump() for m in checked]))
     kept = [m for m in checked if m.confirmed]
     log.info("%d of %d watermark candidate(s) confirmed", len(kept), len(checked))

@@ -26,6 +26,17 @@ def shazam_hears_nothing(request, monkeypatch):
     monkeypatch.setattr(shazam, "song", lambda *args, **kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def no_ocr(request, monkeypatch):
+    """OCR runs models on real frames: in a test it isn't there, so the vision model's text
+    boxes are used, unless the test turns it on itself."""
+    from agentic_editor.analysis import ocr
+
+    if request.module.__name__.endswith("test_ocr"):
+        return
+    monkeypatch.setattr(ocr, "available", lambda: False)
+
+
 @pytest.fixture
 def make_analysis():
     def build(words: list[Word], duration: float, energy: list[float] | None = None, **extra):
