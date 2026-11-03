@@ -31,7 +31,7 @@ WINDOW_STEP = 1.0  # seconds between window starts
 # fraction of a second of each jump.
 PRESENCE_SECONDS = 1.5
 # Bump when detection changes, so cached candidates from the old detector aren't reused.
-VERSION = 5
+VERSION = 6
 
 EDGE_LEVEL = 28  # gray-level step that counts as an edge
 PERSISTENT_SHARE = 0.9  # of a window's frames an edge has to be in
@@ -46,8 +46,19 @@ EDGE_BAND = 0.2
 MIN_STROKE_SPREAD = 3
 
 
+class Part(BaseModel):
+    """A stretch of time a mark that changes width (burnt-in lyrics, one line after
+    another) has one width: its columns in source pixels and when."""
+
+    x: int
+    width: int
+    spans: list[tuple[float, float]]
+
+
 class Watermark(BaseModel):
-    """A box in source pixels and the source-time spans it is visible."""
+    """A box in source pixels and the source-time spans it is visible. A mark whose
+    lettering changes width over time also has parts, each blurred at its own width; the
+    box covers them all."""
 
     x: int
     y: int
@@ -59,9 +70,17 @@ class Watermark(BaseModel):
     # Source time of the clearest sighting, where the vision model is shown the mark.
     seen_at: float | None = None
 
+    parts: list[Part] = []
+
     def visible(self, start: float, end: float) -> list[tuple[float, float]]:
         """Visible spans clipped to [start, end)."""
         return [(max(a, start), min(b, end)) for a, b in self.spans if b > start and a < end]
+
+    def pieces(self) -> list[tuple[int, int, list[tuple[float, float]]]]:
+        """(x, width, spans) to blur: the parts, or the whole box when it has none."""
+        if not self.parts:
+            return [(self.x, self.width, self.spans)]
+        return [(p.x, p.width, p.spans) for p in self.parts]
 
 
 @dataclass
@@ -277,6 +296,46 @@ def windows_of(
         yield 0, np.stack([f for f, _ in recent]), np.mean([m for _, m in recent], axis=0)
 
 
+REACH = 2.5  # times the box's width lettering may run to: further is scenery, not words
+
+
+def lettering(strip: np.ndarray, x0: int, x1: int) -> tuple[int, int]:
+    """Columns the lettering in a mark's rows covers in one window: from the box out, as
+    far as columns with steady edges carry on with gaps no wider than the rows are tall
+    (the space between two words)."""
+    cols = (strip >= PERSISTENT_SHARE).sum(axis=0) >= 2
+    gap = max(2, strip.shape[0])
+    limit = round((x1 - x0) * (REACH - 1) / 2)
+    left, right = x0, x1
+    while left > max(0, x0 - limit):
+        seen = np.flatnonzero(cols[max(0, left - gap) : left])
+        if not len(seen):
+            break
+        left = max(0, left - gap) + int(seen[0])
+    while right < min(len(cols), x1 + limit):
+        seen = np.flatnonzero(cols[right : right + gap])
+        if not len(seen):
+            break
+        right = right + int(seen[-1]) + 1
+    return left, right
+
+
+def widths(
+    windows: list[int], reach: list[tuple[int, int]], tolerance: int
+) -> list[tuple[list[int], tuple[int, int]]]:
+    """Windows in a row whose lettering spans about the same columns, with the columns
+    they cover together: one lyric line each."""
+    groups: list[tuple[list[int], tuple[int, int]]] = []
+    for k, (a, b) in zip(windows, reach, strict=True):
+        if groups:
+            members, (ga, gb) = groups[-1]
+            if k - members[-1] <= 2 and abs(a - ga) <= tolerance and abs(b - gb) <= tolerance:
+                groups[-1] = ([*members, k], (min(a, ga), max(b, gb)))
+                continue
+        groups.append(([k], (a, b)))
+    return groups
+
+
 def find(
     frames: Callable[[], Iterable[np.ndarray]],
     source_size: tuple[int, int],
@@ -322,12 +381,13 @@ def find(
         short_starts.append(first / sample_fps)
         for i, t in enumerate(tracks):
             x0, y0, x1, y1 = t.box
-            crops[i].append(share[y0:y1, x0:x1])
+            crops[i].append(share[y0:y1])  # the whole rows: lettering can run past the box
     starts_at = np.array(short_starts)
 
     scale = source_size[0] / sample_width
     found = []
-    for t, boxes in zip(tracks, crops, strict=True):
+    for t, strips in zip(tracks, crops, strict=True):
+        boxes = [strip[:, t.box[0] : t.box[2]] for strip in strips]
         # The strokes are what was an edge throughout the windows the mark was found in.
         inside = [
             k
@@ -346,7 +406,13 @@ def find(
         if len(windows) * (1 / sample_fps) < min(window_seconds, duration / 2):
             continue  # its pattern doesn't really stand out: scenery, not an overlay
         clearest = max(windows, key=lambda k: contrast(boxes[k], reference))
-        x0, y0, x1, y1 = (round(v * scale) for v in t.box)
+        # Lettering wider than the box in some windows (a longer lyric line): each stretch
+        # of one width becomes a part, blurred at that width.
+        reach = [lettering(strips[k], t.box[0], t.box[2]) for k in windows]
+        groups = widths(windows, reach, max(6, round(0.04 * sample_width)))
+        left = min(min(a for a, _ in reach), t.box[0])
+        right = max(max(b for _, b in reach), t.box[2])
+        x0, y0, x1, y1 = (round(v * scale) for v in (left, t.box[1], right, t.box[3]))
         # Padding follows the shorter side, the text height for a handle: padded by its
         # length, it takes in so much scene that the vision model no longer sees an overlay.
         # The found box already runs past the letters, so an eighth of it covers their
@@ -354,12 +420,28 @@ def find(
         pad = max(4, round(min(0.125 * min(x1 - x0, y1 - y0), 0.015 * source_size[0])))
         x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
         x1, y1 = min(source_size[0], x1 + pad), min(source_size[1], y1 + pad)
+        parts = []
+        if len(groups) > 1 or (left, right) != (t.box[0], t.box[2]):
+            for members, (a, b) in groups:
+                px0 = max(0, round(a * scale) - pad)
+                px1 = min(source_size[0], round(b * scale) + pad)
+                parts.append(
+                    Part(
+                        x=px0 // 2 * 2,
+                        width=(px1 - px0) // 2 * 2,
+                        spans=spans(
+                            [short_starts[k] for k in members], PRESENCE_SECONDS, duration,
+                            1 / sample_fps,
+                        ),
+                    )
+                )  # fmt: skip
         found.append(
             Watermark(
                 x=x0 // 2 * 2,
                 y=y0 // 2 * 2,
                 width=(x1 - x0) // 2 * 2,
                 height=(y1 - y0) // 2 * 2,
+                parts=parts,
                 spans=spans(
                     [short_starts[k] for k in windows], PRESENCE_SECONDS, duration, 1 / sample_fps
                 ),

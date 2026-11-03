@@ -54,23 +54,25 @@ def blur_chain(
     source pixels and before any cropping. Returns the parts and the label they end on."""
     parts: list[str] = []
     current = f"{index}:v"
-    for k, mark in enumerate(marks):
-        visible = mark.visible(clip.start, clip.end)
-        if not visible:
+    pieces = [(mark, piece) for mark in marks for piece in mark.pieces()]
+    for k, (mark, (x, width, shown)) in enumerate(pieces):
+        visible = [(max(a, clip.start), min(b, clip.end)) for a, b in shown
+                   if b > clip.start and a < clip.end]  # fmt: skip
+        if not visible or width <= 0:
             continue
         # Inputs are seeked to the clip start, so their timestamps start at zero.
         enable = "+".join(
             f"between(t,{a - clip.start:.3f},{b - clip.start:.3f})" for a, b in visible
         )
         # Big lettering survives a blur sized for a small handle, so scale with the box.
-        sigma = min(max(strength, 0.4 * mark.height), max(mark.width, mark.height) / 2)
+        sigma = min(max(strength, 0.4 * mark.height), max(width, mark.height) / 2)
         base, patch, done = f"w{index}_{k}b", f"w{index}_{k}p", f"w{index}_{k}"
         parts.append(f"[{current}]split=2[{base}][{patch}]")
         parts.append(
-            f"[{patch}]crop={mark.width}:{mark.height}:{mark.x}:{mark.y},"
+            f"[{patch}]crop={width}:{mark.height}:{x}:{mark.y},"
             f"gblur=sigma={sigma:g}:steps=3[{patch}b]"
         )
-        parts.append(f"[{base}][{patch}b]overlay={mark.x}:{mark.y}:enable='{enable}'[{done}]")
+        parts.append(f"[{base}][{patch}b]overlay={x}:{mark.y}:enable='{enable}'[{done}]")
         current = done
     return parts, current
 

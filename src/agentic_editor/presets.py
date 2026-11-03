@@ -205,6 +205,9 @@ class Watermarks(Strict):
     strength: float = Field(
         default=18, ge=2, le=60, description="smallest blur radius, in source pixels"
     )
+    # A picture fitted between the preset's text loses the rows its own text (burnt-in
+    # lyrics, a logo) sits in along its top and bottom; off keeps that text in view.
+    cut_text: bool = True
 
 
 class Audio(Strict):

@@ -157,6 +157,11 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     fields: [
       { path: "watermarks.blur", label: "Blur watermarks and logos", kind: "switch" },
       { path: "watermarks.strength", label: "Minimum blur (px)", kind: "number" },
+      {
+        path: "watermarks.cut_text",
+        label: "Cut off the video's own text at the picture's edges",
+        kind: "switch",
+      },
     ],
   },
   {

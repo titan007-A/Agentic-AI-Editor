@@ -453,6 +453,10 @@ BRIEF = 2.0
 # Of the picture's height, kept clear of text that is cut off: the vision model's boxes are
 # often a few dozen rows short of the letters, which then peek in at the window's edge.
 TEXT_MARGIN = 0.025
+# A head keeps the picture's edge text only when it is in those rows this often: in at
+# least this many looks, and this share of them.
+HEAD_SEEN = 3
+HEAD_SHARE = 0.1
 
 
 def band_shots(
@@ -476,14 +480,24 @@ def band_shots(
     left, top, picture_width, picture_height = content
     faces, samples = on_moving(faces, samples, moving, src_height)
     found = [(s.y0, s.y1) for _, items in samples for s in items if s.kind == "text"] + list(texts)
-    heads_all = [
-        ((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
-        for _, seen in faces
-        for f in seen
-    ] + [(s.y0, s.y1) for _, items in samples for s in items if s.kind == "head"]
+    # Heads by when they were seen, so a head in a text's rows for a moment (a detector's
+    # mistake on a guitar, a hand) doesn't keep the text in the whole reel.
+    heads_at: list[tuple[float, list[tuple[float, float]]]] = [
+        (t, [((f.cy - 0.85 * f.height) * src_height, (f.cy + 0.6 * f.height) * src_height)
+             for f in seen])
+        for t, seen in faces
+    ] + [
+        (t, [(s.y0, s.y1) for s in items if s.kind == "head"]) for t, items in samples
+    ]  # fmt: skip
+    looks = max(1, len({t for t, _ in heads_at}))
+
+    def head_in(y0: float, y1: float) -> bool:
+        hit = len({t for t, rows_ in heads_at if any(a < y1 and b > y0 for a, b in rows_)})
+        return hit >= min(HEAD_SEEN, looks) and hit / looks >= HEAD_SHARE
+
     lo, hi = top, top + picture_height
     for y0, y1 in found:
-        if any(a < y1 and b > y0 for a, b in heads_all):
+        if head_in(y0, y1):
             continue
         if y1 <= top + EDGE_TEXT * picture_height:
             lo = max(lo, y1 + TEXT_MARGIN * picture_height)
