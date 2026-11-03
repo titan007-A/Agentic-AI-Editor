@@ -173,7 +173,40 @@ export type Trends = {
 };
 
 /** A song a PDF lists, with the words to write above and below its reel. */
-export type PdfEntry = { singer: string; song: string; top: string; bottom: string };
+export type PdfEntry = {
+  singer: string;
+  song: string;
+  top: string;
+  bottom: string;
+  /** From a numbered list read by rule: its year, number, section and section's preset. */
+  year?: string;
+  number?: number;
+  section?: string;
+  preset?: string;
+  /** What the list is of; song and singer lines go to the edit only for songs. */
+  kind?: string;
+};
+
+/** A song a PDF lists, to choose from: read by rule from a numbered list or by the model. */
+export type PdfListed = {
+  number: number;
+  section: string;
+  song: string;
+  singer: string;
+  year: string;
+  lines: string[];
+  labelled: Record<string, string>;
+};
+
+/** How the chosen songs of a PDF are researched: `keep` holds their positions in the
+ * research's listing. */
+export type PdfChoice = {
+  keep: number[];
+  swap: boolean;
+  line: "top" | "bottom" | "none";
+  presets: Record<string, string>;
+  understood?: string;
+};
 
 /** Where a research searches: Instagram reels, YouTube Shorts. */
 export type Site = "instagram" | "shorts";
@@ -206,10 +239,15 @@ export type Research = {
   /** "pdf": songs from a PDF, each with its words above and below; else "search". */
   mode: "search" | "pdf";
   entries: PdfEntry[];
+  /** Every item a PDF lists, while it is "choosing" (empty in lists and after). */
+  listing: PdfListed[];
+  /** What a PDF lists: "songs", "films", "military aircraft"... */
+  kind: string;
   /** The research whose chat asked for this one. */
   parent_id: string | null;
-  /** "asking": thinking of questions (none yet), then waiting for the answers. */
-  status: "asking" | "queued" | "running" | "done" | "failed";
+  /** "asking": thinking of questions (none yet), then waiting for the answers; a PDF's is
+   * "reading" while the model reads it and "choosing" until its items are chosen. */
+  status: "asking" | "reading" | "choosing" | "queued" | "running" | "done" | "failed";
   questions: ResearchQuestion[];
   answers: ResearchAnswer[];
   messages: ResearchMessage[];
@@ -493,6 +531,17 @@ export const api = {
     form.append("sites", sites.join(","));
     return request<Research>("POST", "/research/pdf", form);
   },
+  chooseByWords: (id: string, words: string) =>
+    request<PdfChoice>("POST", `/research/${id}/choose-by-words`, { words }),
+  chooseSongs: (id: string, choice: PdfChoice, perResearch: number, kind: string) =>
+    request<Research>("POST", `/research/${id}/choose`, {
+      keep: choice.keep,
+      swap: choice.swap,
+      line: choice.line,
+      presets: choice.presets,
+      per_research: perResearch,
+      kind,
+    }),
   answerResearch: (id: string, answers: ResearchAnswer[]) =>
     request<Research>("POST", `/research/${id}/answers`, { answers }),
   chatOnResearch: (id: string, text: string) =>

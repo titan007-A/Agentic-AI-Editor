@@ -718,19 +718,57 @@ def run_chat(message_id: int, Session: sessionmaker, settings: Settings, router=
         find_reels(line.follow_up_id)
 
 
+def run_pdf_reading(research_id: str, Session: sessionmaker, settings: Settings, router=None):
+    """Read every song a PDF lists with the model, for one songlist.read can't: the research
+    then waits, "choosing", for the person to pick which to research."""
+
+    def progress(message: str, value: float) -> None:
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.message, found.progress = message, value
+            db.commit()
+
+    try:
+        with Session() as db:
+            text = db.get(Research, research_id).pdf_text
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        with router.planner() as llm:
+            listing = research.pdf_listing(llm, text, progress)
+        if not listing:
+            raise RuntimeError("found no songs in the PDF")
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.listing, found.status, found.progress = listing, "choosing", 0.0
+            found.message = f"{len(listing)} songs found: choose which to research"
+            db.commit()
+    except Exception as exc:
+        log.exception("reading the PDF of research %s failed", research_id)
+        with Session() as db:
+            found = db.get(Research, research_id)
+            found.status, found.error = "failed", f"{type(exc).__name__}: {exc}"
+            db.commit()
+
+
 def run_pdf_research(
     research_id, Session, router, pdf_text, used, seen, progress, context, sites, options
 ) -> None:
     """A PDF research: its songs read from the PDF, then the best reels of each."""
-    progress("reading the PDF", 0.02)
-    with router.planner() as llm:
-        entries = research.pdf_entries(llm, pdf_text)
     with Session() as db:
-        db.get(Research, research_id).entries = entries
-        db.commit()
+        entries = list(db.get(Research, research_id).entries or [])
+    if not entries:
+        # Not a numbered list read and chosen from when it was given: the model reads it.
+        progress("reading the PDF", 0.02)
+        with router.planner() as llm:
+            entries = research.pdf_entries(llm, pdf_text)
+        with Session() as db:
+            db.get(Research, research_id).entries = entries
+            db.commit()
+    with Session() as db:
+        kind = db.get(Research, research_id).kind or "songs"
     given = research.run_pdf(
-        entries, router.planner, used, seen, progress, context=context, sites=sites, **options
-    )
+        entries, router.planner, used, seen, progress, context=context, sites=sites, kind=kind,
+        **options,
+    )  # fmt: skip
     with Session() as db:
         found = db.get(Research, research_id)
         for rank, (entry, reel) in enumerate(given):
@@ -944,6 +982,11 @@ def find_reels(research_id: str) -> None:
 
 
 @huey.task()
+def read_pdf_list(research_id: str) -> None:
+    run_pdf_reading(research_id, sessions(), get_settings())
+
+
+@huey.task()
 def read_account(account_id: str) -> None:
     run_account_learning(account_id, sessions(), get_settings())
 
@@ -962,6 +1005,7 @@ PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
 CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__name__
 ACCOUNT, QUESTIONS = read_account.task_class.__name__, ask_questions.task_class.__name__
 CHAT = answer_chat.task_class.__name__
+READ = read_pdf_list.task_class.__name__
 
 
 def recover(Session: sessionmaker) -> None:
@@ -1022,6 +1066,8 @@ def recover(Session: sessionmaker) -> None:
             ResearchMessage.role == "user", ResearchMessage.answered.is_(False)
         )
         lost_messages = [m for m in db.scalars(waiting) if (CHAT, m) not in pending]
+        reading = select(Research.id).where(Research.status == "reading")
+        lost_readings = [r for r in db.scalars(reading) if (READ, r) not in pending]
         db.commit()
     for job_id in lost_jobs:
         log.info("queueing job %s again", job_id)
@@ -1044,3 +1090,6 @@ def recover(Session: sessionmaker) -> None:
     for message_id in lost_messages:
         log.info("queueing chat message %s again", message_id)
         answer_chat(message_id)
+    for research_id in lost_readings:
+        log.info("queueing the reading of research %s's PDF again", research_id)
+        read_pdf_list(research_id)

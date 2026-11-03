@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
+import httpx
 import yaml
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -26,7 +27,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
-from agentic_editor import accounts, assets, autopilot, buffer, cleanup, jobs, research
+from agentic_editor import (
+    accounts,
+    assets,
+    autopilot,
+    buffer,
+    cleanup,
+    jobs,
+    research,
+    songlist,
+)
 from agentic_editor.auth import LoginGuard
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
@@ -47,10 +57,12 @@ from agentic_editor.db import (
 from agentic_editor.db import User as Account
 from agentic_editor.download import update_ytdlp
 from agentic_editor.ffmpeg import probe as ffmpeg_probe
+from agentic_editor.llm import LLMError
 from agentic_editor.pipeline import UPLOAD_PREFIX
 from agentic_editor.presets import Preset, load_presets, save_preset
 from agentic_editor.render import preview
 from agentic_editor.render.fonts import MissingGlyphs
+from agentic_editor.router import ModelRouter
 from agentic_editor.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -102,6 +114,19 @@ class AssignRequest(BaseModel):
     names: list[str]  # the admin's presets the employee should have
     # True: the ones they already have are replaced by the admin's current version too.
     replace: bool = False
+
+
+class ChooseWordsRequest(BaseModel):
+    words: str = Field(min_length=3, max_length=1000)
+
+
+class ChooseRequest(BaseModel):
+    keep: list[int] = Field(max_length=5000)  # positions in the research's listing
+    swap: bool = False
+    line: Literal["top", "bottom", "none"] = "top"
+    presets: dict[str, str] = {}  # section -> preset
+    per_research: int = Field(default=30, ge=1, le=60)
+    kind: str = Field(default="", max_length=60)  # what the list is of; "" keeps the guess
 
 
 class AccountRequest(BaseModel):
@@ -321,6 +346,9 @@ class ResearchView(BaseModel):
     daily: bool  # the account's morning research started it
     mode: str  # "search", or "pdf": songs from a PDF, each with its words above and below
     entries: list[dict]  # a PDF's songs: {"singer", "song", "top", "bottom"}
+    # Every song the PDF lists, to choose from: shown with the research alone, not in lists.
+    listing: list[dict] = []
+    kind: str = "songs"  # what a PDF lists
     parent_id: str | None
     status: str
     message: str
@@ -1073,13 +1101,20 @@ def create_app(
     def research_view(
         found: Research, account: Account, session: Session, items: bool = False
     ) -> ResearchView:
-        fields = ResearchView.model_fields.keys() - {"found", "owner", "items", "messages"}
+        fields = ResearchView.model_fields.keys() - {
+            "found",
+            "owner",
+            "items",
+            "messages",
+            "listing",
+        }
         view = ResearchView(
             **{k: getattr(found, k) for k in fields},
             found=len(found.items),
             owner=owners(session).get(found.owner_id) if account.role == accounts.ADMIN else None,
         )
         if items:
+            view.listing = list(found.listing or []) if found.status == "choosing" else []
             view.items = item_views(found.items, found.owner_id, account, session)
             view.messages = [
                 ResearchMessageView(**{k: getattr(m, k) for k in ResearchMessageView.model_fields})
@@ -1265,6 +1300,20 @@ def create_app(
             jobs.ask_questions(found.id)
         return research_view(found, account, session)
 
+    async def pdf_text(file: UploadFile) -> str:
+        if Path(file.filename or "").suffix.lower() != ".pdf":
+            raise HTTPException(400, "give a PDF file")
+        data = await file.read(PDF_BYTES + 1)
+        if len(data) > PDF_BYTES:
+            raise HTTPException(413, "the PDF is larger than 10 MB")
+        try:
+            text = await asyncio.to_thread(research.read_pdf, data)
+        except Exception as exc:
+            raise HTTPException(422, f"couldn't read the PDF: {exc}") from exc
+        if len(text) < 3:
+            raise HTTPException(422, "the PDF has no text to read (a scanned page is a picture)")
+        return text
+
     @app.post("/api/research/pdf")
     async def research_pdf(
         file: UploadFile,
@@ -1272,33 +1321,109 @@ def create_app(
         session: DB,
         sites: Annotated[str, Form()] = "instagram,shorts",
     ) -> ResearchView:
-        """A research of the songs a PDF lists, each with the words to write above and
-        below its reel (see research.pdf_entries)."""
-        if Path(file.filename or "").suffix.lower() != ".pdf":
-            raise HTTPException(400, "give a PDF file")
-        data = await file.read(PDF_BYTES + 1)
-        if len(data) > PDF_BYTES:
-            raise HTTPException(413, "the PDF is larger than 10 MB")
+        """A research of the songs a PDF lists, laid out any way: a numbered list is read
+        by rule at once (see songlist.py), anything else by the model in the background
+        ("reading"). Then it waits, "choosing", for the person to pick the songs and how
+        (POST .../choose, or .../choose-by-words first), and only then searches."""
         chosen = [s for s in dict.fromkeys(sites.split(",")) if s in research.SITES]
         if not chosen:
             raise HTTPException(422, "search Instagram, YouTube Shorts or both")
-        try:
-            text = await asyncio.to_thread(research.read_pdf, data)
-        except Exception as exc:
-            raise HTTPException(422, f"couldn't read the PDF: {exc}") from exc
-        if len(text) < 3:
-            raise HTTPException(422, "the PDF has no text to read (a scanned page is a picture)")
+        text = await pdf_text(file)
+        listing = [e.as_dict() for e in research.listed(text)]
         found = Research(
             description=f"PDF: {Path(file.filename or 'songs.pdf').name[:120]}",
-            owner_id=account.id,
-            mode="pdf",
-            pdf_text=text,
-            sites=chosen,
-        )
+            owner_id=account.id, mode="pdf", pdf_text=text, sites=chosen, listing=listing,
+            kind=research.guess_kind(text),
+            status="choosing" if listing else "reading",
+            message=(f"{len(listing)} songs found: choose which to research" if listing
+                     else "reading the PDF"),
+        )  # fmt: skip
         session.add(found)
         session.commit()
-        jobs.find_reels(found.id)
-        return research_view(found, account, session)
+        if not listing:
+            jobs.read_pdf_list(found.id)
+        return research_view(found, account, session, items=True)
+
+    def choosing(research_id: str, session: Session, account: Account) -> Research:
+        found = find_research(research_id, session, account)
+        if found.status != "choosing":
+            raise HTTPException(409, "the research isn't waiting for songs to be chosen")
+        return found
+
+    @app.post("/api/research/{research_id}/choose-by-words")
+    async def choose_by_words(
+        research_id: str, body: ChooseWordsRequest, account: User, session: DB
+    ) -> dict:
+        """The songs and choices the person's words ask for (research.pdf_choose), for them
+        to check and change before starting; nothing is started."""
+        found = choosing(research_id, session, account)
+        listing = list(found.listing)
+        own = {name: p.label for name, p in presets(account).items()}
+
+        def read() -> dict:
+            router = ModelRouter(settings, get_backends(), lambda *args: None)
+            with router.planner() as llm:
+                return research.pdf_choose(llm, body.words, listing, own, found.kind)
+
+        try:
+            return await asyncio.to_thread(read)
+        except (LLMError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                503, f"the planning model couldn't read your words ({exc}); tick the songs"
+            ) from exc
+
+    @app.post("/api/research/{research_id}/choose")
+    def choose_songs(
+        research_id: str, body: ChooseRequest, account: User, session: DB
+    ) -> ResearchView:
+        """Start the research of the songs chosen (`keep`, positions in its listing), with
+        the words under each song going `line`, song and singer swapped if `swap`, and a
+        preset for each section: `per_research` songs a research, the first in this one,
+        the rest in new ones, run one after another."""
+        found = choosing(research_id, session, account)
+        listing = list(found.listing)
+        keep = list(dict.fromkeys(body.keep))
+        if not keep:
+            raise HTTPException(422, "choose at least one song")
+        if any(not 0 <= i < len(listing) for i in keep):
+            raise HTTPException(422, "a chosen song isn't in the PDF")
+        known = presets(account)
+        unknown = sorted({p for p in body.presets.values() if p and p not in known})
+        if unknown:
+            raise HTTPException(422, f"no such preset: {', '.join(unknown)}")
+        kind = " ".join(body.kind.split()) or found.kind
+        picked = songlist.entries_for(listing, keep, body.swap, body.line, body.presets)
+        for e in picked:
+            e["kind"] = kind
+        parts = [
+            picked[i : i + body.per_research] for i in range(0, len(picked), body.per_research)
+        ]
+        name = found.description
+        researches = [found] + [
+            Research(
+                owner_id=found.owner_id,
+                mode="pdf",
+                pdf_text=found.pdf_text,
+                sites=list(found.sites),
+                description=name,
+                kind=kind,
+            )
+            for _ in parts[1:]
+        ]
+        for one, part in zip(researches, parts, strict=True):
+            spans: dict[str, tuple[int, int]] = {}
+            for e in part:
+                a, b = spans.get(e["section"], (e["number"], e["number"]))
+                spans[e["section"]] = (min(a, e["number"]), max(b, e["number"]))
+            what = ", ".join(f"{s} {a}-{b}" for s, (a, b) in spans.items())
+            one.description = f"{name} · {what}"[:1000]
+            one.entries, one.status, one.message = part, "queued", "waiting for a free slot"
+            one.kind = kind
+            session.add(one)
+        session.commit()
+        for one in researches:
+            jobs.find_reels(one.id)
+        return research_view(found, account, session, items=True)
 
     @app.post("/api/research/{research_id}/answers")
     def answer_questions(

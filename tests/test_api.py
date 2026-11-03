@@ -1283,10 +1283,17 @@ def test_an_accounts_page_performance_is_followed_from_learn_to_learn(env, monke
     assert riya.get(url).status_code == 404
 
 
-def test_a_pdf_of_songs_becomes_a_research_of_each(env, monkeypatch):
+def test_a_pdf_of_songs_becomes_a_research_of_the_songs_chosen(env, monkeypatch):
     from tests.test_research import pdf
 
     fake_research(monkeypatch, env)
+    monkeypatch.setattr(
+        jobs,
+        "read_pdf_list",
+        lambda research_id: jobs.run_pdf_reading(
+            research_id, env.sessions, env.settings, ResearchRouter()
+        ),
+    )
 
     def send(name, data, **form):
         files = {"file": (name, data, "application/pdf")}
@@ -1296,14 +1303,25 @@ def test_a_pdf_of_songs_becomes_a_research_of_each(env, monkeypatch):
     started = send("Canzoni.pdf", songs)
     assert started.status_code == 200, started.text
     assert started.json()["mode"] == "pdf" and started.json()["description"] == "PDF: Canzoni.pdf"
-    found = env.client.get(f"/api/research/{started.json()['id']}").json()
+    # Not a numbered list: the model reads it, then it waits for the songs to be chosen.
+    choosing = env.client.get(f"/api/research/{started.json()['id']}").json()
+    assert choosing["status"] == "choosing", choosing["error"]
+    assert [e["song"] for e in choosing["listing"]] == ["Heaven", "Nothing"]
+    url = f"/api/research/{choosing['id']}/choose"
+    assert env.client.post(url, json={"keep": []}).status_code == 422
+    assert env.client.post(url, json={"keep": [7]}).status_code == 422
+    chosen = env.client.post(url, json={"keep": [0, 1]})
+    assert chosen.status_code == 200, chosen.text
+    found = env.client.get(f"/api/research/{choosing['id']}").json()
     assert found["status"] == "done", found["error"]
+    assert found["listing"] == []  # shown only while choosing
     assert [e["song"] for e in found["entries"]] == ["Heaven", "Nothing"]
     assert found["entries"][0]["top"] == "Il capolavoro\ndel 1985"
     assert found["sites"] == ["instagram", "shorts"]
     heaven = [i["code"] for i in found["items"] if i["entry"] == 0]
     assert set(heaven) == {"OWN001", "ADAMS1", "ADAMS2"}  # the cat video doesn't fit
     assert found["message"].startswith("found reels for")
+    assert env.client.post(url, json={"keep": [0]}).status_code == 409  # started already
 
     assert send("songs.txt", b"Bryan Adams").status_code == 400
     assert send("scan.pdf", pdf([])).status_code == 422  # a picture, no text
@@ -1592,3 +1610,63 @@ def test_a_preset_about_the_video_writes_from_watching_it_not_from_a_song(env, m
     output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
     assert output["caption"] == "Dos Apache sobre la playa 🚁"
     assert asked == {"source": "https://x.test/v", "about": "video", "style": "about the flyover"}
+
+
+def test_a_numbered_pdf_list_is_chosen_from_by_hand_or_in_words(env, monkeypatch):
+    import json
+
+    from agentic_editor import research
+    from tests.test_research import pdf
+
+    fake_research(monkeypatch, env)
+    lines = []
+    for decade in ("1960-1969", "1970-1979"):
+        lines += [decade, "Top songs"]
+        for n in range(1, 6):
+            lines += [f"{n}. Song {decade[:4]} {n} ({decade[:3]}{n}) - Singer {n}",
+                      f"The line about song {n} of the {decade[:4]}s."]  # fmt: skip
+    files = {"file": ("Best.pdf", pdf(lines), "application/pdf")}
+    started = env.client.post("/api/research/pdf", files=files).json()
+    # A numbered list is read at once, every song, with its section, number and year.
+    assert started["status"] == "choosing" and len(started["listing"]) == 10
+    first = started["listing"][0]
+    assert (first["section"], first["number"], first["song"], first["year"]) == (
+        "1960-1969",
+        1,
+        "Song 1960 1",
+        "1961",
+    )
+    url = f"/api/research/{started['id']}"
+
+    asked = {}
+
+    def choose(llm, words, listing, presets, kind="songs"):
+        asked.update(words=words, songs=len(listing), presets=presets, kind=kind)
+        return {"keep": [3, 4, 8, 9], "swap": False, "line": "top",
+                "presets": {"1960-1969": "square-1x1"}, "understood": "4-5 of each"}  # fmt: skip
+
+    monkeypatch.setattr(research, "pdf_choose", choose)
+    read = env.client.post(f"{url}/choose-by-words", json={"words": "sirf 4 aur 5"}).json()
+    assert read["keep"] == [3, 4, 8, 9] and asked["words"] == "sirf 4 aur 5"
+    assert asked["songs"] == 10 and "square-1x1" in asked["presets"]
+    assert asked["kind"] == "songs"  # guessed from the PDF's words; the person can change it
+    assert env.client.get(url).json()["status"] == "choosing"  # nothing started by reading
+
+    bad = {**read, "presets": {"1960-1969": "nope"}}
+    assert env.client.post(f"{url}/choose", json=bad).status_code == 422
+    chosen = env.client.post(f"{url}/choose", json={**read, "per_research": 2, "kind": "songs"})
+    assert chosen.status_code == 200, chosen.text
+    made = [r for r in env.client.get("/api/research").json() if r["mode"] == "pdf"]
+    assert sorted(r["description"] for r in made) == [
+        "PDF: Best.pdf · 1960-1969 4-5",
+        "PDF: Best.pdf · 1970-1979 4-5",
+    ]  # two songs a research
+    sixties = env.client.get(f"{url}").json()
+    assert [(e["song"], e["year"], e["preset"]) for e in sixties["entries"]] == [
+        ("Song 1960 4", "1964", "square-1x1"),
+        ("Song 1960 5", "1965", "square-1x1"),
+    ]
+    assert sixties["entries"][0]["top"] == "The line about song 4 of the 1960s."
+    assert sixties["kind"] == "songs" and sixties["entries"][0]["kind"] == "songs"
+    assert {i["preset"] for i in sixties["items"]} <= {"square-1x1"}
+    assert json.dumps(sixties["entries"])  # plain data for the page

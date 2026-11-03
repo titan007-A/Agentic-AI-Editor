@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { HiddenAccounts } from "@/components/hidden-accounts";
 import { InstagramAccounts, learning } from "@/components/instagram-accounts";
+import { PdfChooser } from "@/components/pdf-chooser";
 import { ReelCard } from "@/components/reel-card";
 import { ResearchChat } from "@/components/research-chat";
 import { TrendRadar } from "@/components/trend-radar";
@@ -55,6 +56,7 @@ function sorted(items: ResearchItem[], order: Order): ResearchItem[] {
 const running = (r: Research | null) =>
   r?.status === "queued" ||
   r?.status === "running" ||
+  r?.status === "reading" ||
   (r?.status === "asking" && r.questions.length === 0);
 /** Waiting for the person's answers. */
 const asking = (r: Research | null) => r?.status === "asking" && r.questions.length > 0;
@@ -70,11 +72,15 @@ const SITES: { site: Site; label: string }[] = [
 
 /** A PDF song's words as the lines of a job's notes the edit reads (see names.py). */
 function entryNotes(entry: PdfEntry): string {
-  const line = (key: string, value: string) =>
-    value.trim() ? `${key}: ${value.trim().replace(/\n/g, "\\n")}` : "";
+  const line = (key: string, value: string | undefined) =>
+    value?.trim() ? `${key}: ${value.trim().replace(/\n/g, "\\n")}` : "";
+  // A song's name and singer fill {song} and {artist} and name its post caption's song;
+  // an item of another list (a film, a jet) isn't a song.
+  const song = !entry.kind || /song|music|canci|canzon|chanson|lied|gaan/i.test(entry.kind);
   return [
-    line("song", entry.song),
-    line("artist", entry.singer),
+    song ? line("song", entry.song) : "",
+    song ? line("artist", entry.singer) : "",
+    line("year", entry.year),
     line("top text", entry.top),
     line("bottom text", entry.bottom),
   ]
@@ -362,9 +368,9 @@ function Researcher() {
                   onChange={(e) => setPdf(e.target.files?.[0] ?? null)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Each song with its singer, and the words to write above and below its reel (start
-                  those lines with &quot;Top text:&quot; and &quot;Bottom text:&quot;): the
-                  researcher finds reels of each, and the edit writes your words.
+                  Any list: songs, films, people, events... laid out any way. It is read first; then
+                  you choose what to research (by ticking, by numbers or years, or in your words),
+                  with a preset for each section, before anything is searched.
                 </p>
               </div>
             )}
@@ -495,8 +501,24 @@ function Researcher() {
               <p className="text-xs text-muted-foreground">
                 {current.status === "asking"
                   ? "It thinks of a few questions first; this takes a moment."
-                  : "This takes a few minutes: it searches slowly so the engines don't turn it away."}
+                  : current.status === "reading"
+                    ? "The model reads the whole PDF; then you choose what to research."
+                    : "This takes a few minutes: it searches slowly so the engines don't turn it away."}
               </p>
+            </Card>
+          )}
+
+          {current.mode === "pdf" && current.status === "choosing" && (
+            <Card className="p-4">
+              <PdfChooser
+                key={current.id}
+                research={current}
+                presets={presets}
+                onStarted={() => {
+                  load();
+                  refreshList();
+                }}
+              />
             </Card>
           )}
 
