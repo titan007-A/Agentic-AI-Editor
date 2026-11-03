@@ -31,6 +31,11 @@ from agentic_editor.settings import ROOT, Settings, get_settings
 log = logging.getLogger(__name__)
 _CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 BANNER_GAP = 24  # px between a banner and anything else drawn on the frame
+# Of a 1920-row frame: Instagram's header covers the top rows, its caption and buttons the
+# bottom ones; a banner moving off the picture doesn't go under them.
+SAFE_TOP = 150
+SAFE_BOTTOM = 330
+SHRINK = 0.75  # the smallest share of its size a banner shrinks to, to keep off the picture
 LAYOUT_FRAMES = 24  # frames the picture's place in a padded layout is read from
 LAYOUT_WIDTH = 540  # px they are read at; half a 1080 frame, so edges land within 2 px
 
@@ -337,6 +342,54 @@ def keep_clear(
     ]
 
 
+def off_picture(
+    words: str,
+    font: text.Face,
+    size: int,
+    box: str | None,
+    frame: tuple[int, int],
+    position: str,
+    offset: int,
+    picture: tuple[float, float] | None,
+) -> tuple[str, int, int]:
+    """The banner's wrapped words, size and offset, made to keep off the rows of a picture
+    shown whole with room around it: as set when it fits beside the picture, else smaller
+    (down to SHRINK of its size), else also moved away from the picture (not under
+    Instagram's header or buttons). As set when nothing keeps it off: it can't."""
+
+    def laid(s: int) -> tuple[str, float, float]:
+        wrapped = text.balance(words, font, s, frame[0] - 160)
+        return wrapped, *text.banner_extent(wrapped, font, s, box, frame[0])
+
+    wrapped, above, below = laid(size)
+    if picture is None or position not in ("top", "bottom"):
+        return wrapped, size, offset
+    first, last = picture
+
+    def room(off: int, above: float, below: float) -> bool:
+        if position == "top":
+            return off + below <= first - BANNER_GAP
+        return frame[1] - off - (below - above) >= last + BANNER_GAP
+
+    if room(offset, above, below):
+        return wrapped, size, offset
+    smallest = math.ceil(size * SHRINK)
+    for s in range(size - 2, smallest - 1, -2):
+        w, a, b = laid(s)
+        if room(offset, a, b):
+            return w, s, offset
+    w, a, b = laid(smallest)
+    if position == "top":
+        moved = math.floor(first - BANNER_GAP - b)
+        if moved + a >= min(SAFE_TOP, offset + a):
+            return w, smallest, moved
+    else:
+        moved = math.floor(frame[1] - last - BANNER_GAP - (b - a))
+        if moved >= min(SAFE_BOTTOM, offset):
+            return w, smallest, moved
+    return wrapped, size, offset
+
+
 def banner_top(
     position: str,
     offset: int,
@@ -469,9 +522,27 @@ def render(
             text.place(b, face(b.font, b.text), frame, band, gap)
             for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
         ]
-        obstacles += [(0.0, edl.duration, *block.band) for block in placed]
+        # A block without words (a spacer that only sets where the picture goes) has no
+        # ink for anything to keep off.
+        obstacles += [
+            (0.0, edl.duration, *p.band)
+            for b, p in zip(preset.text_blocks, placed, strict=True)
+            if b.text.strip()
+        ]
     else:
         placed = []
+
+    # Rows of the frame the picture covers when shown whole with room around it: banners
+    # and captions keep off them.
+    picture_rows = None
+    if edl.crop_mode == "none":
+        shown_size = source
+        if edl.shots:
+            shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
+        picture_rows = video_band(
+            "none", shown_size, frame, preset.framing.picture_width, layers.picture_band,
+            layers.picture_anchor,
+        )  # fmt: skip
 
     bars = layers.black_bars
     shown = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
@@ -529,14 +600,23 @@ def render(
         position: str, offset: int, until: float, name: str, fixed: bool = False,
     ) -> int:  # fmt: skip
         font = face(font_name, words)
-        wrapped = text.balance(words, font, size, frame[0] - 160)
+        # Off the picture shown whole (smaller or moved when the words run long), as the
+        # preset preview shows it.
+        wrapped, size, offset = off_picture(
+            words, font, size, box, frame, position, offset, picture_rows
+        )
         # Placed by the rows it really covers, box included, with `offset` still where the
         # first line starts.
         above, below = text.banner_extent(wrapped, font, size, box, frame[0])
         height = math.ceil(below - above)
         start = max(0, round(offset + above)) if position == "top" else offset
         taken = [(top, bottom) for _, _, top, bottom in obstacles]
-        top = banner_top(position, start, height, frame[1], [] if fixed else rows, until, taken)
+        clear = [] if fixed else rows
+        if picture_rows is not None:
+            # The picture counts like a face there all along: the other end of the frame is
+            # tried before a banner goes over it.
+            clear = clear + [(t * 0.5, [picture_rows]) for t in range(int(until * 2) + 1)]
+        top = banner_top(position, start, height, frame[1], clear, until, taken)
         obstacles.append((0.0, until, top, top + height))
         png = text.draw_banner(
             wrapped, font, size, color, box, frame, round(top - above), work_dir / name
@@ -582,8 +662,10 @@ def render(
         scales = caption_scales(cues, measure, room, style.animation == "pop")
         position = overrides.position or style.position
         placements = None
-        if style.avoid_faces and (rows or obstacles):
+        if style.avoid_faces and (rows or obstacles or picture_rows):
             blocked = rows + keep_clear(obstacles)
+            if picture_rows is not None:
+                blocked += keep_clear([(0.0, edl.duration, *picture_rows)])
             lines = max((c.text.count("\n") + 1 for c in cues), default=1)
             height = round(style.size * 1.25 * lines + 2 * style.outline)
             placements = subtitles.place(cues, position, style.margin, height, frame[1], blocked)

@@ -12,6 +12,8 @@ from typing import Literal
 
 from PIL import Image, ImageDraw, ImageFilter
 
+from agentic_editor import subtitles
+from agentic_editor.edl import Cue
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose, text
 from agentic_editor.render.video import picture_rect
@@ -35,7 +37,8 @@ SAMPLES = {
 }
 FIELD = re.compile(r"\{(\w+)\}")
 CAPTION = "this is how captions look on the video"
-LINE = "A one-liner about the video"
+# As long as a one-liner can be (its max_words): the preview shows its longest case.
+LINE = "A one-liner the model writes about what happens in the video, as long as allowed"
 TITLE = "The video's title"
 
 
@@ -113,7 +116,15 @@ def picture_place(
     return picture_rect(source, frame, preset.framing.picture_width, None), source
 
 
-def _caption(canvas: ImageDraw.ImageDraw, preset: Preset, settings: Settings, face) -> None:
+def _caption(
+    canvas: ImageDraw.ImageDraw,
+    preset: Preset,
+    settings: Settings,
+    face,
+    keep_off: list[tuple[float, float]] = (),
+) -> None:
+    """A sample caption where a render puts it: at its position, or, where that covers
+    `keep_off` (the picture shown whole, the text), the clear place a render would pick."""
     style = preset.captions
     width, height = preset.size
     words = CAPTION.split()[: style.words_per_line]
@@ -126,12 +137,20 @@ def _caption(canvas: ImageDraw.ImageDraw, preset: Preset, settings: Settings, fa
     )
     w, h = right - left, bottom - top
     x = (width - w) / 2 - left
-    if style.position == "top":
-        y = style.margin - top
-    elif style.position == "middle":
+    position, margin = style.position, style.margin
+    if keep_off:
+        cue = Cue(start=0.0, end=1.0, text=line)
+        blocked = [(0.5, [(a - compose.BANNER_GAP, b + compose.BANNER_GAP) for a, b in keep_off])]
+        height_ = round(style.size * 1.25 + 2 * style.outline)
+        (spot,) = subtitles.place([cue], style.position, style.margin, height_, height, blocked)
+        position = {2: "bottom", 5: "middle", 8: "top"}[spot.alignment]
+        margin = spot.margin
+    if position == "top":
+        y = margin - top
+    elif position == "middle":
         y = (height - h) / 2 - top
     else:
-        y = height - style.margin - h - top
+        y = height - margin - h - top
     first, _, rest = line.partition(" ")
     highlight = style.animation in ("highlight", "karaoke")
     stroke = {"stroke_width": round(style.outline), "stroke_fill": style.outline_color}
@@ -253,19 +272,45 @@ def render_checked(
             )
         if preset.one_liner.enabled:
             o = preset.one_liner
-            font = face(o.font, LINE)
-            top = o.offset
+            words = " ".join(LINE.split()[: o.max_words])
+            font = face(o.font, words)
+            # Laid out as a render lays it out: kept off the picture shown whole.
+            off = (y0, y1) if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]) else None
+            wrapped, size, offset = compose.off_picture(
+                words, font, o.size, o.box_color, frame, o.position, o.offset, off
+            )
+            above, below = text.banner_extent(wrapped, font, size, o.box_color, frame[0])
+            top = offset
             if o.position == "bottom":
-                _, bottom = text.banner_extent(LINE, font, o.size, o.box_color, frame[0])
-                top = frame[1] - o.offset - round(bottom)
+                top = frame[1] - offset - round(below)
+            if size < o.size or offset != o.offset:
+                notes.append(
+                    "A long one-liner is made smaller or moved to keep off the video. "
+                    "For it to stay as set, give it a smaller size or fewer words, or move "
+                    "the text and the video apart."
+                )
+            if off is not None and top + below > off[0] and top + above < off[1]:
+                notes.append(
+                    "A long one-liner covers part of the video even made smaller. Give it "
+                    "fewer words or a smaller size, or move the text and the video apart."
+                )
             dest = work / "line.png"
             _lay(
-                image, text.draw_banner(LINE, font, o.size, o.color, o.box_color, frame, top, dest)
+                image,
+                text.draw_banner(wrapped, font, size, o.color, o.box_color, frame, top, dest),
             )
 
     canvas = ImageDraw.Draw(image)
     if preset.captions.enabled:
-        _caption(canvas, preset, settings, face)
+        # Like a render: captions that avoid faces also keep off the text and the picture.
+        keep_off = []
+        if preset.captions.avoid_faces:
+            keep_off = [
+                ink for b, ink in zip(shown.text_blocks, inks, strict=True) if b.text.strip()
+            ]
+            if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]):
+                keep_off.append((y0, y1))
+        _caption(canvas, preset, settings, face, keep_off)
 
     if preset.logo.file and not _logo(image, preset):
         notes.append("The logo file isn't there or isn't a picture; upload it again.")

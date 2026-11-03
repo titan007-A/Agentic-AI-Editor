@@ -398,6 +398,13 @@ render behaves:
 | `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 
+A picture shown whole (framing `none`) keeps the one-liner, title, hook and captions off
+it: a banner that runs long (the one-liner is written per video, so its length varies)
+is made smaller, down to three quarters of its size, then moved away from the picture,
+never under Instagram's header or buttons; captions take the clear place nearest theirs.
+The preset preview lays these out the same way, with the one-liner at its longest
+(`max_words`), and says when it had to shrink or move it.
+
 Framing `smart` (the default) frames each shot so nothing that matters is cut. Heads
 come from the face detector; the vision model points out what else must stay whole (the
 microphone or instrument in use, a logo), and OCR finds the text on screen. A shot whose essentials fit a
