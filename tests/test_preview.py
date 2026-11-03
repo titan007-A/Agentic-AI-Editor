@@ -98,3 +98,48 @@ def test_the_preview_says_what_looks_wrong():
     gone = {"file": "media/assets/nothing-here.png", "x": 10, "y": 10, "width": 100}
     with_gone = type(preset).model_validate(preset.model_dump() | {"images": [gone]})
     assert any("Picture 1" in n for n in preview.render_checked(with_gone, settings)[1])
+
+
+def _military(**line):
+    """Vanshaj's military preset: a one-liner just above a picture shown whole."""
+    from agentic_editor.presets import OneLiner, TextBlock
+
+    preset = load_preset(PRESETS / "vocal-music-it-9x16.yaml")
+    blocks = [
+        TextBlock(text="", font="OpenSans-ExtraBold", size=42, anchor="top", offset=228),
+        TextBlock(text="Sígueme historias militares\nque nunca te\ncontaron", font="Rubik-Bold",
+                  size=43, anchor="bottom", offset=550),
+    ]  # fmt: skip
+    one_liner = OneLiner(**{"enabled": True, "font": "OpenSans-ExtraBold", "size": 58,
+                            "position": "top", "offset": 253, "max_words": 10, **line})  # fmt: skip
+    framing = preset.framing.model_copy(update={"text_gap_above": 105, "text_gap_below": 57})
+    return preset.model_copy(
+        update={"text_blocks": blocks, "one_liner": one_liner, "framing": framing}
+    )
+
+
+def test_a_one_liner_that_runs_long_keeps_off_the_picture():
+    face = compose.text_face(get_settings(), None)
+    picture = (320.0, 900.0)
+    words = "Helicópteros militares sobre la playa"
+    font = face("OpenSans-ExtraBold", words)
+    wrapped, size, offset = compose.off_picture(
+        words, font, 58, "#000000", (1080, 1920), "top", 253, picture
+    )
+    _, below = compose.text.banner_extent(wrapped, font, size, "#000000", 1080)
+    assert offset + below <= picture[0] - compose.BANNER_GAP
+    assert size >= round(58 * compose.SHRINK) and offset + 0 >= compose.SAFE_TOP - 40
+    # Already clear: left exactly as set.
+    assert compose.off_picture(words, font, 58, None, (1080, 1920), "top", 253, (800.0, 1400.0))[
+        1:
+    ] == (58, 253)
+
+
+def test_the_preview_shows_the_longest_one_liner_where_a_render_puts_it():
+    settings = get_settings()
+    notes = preview.render_checked(_military(), settings, "9:16")[1]
+    assert any("one-liner is made smaller or moved" in n for n in notes)
+    assert not any("covers part of the video" in n for n in notes)
+    # A wide video sits smaller in the band, leaving room above it: a short line stays.
+    short = preview.render_checked(_military(max_words=3), settings, "16:9")[1]
+    assert not any("one-liner" in n for n in short)
