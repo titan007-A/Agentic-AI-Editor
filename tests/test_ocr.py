@@ -138,3 +138,43 @@ def test_ocr_reads_rendered_text_when_its_models_are_here(tmp_path):
     (line,) = ocr.read(tmp_path / "f.png", ROOT / "models")
     assert line.text.replace(" ", "") == "HELLOWORLD"
     assert 30 <= line.x0 <= 50 and 60 <= line.y0 <= 90
+
+
+def test_the_picture_band_hears_of_edge_text_from_ocr_all_through_the_clip(
+    monkeypatch, tmp_path, make_analysis
+):
+    """Lyrics come in after the shot's one look: OCR every couple of seconds catches them."""
+    from agentic_editor import framing
+    from agentic_editor.edl import EDL, Clip
+    from agentic_editor.presets import Preset, TextBlock
+    from agentic_editor.render import compose
+
+    preset = Preset(
+        name="p", label="p", min_duration=1, max_duration=60,
+        text_blocks=[TextBlock(text="top", size=60, anchor="top", offset=200)],
+    )  # fmt: skip
+    analysis = make_analysis([], 9).model_copy(update={"width": 1080, "height": 1920})
+    looked = []
+
+    def text_lines(video, times, analysis, settings, work_dir):
+        looked.extend(times)
+        return {t: ([LYRIC] if t > 3 else []) for t in times}
+
+    LYRIC = subjects.Subject(kind="text", label="SI CHIAMAN GUAI", x0=200, y0=1450,
+                             x1=880, y1=1490, keep=True)  # fmt: skip
+    seen = {}
+    monkeypatch.setattr(pipeline, "text_lines", text_lines)
+    monkeypatch.setattr(pipeline, "subject_samples", lambda *a: [])
+    monkeypatch.setattr(compose, "picture_band", lambda preset, face: (300, 1700))
+    monkeypatch.setattr(compose, "band_rows", lambda *a: 1400)
+    monkeypatch.setattr(compose, "moving_part", lambda *a: None)
+    monkeypatch.setattr(compose, "text_face", lambda *a: None)
+    monkeypatch.setattr(
+        framing, "band_shots", lambda *a: (seen.setdefault("marks", a[7]) and []) or []
+    )
+    edl = EDL(clips=[Clip(start=0, end=9)], crop_mode="none")
+    detections = {(0, 9): []}
+    pipeline.band_framing(edl, preset, analysis, tmp_path / "v.mp4", _settings(tmp_path),
+                          tmp_path, detections, None)  # fmt: skip
+    assert len(looked) >= 4  # every couple of seconds, not once
+    assert (1450, 1490) in seen["marks"]

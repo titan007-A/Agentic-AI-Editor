@@ -199,6 +199,7 @@ def subject_samples(
 
 
 OCR_VERSION = 1
+TEXT_EVERY = 2.0  # seconds between OCR looks for the picture band's edge text
 
 
 def text_lines(
@@ -420,6 +421,11 @@ def band_framing(
     times = framing.view_times(clip, analysis.scenes, every=None)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
     marks = [(m.y, m.y + m.height) for m in analysis.watermarks]
+    # Burnt-in lyrics come and go line by line, so one look a shot misses them: OCR (cheap,
+    # off the GPU) looks every few seconds, and a line along an edge at any moment goes.
+    every = framing.view_times(clip, analysis.scenes, every=TEXT_EVERY)
+    if (texts := text_lines(video, every, analysis, settings, work_dir)) is not None:
+        marks += [(s.y0, s.y1) for items in texts.values() for s in items]
     if not preset.watermarks.cut_text:
         # The video's own text stays in view: nothing is cut for it.
         samples = [(t, [s for s in items if s.kind != "text"]) for t, items in samples]
