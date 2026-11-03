@@ -261,7 +261,7 @@ def test_one_account_fills_at_most_two_of_the_eight_but_a_song_may_come_again():
         reel("E1", "vault", "Caruso - Lucio Dalla", 0.4),
         reel("E2", "vault", "Felicità - Al Bano", 0.3),
     ]
-    picked, passed, cutoff = research.pick(ranked)
+    picked, passed, cutoff = research.pick(ranked, count=8)
     assert [r.code for r in picked] == ["A1", "A2", "B1", "C1", "C2", "D1", "D2", "E1"]
     assert passed == {"same account": 2, "same song": 1} and cutoff == 0.3
 
@@ -404,8 +404,12 @@ def test_feedback_steers_planning_and_rating_and_hidden_accounts_stay_out():
     assert [r.code for r in result.reels] == ["ADAMS1", "ADAMS2"]
     assert result.left_out == {"hidden account": 1}
     for prompt in (llm.asked[0], llm.asked[-1]):  # planning, rating
-        assert "liked before (find more like these):\n- Heaven - Bryan Adams (@attic)" in prompt
+        assert "liked before, which show their taste" in prompt
+        assert ":\n- Heaven - Bryan Adams (@attic)" in prompt
         assert "- Bryan Adams karaoke cover (@covers): Not the real singer" in prompt
+    # The owner wants variety: some searches go elsewhere, and unlike isn't rated lower.
+    assert "the rest deliberately different ones" in llm.asked[0]
+    assert "don't rate it lower for that" in llm.asked[-1]
     plain = Planner()
     research.plan(plain, "Bryan Adams")
     assert "liked before" not in plain.asked[0]  # no feedback, nothing said of it
@@ -903,3 +907,42 @@ def test_a_pdf_title_read_as_a_section_and_by_words_are_tidied():
         ("All", 2, "Dunkirk", "Christopher Nolan"),
         ("All", 3, "Top Gun", "Tony Scott"),
     ]
+
+
+def test_one_artist_fills_at_most_two_of_the_eight():
+    def reel(code, artist, score):
+        return Reel(code, "", "", handle=code.lower(), artist=artist, score=score)
+
+    ranked = [reel(f"Q{n}", "Queen", 0.9 - n / 100) for n in range(5)] + [
+        reel("A1", "Bryan Adams", 0.5),
+        reel("L1", "Laura Pausini", 0.4),
+    ]
+    picked, passed, _ = research.pick(ranked)
+    assert [r.code for r in picked] == ["Q0", "Q1", "A1", "L1"]
+    assert passed == {"same artist": 3}
+
+
+def test_a_featured_singer_doesnt_make_another_song_or_artist():
+    def reel(code, song, artist, score):
+        return Reel(code, "", "", handle=code.lower(), song=song, artist=artist, score=score)
+
+    ranked = [
+        reel("J1", "Faithfully - Journey", "Journey", 0.9),
+        reel("J2", "Faithfully - Journey (feat. Steve Perry)", "Journey (feat. Steve Perry)", 0.8),
+        reel("J3", "Faithfully – Journey ft. Steve Perry", "Journey ft. Steve Perry", 0.7),
+        reel("B1", "Livin' on a Prayer - Bon Jovi", "Bon Jovi", 0.6),
+    ]
+    picked, passed, _ = research.pick(ranked)
+    assert [r.code for r in picked] == ["J1", "J2", "B1"] and passed == {"same song": 1}
+
+
+def test_an_artist_asked_for_by_name_may_fill_the_research_a_song_still_twice():
+    def reel(code, song, score):
+        return Reel(code, "", "", handle=code.lower(), song=song, artist="Adele", score=score)
+
+    ranked = [reel(f"A{n}", f"Song {n // 2} - Adele", 0.9 - n / 100) for n in range(8)]
+    ranked.append(reel("A9", "Song 0 - Adele", 0.5))  # a third reel of one song
+    picked, passed, _ = research.pick(ranked, asked="Adele ke best live songs")
+    assert len(picked) == 8 and passed == {"same song": 1}
+    picked, _, _ = research.pick(ranked, asked="female pop singers live")
+    assert len(picked) == 2  # not asked for by name: two of her at most

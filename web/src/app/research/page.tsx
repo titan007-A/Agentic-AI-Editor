@@ -294,7 +294,7 @@ function Researcher() {
         <h1 className="font-hand text-4xl font-bold">Researcher</h1>
         <p className="text-sm text-muted-foreground">
           It searches Instagram and YouTube Shorts through web search engines for reels like your
-          account&apos;s best ones, or for what you describe, and gives the 8 that fit best and are
+          account&apos;s best ones, or for what you describe, and gives the 10 that fit best and are
           most viral, never one it showed you before. Choose up to 5 of them to edit.
         </p>
       </div>
