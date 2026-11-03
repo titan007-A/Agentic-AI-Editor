@@ -387,7 +387,7 @@ render behaves:
 | `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline; `{song}` and `{artist}` come from a video named "Song - Artist" or, for a link, which can't be renamed, from notes lines `song: ...` and `artist: ...` (they also become the reel's title and the song its post caption is about), `{headline}` is written for each video (see `headline`), and any other word in braces is the preset's own, filled per reel from a notes line like `day: 103` for `{day}` (`{song_number}` from `song number: 5`); `{year}` can also come from the video's name, "Song (1980) - Artist" |
 | `auto_name` | `true`: when neither the video's name nor the notes say the `{song}` and `{artist}`, they are recognised from its sound with Shazam (free, no key, through the unofficial `shazamio` library, so it can stop working). Shazam's notes about the take go, "(Live)", "(feat. ...)", "- Remastered 2011"; a bracket that doesn't say what it is stays only if MusicBrainz knows the song by the name with it, "(I Can't Get No) Satisfaction". Still nothing, and the job page asks for the song and artist and makes the reel with them |
-| `post_caption` | the post's caption, written from Wikipedia and Wikidata about the song (see below): `enabled` writes it after every render, otherwise the video's card has a Write caption button; `language`, `style`, word range |
+| `post_caption` | the post's caption (see below): `about` the `song` (from Wikipedia and Wikidata) or the `video` (from watching it, what is said, its post and Wikipedia); `enabled` writes it after every render, otherwise the video's card has a Write caption button; `language`, `style`, word range |
 | `headline` | how the planning model writes `{headline}` from the video's title and description (`hint` with examples, `max_chars`, `uppercase`); a notes line `headline: ...` gives it instead. Long headlines wrap into even lines without breaking a quoted song name |
 | `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage |
 | `grade` | colour: `auto` corrects a cast or a flat, dim picture; `look` (warm, cool, teal-orange, film, moody, vivid, mono, faded); a `.cube` LUT; `strength` |
@@ -431,6 +431,18 @@ the sources' words that say so, which are then looked up in the sources. A capti
 fails is written again once with what was wrong; what still fails is shown under it as
 "Check before posting", next to links to the articles it came from. A song Wikipedia has no
 article on gets no caption.
+
+A preset whose posts aren't about a song sets `post_caption.about: video` ("About" in the
+editor). Then the caption is written from the video itself: the vision model watches six
+frames of the stretch the reel uses and says plainly what it shows; with what is said in
+it, the post's own description and the reel's one-liner, the planning model names what the
+reel is about, the facts it gives and up to three English Wikipedia articles on them
+(read in the caption's language too when Wikipedia has the same article there). What is
+seen, said and posted counts as a source like the articles, so the same checks apply. The
+preset's `style` then says what the page wants from the caption, on top of a default shape
+(three paragraphs, a few emojis, no hashtags). On Vanshaj's beach reel it wrote about the
+two AH-64 Apaches over Myrtle Beach on 4 July 2026 and the Semiquincentennial, in 58 s on
+the Mac, with nothing left to check.
 
 ### Learning a style from a reel
 

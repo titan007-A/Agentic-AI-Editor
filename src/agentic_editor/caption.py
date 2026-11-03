@@ -79,6 +79,28 @@ TOPIC_STYLE = (
 )
 
 
+VIDEO_STYLE = (
+    "three paragraphs, 150 to 220 words in all. The first says what happens in the video "
+    "with its most striking detail; the second gives the background: who or what it is, "
+    "where and when, how it came about; the third says why it matters and ends on a "
+    "reflective note. Two to four fitting emojis spread through the text, not bunched at "
+    "the end. Natural, storytelling prose. No hashtags and no call to follow or like."
+)
+
+
+def video_style(wished: str) -> str:
+    """How a video's caption is written: the default shape, with what the page asks for
+    (in a preset that says what it should be about, not how to write it) on top."""
+    if not wished.strip():
+        return VIDEO_STYLE
+    return f"{VIDEO_STYLE} What the page wants from it: {wished.strip()}"
+
+
+SEEN = "What the video shows"
+SAID = "What is said in the video"
+POSTED = "The post's own description"
+
+
 class CaptionError(RuntimeError):
     """No caption can be written: the song isn't named, or no source covers it."""
 
@@ -353,10 +375,15 @@ def topic_article(http: httpx.Client, language: str, topic: str):
     return None
 
 
-def gather_topic(topic: str, language: str, cache: Path, transport=None) -> Sources:
+def gather_topic(
+    topic: str, language: str, cache: Path, transport=None, english_first: bool = False
+) -> Sources:
     """The topic's article in the caption's language and in English, and its Wikidata
-    facts, kept on disk like a song's."""
-    key = re.sub(r"[^a-z0-9]+", "-", plain(f"topic {topic} {language}")).strip("-")[:100]
+    facts, kept on disk like a song's. `english_first` for a topic named in English: the
+    English article settles what it is, and only the other language's article about the
+    same thing is kept (searched first, Spanish Wikipedia matched another name)."""
+    order = ["en", language] if english_first else [language, "en"]
+    key = re.sub(r"[^a-z0-9]+", "-", plain(f"topic {topic} {'-'.join(order)}")).strip("-")[:100]
     path = cache / f"{key}.json"
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -367,7 +394,7 @@ def gather_topic(topic: str, language: str, cache: Path, transport=None) -> Sour
         timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True, transport=transport
     )
     with client as http:
-        for lang in dict.fromkeys([language, "en"]):
+        for lang in dict.fromkeys(order):
             hit = topic_article(http, lang, topic)
             if hit is None:
                 continue
@@ -454,8 +481,9 @@ def _check(llm, text: str, sources: Sources, headline: str) -> list[str]:
         "For each sentence, say whether it states a fact (a name, date, number, place, or "
         "what happened, how or why) or only an opinion or feeling. For a fact, copy the "
         "words of the sources above that state it, exactly as they are written there, up to "
-        "40 words; write HEADLINE if it only describes the reel as the headline does, and "
-        "leave it empty if the sources don't state it."
+        "40 words, in the language they are written in, never translated, even when the "
+        "caption is in another language; write HEADLINE if it only describes the reel as the "
+        "headline does, and leave it empty if the sources don't state it."
     )
     reply = parse(
         _Check,
@@ -546,3 +574,99 @@ def write(
         wrong = problems(text, sources, llm, words, headline, emojis)
     used = [{"title": a.title, "url": a.url} for a in sources.articles]
     return Written(text=text, sources=used, notes=wrong)
+
+
+class _Seen(BaseModel):
+    description: str
+
+
+ARTICLES = 3  # Wikipedia articles read for a video's caption, at most
+
+
+class _Subject(BaseModel):
+    topic: str  # what the reel is about, in a few words
+    facts: list[str] = Field(max_length=6)  # what the video itself shows and says
+    articles: list[str] = Field(max_length=ARTICLES)  # Wikipedia titles to read; maybe none
+
+
+WATCH_PROMPT = (
+    "These frames come from one short video, in order. Say plainly what it shows: what "
+    "happens, the people (by what they do or wear, never by a guessed name), animals, "
+    "vehicles, machines or objects that matter (their kind or model when it is clear), "
+    "the place, and any writing you can read on screen. Name nothing you can't see; say "
+    '"unclear" rather than guess. Four to eight sentences.'
+)
+
+
+def watch(vision, frames: list[Path]) -> str:
+    """What the vision model sees in the video's frames, in plain sentences."""
+    reply = vision.chat_json(
+        [{"role": "user", "content": WATCH_PROMPT}],
+        _Seen.model_json_schema(),
+        images=frames,
+        temperature=0.0,
+    )
+    return parse(_Seen, reply).description.strip()
+
+
+def video_subject(
+    llm, seen: str, said: str, posted: str, one_liner: str, guide: str
+) -> tuple[str, list[str], list[str]]:
+    """What the reel is about (a few words), the facts the video itself gives, and the
+    Wikipedia articles to read about them (none when nothing in it is something an
+    encyclopedia covers)."""
+    reply = llm.chat_json(
+        [
+            {
+                "role": "user",
+                "content": (
+                    "A short video is posted with a caption that tells its story. From what "
+                    "is known about it: say what it is about in a few words (the event, "
+                    "thing or person at its heart); list the facts it gives (what happens, "
+                    "who or what, where, when), each only if it is seen, said or posted "
+                    f"below; and give the titles of up to {ARTICLES} English Wikipedia "
+                    "articles to read for those facts: the specific event if it has one, "
+                    "then the machine, place, person, unit or phenomenon it shows. No "
+                    "articles when nothing there is that specific.\n\n"
+                    f"{SEEN}: {seen or '(nothing)'}\n{SAID}: {said or '(nothing)'}\n"
+                    f"{POSTED}: {posted or '(none)'}\nThe line shown on it: "
+                    f"{one_liner or '(none)'}\nWhat the page wants the caption to be about: "
+                    f"{guide or '(nothing said)'}"
+                ),
+            }
+        ],
+        _Subject.model_json_schema(),
+        temperature=0.0,
+    )
+    found = parse(_Subject, reply)
+    titles = [a.strip() for a in found.articles if a.strip()][:ARTICLES]
+    return found.topic.strip(), [f.strip() for f in found.facts if f.strip()], titles
+
+
+def video_sources(
+    seen: str,
+    said: str,
+    posted: str,
+    url: str,
+    articles: list[str],
+    language: str,
+    cache: Path,
+    transport=None,
+) -> Sources:
+    """The video itself (what is seen and said), the post's description, and Wikipedia
+    on each of `articles` it has, in the caption's language and in English: everything a
+    caption may state."""
+    sources = Sources()
+    for title in articles:
+        try:
+            found = gather_topic(title, language, cache, transport, english_first=True)
+        except (CaptionError, httpx.HTTPError):
+            continue  # the video, its post and the other articles are enough to go on
+        known = {a.url for a in sources.articles}
+        sources.articles += [a for a in found.articles if a.url not in known]
+        sources.facts += [f for f in found.facts if f not in sources.facts]
+    own = [Article(SEEN, "", seen), Article(SAID, "", said), Article(POSTED, url, posted)]
+    sources.articles = [a for a in own if a.text.strip()] + sources.articles
+    if not sources.articles:
+        raise CaptionError("nothing is known about the video to write from")
+    return sources

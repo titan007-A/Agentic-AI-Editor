@@ -198,3 +198,62 @@ def test_a_topic_caption_is_asked_for_about_the_topic():
     caption.write(llm, "", "", SOURCES, "es", words=(5, 40), topic="Thriller (album)")
     prompt = llm.asked[0][0]["content"]
     assert "about Thriller (album), in Spanish" in prompt and "the song" not in prompt
+
+
+def test_a_video_caption_may_state_what_is_seen_said_and_posted_and_wikipedia(tmp_path):
+    from agentic_editor import caption
+
+    def gather(topic, language, cache, transport=None, english_first=False):
+        assert english_first  # the titles are English Wikipedia's
+        if topic == "Myrtle Beach Airshow":
+            raise caption.CaptionError("Wikipedia has no article")
+        assert topic == "Boeing AH-64 Apache"
+        apache = caption.Article("Boeing AH-64 Apache", "w", "An attack helicopter.")
+        return caption.Sources([apache], ["first flight: 1975"])
+
+    import agentic_editor.caption as module
+
+    original = module.gather_topic
+    module.gather_topic = gather
+    try:
+        found = caption.video_sources(
+            "Two helicopters fly low over a beach.", "", "4 de julio, Myrtle Beach",
+            "https://x.test/p", ["Boeing AH-64 Apache", "Myrtle Beach Airshow"], "es", tmp_path,
+        )  # fmt: skip
+    finally:
+        module.gather_topic = original
+    assert [a.title for a in found.articles] == [
+        caption.SEEN,
+        caption.POSTED,
+        "Boeing AH-64 Apache",
+    ]  # nothing said: left out
+    corpus = found.corpus()
+    assert "Myrtle Beach" in corpus and "1975" in corpus and "beach" in corpus
+
+
+def test_without_an_article_the_video_and_its_post_are_enough(tmp_path):
+    import agentic_editor.caption as module
+    from agentic_editor import caption
+
+    def none(*args, **kwargs):
+        raise caption.CaptionError("Wikipedia has no article")
+
+    original, module.gather_topic = module.gather_topic, none
+    try:
+        found = caption.video_sources(
+            "A tank crosses a river.", "", "", "", ["Tank"], "en", tmp_path
+        )
+    finally:
+        module.gather_topic = original
+    assert [a.title for a in found.articles] == [caption.SEEN]
+    with pytest.raises(caption.CaptionError):
+        caption.video_sources("", "", "", "", [], "en", tmp_path)
+
+
+def test_a_page_wish_adds_to_the_video_style_rather_than_replacing_it():
+    from agentic_editor import caption
+
+    assert caption.video_style("") == caption.VIDEO_STYLE
+    styled = caption.video_style("related to the one-liner")
+    assert styled.startswith(caption.VIDEO_STYLE) and "No hashtags" in styled
+    assert styled.endswith("related to the one-liner")

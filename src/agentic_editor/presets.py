@@ -116,10 +116,12 @@ class Headline(Strict):
 
 
 class PostCaption(Strict):
-    """The post's caption, written from Wikipedia and Wikidata about the song: after every
-    render when enabled, or when asked for from the video's card."""
+    """The post's caption, written after every render when enabled, or when asked for from
+    the video's card: about the song (from Wikipedia and Wikidata), or about what the video
+    shows (from watching it, what is said in it, its post's description and Wikipedia)."""
 
     enabled: bool = False
+    about: Literal["song", "video"] = "song"
     language: str = Field(default="en", pattern=r"^[a-z]{2}$")
     style: str = Field(default="", description="how to write it; empty for the default")
     min_words: int = Field(default=150, ge=10, le=1000)

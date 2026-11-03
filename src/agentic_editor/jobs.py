@@ -282,6 +282,69 @@ def source_text(output_path: Path, media_dir: Path) -> tuple[str, str]:
     return meta.get("title", ""), meta.get("description", "")
 
 
+WATCHED_FRAMES = 6
+
+
+def caption_from_video(
+    router,
+    settings: Settings,
+    source_ref: str,
+    edl: dict,
+    output_path: Path,
+    description: str,
+    headline: str,
+    wanted: PostCaption,
+) -> caption.Written:
+    """A caption about what the video shows: the vision model watches frames of the stretch
+    the reel uses, then the planner names its subject and writes from what is seen and
+    said, the post's description and Wikipedia on that subject."""
+    from agentic_editor.analysis import subjects
+    from agentic_editor.analyze import file_hash
+    from agentic_editor.transcript import Transcript
+
+    source = pipeline.resolve_source(source_ref, settings)
+    clips = edl.get("clips") or [{"start": 0.0, "end": 0.0}]
+    start, end = float(clips[0]["start"]), float(clips[0]["end"])
+    work = settings.cache_dir / file_hash(source.path)
+    frames_dir = output_path.parent / "caption-frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    length = max(end - start, 0.1)
+    frames = [
+        subjects.grab(
+            source.path, start + length * (i + 0.5) / WATCHED_FRAMES,
+            frames_dir / f"frame-{i}.jpg", settings.ffmpeg_bin,
+        )
+        for i in range(WATCHED_FRAMES)
+    ]  # fmt: skip
+    # What is said: the original sound's transcript before the vocals', if the job made one.
+    said = ""
+    for made in sorted(work.glob("transcript-*.json"), key=lambda p: "original" not in p.name):
+        heard = Transcript.model_validate_json(made.read_text(encoding="utf-8"))
+        said = (
+            heard.text_between(start, end) if end > start else " ".join(w.text for w in heard.words)
+        )
+        break
+    with router.vision() as vision:
+        seen = caption.watch(vision, frames)
+    one_liner = edl.get("one_liner") or ""
+    words = (wanted.min_words, wanted.max_words)
+    with router.planner() as llm:
+        llm.context = caption.CONTEXT
+        topic, facts, articles = caption.video_subject(
+            llm, seen, said, description, one_liner, wanted.style
+        )
+        sources = caption.video_sources(
+            seen, said, description, source.url or "", articles, wanted.language,
+            settings.cache_dir / "captions",
+        )  # fmt: skip
+        written = caption.write(
+            llm, "", "", sources, wanted.language, headline or one_liner,
+            caption.video_style(wanted.style), words, topic=topic or one_liner or "the video",
+        )  # fmt: skip
+    log.info("caption from the video: about %r, facts %s, articles %s", topic, facts, articles)
+    return written
+
+
 def run_caption(output_id: int, Session: sessionmaker, settings: Settings, router=None) -> None:
     """Write an output's post caption (see caption.py). Like a job, it never stays
     "writing": whatever happens is stored."""
@@ -298,31 +361,38 @@ def run_caption(output_id: int, Session: sessionmaker, settings: Settings, route
             path = Path(output.path)
             named = output.caption_song, output.caption_artist
             topic = output.caption_topic
+            source_ref, edl = output.job.source, output.edl
         headline = next((d.split(": ", 1)[1] for d in decisions if d.startswith("headline ")), "")
         title, description = source_text(path, settings.media_dir)
         cache = settings.cache_dir / "captions"
         words = (wanted.min_words, wanted.max_words)
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
-        with router.planner() as llm:
-            llm.context = caption.CONTEXT
-            if topic:
-                # The preset's style is written for songs; a topic gets the general one.
-                sources = caption.gather_topic(topic, wanted.language, cache)
-                written = caption.write(
-                    llm, "", "", sources, wanted.language, headline, words=words, topic=topic
-                )
-            else:
-                song, artist = (
-                    named if named[0] else (caption.identify(llm, title, description, headline))
-                )
-                with Session() as db:
-                    output = db.get(Output, output_id)
-                    output.caption_song, output.caption_artist = song, artist
-                    db.commit()
-                sources = caption.gather(song, artist, wanted.language, cache)
-                written = caption.write(
-                    llm, song, artist, sources, wanted.language, headline, wanted.style, words
-                )
+        if wanted.about == "video" and not topic and not named[0]:
+            # A post about what the video shows (unless a person named a song or topic).
+            written = caption_from_video(
+                router, settings, source_ref, edl, path, description, headline, wanted
+            )
+        else:
+            with router.planner() as llm:
+                llm.context = caption.CONTEXT
+                if topic:
+                    # The preset's style is written for songs; a topic gets the general one.
+                    sources = caption.gather_topic(topic, wanted.language, cache)
+                    written = caption.write(
+                        llm, "", "", sources, wanted.language, headline, words=words, topic=topic
+                    )
+                else:
+                    song, artist = (
+                        named if named[0] else caption.identify(llm, title, description, headline)
+                    )
+                    with Session() as db:
+                        output = db.get(Output, output_id)
+                        output.caption_song, output.caption_artist = song, artist
+                        db.commit()
+                    sources = caption.gather(song, artist, wanted.language, cache)
+                    written = caption.write(
+                        llm, song, artist, sources, wanted.language, headline, wanted.style, words
+                    )
         with Session() as db:
             output = db.get(Output, output_id)
             output.caption, output.caption_sources = written.text, written.sources
