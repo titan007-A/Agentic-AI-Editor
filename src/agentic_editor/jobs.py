@@ -107,60 +107,102 @@ def _utc(at: datetime) -> datetime:
     return at if at.tzinfo else at.replace(tzinfo=UTC)
 
 
-def next_job(db, now: datetime) -> Job | None:
-    """The queued job whose turn it is. People's own jobs go before autopilot's (until an
-    autopilot job has waited AGING), then the account with the fewest jobs running goes
-    first, then the one served longest ago, then the oldest job: one person's long queue
-    never holds everyone else up."""
-    queued = db.scalars(select(Job).where(Job.status == "queued")).all()
-    if not queued:
+Turn = tuple[str, str | int]  # ("job", job id) or ("caption", output id)
+
+
+def next_turn(db, now: datetime) -> Turn | None:
+    """The queued job or post caption whose turn it is. Jobs and captions share the
+    workers and the GPU, so they take turns together: people's own work before
+    autopilot's (until it has waited AGING), then the account with the least running,
+    then the one served longest ago, then the oldest. One person's long queue (jobs, and
+    the captions each of them adds) never holds everyone else up."""
+    jobs_ = db.scalars(select(Job).where(Job.status == "queued")).all()
+    captions = db.execute(
+        select(Output.id, Output.caption_queued_at, Job.id, Job.owner_id, Job.created_at)
+        .join(Output.job)
+        .where(Output.caption_status == "queued")
+    ).all()
+    if not jobs_ and not captions:
         return None
-    ids = [j.id for j in queued]
+    ids = [j.id for j in jobs_] + [row[2] for row in captions]
     automatic = set(db.scalars(select(FeedItem.job_id).where(FeedItem.job_id.in_(ids))))
     running = Counter(db.scalars(select(Job.owner_id).where(Job.status == "running")))
-    served = dict(
-        db.execute(
+    running.update(
+        db.scalars(select(Job.owner_id).join(Job.outputs).where(Output.caption_status == "writing"))
+    )
+    served: dict[str | None, datetime] = {}
+    for owner, at in [
+        *db.execute(
             select(Job.owner_id, func.max(Job.started_at))
             .where(Job.started_at.is_not(None))
             .group_by(Job.owner_id)
-        ).all()
-    )
+        ).all(),
+        *db.execute(
+            select(Job.owner_id, func.max(Output.caption_started_at))
+            .join(Output.job)
+            .where(Output.caption_started_at.is_not(None))
+            .group_by(Job.owner_id)
+        ).all(),
+    ]:
+        served[owner] = max(served.get(owner, _utc(at)), _utc(at))
     never = datetime.min.replace(tzinfo=UTC)
 
-    def turn(job: Job):
-        waited = now - _utc(job.created_at)
-        background = job.id in automatic and waited < AGING
-        last = served.get(job.owner_id)
-        return (
-            background,
-            running[job.owner_id],
-            _utc(last) if last else never,
-            _utc(job.created_at),
-            job.id,
-        )
+    def turn(owner: str | None, job_id: str, asked: datetime, ident: str):
+        background = job_id in automatic and now - asked < AGING
+        return (background, running[owner], served.get(owner, never), asked, ident)
 
-    return min(queued, key=turn)
+    options = [
+        (turn(j.owner_id, j.id, _utc(j.created_at), f"j{j.id}"), ("job", j.id)) for j in jobs_
+    ] + [
+        (turn(owner, job_id, _utc(asked or made), f"c{output_id:09d}"), ("caption", output_id))
+        for output_id, asked, job_id, owner, made in captions
+    ]
+    return min(options, key=lambda option: option[0])[1]
 
 
-def claim(Session: sessionmaker, now: datetime | None = None) -> str | None:
-    """Mark the job whose turn it is running and return its id; None when none is queued.
-    Every queued job has one task in the queue, but a task runs whichever job's turn it
-    is when a worker takes it up, not the one it was made for."""
+def claim_turn(Session: sessionmaker, now: datetime | None = None) -> Turn | None:
+    """Mark the job or caption whose turn it is as started and return it; None when
+    nothing is queued. Every queued job and caption has one task in the queue, but a task
+    runs whichever one's turn it is when a worker takes it up, not the one it was made for."""
     with _claiming:
         while True:
             with Session() as db:
                 at = now or datetime.now(UTC)
-                job = next_job(db, at)
-                if job is None:
+                chosen = next_turn(db, at)
+                if chosen is None:
                     return None
-                taken = db.execute(
-                    update(Job)
-                    .where(Job.id == job.id, Job.status == "queued")
-                    .values(status="running", started_at=at)
-                ).rowcount
+                kind, ident = chosen
+                if kind == "job":
+                    change = (
+                        update(Job)
+                        .where(Job.id == ident, Job.status == "queued")
+                        .values(status="running", started_at=at)
+                    )
+                else:
+                    change = (
+                        update(Output)
+                        .where(Output.id == ident, Output.caption_status == "queued")
+                        .values(caption_status="writing", caption_started_at=at)
+                    )
+                taken = db.execute(change).rowcount
                 db.commit()
                 if taken:
-                    return job.id
+                    return chosen
+
+
+def take_turn(made_for: Turn) -> None:
+    """A queued job's or caption's turn: runs whichever one's turn it is now."""
+    Session = sessions()
+    chosen = claim_turn(Session)
+    if chosen is None:
+        return  # deleted, or run by an earlier turn
+    if chosen != made_for:
+        log.info("the turn of %s %s went to %s %s", *made_for, *chosen)
+    kind, ident = chosen
+    if kind == "job":
+        run_job(ident, Session, get_settings())
+    else:
+        run_caption(ident, Session, get_settings())
 
 
 def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline.run) -> None:
@@ -213,6 +255,7 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             captioned = [o for o in job.outputs if available[o.preset].post_caption.enabled]
             for output in captioned:
                 output.caption_status = "queued"
+                output.caption_queued_at = datetime.now(UTC)
             db.commit()
             for output in captioned:
                 write_caption(output.id)
@@ -747,15 +790,8 @@ def run_research(
 
 @huey.task()
 def process(job_id: str) -> None:
-    """One queued job's turn: runs the job whose turn it is now (see claim), which is
-    `job_id` only when nothing fairer is waiting."""
-    Session = sessions()
-    chosen = claim(Session)
-    if chosen is None:
-        return  # its job was deleted, or run by an earlier turn
-    if chosen != job_id:
-        log.info("job %s's turn went to job %s", job_id, chosen)
-    run_job(chosen, Session, get_settings())
+    """One queued job's turn (see take_turn): `job_id` runs only when nothing fairer waits."""
+    take_turn(("job", job_id))
 
 
 @huey.task()
@@ -765,12 +801,76 @@ def learn_style(draft_id: str) -> None:
 
 @huey.task()
 def write_caption(output_id: int) -> None:
-    run_caption(output_id, sessions(), get_settings())
+    """One queued caption's turn, shared with the jobs (see take_turn)."""
+    take_turn(("caption", output_id))
+
+
+# How long a research's turn waits before looking again while another research runs.
+RESEARCH_RETRY = 10
+BUSY = "busy"
+
+
+def next_research(db) -> Research | None:
+    """The queued research whose turn it is: the account served longest ago first, then
+    the oldest research, so one person's pile of researches doesn't hold anyone up."""
+    queued = db.scalars(select(Research).where(Research.status == "queued")).all()
+    if not queued:
+        return None
+    served = dict(
+        db.execute(
+            select(Research.owner_id, func.max(Research.started_at))
+            .where(Research.started_at.is_not(None))
+            .group_by(Research.owner_id)
+        ).all()
+    )
+    never = datetime.min.replace(tzinfo=UTC)
+
+    def turn(found: Research):
+        last = served.get(found.owner_id)
+        return (_utc(last) if last else never, _utc(found.created_at), found.id)
+
+    return min(queued, key=turn)
+
+
+def claim_research(Session: sessionmaker, now: datetime | None = None) -> str | None:
+    """Mark the research whose turn it is running and return its id; BUSY while another
+    research runs (one at a time: two at once search the same sites together, which then
+    refuse them, and hold both workers the jobs need); None when none is queued."""
+    with _claiming:
+        while True:
+            with Session() as db:
+                running = select(func.count()).select_from(Research)
+                if db.scalar(running.where(Research.status == "running")):
+                    return BUSY
+                at = now or datetime.now(UTC)
+                found = next_research(db)
+                if found is None:
+                    return None
+                taken = db.execute(
+                    update(Research)
+                    .where(Research.id == found.id, Research.status == "queued")
+                    .values(status="running", started_at=at)
+                ).rowcount
+                db.commit()
+                if taken:
+                    return found.id
 
 
 @huey.task()
 def find_reels(research_id: str) -> None:
-    run_research(research_id, sessions(), get_settings())
+    """One queued research's turn: runs the research whose turn it is (see
+    claim_research), or, while another runs, waits RESEARCH_RETRY seconds in the queue's
+    schedule, holding no worker meanwhile."""
+    Session = sessions()
+    chosen = claim_research(Session)
+    if chosen == BUSY:
+        find_reels.schedule((research_id,), delay=RESEARCH_RETRY)
+        return
+    if chosen is None:
+        return  # removed, or run by an earlier turn
+    if chosen != research_id:
+        log.info("research %s's turn went to research %s", research_id, chosen)
+    run_research(chosen, Session, get_settings())
 
 
 @huey.task()
@@ -800,6 +900,8 @@ def recover(Session: sessionmaker) -> None:
     running will never finish: it is marked failed. One still queued whose task is gone
     (it never reached the queue) is queued again."""
     pending = {(task.name, task.args[0]) for task in huey.pending() if task.args}
+    # A research turn waiting for the running one sits in the schedule, not the queue.
+    pending |= {(task.name, task.args[0]) for task in huey.scheduled() if task.args}
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status == "running")).all():
             job.status, job.error = "failed", INTERRUPTED
@@ -813,25 +915,29 @@ def recover(Session: sessionmaker) -> None:
             account.learn_status, account.learn_error = "failed", INTERRUPTED
         for output in db.scalars(select(Output).where(Output.caption_status == "writing")).all():
             output.caption_status, output.caption_notes = "failed", [INTERRUPTED]
-        lost_captions = [
-            output_id
-            for output_id in db.scalars(select(Output.id).where(Output.caption_status == "queued"))
-            if (CAPTION, output_id) not in pending
-        ]
-        # A turn runs whichever job is due, so what counts is a turn for every queued job.
-        turns = sum(1 for name, _ in pending if name == PROCESS)
+        # A turn runs whichever job or caption is due, so what counts is a turn for each.
+        turns = sum(1 for name, _ in pending if name in (PROCESS, CAPTION))
         queued_jobs = list(db.scalars(select(Job.id).where(Job.status == "queued")))
-        unturned = [j for j in queued_jobs if (PROCESS, j) not in pending]
-        lost_jobs = unturned[: max(0, len(queued_jobs) - turns)]
+        queued_captions = list(
+            db.scalars(select(Output.id).where(Output.caption_status == "queued"))
+        )
+        missing = max(0, len(queued_jobs) + len(queued_captions) - turns)
+        unturned = [(PROCESS, j) for j in queued_jobs if (PROCESS, j) not in pending] + [
+            (CAPTION, o) for o in queued_captions if (CAPTION, o) not in pending
+        ]
+        lost = unturned[:missing]
+        lost_jobs = [ident for name, ident in lost if name == PROCESS]
+        lost_captions = [ident for name, ident in lost if name == CAPTION]
         lost_drafts = [
             draft_id
             for draft_id in db.scalars(select(StyleDraft.id).where(StyleDraft.status == "queued"))
             if (LEARN, draft_id) not in pending
         ]
-        lost_research = [
-            research_id
-            for research_id in db.scalars(select(Research.id).where(Research.status == "queued"))
-            if (RESEARCH, research_id) not in pending
+        # Like jobs: a turn runs whichever research is due, so a turn for each is enough.
+        research_turns = sum(1 for name, _ in pending if name == RESEARCH)
+        queued_research = list(db.scalars(select(Research.id).where(Research.status == "queued")))
+        lost_research = [r for r in queued_research if (RESEARCH, r) not in pending][
+            : max(0, len(queued_research) - research_turns)
         ]
         queued = select(ResearchAccount.id).where(ResearchAccount.learn_status == "queued")
         lost_accounts = [a for a in db.scalars(queued) if (ACCOUNT, a) not in pending]

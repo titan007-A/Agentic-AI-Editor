@@ -106,6 +106,10 @@ class Output(Base):
     # was written from; and what to check before posting it, empty when it passed.
     caption: Mapped[str] = mapped_column(Text, default="")
     caption_status: Mapped[str | None] = mapped_column(String(16))
+    # When the caption was asked for, and when a turn took it up: captions take turns
+    # with jobs (see jobs.claim_turn).
+    caption_queued_at: Mapped[datetime | None]
+    caption_started_at: Mapped[datetime | None]
     caption_sources: Mapped[list[dict]] = mapped_column(JSON, default=list)
     caption_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
     # The song it is about: as the model found it from the video, or as a person named it
@@ -294,6 +298,8 @@ class Research(Base):
     # "asking": the model thinks of questions (none yet), then waits for the answers;
     # then queued, running, done or failed like a job.
     status: Mapped[str] = mapped_column(String(16), default="queued")
+    # When a turn took it up: whose research goes next is by who was served last.
+    started_at: Mapped[datetime | None]
     # The questions asked before searching, [{"question", "choices"}], and the answers
     # given, [{"question", "answer"}]: they become part of what to find.
     questions: Mapped[list[dict]] = mapped_column(JSON, default=list)
