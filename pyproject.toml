@@ -34,6 +34,8 @@ ml = [
     "mediapipe>=0.10.20",
     # 1.27+ is built for CUDA 13, while torch cu128 and CTranslate2 load CUDA 12.
     "onnxruntime-gpu>=1.22,<1.27; sys_platform == 'linux'",
+    # PaddleOCR's text models on onnxruntime: boxes for on-screen text (analysis/ocr.py).
+    "rapidocr>=3.10",
     "mlx-whisper>=0.4.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "scenedetect>=0.6.6",
     "torch>=2.8",
@@ -82,8 +84,10 @@ addopts = "-m 'not e2e'"
 [tool.uv]
 # Packages that install the same module and overwrite each other: mediapipe's
 # opencv-contrib-python already provides the cv2 scenedetect asks for, and on Linux
-# onnxruntime-gpu already provides the onnxruntime faster-whisper asks for.
+# onnxruntime-gpu already provides the onnxruntime faster-whisper asks for. rapidocr's
+# opencv-python-headless would be a third cv2.
 override-dependencies = [
     "opencv-python; sys_platform == 'never'",
+    "opencv-python-headless; sys_platform == 'never'",
     "onnxruntime; sys_platform != 'linux'",
 ]

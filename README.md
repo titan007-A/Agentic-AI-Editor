@@ -392,7 +392,7 @@ render behaves:
 
 Framing `smart` (the default) frames each shot so nothing that matters is cut. Heads
 come from the face detector; the vision model points out what else must stay whole (the
-microphone or instrument in use, readable text, a logo). A shot whose essentials fit a
+microphone or instrument in use, a logo), and OCR finds the text on screen. A shot whose essentials fit a
 full-height 9:16 window is cropped, following the subject if it moves; one that doesn't is
 widened and padded above and below instead of cut, a name banner sliding in only widens
 the seconds it is on screen, and when most of a reel is too wide every shot gets the same
@@ -472,6 +472,17 @@ render with an error rather than showing as an empty box.
 | Checking frames, thumbnails | `VISION_MODEL` | `qwen3.5:4b-q4_K_M` (Ollama) |
 | Transcription | `WHISPER_MODEL` / `MLX_WHISPER_MODEL` | `large-v3-turbo` |
 | Vocal isolation | `SEPARATION_MODEL` | `UVR-MDX-NET-Voc_FT.onnx` |
+| Text on screen | (fixed) | PaddleOCR PP-OCRv6 small, through RapidOCR on the CPU |
+
+Text on screen (burnt-in lyrics, captions, @handles) is found by OCR, not by the vision
+model: on 36 frames of 9 real reels the vision models (`qwen3.5:4b`, `qwen3.5:9b`) found
+under half the lines OCR found, their boxes sat a fraction of a line to a whole line off,
+and now and then they named a line that wasn't there. OCR boxes sit on the letters, so the
+picture band cuts edge text off cleanly and captions keep off it. A watermark candidate is
+blurred only when OCR reads letters in it and the vision model agrees it was added on top
+(the vision model alone once read a watermark into a trouser leg). The OCR models (30 MB)
+come with the `ml` extras and `fetch-models`; without them the vision model's text boxes
+are used as before.
 
 To try another model, pull it (`ollama pull <name>`) or pick one from
 `uv run audio-separator --list_models`, set it in `.env`, and run the benchmark and the

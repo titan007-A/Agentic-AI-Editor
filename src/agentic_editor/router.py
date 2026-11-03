@@ -17,7 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from agentic_editor import logs, slots
-from agentic_editor.analysis import faces, separation, transcribe
+from agentic_editor.analysis import faces, ocr, separation, transcribe
 from agentic_editor.backends import Backends
 from agentic_editor.llm import OllamaClient
 from agentic_editor.settings import Settings
@@ -115,6 +115,8 @@ class ModelRouter:
             transcribe.fetch_faster_whisper(s.whisper_model, s.models_dir / "whisper")
         separation.fetch_model(s.separation_model, s.models_dir / "separation")
         faces.model_file(s.models_dir)
+        if ocr.available():
+            ocr.fetch_model(s.models_dir)
 
     def planner(self) -> OllamaClient:
         """The planning model, holding the GPU while open."""

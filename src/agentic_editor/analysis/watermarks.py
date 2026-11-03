@@ -550,8 +550,18 @@ def readable(text: str) -> bool:
     return sum(c.isalnum() for c in text) >= 2
 
 
-def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_dir: Path):
-    """Ask the vision model which candidates are overlays rather than parts of the scene."""
+def confirm(
+    vision,
+    video: Path,
+    marks: list[Watermark],
+    ffmpeg_bin: str,
+    work_dir: Path,
+    read: Callable[[Path], str] | None = None,
+):
+    """Ask the vision model which candidates are overlays rather than parts of the scene.
+    `read` (OCR) reads the close-up first when given: it reads only real letters, where
+    the vision model now and then reads a watermark into a trouser leg or an empty strip.
+    The vision model reads it only where `read` fails."""
     from agentic_editor.llm import LLMError, parse
 
     confirmed = []
@@ -560,13 +570,20 @@ def confirm(vision, video: Path, marks: list[Watermark], ffmpeg_bin: str, work_d
         dest.mkdir(parents=True, exist_ok=True)
         try:
             images = _evidence(video, mark, ffmpeg_bin, dest)
-            reply = vision.chat_json(
-                [{"role": "user", "content": READ_PROMPT}],
-                _Reading.model_json_schema(),
-                images=images[1:],
-                temperature=0.0,
-            )
-            text = parse(_Reading, reply).text.strip()
+            text = None
+            if read is not None:
+                try:
+                    text = read(images[1]).strip()
+                except Exception as exc:  # OCR missing or broken: the vision model reads
+                    log.warning("OCR couldn't read watermark candidate %d: %s", i, exc)
+            if text is None:
+                reply = vision.chat_json(
+                    [{"role": "user", "content": READ_PROMPT}],
+                    _Reading.model_json_schema(),
+                    images=images[1:],
+                    temperature=0.0,
+                )
+                text = parse(_Reading, reply).text.strip()
             # Only a mark with something to read is blurred: a watermark names its owner,
             # and an empty strip or a piece of furniture has nothing to read.
             overlay = (
