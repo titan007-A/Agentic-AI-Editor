@@ -129,8 +129,8 @@ def test_when_ocr_fails_the_vision_model_reads(evidence, tmp_path):
 def test_ocr_reads_rendered_text_when_its_models_are_here(tmp_path):
     from agentic_editor.settings import ROOT
 
-    if not ocr.available() or not (ROOT / "models" / "ocr").exists():
-        pytest.skip("OCR or its models aren't installed here")
+    if not ocr.available():
+        pytest.skip("OCR isn't installed here (it comes with the ml extras)")
     image = Image.new("RGB", (640, 200), "black")
     font = ImageFont.truetype(str(ROOT / "fonts" / "OpenSans-Bold.ttf"), 40)
     ImageDraw.Draw(image).text((40, 70), "HELLO WORLD", fill="white", font=font)
@@ -192,9 +192,18 @@ def test_what_cant_be_a_line_of_text_is_left_out(monkeypatch, tmp_path):
         txts=["LL", "@secretosmilitares", "OK", "C"],
         scores=[0.93, 0.97, 0.7, 0.99],
     )
-    monkeypatch.setattr(ocr, "_engine", lambda folder: lambda pixels, **kw: found)
+    monkeypatch.setattr(ocr, "_engine", lambda: lambda pixels, **kw: found)
     lines = ocr.read(Image.new("RGB", (720, 1280)), tmp_path, whole_frame=True)
     assert [line.text for line in lines] == ["@secretosmilitares"]
     # A close-up of one line is all line: tall is fine there.
     lines = ocr.read(Image.new("RGB", (720, 1280)), tmp_path)
     assert [line.text for line in lines] == ["LL", "@secretosmilitares"]
+
+
+def test_a_frame_without_text_reads_nothing_and_logs_nothing(tmp_path, capfd, caplog):
+    if not ocr.available():
+        pytest.skip("OCR isn't installed here (it comes with the ml extras)")
+    assert ocr.read(Image.new("RGB", (640, 360)), tmp_path, whole_frame=True) == []
+    out, err = capfd.readouterr()
+    said = out + err + caplog.text
+    assert "detection result is empty" not in said

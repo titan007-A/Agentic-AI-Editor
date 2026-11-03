@@ -496,8 +496,8 @@ and now and then they named a line that wasn't there. OCR boxes sit on the lette
 picture band cuts edge text off cleanly and captions keep off it. A watermark candidate is
 blurred only when OCR reads letters in it and the vision model agrees it was added on top
 (the vision model alone once read a watermark into a trouser leg). The OCR models (30 MB)
-come with the `ml` extras and `fetch-models`; without them the vision model's text boxes
-are used as before.
+come inside the `rapidocr` package of the `ml` extras, so nothing is downloaded; without
+it the vision model's text boxes are used as before.
 
 To try another model, pull it (`ollama pull <name>`) or pick one from
 `uv run audio-separator --list_models`, set it in `.env`, and run the benchmark and the
