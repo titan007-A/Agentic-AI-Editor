@@ -310,3 +310,60 @@ def test_a_turn_runs_the_job_whose_turn_it_is_and_a_spare_turn_does_nothing(tmp_
         db.commit()
     jobs.process.call_local("aman0")
     assert ran == ["aman0"]
+
+
+def test_a_turn_given_to_another_job_runs_only_that_jobs_own_video_presets_and_notes(
+    tmp_path, monkeypatch
+):
+    """Riya's job's turn goes to Aman's (she already has one running): the run gets only
+    Aman's source, notes and presets, his outputs land on his job, and hers is untouched."""
+    import yaml
+
+    from agentic_editor.db import User
+
+    presets_root = tmp_path / "presets"
+    for owner, label in (("riya", "Riya's preset"), ("aman", "Aman's preset")):
+        folder = presets_root / "people" / owner
+        folder.mkdir(parents=True)
+        (folder / "p.yaml").write_text(
+            yaml.safe_dump({"name": "p", "label": label, "min_duration": 1, "max_duration": 60})
+        )
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        for owner in ("riya", "aman"):
+            db.add(User(id=owner, username=owner, password_hash="x"))
+        db.add_all([
+            Job(id="riya-busy", source="https://x.test/riya-0", presets=["p"], owner_id="riya",
+                status="running"),
+            Job(id="riya-next", source="https://x.test/riya-vocals", presets=["p"],
+                owner_id="riya", notes="riya's notes"),
+            Job(id="aman-next", source="https://x.test/aman-vocals", presets=["p"],
+                owner_id="aman", notes="aman's notes"),
+        ])  # fmt: skip
+        db.commit()
+    settings = Settings(presets_dir=presets_root, media_dir=tmp_path / "media")
+    monkeypatch.setattr(jobs, "sessions", lambda: Session)
+    monkeypatch.setattr(jobs, "get_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    seen = {}
+
+    def run(source, presets, settings, backends, notes, progress, run_id):
+        seen.update(source=source, labels=[p.label for p in presets], notes=notes, run_id=run_id)
+        return pipeline.Result("Aman's song", [])
+
+    real = jobs.run_job
+    monkeypatch.setattr(jobs, "run_job", lambda job_id, S, s: real(job_id, S, s, run))
+    jobs.process.call_local("riya-next")  # riya-next's turn
+
+    assert seen == {
+        "source": "https://x.test/aman-vocals",
+        "labels": ["Aman's preset"],
+        "notes": "aman's notes",
+        "run_id": "aman-next",
+    }
+    with Session() as db:
+        assert db.get(Job, "aman-next").status == "done"
+        assert db.get(Job, "aman-next").title == "Aman's song"
+        riya = db.get(Job, "riya-next")
+        assert (riya.status, riya.title, riya.started_at) == ("queued", "", None)
+        assert db.query(Event).filter_by(job_id="riya-next").count() == 0
