@@ -1,6 +1,16 @@
 "use client";
 
-import { Plus, Trash2, Upload, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  Plus,
+  RotateCcw,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -19,7 +29,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, errorText, type AssetKind, type Preset } from "@/lib/api";
 
 type Field =
-  | { path: string; label: string; kind: "text" | "textarea" | "color" | "font" | "switch" }
+  | {
+      path: string;
+      label: string;
+      kind: "text" | "textarea" | "color" | "font" | "switch" | "language";
+    }
   | { path: string; label: string; kind: "number"; step?: number }
   | { path: string; label: string; kind: "select"; options: string[] }
   | { path: string; label: string; kind: "file"; accept: AssetKind };
@@ -32,6 +46,35 @@ const ACCEPT: Record<AssetKind, string> = {
 };
 // Where the editor's uploads are kept; a file there can be shown back by its name.
 const UPLOADED = /(^|\/)media\/assets\/([0-9a-f]{12}-[\w-]+\.[a-z0-9]+)$/;
+
+// The languages the editor names (agent.LANGUAGES), by two-letter code.
+const LANGUAGES: [string, string][] = [
+  ["ar", "Arabic"],
+  ["bn", "Bengali"],
+  ["zh", "Chinese"],
+  ["nl", "Dutch"],
+  ["en", "English"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["hi", "Hindi"],
+  ["id", "Indonesian"],
+  ["it", "Italian"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["mr", "Marathi"],
+  ["pl", "Polish"],
+  ["pt", "Portuguese"],
+  ["pa", "Punjabi"],
+  ["ru", "Russian"],
+  ["es", "Spanish"],
+  ["ta", "Tamil"],
+  ["te", "Telugu"],
+  ["th", "Thai"],
+  ["tr", "Turkish"],
+  ["uk", "Ukrainian"],
+  ["ur", "Urdu"],
+  ["vi", "Vietnamese"],
+];
 
 // Fields the schema allows to be null. An empty input is sent as null rather than "".
 const NULLABLE = new Set([
@@ -131,18 +174,6 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         kind: "number",
         step: 0.01,
       },
-      {
-        path: "framing.picture_x",
-        label: "Move video right (px; minus: left; video shown whole)",
-        kind: "number",
-        step: 10,
-      },
-      {
-        path: "framing.picture_y",
-        label: "Move video down (px; minus: up; stays between the text)",
-        kind: "number",
-        step: 10,
-      },
       { path: "framing.smoothing", label: "Tracking smoothing", kind: "number", step: 0.05 },
       { path: "framing.text_gap_above", label: "Gap above video (px)", kind: "number" },
       { path: "framing.text_gap_below", label: "Gap below video (px)", kind: "number" },
@@ -212,6 +243,7 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     title: "One-liner",
     fields: [
       { path: "one_liner.enabled", label: "Write a one-line caption", kind: "switch" },
+      { path: "one_liner.language", label: "Language it is written in", kind: "language" },
       { path: "one_liner.hint", label: "What it should be about", kind: "textarea" },
       { path: "one_liner.font", label: "Font", kind: "font" },
       { path: "one_liner.size", label: "Size", kind: "number" },
@@ -226,11 +258,6 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "one_liner.offset", label: "Offset from edge (px)", kind: "number" },
       { path: "one_liner.duration", label: "Seconds on screen (empty: all)", kind: "number" },
       { path: "one_liner.max_words", label: "Max words", kind: "number" },
-      {
-        path: "one_liner.language",
-        label: "Language (like Spanish or es; empty: the model picks)",
-        kind: "text",
-      },
     ],
   },
   {
@@ -411,6 +438,30 @@ function FieldInput({
           />
         </div>
       );
+    case "language": {
+      const current = String(value ?? "");
+      const known = LANGUAGES.some(
+        ([code, name]) => code === current || name.toLowerCase() === current.toLowerCase(),
+      );
+      const chosen =
+        LANGUAGES.find(([, name]) => name.toLowerCase() === current.toLowerCase())?.[0] ?? current;
+      return (
+        <select
+          id={id}
+          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+          value={chosen}
+          onChange={(e) => onChange(e.target.value || empty)}
+        >
+          <option value="">The model picks (or the captions&apos; language)</option>
+          {!known && current && <option value={current}>{current}</option>}
+          {LANGUAGES.map(([code, name]) => (
+            <option key={code} value={code}>
+              {name}
+            </option>
+          ))}
+        </select>
+      );
+    }
     case "select":
     case "font": {
       const options = field.kind === "select" ? field.options : fonts;
@@ -923,6 +974,104 @@ export function WatermarkFields({
           instagram={preset.platform === "instagram_reels"}
           onChange={(x, y) => set({ x, y })}
         />
+      </div>
+    </div>
+  );
+}
+
+const NUDGE = 20; // px a tap on an arrow moves the video
+
+/** Where the video sits in the frame, moved by the arrows or typed in px. Shown whole
+ * (framing mode none), it moves; what would run into the text above or below, or off the
+ * frame, is cut off, so the text never moves. In the other modes the video fills the
+ * frame, so there's nothing to move: one tap shows it whole instead. */
+export function VideoPosition({
+  preset,
+  onChange,
+}: {
+  preset: Preset;
+  onChange: (preset: Preset) => void;
+}) {
+  const framing: Obj = preset.framing ?? {};
+  const x = Number(framing.picture_x ?? 0) || 0;
+  const y = Number(framing.picture_y ?? 0) || 0;
+  const whole = framing.mode === "none";
+  const set = (next: Obj) => onChange({ ...preset, framing: { ...framing, ...next } });
+  const move = (dx: number, dy: number) => set({ picture_x: x + dx, picture_y: y + dy });
+  const arrow = (label: string, icon: React.ReactNode, dx: number, dy: number) => (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon"
+      className="size-11"
+      aria-label={label}
+      onClick={() => move(dx, dy)}
+    >
+      {icon}
+    </Button>
+  );
+
+  if (!whole) {
+    return (
+      <div className="space-y-2 text-sm">
+        <p className="text-muted-foreground">
+          In framing mode &ldquo;{String(framing.mode ?? "smart")}&rdquo; the video fills the whole
+          frame, so there&apos;s nowhere to move it. Show it whole (mode none) to place it between
+          the text.
+        </p>
+        <Button type="button" variant="outline" onClick={() => set({ mode: "none" })}>
+          Show the video whole so it can be moved
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="grid w-fit grid-cols-3 gap-1">
+          <span />
+          {arrow(`Move the video up ${NUDGE} px`, <ArrowUp />, 0, -NUDGE)}
+          <span />
+          {arrow(`Move the video left ${NUDGE} px`, <ArrowLeft />, -NUDGE, 0)}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-11"
+            aria-label="Put the video back where it goes"
+            onClick={() => set({ picture_x: 0, picture_y: 0 })}
+          >
+            <RotateCcw />
+          </Button>
+          {arrow(`Move the video right ${NUDGE} px`, <ArrowRight />, NUDGE, 0)}
+          <span />
+          {arrow(`Move the video down ${NUDGE} px`, <ArrowDown />, 0, NUDGE)}
+          <span />
+        </div>
+        <p className="max-w-xs text-xs text-muted-foreground">
+          The text stays where it is: what of the video would run into it is cut off. Sideways it
+          moves when it is narrower than the frame. The preview shows it.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        {(
+          [
+            ["picture_x", "Right (px; minus: left)", x],
+            ["picture_y", "Down (px; minus: up)", y],
+          ] as const
+        ).map(([key, label, value]) => (
+          <div key={key} className="space-y-2">
+            <Label htmlFor={`video-${key}`}>{label}</Label>
+            <Input
+              id={`video-${key}`}
+              type="number"
+              inputMode="numeric"
+              step={10}
+              value={value}
+              onChange={(e) => set({ [key]: Math.round(Number(e.target.value) || 0) })}
+            />
+          </div>
+        ))}
       </div>
     </div>
   );

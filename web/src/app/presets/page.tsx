@@ -2,7 +2,7 @@
 
 import { Copy, FileCode, Plus, Save, Send, Sparkles, Trash2, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { LearnStyleDialog } from "@/components/learn-style-dialog";
@@ -11,6 +11,7 @@ import {
   PresetSection,
   SECTIONS,
   TextBlocks,
+  VideoPosition,
   WatermarkFields,
 } from "@/components/preset-fields";
 import { Badge } from "@/components/ui/badge";
@@ -532,14 +533,31 @@ function Presets() {
         </Card>
 
         {SECTIONS.slice(1).map((section) => (
-          <Card key={section.title}>
-            <CardHeader>
-              <CardTitle>{section.title}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <PresetSection fields={section.fields} preset={draft} fonts={fonts} onChange={edit} />
-            </CardContent>
-          </Card>
+          <Fragment key={section.title}>
+            <Card>
+              <CardHeader>
+                <CardTitle>{section.title}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PresetSection
+                  fields={section.fields}
+                  preset={draft}
+                  fonts={fonts}
+                  onChange={edit}
+                />
+              </CardContent>
+            </Card>
+            {section.title === "Framing" && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Video position</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <VideoPosition preset={draft} onChange={edit} />
+                </CardContent>
+              </Card>
+            )}
+          </Fragment>
         ))}
 
         <div className="hand-rule-top fixed inset-x-0 bottom-0 bg-background/90 backdrop-blur">
