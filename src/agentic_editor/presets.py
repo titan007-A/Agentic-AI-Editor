@@ -205,6 +205,9 @@ class Framing(Strict):
     # above and below it, so the text stays where it is.
     picture_x: int = Field(default=0, ge=-4000, le=4000)
     picture_y: int = Field(default=0, ge=-4000, le=4000)
+    # The text above and below the picture (its blocks, a whole-reel one-liner) moves up
+    # and down with it; off, the text stays and what of the picture runs into it is cut.
+    text_follows_video: bool = True
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     # Smart framing keeps where the picture moves too, not only faces and the vision
     # model's must-keep items: for footage whose point is an action (a fall, a trick).

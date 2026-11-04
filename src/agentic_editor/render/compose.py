@@ -284,6 +284,49 @@ def picture_band(preset: Preset, face: Callable[..., text.Face]) -> tuple[int, i
     return math.ceil(top / 2) * 2, bottom // 2 * 2
 
 
+def moved_layout(preset: Preset) -> Preset:
+    """The preset as a render and the preview lay it out. With framing text_follows_video
+    on, moving the picture shown whole up or down moves the text that holds it in place
+    by as much: each text block, a whole-reel one-liner and the rows the preset gives,
+    so the picture, which goes between them, moves with them and nothing is cut; it moves
+    by itself only where no text holds it. The captions and the title move too. Off, or
+    nothing moved: the preset as it is."""
+    f = preset.framing
+    dy = f.picture_y
+    if f.mode != "none" or not f.text_follows_video or not dy:
+        return preset
+    gaps = text_gaps(preset)
+    blocks = [
+        b.model_copy(update={"offset": max(0, b.offset + (dy if b.anchor == "top" else -dy))})
+        for b in preset.text_blocks
+    ]
+    line = preset.one_liner
+    whole_reel = line.enabled and line.duration is None
+    if whole_reel:
+        line = line.model_copy(
+            update={"offset": max(0, line.offset + (dy if line.position == "top" else -dy))}
+        )
+    rows = f.picture_rows
+    if rows is not None:
+        rows = (rows[0] + dy, rows[1] + dy)
+        rows = (max(0, rows[0]), min(preset.size[1], rows[1]))
+    held = rows is not None or whole_reel or any(g is not None for g in gaps)
+    framing = f.model_copy(update={"picture_rows": rows, "picture_y": 0 if held else dy})
+    # The captions and the title (and the hook under it) go along too: all the text moves.
+    c = preset.captions
+    margin = c.margin + (dy if c.position == "top" else -dy if c.position == "bottom" else 0)
+    title = preset.title_overlay
+    return preset.model_copy(
+        update={
+            "text_blocks": blocks,
+            "one_liner": line,
+            "framing": framing,
+            "captions": c.model_copy(update={"margin": max(0, margin)}),
+            "title_overlay": title.model_copy(update={"offset": max(0, title.offset + dy)}),
+        }
+    )
+
+
 def line_rows(preset: Preset, face: Callable[..., text.Face]) -> tuple[float, float] | None:
     """Rows the preset's one-liner takes at its longest (LONGEST_LINE cut to its words),
     where it is set, when it is up for the whole reel; None otherwise."""

@@ -106,3 +106,82 @@ def test_between_text_a_moved_picture_is_cut_where_it_meets_the_text():
     assert up.rect == (whole.x, 400, whole.x + whole.width, 1300) and up.cut_top == 200
     # the text's rows are never covered
     assert video_band("none", tall, FRAME, 1.0, band, "middle", (0, 200)) == (600.0, 1500.0)
+
+
+def _between_text(**framing) -> Preset:
+    from agentic_editor.presets import OneLiner, TextBlock
+
+    return Preset(
+        name="t", label="t", min_duration=1, max_duration=60,
+        text_blocks=[TextBlock(text="Above", size=40, anchor="top", offset=300),
+                     TextBlock(text="Below", size=40, anchor="bottom", offset=400)],
+        one_liner=OneLiner(enabled=True, position="top", offset=150, size=30),
+        framing=Framing(mode="none", text_gap_above=20, text_gap_below=20, **framing),
+    )  # fmt: skip
+
+
+def test_ticked_the_captions_and_title_move_along():
+    from agentic_editor.render import compose
+
+    moved = compose.moved_layout(_between_text(picture_y=100))
+    assert moved.captions.margin == 520 - 100  # bottom captions: nearer the bottom
+    assert moved.title_overlay.offset == 300 + 100
+
+
+def test_ticked_the_text_moves_with_the_video_and_nothing_is_cut():
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    face = compose.text_face(get_settings(), None)
+    still = _between_text()
+    moved = compose.moved_layout(_between_text(picture_y=100))
+    assert [b.offset for b in moved.text_blocks] == [400, 300]  # top down, bottom up = down
+    assert moved.one_liner.offset == 250 and moved.framing.picture_y == 0
+    before, after = compose.picture_band(still, face), compose.picture_band(moved, face)
+    assert (after[0] - before[0], after[1] - before[1]) == (100, 100)
+    tall = (1080, 1920)
+    a = preview.picture_layout(still, tall, before)[2]
+    b = preview.picture_layout(moved, tall, after)[2]
+    assert b.y - a.y == 100 and b.height == a.height == b.full  # moved whole, none cut
+
+
+def test_unticked_the_text_stays_and_the_video_is_cut():
+    from agentic_editor.render import compose
+
+    fixed = _between_text(picture_y=100, text_follows_video=False)
+    assert compose.moved_layout(fixed) == fixed
+
+
+def test_with_no_text_to_move_the_video_still_moves_by_itself():
+    from agentic_editor.render import compose
+
+    alone = _preset(picture_y=-200)
+    assert compose.moved_layout(alone).framing.picture_y == -200
+    smart = Preset(name="s", label="s", min_duration=1, max_duration=60,
+                   framing=Framing(mode="smart", picture_y=50))  # fmt: skip
+    assert compose.moved_layout(smart) == smart
+
+
+def test_the_preview_lays_out_moved_text_as_the_render_does():
+    from agentic_editor.settings import get_settings
+
+    settings = get_settings()
+    from agentic_editor.presets import CaptionStyle
+
+    # (captions off: they keep off the picture and the text by their own rule)
+    quiet = {"captions": CaptionStyle(enabled=False)}
+    still, _ = preview.render_checked(_between_text().model_copy(update=quiet), settings, "9:16")
+    # 96 px: whole JPEG blocks, so the two stills compress alike
+    moved, _ = preview.render_checked(
+        _between_text(picture_y=96).model_copy(update=quiet), settings, "9:16"
+    )
+    import io
+
+    a = Image.open(io.BytesIO(still)).convert("L")
+    b = Image.open(io.BytesIO(moved)).convert("L")
+    # the whole picture, text and all, 96 px lower: rows match once shifted
+    top = a.crop((0, 100, 1080, 1700))
+    low = b.crop((0, 196, 1080, 1796))
+    diff = sum(abs(x - y) for x, y in zip(top.get_flattened_data(), low.get_flattened_data(),
+                                           strict=True)) / (1080 * 1600)  # fmt: skip
+    assert diff < 3
