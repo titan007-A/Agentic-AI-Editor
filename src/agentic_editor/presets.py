@@ -164,6 +164,9 @@ class Music(Strict):
 class Framing(Strict):
     mode: Literal["smart", "face", "center", "none"] = "smart"
     background: Color = "#000000"
+    # A picture behind everything, filling the frame (a file in the assets), instead of
+    # the colour: a page's starry sky, a paper texture.
+    background_image: str | None = None
     # Take the background colour from the footage instead, toned to keep text readable.
     auto_background: bool = False
     crop_black_bars: bool = False
@@ -220,6 +223,9 @@ class Audio(Strict):
     true_peak_db: float = Field(default=-1.5, ge=-20, le=0)
     fade_in: float = Field(default=0.03, ge=0)
     fade_out: float = Field(default=0.25, ge=0)
+    # What is sung or said, for the speech recognition (two letters, "es"); unset, it
+    # tells by itself, and can take a Spanish song for an Italian one.
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
 
 
 class BeatSync(Strict):

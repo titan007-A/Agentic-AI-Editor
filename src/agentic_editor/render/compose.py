@@ -48,6 +48,24 @@ def asset_path(name: str) -> Path:
     return path
 
 
+def backdrop(name: str, frame: tuple[int, int], dest: Path) -> Path:
+    """The preset's background picture scaled to fill the frame, its middle kept, saved
+    once as `dest` for the encoder to loop under the picture."""
+    from PIL import Image
+
+    with Image.open(asset_path(name)) as image:
+        image = image.convert("RGB")
+        scale = max(frame[0] / image.width, frame[1] / image.height)
+        size = (
+            max(frame[0], round(image.width * scale)),
+            max(frame[1], round(image.height * scale)),
+        )
+        image = image.resize(size, Image.Resampling.LANCZOS)
+        x, y = (size[0] - frame[0]) // 2, (size[1] - frame[1]) // 2
+        image.crop((x, y, x + frame[0], y + frame[1])).save(dest)
+    return dest
+
+
 def detect_black_bars(video: Path, start: float) -> tuple[int, int, int, int] | None:
     result = ffmpeg.run(["-ss", f"{start:.3f}", "-t", "5", "-i", str(video),
                          "-vf", "cropdetect=24:2:0", "-f", "null", "-"])  # fmt: skip
@@ -472,6 +490,11 @@ def render(
     for clip in edl.clips:
         inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video)]
     layers = Layers()
+    if preset.framing.background_image:
+        still = backdrop(preset.framing.background_image, frame, work_dir / "background.png")
+        # One still, repeated for as long as the reel runs.
+        inputs += ["-loop", "1", "-framerate", str(preset.fps), "-i", str(still)]
+        layers.background_image = inputs.count("-i") - 1
     if edl.crop_mode == "smart":
         clip = edl.clips[0]
         layers.content = edl.picture or picture_area(

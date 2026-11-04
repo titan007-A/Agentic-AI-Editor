@@ -422,3 +422,78 @@ def branding(
         cut = np.dstack([fore, alpha * 255]).round().astype(np.uint8)
         found.append(((int(left), int(top), int(right), int(bottom)), cut))
     return sorted(found, key=lambda f: (f[0][1], f[0][0]))
+
+
+STEADY_TEXT = 0.15  # share of a text's pixels that may change over the reel and it still stays
+CHANGES = 40.0  # grey levels a pixel spreads over the reel past which it changes
+
+
+def steady(
+    frames: np.ndarray, colour: tuple[int, int, int], box: tuple[int, int, int, int]
+) -> bool:
+    """Whether what is drawn in `box` (x0, y0, x1, y1 in frame pixels) on the padding stays
+    the same over the reel: a page's line about the song, put on once, rather than captions
+    that come and go. The vision model reads such a line differently from frame to frame
+    (a line more, a line less), which made it look like captions."""
+    x0, y0, x1, y1 = box
+    crop = frames[:, y0:y1, x0:x1].astype(np.float32)
+    if crop.size == 0 or len(frames) < 3:
+        return False
+    far = np.abs(crop - np.array(colour, np.float32)).max(axis=3)
+    drawn = far.max(axis=0) > BRAND_DIFF
+    if drawn.sum() < 20:
+        return False
+    # Letters' edges flicker over a threshold with the compression, and stars twinkle, so
+    # it is how much a pixel changes that counts: captions come and go, a line put on once
+    # barely changes.
+    changing = far.std(axis=0) > CHANGES
+    return float((drawn & changing).sum()) <= STEADY_TEXT * float(drawn.sum())
+
+
+BACKDROP_SPECKS = 40  # small still marks on the padding past which it is a picture (stars)
+BACKDROP_CLEAN = 0.1  # of the height: the least clean padding a picture can be made from
+
+
+def backdrop(
+    frames: np.ndarray,
+    colour: tuple[int, int, int],
+    picture: Box,
+    covered: list[tuple[int, int, int, int]],
+) -> np.ndarray | None:
+    """The picture on the padding behind everything, when it isn't a flat colour (a starry
+    sky): the reel's still pixels, with the rows of the picture and of the text (`covered`,
+    boxes in frame pixels) filled from the clean rows around them, so another video's
+    picture or text can go anywhere on it. None when the padding is plain."""
+    count, height, width, _ = frames.shape
+    if count < 3:
+        return None
+    median = np.median(frames.astype(np.float32), axis=0)
+    margin = round(0.01 * height)
+    hole = np.zeros(height, bool)
+    hole[max(0, round(picture[1] * height) - margin) : round(picture[3] * height) + margin] = True
+    for _, top, _, bottom in covered:
+        hole[max(0, top - margin) : bottom + margin] = True
+    clean = np.nonzero(~hole)[0]
+    if len(clean) < BACKDROP_CLEAN * height:
+        return None
+
+    def specks(picture: np.ndarray) -> int:
+        marks = np.abs(picture - np.array(colour, np.float32)).max(axis=2) > BRAND_DIFF
+        marks[hole] = False
+        labels, found = ndimage.label(marks)
+        if not found:
+            return 0
+        sizes = ndimage.sum(marks, labels, range(1, found + 1))
+        return int((sizes <= BRAND_SMALLEST * height * width).sum())
+
+    # Stars that stay are kept by the median; drifting ones only show on a frame of their
+    # own, which is still nearer the look than a flat colour.
+    chosen = median
+    if specks(median) < BACKDROP_SPECKS:
+        chosen = frames[count // 2].astype(np.float32)
+        if specks(chosen) < BACKDROP_SPECKS:
+            return None
+    out = chosen.copy()
+    holes = np.nonzero(hole)[0]
+    out[holes] = chosen[clean[np.arange(len(holes)) % len(clean)]]
+    return out.round().clip(0, 255).astype(np.uint8)

@@ -29,6 +29,7 @@ class Layers:
     look: list[str] = field(default_factory=list)  # look and LUT, mixed in at look_strength
     look_strength: float = 1.0
     background: str | None = None  # overrides the preset's, e.g. taken from the footage
+    background_image: int | None = None  # input of a still drawn under the picture
     pulse_scale: float = 1.0
     line_overlay: int | None = None
     line_duration: float = 0.0  # 0 keeps it up for the whole reel
@@ -386,11 +387,16 @@ def build_graph(
     parts = []
     segments = 0
     background = layers.background or preset.framing.background
+    if layers.background_image is not None:
+        # Clear padding, so the picture behind shows through it.
+        background = "#000000@0"
 
     def segment(label: str, crop: list[str], fit: list[str]) -> None:
         # Colour goes on after the crop, so only the pixels that are kept get graded (every
         # grading filter works pixel by pixel), and before the padding, which keeps its own.
         nonlocal segments
+        if layers.background_image is not None:
+            fit = ["format=rgba", *fit]
         fit = [*fit, "setsar=1", f"fps={preset.fps}"]
         graded, last = grade_chain(f"c{segments}", segments, layers)
         if graded:
@@ -446,6 +452,10 @@ def build_graph(
     joined = "".join(f"[v{i}]" for i in range(segments))
     parts.append(f"{joined}concat=n={segments}:v=1:a=0[base]")
     current = "base"
+    if layers.background_image is not None:
+        parts.append(f"[{layers.background_image}:v]setsar=1,format=rgba[backdrop]")
+        parts.append("[backdrop][base]overlay=0:0:shortest=1[backed]")
+        current = "backed"
 
     def step(filters: str, label: str) -> None:
         nonlocal current

@@ -44,6 +44,8 @@ const NULLABLE = new Set([
   "one_liner.box_color",
   "one_liner.duration",
   "grade.lut",
+  "audio.language",
+  "framing.background_image",
   "framing.text_gap_above",
   "framing.text_gap_below",
 ]);
@@ -114,6 +116,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         options: ["smart", "face", "center", "none"],
       },
       { path: "framing.background", label: "Background", kind: "color" },
+      {
+        path: "framing.background_image",
+        label: "Background picture (instead of the colour)",
+        kind: "file",
+        accept: "image",
+      },
       { path: "framing.auto_background", label: "Background from the footage", kind: "switch" },
       { path: "framing.crop_black_bars", label: "Crop black bars", kind: "switch" },
       {
@@ -172,6 +180,11 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         label: "Soundtrack",
         kind: "select",
         options: ["original", "vocals"],
+      },
+      {
+        path: "audio.language",
+        label: "Language sung or spoken (two letters, e.g. es; empty: heard by itself)",
+        kind: "text",
       },
       { path: "audio.highpass_hz", label: "High-pass (Hz)", kind: "number" },
       { path: "audio.loudness_lufs", label: "Loudness (LUFS)", kind: "number", step: 0.5 },

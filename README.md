@@ -392,7 +392,10 @@ Hinglish too), ranked by how well they fit and how viral they are:
     notes lines `song:` and `artist:` (for songs), `year:` and `top text:`/`bottom
     text:`, so the reel shows your words in place of the preset's own above and below the
     video (in the look of the preset's first block there), and `{year}` in a preset is
-    the item's year. A scanned PDF is only pictures and can't be read.
+    the item's year. A preset whose block there writes `{headline}` takes the words as its
+    headline instead: they are wrapped like one, and the block's other words ("SONG:
+    {song}", the year) stay. Your words, from the PDF or the notes, always win over the
+    preset's own. A scanned PDF is only pictures and can't be read.
 - Search engines index only part of Instagram, mostly popular reels a few days old or
   more, so a research finds plenty, never everything; the engines may also turn it away
   for a while when asked too often.
@@ -407,13 +410,13 @@ render behaves:
 | --- | --- |
 | `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces and off text already in the picture (name banners, titles) while it is on screen; lines break where they read well, never after a linking word like "the" or "de" when a better place is near, and each sentence starts a new line; on songs, presets that keep the original audio take their words from the isolated vocals when the full mix gives almost none; an .srt file is saved next to the video |
 | `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
-| `text_blocks` | fixed text drawn on every frame, such as a series tagline; `{song}` and `{artist}` come from a video named "Song - Artist" or, for a link, which can't be renamed, from notes lines `song: ...` and `artist: ...` (they also become the reel's title and the song its post caption is about), `{headline}` is written for each video (see `headline`), and any other word in braces is the preset's own, filled per reel from a notes line like `day: 103` for `{day}` (`{song_number}` from `song number: 5`); `{year}` can also come from the video's name, "Song (1980) - Artist" |
+| `text_blocks` | fixed text drawn on every frame, such as a series tagline; `{song}` and `{artist}` come from a video named "Song - Artist" or, for a link, which can't be renamed, from notes lines `song: ...` and `artist: ...` (they also become the reel's title and the song its post caption is about), `{headline}` is written for each video (see `headline`), and any other word in braces is the preset's own, filled per reel from a notes line like `day: 103` for `{day}` (`{song_number}` from `song number: 5`); `{year}` can also come from the video's name, "Song (1980) - Artist", and otherwise from the post's caption (a line naming the song with its year) or MusicBrainz (the song's first release), so the job form doesn't need it |
 | `auto_name` | `true`: when neither the video's name nor the notes say the `{song}` and `{artist}`, they are recognised from its sound with Shazam (free, no key, through the unofficial `shazamio` library, so it can stop working). Shazam's notes about the take go, "(Live)", "(feat. ...)", "- Remastered 2011"; a bracket that doesn't say what it is stays only if MusicBrainz knows the song by the name with it, "(I Can't Get No) Satisfaction". Still nothing, and the job page asks for the song and artist and makes the reel with them |
 | `post_caption` | the post's caption (see below): `about` the `song` (from Wikipedia and Wikidata) or the `video` (from watching it, what is said, its post and Wikipedia); `enabled` writes it after every render, otherwise the video's card has a Write caption button; `language`, `style`, word range |
 | `headline` | how the planning model writes `{headline}` from the video's title and description (`hint` with examples, `max_chars`, `uppercase`); a notes line `headline: ...` gives it instead. Long headlines wrap into even lines without breaking a quoted song name |
-| `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage |
+| `framing` | how the picture fills the frame (see below); background colour, or `auto_background` to take it from the footage, or `background_image`, a picture behind everything (a starry sky), filling the frame |
 | `grade` | colour: `auto` corrects a cast or a flat, dim picture; `look` (warm, cool, teal-orange, film, moody, vivid, mono, faded); a `.cube` LUT; `strength` |
-| `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target |
+| `audio` | `original` or `vocals` (instruments removed), high-pass, loudness target; `language`, what is sung or said (`es`), for the speech recognition, which left to tell can take a Spanish song for an Italian one and write Italian lyrics |
 | `silence` | what counts as silence when trimming a quiet start or end |
 | `beat_sync` | start and end on the beat (bar lines from the original mix), and an optional zoom pulse on each bar or beat |
 | `hook` | `optimize` lets the editor choose where the reel starts: the strongest opening line (the planning model reads them for speech; the strongest entrance wins for music), and the strongest stretch when the plan runs long. Off, the planned opening stays and a long plan is cut from the end; `variants` makes up to five versions per video from different strong segments, saved as `preset-b.mp4` and so on |
@@ -485,16 +488,28 @@ with what was found listed above it. Nothing is saved until you save it.
   rest timed to words being said or sung, since captions only show then). Frames are read
   padded to a square: on a tall frame its boxes drift down by up to a tenth of the height.
   Text that stays the whole reel becomes a text block, captions that change become caption
-  settings, text only in the opening seconds becomes the hook banner. A username in a
+  settings, text only in the opening seconds becomes the hook banner. Whether text on the
+  padding stays is also checked in the pixels of eight frames across the reel: the model
+  reads the same line differently from frame to frame (a line more, a line less), which
+  made a page's line about the song look like captions. Text that stays is split into the
+  blocks it is drawn in (a sentence, then a blank line, then "SONG: ..." over the year) by
+  OCR's line boxes, its words taken from the model's readings, which keep the accents. A username in a
   corner and text that belongs to the video shown (inside a letterboxed picture) are left
   out. The model's boxes are only roughly right, so each text is then found in the pixels:
   its exact colour, position, line breaks, an outline and a highlighted word's colour.
-  Every bundled font is tried at the size that matches the measured widths, and the one
-  whose heights and stroke thickness match best is chosen; every reading of a text is
+  The vision model also says whether the letters have serifs; measuring can't tell a
+  serif from a plain font of the same width and weight, so only fonts of that kind are
+  tried (a serif, Source Serif 4, is bundled). Each is tried at the size that matches the
+  measured widths, and the one whose heights and stroke thickness match best is chosen; every reading of a text is
   measured and they vote, so one bad box can't decide it. Caption sizes and margins are
   measured against libass, which draws captions smaller than Pillow draws text blocks.
 - Captions are `speech` or `lyrics` when they are the words heard, `translated` when they
-  are in another language, `visual` otherwise.
+  are in another language, `visual` otherwise. Accents don't count in the comparison, and
+  when the speech recognition heard another language than the captions', it listens again
+  told theirs; the preset then keeps that language (`audio.language`) for its edits.
+- A padding that isn't a flat colour (stars, a texture) becomes the preset's background
+  picture: the reel's still pixels, with the rows of the picture and text filled from the
+  rows around them.
 - Look: black and white is recognised; other looks are left for you.
 - Sound: speech or singing (the planning model reads the transcript and what the frames
   show), and for singing, whether the instruments were taken out, in which case the
@@ -502,8 +517,13 @@ with what was found listed above it. Nothing is saved until you save it.
 - The length range is set around the reel's length, and the planning model writes the
   label and the style notes.
 
-Text that changes from video to video (a song title, "Day 28") is flagged so you can edit
-it. Logos, music beds, intros and outros are not learned.
+Text that changes from video to video becomes the words the editor fills for each video:
+the song's name `{song}`, the singer `{artist}`, its year `{year}`, and a sentence about
+the video `{headline}`, written for the next videos like the reel's own (its hint quotes
+it). The planning model makes the template and it is kept only if, filled back with what
+it says each word stood for, it gives the text read; otherwise the text is flagged so you
+can edit it ("Day 28"). Words to read (six or more) are never cut out as branding.
+Logos, music beds, intros and outros are not learned.
 
 The quickest way to make one by hand is to duplicate an existing preset on the web app's
 Presets page and edit it there; the server validates every save. Editing the YAML by

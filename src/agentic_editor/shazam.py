@@ -127,14 +127,16 @@ def same(name: str) -> str:
     return " ".join(re.sub(r"[\W_]+", " ", name.casefold()).split())
 
 
+def _quoted(text: str) -> str:
+    """A phrase for a MusicBrainz (Lucene) query."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def titles(song: str, artist: str, transport=None) -> set[str] | None:
     """Titles of the artist's recordings that have `song` in them, as MusicBrainz names
     them; None when it can't be asked."""
 
-    def quoted(text: str) -> str:
-        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-    query = f"recording:{quoted(song)} AND artist:{quoted(artist)}"
+    query = f"recording:{_quoted(song)} AND artist:{_quoted(artist)}"
     # MusicBrainz serves one request a second to a client.
     time.sleep(max(0.0, _asked[0] + 1.0 - time.monotonic()))
     _asked[0] = time.monotonic()
@@ -147,6 +149,35 @@ def titles(song: str, artist: str, transport=None) -> set[str] | None:
         log.warning("MusicBrainz couldn't be asked about %s - %s: %s", song, artist, exc)
         return None
     return {same(r.get("title", "")) for r in found}
+
+
+def first_year(song: str, artist: str, transport=None) -> str | None:
+    """The year the artist's song first came out, as MusicBrainz has it: the earliest
+    release of a recording by that name (a live take or a reissue comes later). None when
+    it doesn't know the song or can't be asked."""
+    if not song.strip():
+        return None
+    query = f"recording:{_quoted(song)}" + (
+        f" AND artist:{_quoted(artist)}" if artist.strip() else ""
+    )
+    time.sleep(max(0.0, _asked[0] + 1.0 - time.monotonic()))
+    _asked[0] = time.monotonic()
+    try:
+        with httpx.Client(transport=transport, timeout=10, headers={"User-Agent": AGENT}) as http:
+            reply = http.get(MUSICBRAINZ, params={"query": query, "fmt": "json", "limit": 50})
+            reply.raise_for_status()
+            found = reply.json().get("recordings", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("MusicBrainz couldn't be asked when %s - %s came out: %s", song, artist, exc)
+        return None
+    wanted = same(_without_notes(song))
+    years = [
+        int(date[:4])
+        for r in found
+        if same(_without_notes(r.get("title", ""))) == wanted
+        and (date := r.get("first-release-date") or "")[:4].isdigit()
+    ]
+    return str(min(years)) if years else None
 
 
 def _recognise(clip: Path) -> dict | None:

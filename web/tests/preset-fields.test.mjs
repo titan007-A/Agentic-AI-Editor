@@ -6,6 +6,7 @@ import {
   fieldLabel,
   fieldNotes,
   nextValues,
+  optional,
   presetFields,
 } from "../src/lib/preset-fields.mjs";
 
@@ -74,4 +75,21 @@ test("a number that isn't one is given as typed", () => {
   const used = {};
   assert.equal(fieldNotes(["song_number"], { song_number: " 7a " }, used), "song number: 7a");
   assert.deepEqual(nextValues({ song_number: "7a" }, used), { song_number: "7a" });
+});
+
+test("a block writing {headline} keeps its fields when the PDF gives the words above", () => {
+  const preset = {
+    text_blocks: [
+      { anchor: "top", text: "{headline}\n\nSONG: { {song} }\n- {year} -" },
+      { anchor: "bottom", text: "Día {day}" },
+    ],
+  };
+  assert.deepEqual(presetFields(preset, ["top", "bottom"]), ["year"]);
+  assert.deepEqual(presetFields(preset), ["year", "day"]);
+});
+
+test("an empty year is left for the editor to find", () => {
+  assert.equal(optional("year"), true);
+  assert.equal(fieldNotes(["year", "day"], { year: " ", day: "3" }, {}), "day: 3");
+  assert.equal(fieldNotes(["year"], { year: "1981" }, {}), "year: 1981");
 });

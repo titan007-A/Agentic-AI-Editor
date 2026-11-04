@@ -25,6 +25,7 @@ FIELD = re.compile(r"\{(\w+)\}")
 # Filled elsewhere: the song and artist from the name, the headline by headline.py.
 OWN = {"song", "artist", "headline"}
 YEAR = re.compile(r"[(\[][^)\]]*?\b((?:19|20)\d{2})\b[^)\]]*[)\]]")
+ANY_YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 
 # A bracketed group with a digit in it, "(2)", "(Live 1982)", "[2011 Remaster]": a second
 # copy or a release note, not part of the name. "(feat. Adam Levine)" stays.
@@ -139,7 +140,9 @@ def with_texts(preset: Preset, texts: dict[str, str]) -> Preset:
     """The preset with `texts` above ("top") and below ("bottom") the video instead of its
     own: the first block anchored there takes the words, keeping its look, and any other
     block there goes, so the reel shows just those words. A preset without a block there
-    gets one in the default look."""
+    gets one in the default look. Where a block there has {headline} in it, the words are
+    that headline instead (headline_from_texts), and the blocks stay as they are."""
+    texts = {a: w for a, w in texts.items() if a not in headline_anchors(preset)}
     if not texts:
         return preset
     blocks, placed = [], set()
@@ -162,9 +165,39 @@ def with_texts(preset: Preset, texts: dict[str, str]) -> Preset:
     return preset.model_copy(update={"text_blocks": blocks})
 
 
+def headline_anchors(preset: Preset) -> set[str]:
+    """Where the preset has a block with {headline} in it: "top", "bottom"."""
+    return {b.anchor for b in preset.text_blocks if "{headline}" in b.text}
+
+
+def headline_from_texts(presets: list[Preset], texts: dict[str, str]) -> str | None:
+    """The words given for above or below the video, when a preset's block there writes
+    {headline}: they are its headline, wrapped like one, and the block's other words
+    ("SONG: {song}") stay."""
+    for anchor in ("top", "bottom"):
+        if anchor in texts and any(anchor in headline_anchors(p) for p in presets):
+            return " ".join(texts[anchor].split())
+    return None
+
+
 def year_of(title: str) -> str | None:
     match = YEAR.search(title)
     return match.group(1) if match else None
+
+
+def year_in(text: str, song: str) -> str | None:
+    """The year a post's caption gives its song, "Maldita primavera (1981) - Yuri": on a
+    line that names the song, so the post's own date or another song's year isn't it."""
+    if not song.strip():
+        return None
+    for line in text.splitlines():
+        if same_name(song) in same_name(line) and (match := ANY_YEAR.search(line)):
+            return match.group(1)
+    return None
+
+
+def same_name(text: str) -> str:
+    return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
 
 
 def fill(
@@ -172,9 +205,11 @@ def fill(
     title: str,
     given: dict[str, str] | None = None,
     hear: Callable[[], Song | None] | None = None,
+    find_year: Callable[[str, str], str | None] | None = None,
 ) -> Preset:
     """The preset with {song} and {artist} in its text replaced from `given` (the notes) or
-    the video's name, and its own fields from `given` or, for {year}, the name."""
+    the video's name, and its own fields from `given` or, for {year}, the name, and else
+    `find_year` (song, artist) -> the year the song came out."""
     own = fields(preset)
     if not names_song(preset) and not own:
         return preset
@@ -183,6 +218,9 @@ def fill(
         values["year"] = year
     if names_song(preset):
         values["song"], values["artist"] = song_and_artist(title, values, hear)
+    looked = "year" in own and "year" not in values and find_year and values.get("song")
+    if looked and (year := find_year(values["song"], values.get("artist", ""))):
+        values["year"] = year
     if missing := sorted(own - values.keys()):
         hint = (
             " or put the year in the video's name, 'Song (1980) - Artist'"

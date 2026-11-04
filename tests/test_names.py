@@ -1,7 +1,7 @@
 import pytest
 
 from agentic_editor import names
-from agentic_editor.presets import load_presets
+from agentic_editor.presets import Preset, TextBlock, load_presets
 from agentic_editor.settings import ROOT
 
 
@@ -152,7 +152,7 @@ def test_top_and_bottom_text_lines_replace_the_presets_own_for_one_job():
         update={
             "text_blocks": [
                 block("Qui pubblichiamo", "top", 58),
-                block("{headline}", "top"),
+                block("Il nostro motto", "top"),
                 block("Seguici adesso", "bottom", 52),
             ]
         }
@@ -186,3 +186,42 @@ def test_the_singer_in_the_video_is_read_from_the_post_s_caption():
     assert "not the song's original artist" in llm.asked
     assert caption.performed_in(Reader("", ""), "Video by x", "a dance") is None
     assert caption.performed_in(Reader("Hello", ""), "Video by x", "Hello") is None
+
+
+def test_the_year_comes_from_the_post_or_is_looked_up():
+    caption = "🎵 Maldita primavera (1981) – Yuri\nPublicado en 2024 por la página"
+    assert names.year_in(caption, "Maldita primavera") == "1981"
+    assert names.year_in(caption, "Otra canción") is None
+    assert names.year_in(caption, "") is None
+    block = TextBlock(text="SONG: { {song} }\n- {year} -", size=30, anchor="top", offset=400)
+    preset = Preset(name="p", label="p", min_duration=1, max_duration=60, text_blocks=[block])
+    asked = []
+
+    def came_out(song, artist):
+        asked.append((song, artist))
+        return "1981"
+
+    given = {"song": "Maldita primavera", "artist": "Yuri"}
+    filled = names.fill(preset, "Video by someone", given, find_year=came_out)
+    assert filled.text_blocks[0].text == "SONG: { Maldita primavera }\n- 1981 -"
+    assert asked == [("Maldita primavera", "Yuri")]
+    told = names.fill(preset, "Video by someone", {**given, "year": "1980"}, find_year=came_out)
+    assert told.text_blocks[0].text.endswith("- 1980 -") and len(asked) == 1
+    with pytest.raises(names.MissingField):
+        names.fill(preset, "Video by someone", given, find_year=lambda song, artist: None)
+
+
+def test_words_for_above_the_video_fill_a_headline_and_keep_the_rest():
+    block = TextBlock(text="{headline}\n\nSONG: { {song} }", size=30, anchor="top", offset=400)
+    tagline = TextBlock(text="Más canciones", size=30, anchor="top", offset=200)
+    below = TextBlock(text="Los años 80", size=30, anchor="bottom", offset=400)
+    preset = Preset(name="p", label="p", min_duration=1, max_duration=60,
+                    text_blocks=[block, tagline, below])  # fmt: skip
+    texts = {"top": "Una línea\nde la lista", "bottom": "Del PDF"}
+    assert names.headline_from_texts([preset], texts) == "Una línea de la lista"
+    kept = names.with_texts(preset, texts)
+    assert [b.text for b in kept.text_blocks] == [block.text, tagline.text, "Del PDF"]
+    plain = preset.model_copy(update={"text_blocks": [tagline, below]})
+    assert names.headline_from_texts([plain], texts) is None
+    assert [b.text for b in names.with_texts(plain, texts).text_blocks] == [
+        "Una línea\nde la lista", "Del PDF"]  # fmt: skip

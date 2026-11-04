@@ -335,3 +335,11 @@ def test_a_researched_headline_waits_for_what_the_clip_says(monkeypatch):
     assert "Offer" in second[0].text_blocks[0].text
     assert decisions["watched"][1] == ["headline: not in the sources: X"]
     assert notes_for["watched"] == 'start late Keep the line "an offer" in the reel.'
+
+
+def test_a_song_already_in_guillemets_is_not_quoted_again():
+    from agentic_editor.headline import quote
+
+    quoted = "«Maldita primavera» cautiva"
+    assert quote(quoted, "Maldita primavera") == quoted
+    assert quote("Maldita primavera cautiva", "Maldita primavera") == "“Maldita primavera” cautiva"

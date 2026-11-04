@@ -198,6 +198,15 @@ def render_checked(
     if preset.framing.auto_background:
         background = "#2a2433"  # a render tones one from the footage; this stands for it
     image = Image.new("RGB", frame, background)
+    if preset.framing.background_image:
+        try:
+            with tempfile.TemporaryDirectory() as work:
+                still = compose.backdrop(
+                    preset.framing.background_image, frame, Path(work) / "background.png"
+                )
+                image = Image.open(still).convert("RGB")
+        except (FileNotFoundError, OSError):
+            pass  # a picture not uploaded yet: the colour stands in
 
     (x0, y0, x1, y1), part = picture_place(preset, source, band)
     picture = _cover(stand_in(source), part) if part != source else stand_in(source)

@@ -181,3 +181,33 @@ def test_a_pages_still_branding_on_the_padding_is_cut_out_but_not_the_text_or_pi
     assert cut.shape == (y1 - y0, x1 - x0, 4)
     assert cut[25 - y0, 25 - x0, 3] == 255 and tuple(cut[25 - y0, 25 - x0, :3]) == (230, 60, 30)
     assert cut[55 - y0, 100 - x0, 3] == 0  # background between them is see-through
+
+
+def _sky(count=6, height=400, width=200, seed=1):
+    rng = np.random.default_rng(seed)
+    frames = np.zeros((count, height, width, 3), np.uint8)
+    for y, x in zip(rng.integers(0, height, 200), rng.integers(0, width, 200), strict=True):
+        frames[:, y, x] = 220  # stars that stay
+    frames[:, 150:250] = rng.integers(0, 255, (count, 100, width, 3))  # the moving picture
+    return frames
+
+
+def test_text_drawn_all_reel_long_stays_and_captions_do_not():
+    frames = _sky()
+    frames[:, 40:60, 40:160] = 255  # a page's line, on every frame
+    assert layout.steady(frames, (0, 0, 0), (30, 30, 170, 70))
+    for i in range(len(frames)):
+        frames[i, 300:320] = 0
+        frames[i, 300:320, 20 * i : 20 * i + 60] = 255  # captions coming and going
+    assert not layout.steady(frames, (0, 0, 0), (0, 290, 200, 330))
+
+
+def test_a_starry_background_is_learned_without_the_picture_or_text():
+    frames = _sky()
+    frames[:, 40:60, 40:160] = 255
+    sky = layout.backdrop(frames, (0, 0, 0), (0.0, 150 / 400, 1.0, 250 / 400), [(40, 40, 160, 60)])
+    assert sky is not None and sky.shape == (400, 200, 3)
+    assert sky[40:60, 40:160].max() < 255 or (sky[40:60, 40:160] == 255).mean() < 0.05
+    assert (sky[150:250] > 30).mean() < 0.05  # stars, not the picture, where the picture was
+    plain = np.zeros((6, 400, 200, 3), np.uint8)
+    assert layout.backdrop(plain, (0, 0, 0), (0.0, 0.4, 1.0, 0.6), []) is None
