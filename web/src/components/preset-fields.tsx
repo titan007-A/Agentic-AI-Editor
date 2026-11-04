@@ -15,6 +15,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -996,6 +997,7 @@ export function VideoPosition({
   const x = Number(framing.picture_x ?? 0) || 0;
   const y = Number(framing.picture_y ?? 0) || 0;
   const whole = framing.mode === "none";
+  const follows = framing.text_follows_video !== false;
   const set = (next: Obj) => onChange({ ...preset, framing: { ...framing, ...next } });
   const move = (dx: number, dy: number) => set({ picture_x: x + dx, picture_y: y + dy });
   const arrow = (label: string, icon: React.ReactNode, dx: number, dy: number) => (
@@ -1027,6 +1029,13 @@ export function VideoPosition({
   }
   return (
     <div className="space-y-3">
+      <label className="flex min-h-11 items-center gap-3 text-sm">
+        <Checkbox
+          checked={follows}
+          onCheckedChange={(v) => set({ text_follows_video: v === true })}
+        />
+        Text moves with the video
+      </label>
       <div className="flex flex-wrap items-center gap-4">
         <div className="grid w-fit grid-cols-3 gap-1">
           <span />
@@ -1049,8 +1058,10 @@ export function VideoPosition({
           <span />
         </div>
         <p className="max-w-xs text-xs text-muted-foreground">
-          The text stays where it is: what of the video would run into it is cut off. Sideways it
-          moves when it is narrower than the frame. The preview shows it.
+          {follows
+            ? "The text above and below, the one-liner, the title and the captions move up and down with the video, so none of it is cut."
+            : "The text stays where it is: what of the video would run into it is cut off."}{" "}
+          Sideways only the video moves, when it is narrower than the frame. The preview shows it.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-4">

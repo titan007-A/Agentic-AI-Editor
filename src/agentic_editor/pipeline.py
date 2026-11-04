@@ -746,6 +746,8 @@ def edit(
     given_headline, notes = headline.from_notes(notes)
     given_headline = given_headline or names.headline_from_texts(presets, texts)
     presets = [names.with_texts(p, texts) for p in presets]
+    # Text that moves with the picture, where the preset moves it (framing.text_follows_video).
+    presets = [compose.moved_layout(p) for p in presets]
     # "song:" and "artist:" lines are always taken, so the instruction reader never sees
     # them; a preset that doesn't name the song still gets them for its reel's song.
     wanted = set().union({"song", "artist"}, *(names.wanted(p) for p in presets))

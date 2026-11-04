@@ -183,6 +183,7 @@ def render_checked(
     preset: Preset, settings: Settings, shape: Shape = "16:9"
 ) -> tuple[bytes, list[str]]:
     """The preview as a JPEG, and what looks wrong in it, in words a person can act on."""
+    preset = compose.moved_layout(preset)  # as a render lays it out
     notes: list[str] = []
     frame = preset.size
     source = SHAPES[shape]
