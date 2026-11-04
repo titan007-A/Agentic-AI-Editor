@@ -16,7 +16,7 @@ from agentic_editor import subtitles
 from agentic_editor.edl import Cue
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose, mark, text
-from agentic_editor.render.video import picture_rect
+from agentic_editor.render.video import picture_rect, picture_shift
 from agentic_editor.settings import Settings
 
 Shape = Literal["16:9", "4:3", "1:1", "4:5", "9:16"]
@@ -38,7 +38,7 @@ SAMPLES = {
 FIELD = re.compile(r"\{(\w+)\}")
 CAPTION = "this is how captions look on the video"
 # As long as a one-liner can be (its max_words): the preview shows its longest case.
-LINE = "A one-liner the model writes about what happens in the video, as long as allowed"
+LINE = compose.LONGEST_LINE
 TITLE = "The video's title"
 
 
@@ -112,8 +112,13 @@ def picture_place(
         rows = compose.band_rows(preset, band, source[0])
         shown = (source[0], min(source[1], rows))
         anchor = compose.picture_anchor(preset)
-        return picture_rect(shown, frame, preset.framing.picture_width, band, anchor), shown
-    return picture_rect(source, frame, preset.framing.picture_width, None), source
+        rect = picture_rect(
+            shown, frame, preset.framing.picture_width, band, anchor, picture_shift(preset)
+        )
+        return rect, shown
+    rect = picture_rect(source, frame, preset.framing.picture_width, None, "middle",
+                        picture_shift(preset))  # fmt: skip
+    return rect, source
 
 
 def _caption(

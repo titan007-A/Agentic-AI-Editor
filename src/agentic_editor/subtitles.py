@@ -6,8 +6,10 @@ timing of the spoken lines and swap their text; captions written from the visual
 timed to the shots they describe. Placement moves a caption off any face it would cover.
 """
 
+import difflib
 import itertools
 import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +30,9 @@ LINE_BREAK_PAUSE = 0.6  # a pause this long starts a new caption line
 LYRIC_BREAK = 0.8  # sung lines are longer and breathe less often
 LYRIC_WORDS = 8
 FACE_PAD = 24  # px kept clear around a face
-NEAR_EDGE = 220  # px from the frame edge for the fallback positions
+NEAR_EDGE = 220  # px from the frame edge a caption may move to, to keep off a face
+NUDGE = 300  # the most a caption moves nearer its edge for that
+NUDGE_STEP = 20
 SETTLE = 0.6  # a pause this long lets a moved caption go back to its usual place
 
 
@@ -340,22 +344,26 @@ def place(
     frame_height: int,
     faces: list[tuple[float, list[tuple[float, float]]]],
 ) -> list[Placement]:
-    """A position per cue that keeps it off every face on screen while it shows.
+    """A position per cue that keeps it off every face on screen while it shows, by moving
+    it no further than nearer its own edge of the frame.
 
     `faces` gives, at reel times, the rows each face (or other thing to keep clear)
     covers in the output frame. The preferred position wins whenever it is clear;
-    otherwise the clear position nearest to it. A caption that had to move stays where it
-    went, while that is clear, until the speaker pauses, so captions don't jump between
-    the top and bottom of the frame line by line."""
+    otherwise the clear position nearest to it at the same end. A caption that had to
+    move stays where it went, while that is clear, until the speaker pauses, so captions
+    don't jump about line by line."""
     first = Placement(_ALIGN[preferred], margin if preferred != "middle" else 0)
-    options = [
-        first,
-        Placement(2, margin),
-        Placement(2, NEAR_EDGE),
-        Placement(8, NEAR_EDGE),
-        Placement(8, margin),
-        Placement(5, 0),
-    ]
+    # Only nearer its own edge, never to the other end: top captions stay at the top,
+    # bottom ones at the bottom, middle ones in the middle.
+    options = [first]
+    if preferred != "middle":
+        nearest = min(margin, max(NEAR_EDGE, margin - NUDGE))
+        options += [
+            Placement(first.alignment, m)
+            for m in range(margin - NUDGE_STEP, nearest - 1, -NUDGE_STEP)
+        ]
+        options.append(Placement(first.alignment, nearest))
+    options = list(dict.fromkeys(options))
     chosen: list[Placement] = []
     for k, cue in enumerate(cues):
         covered = [
@@ -566,6 +574,7 @@ def one_line(
     context: str,
     notes: str | None,
     language: str | None = None,
+    retried: bool = False,
 ) -> str:
     """One line about the whole video, written by the vision model."""
     guide = " ".join(x for x in (hint, notes or "") if x)
@@ -588,8 +597,22 @@ def one_line(
         images=frames,
         temperature=0.5,
     )
-    words = parse(_Line, reply).line.strip().strip('"').split()
-    return " ".join(words[:max_words])
+    line = parse(_Line, reply).line.strip().strip('"')
+    copied = [q for q in re.findall(r'"([^"]{20,})"', guide) if _echoes(line, q)]
+    if copied and not retried:
+        # It wrote out the guidance's example instead of this video's line: once more.
+        return one_line(vision, frames, max_words, hint + " Describe this video in your own "
+                        "words; don't copy any example.", context, notes, language,
+                        retried=True)  # fmt: skip
+    return " ".join(line.split()[:max_words])
+
+
+def _echoes(line: str, quoted: str) -> bool:
+    """Whether a line is mostly words taken from `quoted`, in order."""
+    a, b = line.casefold().split(), quoted.casefold().split()
+    if not a:
+        return False
+    return difflib.SequenceMatcher(None, a, b).find_longest_match().size >= max(4, len(a) // 2)
 
 
 def fit_lines(cues: list[Cue], measure, max_width: float, max_lines: int = 2) -> list[Cue]:

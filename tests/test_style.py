@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from agentic_editor import style
@@ -332,3 +333,37 @@ def test_serif_letters_are_fitted_with_serif_fonts():
     assert style.fonts_for(plain, fonts) == [fonts[0]]
     unsure = [Sighting(s.at, s.text, s.box, s.colour) for s in serif]
     assert style.fonts_for(unsure, fonts) == fonts
+
+
+def test_words_about_one_video_with_nothing_to_fill_become_its_one_liner():
+    from agentic_editor.presets import TextBlock
+
+    read = (
+        "Una demostración en primera persona muestra el manejo de un rifle equipado con "
+        "accesorios tácticos, destacando su diseño"
+    )
+    block = TextBlock(text=read, font="Montserrat-Bold", size=26, color="#FFFFFF",
+                      anchor="top", offset=372)  # fmt: skip
+    line = style.one_liner_from(block, read, "es")
+    assert line.enabled and line.position == "top" and line.offset == 372
+    assert (line.font, line.size, line.color, line.box_color) == ("Montserrat-Bold", 26,
+                                                                  "#FFFFFF", None)  # fmt: skip
+    assert line.max_words == 18 and line.language == "es"
+    assert "rifle" not in line.hint  # the reel's words aren't handed on to be copied
+
+    class Says:
+        def __init__(self, code):
+            self.code = code
+
+        def chat_json(self, *args, **kwargs):
+            return {"language": self.code}
+
+    assert style.language_of(Says("ES"), read) == "es"
+    assert style.language_of(Says("xx"), read) == ""
+
+
+def test_a_mark_mostly_covered_by_text_is_text_not_a_picture():
+    mark = (0.1, 0.1, 0.5, 0.2)
+    assert style._covered(mark, (0.1, 0.1, 0.5, 0.2)) == pytest.approx(1.0)
+    assert style._covered(mark, (0.3, 0.1, 0.5, 0.2)) == pytest.approx(0.5)
+    assert style._covered(mark, (0.6, 0.6, 0.7, 0.7)) == 0.0

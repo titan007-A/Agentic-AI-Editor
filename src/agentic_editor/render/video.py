@@ -117,11 +117,12 @@ def frame_chain(
     picture_width: float = 1.0,
     picture_band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
+    shift: tuple[int, int] = (0, 0),
 ) -> list[str]:
     """Filters that turn one source clip into a frame-sized clip."""
     crop, fit = frame_parts(
         mode, source, frame, background, crop_label, commands, black_bars, picture_width,
-        picture_band, anchor,
+        picture_band, anchor, shift,
     )  # fmt: skip
     return crop + fit
 
@@ -137,6 +138,7 @@ def frame_parts(
     picture_width: float = 1.0,
     picture_band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
+    shift: tuple[int, int] = (0, 0),
 ) -> tuple[list[str], list[str]]:
     """frame_chain in two parts: what cuts the window out, and what fits it to the frame."""
     src_w, src_h = source
@@ -147,7 +149,7 @@ def frame_parts(
         src_w, src_h = bw, bh
 
     if mode == "none":
-        return crop, band_fit(frame, background, picture_width, picture_band, anchor)
+        return crop, band_fit(frame, background, picture_width, picture_band, anchor, shift)
 
     crop_w, crop_h = crop_size((src_w, src_h), frame)
     x = (src_w - crop_w) // 2
@@ -198,9 +200,12 @@ def band_fit(
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
+    shift: tuple[int, int] = (0, 0),
 ) -> list[str]:
     """Scale a picture shown whole into `band` (rows of the frame, all of it by default)
-    without stretching it, against the band's `anchor` edge, and pad the rest of the frame."""
+    without stretching it, against the band's `anchor` edge, and pad the rest of the frame;
+    `shift` moves it px right and down from there, kept inside the frame and up and down
+    inside the band, so the text above and below stays where it is."""
     width, height = frame
     top, bottom = band or (0, height)
     if not band:
@@ -211,11 +216,28 @@ def band_fit(
         y = f"{bottom}-ih"
     else:
         y = f"{top}+({bottom - top}-ih)/2"
+    x = "(ow-iw)/2"
+    dx, dy = _shift(shift)
+    if dx:
+        x = f"'clip(trunc((ow-iw)/2){dx:+d},0,ow-iw)'"
+    if dy:
+        # Kept between the text (the band), so the text never has to make way for it.
+        y = f"'clip(trunc({y}){dy:+d},{top},{bottom}-ih)'"
     return [
         f"scale={_even(width * picture_width)}:{bottom - top}"
         ":force_original_aspect_ratio=decrease:flags=lanczos",
-        f"pad={width}:{height}:(ow-iw)/2:{y}:color={ffmpeg_color(background)}",
+        f"pad={width}:{height}:{x}:{y}:color={ffmpeg_color(background)}",
     ]
+
+
+def picture_shift(preset: Preset) -> tuple[int, int]:
+    """How far the preset moves a picture shown whole, px right and down."""
+    return preset.framing.picture_x, preset.framing.picture_y
+
+
+def _shift(shift: tuple[int, int]) -> tuple[int, int]:
+    """A move in whole pairs of pixels, as the picture's sizes are, so its chroma lines up."""
+    return shift[0] // 2 * 2, shift[1] // 2 * 2
 
 
 def shot_parts(
@@ -318,6 +340,15 @@ def zoom_room(
             w = edl.shots[0].width
             h = max(s.height or h for s in edl.shots)
         scale = min(box / w, (bottom - top) / h)
+        if any(picture_shift(preset)):
+            # Moved off the middle: the zoom, about the frame's middle, cuts into the
+            # picture's farther edge first.
+            x0, y0, x1, y1 = picture_rect((w, h), frame, preset.framing.picture_width,
+                                          layers.picture_band, layers.picture_anchor,
+                                          picture_shift(preset))  # fmt: skip
+            reach_x = max(width / 2 - x0, x1 - width / 2)
+            reach_y = max(height / 2 - y0, y1 - height / 2)
+            return [(0.0, edl.duration, min(width / 2 / reach_x, height / 2 / reach_y))]
         return [(0.0, edl.duration, min(width / (w * scale), height / (h * scale)))]
     if edl.crop_mode != "smart" or not edl.shots:
         return [(0.0, edl.duration, math.inf)]
@@ -345,6 +376,7 @@ def picture_rect(
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
+    shift: tuple[int, int] = (0, 0),
 ) -> tuple[int, int, int, int]:
     """Where a picture of `size` shown whole lands in the frame, x0, y0, x1, y1, as
     band_fit places it."""
@@ -356,6 +388,11 @@ def picture_rect(
     spare = box_h - h
     y0 = top + (int(_offset(spare, anchor)) if band else spare // 2)
     x0 = (width - w) // 2
+    dx, dy = _shift(shift)
+    if dx:
+        x0 = min(max(x0 + dx, 0), width - w)
+    if dy:
+        y0 = min(max(y0 + dy, top), bottom - h)
     return x0, y0, x0 + w, y0 + h
 
 
@@ -366,6 +403,7 @@ def video_band(
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
+    shift: tuple[int, int] = (0, 0),
 ) -> tuple[float, float] | None:
     """Rows of the frame covered by the picture when it is letterboxed, else None."""
     if mode != "none":
@@ -376,6 +414,9 @@ def video_band(
     if scaled >= height - 1:
         return None
     top += _offset(bottom - top - scaled, anchor if band else "middle")
+    if dy := _shift(shift)[1]:
+        low, high = band or (0, height)
+        top = min(max(int(top) + dy, low), high - scaled)
     return top, top + scaled
 
 
@@ -420,7 +461,7 @@ def build_graph(
             crop = [f"crop={first.width}:{h}:{first.x}:'{y}'"]
             fit = band_fit(
                 frame, background, preset.framing.picture_width, layers.picture_band,
-                layers.picture_anchor,
+                layers.picture_anchor, picture_shift(preset),
             )  # fmt: skip
             segment(label, crop, fit)
             continue
@@ -448,6 +489,7 @@ def build_graph(
             preset.framing.picture_width,
             layers.picture_band,
             layers.picture_anchor,
+            picture_shift(preset),
         )
         segment(label, crop, fit)
     joined = "".join(f"[v{i}]" for i in range(segments))

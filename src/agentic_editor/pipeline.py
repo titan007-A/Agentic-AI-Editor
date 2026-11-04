@@ -32,6 +32,7 @@ from agentic_editor import (
     subtitles,
     trim,
 )
+from agentic_editor.agent import LANGUAGES
 from agentic_editor.analysis import faces, ocr, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -278,6 +279,17 @@ def translated(
     return edl.model_copy(update=update).noted(note, doubt=failed)
 
 
+def line_language(preset: Preset) -> str | None:
+    """The language the one-liner is written in, by name: its own, else the captions' when
+    they are translated, else None (the model's choice)."""
+    language = preset.one_liner.language or (
+        preset.captions.language if preset.captions.mode == "translated" else None
+    )
+    if not language or not language.strip():
+        return None
+    return LANGUAGES.get(language.strip().lower(), language.strip())
+
+
 def written_text(
     vision: OllamaClient | None,
     edl: EDL,
@@ -324,7 +336,7 @@ def written_text(
     if want_line:
         line = preset.one_liner
         try:
-            language = preset.captions.language if preset.captions.mode == "translated" else None
+            language = line_language(preset)
             update["one_liner"] = subtitles.one_line(
                 vision, frames(4, "line"), line.max_words, line.hint, context, notes, language
             )

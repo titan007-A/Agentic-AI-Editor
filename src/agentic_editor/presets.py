@@ -69,8 +69,11 @@ class OneLiner(Strict):
     duration: float | None = Field(default=None, gt=0, description="seconds; None for all")
     max_words: int = Field(default=10, ge=2, le=20)
     hint: str = Field(default="", description="what the line should be about or sound like")
-    # Stays where it is put even over faces, rather than moving to the frame's other end.
+    # Stays where it is put even over faces, rather than moving a little nearer its edge.
     fixed: bool = False
+    # What it is written in: a name ("Spanish") or two letters ("es"); unset, the captions'
+    # language when they are translated, else whatever the model writes.
+    language: str | None = Field(default=None, max_length=40)
 
 
 class TextBlock(Strict):
@@ -197,6 +200,11 @@ class Framing(Strict):
         description="share of the frame width the whole picture "
         "takes when it isn't cropped (mode none)",
     )
+    # Moves a picture shown whole (mode none) from where it goes, px right and down
+    # (negative: left and up); it never leaves the frame, nor the rows between the text
+    # above and below it, so the text stays where it is.
+    picture_x: int = Field(default=0, ge=-4000, le=4000)
+    picture_y: int = Field(default=0, ge=-4000, le=4000)
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     # Smart framing keeps where the picture moves too, not only faces and the vision
     # model's must-keep items: for footage whose point is an action (a fall, a trick).

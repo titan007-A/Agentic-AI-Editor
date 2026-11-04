@@ -137,9 +137,16 @@ def test_a_one_liner_that_runs_long_keeps_off_the_picture():
 
 def test_the_preview_shows_the_longest_one_liner_where_a_render_puts_it():
     settings = get_settings()
-    notes = preview.render_checked(_military(), settings, "9:16")[1]
-    assert any("one-liner is made smaller or moved" in n for n in notes)
-    assert not any("covers part of the video" in n for n in notes)
+    military = _military()
+    notes = preview.render_checked(military, settings, "9:16")[1]
+    # The picture makes way for the longest line: it stays as set, nothing covered.
+    assert not any("one-liner" in n for n in notes)
+    face = compose.text_face(settings, None)
+    _, line_bottom = compose.line_rows(military, face)
+    (_, y0, _, _), _ = preview.picture_place(
+        military, preview.SHAPES["9:16"], compose.picture_band(military, face)
+    )
+    assert y0 >= line_bottom + compose.BANNER_GAP
     # A wide video sits smaller in the band, leaving room above it: a short line stays.
     short = preview.render_checked(_military(max_words=3), settings, "16:9")[1]
     assert not any("one-liner" in n for n in short)

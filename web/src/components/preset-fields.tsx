@@ -43,6 +43,7 @@ const NULLABLE = new Set([
   "captions.language",
   "one_liner.box_color",
   "one_liner.duration",
+  "one_liner.language",
   "grade.lut",
   "audio.language",
   "framing.background_image",
@@ -130,6 +131,18 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         kind: "number",
         step: 0.01,
       },
+      {
+        path: "framing.picture_x",
+        label: "Move video right (px; minus: left; video shown whole)",
+        kind: "number",
+        step: 10,
+      },
+      {
+        path: "framing.picture_y",
+        label: "Move video down (px; minus: up; stays between the text)",
+        kind: "number",
+        step: 10,
+      },
       { path: "framing.smoothing", label: "Tracking smoothing", kind: "number", step: 0.05 },
       { path: "framing.text_gap_above", label: "Gap above video (px)", kind: "number" },
       { path: "framing.text_gap_below", label: "Gap below video (px)", kind: "number" },
@@ -213,6 +226,11 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "one_liner.offset", label: "Offset from edge (px)", kind: "number" },
       { path: "one_liner.duration", label: "Seconds on screen (empty: all)", kind: "number" },
       { path: "one_liner.max_words", label: "Max words", kind: "number" },
+      {
+        path: "one_liner.language",
+        label: "Language (like Spanish or es; empty: the model picks)",
+        kind: "text",
+      },
     ],
   },
   {

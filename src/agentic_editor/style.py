@@ -54,6 +54,7 @@ from agentic_editor.presets import (
     Headline,
     Hook,
     ImageBlock,
+    OneLiner,
     Preset,
     Silence,
     TextBlock,
@@ -97,6 +98,7 @@ THICKEST = 0.3  # of the line's height: a border wider than this is the backgrou
 READ_ALIKE = 0.8  # how alike a reading must be to OCR's words to stand for them
 BLOCK_STEP = 1.35  # a step between lines' tops this much past the usual starts a new block
 SENTENCE = 6  # words: text this long is something to read, never a page's branding
+TEXT_MARK = 0.5  # a mark this much covered by text read there is text, never a picture
 
 FORMATS = {(9, 16): (1080, 1920), (4, 5): (1080, 1350), (3, 4): (1080, 1440),
            (1, 1): (1080, 1080), (4, 3): (1440, 1080), (16, 9): (1920, 1080)}  # fmt: skip
@@ -401,6 +403,14 @@ def _group_box(g: list[Sighting]) -> Box:
 def _inside(box: Box, picture: Box) -> bool:
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
     return picture[0] < cx < picture[2] and picture[1] < cy < picture[3]
+
+
+def _covered(mark: Box, text: Box) -> float:
+    """The share of a mark's area that text read there takes."""
+    w = min(mark[2], text[2]) - max(mark[0], text[0])
+    h = min(mark[3], text[3]) - max(mark[1], text[1])
+    area = (mark[2] - mark[0]) * (mark[3] - mark[1])
+    return max(0.0, w) * max(0.0, h) / area if area > 0 else 0.0
 
 
 def _overlaps(a: Box, b: Box) -> bool:
@@ -932,6 +942,55 @@ def template(llm: OllamaClient, text: str, title: str, description: str) -> Temp
     return Templated(shape, "", language)
 
 
+class _Language(BaseModel):
+    language: str
+
+
+def language_of(llm: OllamaClient, text: str) -> str:
+    """The two-letter code of the language `text` is written in; "" when unsure."""
+    try:
+        reply = _Language.model_validate(
+            llm.chat_json(
+                [
+                    {
+                        "role": "user",
+                        "content": "The two-letter code (ISO 639-1) of the language "
+                        f"this is written in:\n\n{text}",
+                    }
+                ],
+                _Language.model_json_schema(),
+                temperature=0.0,
+            )
+        )
+    except (LLMError, ValueError) as exc:
+        log.warning("could not tell the language of %r: %s", text, exc)
+        return ""
+    code = reply.language.strip().lower()
+    return code if code in LANGUAGES else ""
+
+
+def one_liner_from(block: TextBlock, read: str, language: str) -> OneLiner:
+    """The one-liner that writes, for each video, words like `read` where `block` has them."""
+    words = len(read.split())
+    return OneLiner(
+        enabled=True,
+        font=block.font,
+        size=block.size,
+        color=block.color,
+        box_color=None,
+        position=block.anchor,
+        offset=block.offset,
+        max_words=min(20, max(2, words)),
+        # What it does, never the reel's own words: a model shown that video's sentence
+        # copies it onto every video.
+        hint=(
+            "One sentence saying what this video shows (what happens, who, with what), "
+            "the way a page describes each of its clips"
+        ),
+        language=language or None,
+    )
+
+
 def _alike(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, _plain(a), _plain(b)).ratio()
 
@@ -1328,11 +1387,16 @@ def _learn(
         found_marks = layout.branding(stills, colour, picture, rows)
         for i, ((x0, y0, x1, y1), cut) in enumerate(found_marks):
             mark = (x0 / width, y0 / height, x1 / width, y1 / height)
-            said = [g[0].text for role, g in found if _overlaps(_group_box(g), mark)]
-            if any(len(s.split()) >= SENTENCE for s in said):
-                # Words to read aren't a page's avatar or name: a picture of them would put
-                # this video's sentence on every reel.
-                notes.append(f"Left out {quoted(said[0])}: couldn't measure it as text")
+            said = [g for role, g in found if _overlaps(_group_box(g), mark)]
+            wordy = [g for g in said if len(g[0].text.split()) >= SENTENCE]
+            mostly = [g for g in said if _covered(mark, _group_box(g)) >= TEXT_MARK]
+            if wordy or mostly:
+                # Words to read aren't a page's avatar or logo: text stays text (a picture
+                # of it would put this video's words on every reel). Only a mark that is
+                # mostly picture, such as an avatar beside a name, is cut out.
+                notes.append(
+                    f"Kept {quoted((wordy or mostly)[0][0].text)} as text, not as a picture"
+                )
                 continue
             marks.append((x0, y0, x1, y1))
             kept = assets.keep(png_bytes(cut), f"branding-{i + 1}.png", settings.media_dir)
@@ -1387,6 +1451,13 @@ def _learn(
             for i in sorted(changing)
             if (shaped := template(llm, blocks[i][2], source.title, source.description))
         }
+        # Words about this one video with nothing in braces to fill (no song or year), a
+        # sentence long: written afresh for every video as its one-liner, where the reel
+        # has them, rather than this video's words on every reel.
+        written = [i for i in sorted(changing) if i not in templates
+                   and len(blocks[i][2].split()) >= SENTENCE]  # fmt: skip
+        line_block = max(written, key=lambda i: len(blocks[i][2].split()), default=None)
+        line_language = language_of(llm, blocks[line_block][2]) if line_block is not None else ""
     singing = described is not None and described.content == "singing"
 
     instrument_free, vocals = False, None
@@ -1425,6 +1496,17 @@ def _learn(
     text_blocks = []
     font_folder = settings.models_dir / "fonts"
     for i, (block, measured_block, read) in enumerate(blocks):
+        if i == line_block:
+            updates["one_liner"] = one_liner_from(block, read, line_language)
+            line = updates["one_liner"]
+            notes.append(
+                f"{quoted(read)} is about this one video: each reel gets its own, written from "
+                f"what it shows as the one-liner ({line.font} {line.size}, {line.color}, "
+                f"{line.offset} px from the {line.position}, up to {line.max_words} words"
+                + (f", in {LANGUAGES.get(line_language, line_language)}" if line_language else "")
+                + "); the video goes between it and the other text"
+            )
+            continue
         shaped = templates.get(i)
         if shaped is not None:
             update: dict = {"text": shaped.template}

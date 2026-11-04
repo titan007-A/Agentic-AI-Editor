@@ -76,10 +76,19 @@ def test_the_one_liner_is_cut_to_its_word_limit():
     assert "about the singer" in model.prompts[0] and "we sang all night" in model.prompts[0]
 
 
-def test_one_liner_moves_to_the_other_end_when_faces_are_under_it():
-    faces_at_top = [(t, [(250.0, 420.0)]) for t in range(10)]
-    assert banner_top("top", 260, 90, 1920, faces_at_top) == 1920 - 260 - 90
+def test_a_one_liner_never_goes_to_the_other_end_only_a_little_nearer_its_own():
+    from agentic_editor.subtitles import overlap
+
+    faces = [(t, [(330.0, 500.0)]) for t in range(10)]
+    top = banner_top("top", 260, 90, 1920, faces)
+    assert 150 <= top < 260 and overlap((top, top + 90), [(330.0, 500.0)]) == 0
     assert banner_top("top", 260, 90, 1920, []) == 260
+    # faces it can't get clear of by a small move: it stays where it is put, at the top
+    everywhere = [(t, [(0.0, 900.0)]) for t in range(10)]
+    assert banner_top("top", 260, 90, 1920, everywhere) == 260
+    bottom = banner_top("bottom", 400, 90, 1920, [(t, [(1300.0, 1450.0)]) for t in range(10)])
+    assert bottom > 1920 - 400 - 90 and bottom + 90 <= 1920 - 330  # down a little, not up
+    assert banner_top("bottom", 400, 90, 1920, everywhere) == 1920 - 400 - 90
 
 
 def test_long_lines_wrap_into_two_and_split_into_timed_captions():
@@ -97,9 +106,9 @@ def test_a_banner_never_covers_one_already_placed():
     faces_at_top = [(t, [(250.0, 420.0)]) for t in range(10)]
     first = banner_top("top", 260, 90, 1920, faces_at_top)
     second = banner_top("top", 260, 90, 1920, faces_at_top, taken=[(first, first + 90)])
-    assert first == 1920 - 260 - 90
+    assert first == 260  # can't get clear by a small move: stays at the top
     assert second + 90 <= first or second >= first + 90
-    assert second + 90 <= 250 - 24 or second >= 420 + 24
+    assert second + 90 <= 960  # stacked beside it on its own half
 
 
 def test_speech_is_translated_a_sentence_at_a_time_and_keeps_its_timing():
@@ -153,3 +162,22 @@ def test_a_word_wider_than_the_frame_does_not_stop_the_captions():
     out = fit_lines([cue], lambda line: 40.0 * len(line), max_width=950)
     assert " ".join(c.text.replace("\n", " ") for c in out) == cue.text
     assert out[0].start == 0 and out[-1].end == 2
+
+
+def test_a_one_liner_that_copies_the_guidance_s_example_is_written_again():
+    example = "Una demostración en primera persona muestra el manejo de un rifle equipado"
+
+    class Copier:
+        def __init__(self):
+            self.prompts = []
+
+        def chat_json(self, messages, schema, images=None, temperature=0.0):
+            self.prompts.append(messages[0]["content"])
+            if len(self.prompts) == 1:
+                return {"line": example}
+            return {"line": "Marines suben a un buque de guerra en el puerto"}
+
+    model = Copier()
+    line = one_line(model, ["a.jpg"], 12, f'Like "{example}"', "", None, "Spanish")
+    assert line == "Marines suben a un buque de guerra en el puerto"
+    assert len(model.prompts) == 2 and "don't copy" in model.prompts[1]
