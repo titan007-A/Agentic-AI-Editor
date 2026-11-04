@@ -402,7 +402,9 @@ Hinglish too), ranked by how well they fit and how viral they are:
     notes lines `song:` and `artist:` (for songs), `year:` and `top text:`/`bottom
     text:`, so the reel shows your words in place of the preset's own above and below the
     video (in the look of the preset's first block there), and `{year}` in a preset is
-    the item's year. A preset whose block there writes `{headline}` takes the words as its
+    the item's year: the one the PDF writes beside its name ("Song (1966) - Singer",
+    "Song - Singer - 1966", "Song - Singer, 1966"), which isn't asked for then and wins
+    over the post's caption and MusicBrainz. A preset whose block there writes `{headline}` takes the words as its
     headline instead: they are wrapped like one, and the block's other words ("SONG:
     {song}", the year) stay. Your words, from the PDF or the notes, always win over the
     preset's own. A scanned PDF is only pictures and can't be read.

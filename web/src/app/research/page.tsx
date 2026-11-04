@@ -32,7 +32,7 @@ import {
   type ResearchItem,
   type Site,
 } from "@/lib/api";
-import { fieldNotes, presetFields } from "@/lib/preset-fields.mjs";
+import { entryFields, fieldNotes } from "@/lib/preset-fields.mjs";
 import { cn } from "@/lib/utils";
 
 const RUNNING_POLL_MS = 3000;
@@ -206,13 +206,11 @@ function Researcher() {
   const startedHere = started.of === id ? started.jobs : [];
 
   /** The words a chosen reel's preset needs given; a PDF's own top and bottom text stand
-   * in for the preset's there. */
+   * in for the preset's there, and its year beside the name is the {year}. */
   function fieldsOf(item: ResearchItem): string[] {
     const preset = presets.find((p) => p.name === chosen[item.id]);
     if (!preset) return [];
-    const entry = item.entry === null ? undefined : current?.entries[item.entry];
-    const replaced = entry ? (["top", "bottom"] as const).filter((a) => entry[a]) : [];
-    return presetFields(preset, [...replaced]);
+    return entryFields(preset, item.entry === null ? undefined : current?.entries[item.entry]);
   }
   const chosenItems = current ? current.items.filter((i) => i.id in chosen) : [];
   const fields = [...new Set(chosenItems.flatMap(fieldsOf))];
@@ -589,6 +587,7 @@ function Researcher() {
                     <div className="space-y-0.5">
                       <h3 className="font-medium break-words">
                         {n + 1}. {[entry.song, entry.singer].filter(Boolean).join(" - ")}
+                        {entry.year ? ` (${entry.year})` : ""}
                       </h3>
                       {entry.top && (
                         <p className="text-sm whitespace-pre-wrap text-muted-foreground">
