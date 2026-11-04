@@ -16,7 +16,7 @@ from agentic_editor import subtitles
 from agentic_editor.edl import Cue
 from agentic_editor.presets import Preset
 from agentic_editor.render import compose, mark, text
-from agentic_editor.render.video import picture_rect, picture_shift
+from agentic_editor.render.video import Cut, picture_cut, picture_shift
 from agentic_editor.settings import Settings
 
 Shape = Literal["16:9", "4:3", "1:1", "4:5", "9:16"]
@@ -104,21 +104,28 @@ def picture_place(
 ) -> tuple[tuple[int, int, int, int], tuple[int, int]]:
     """Where the picture goes in the frame (x0, y0, x1, y1) and the shape of the part of
     the source shown there."""
+    rect, shown, _ = picture_layout(preset, source, band)
+    return rect, shown
+
+
+def picture_layout(
+    preset: Preset, source: tuple[int, int], band: tuple[int, int] | None
+) -> tuple[tuple[int, int, int, int], tuple[int, int], Cut | None]:
+    """picture_place, and how a render scales and cuts the picture to get there (None
+    when the picture fills the frame)."""
     frame = preset.size
     if preset.framing.mode != "none":
-        return (0, 0, *frame), frame
+        return (0, 0, *frame), frame, None
+    shown, anchor = source, "middle"
     if band is not None:
         # Band framing: the frame's width, the source cut top and bottom to fit the band.
         rows = compose.band_rows(preset, band, source[0])
         shown = (source[0], min(source[1], rows))
         anchor = compose.picture_anchor(preset)
-        rect = picture_rect(
-            shown, frame, preset.framing.picture_width, band, anchor, picture_shift(preset)
-        )
-        return rect, shown
-    rect = picture_rect(source, frame, preset.framing.picture_width, None, "middle",
-                        picture_shift(preset))  # fmt: skip
-    return rect, source
+    cut = picture_cut(
+        shown, frame, preset.framing.picture_width, band, anchor, picture_shift(preset)
+    )
+    return cut.rect, shown, cut
 
 
 def _caption(
@@ -213,8 +220,12 @@ def render_checked(
         except (FileNotFoundError, OSError):
             pass  # a picture not uploaded yet: the colour stands in
 
-    (x0, y0, x1, y1), part = picture_place(preset, source, band)
+    (x0, y0, x1, y1), part, cut = picture_layout(preset, source, band)
     picture = _cover(stand_in(source), part) if part != source else stand_in(source)
+    if cut is not None and cut.full != cut.height:
+        # Moved into the text: scaled whole, then the rows a render cuts off are cut here.
+        whole = picture.resize((cut.width, cut.full), Image.Resampling.LANCZOS)
+        picture = whole.crop((0, cut.cut_top, cut.width, cut.cut_top + cut.height))
     image.paste(picture.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS), (x0, y0))
 
     placed = []

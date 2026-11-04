@@ -24,6 +24,7 @@ from agentic_editor.render.video import (
     Layers,
     build_graph,
     crop_size,
+    picture_cut,
     picture_rect,
     picture_shift,
     video_band,
@@ -627,7 +628,8 @@ def render(
             shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
         args = (shown_size, frame, preset.framing.picture_width, layers.picture_band,
                 layers.picture_anchor)  # fmt: skip
-        moved = picture_rect(*args, picture_shift(preset))[1] - picture_rect(*args)[1]
+        cut = picture_cut(*args, picture_shift(preset))
+        moved = cut.y - cut.cut_top - picture_cut(*args).y
         rows = [(t, [(a + moved, b + moved) for a, b in spans]) for t, spans in rows]
 
     colour = preset.grade

@@ -149,7 +149,9 @@ def frame_parts(
         src_w, src_h = bw, bh
 
     if mode == "none":
-        return crop, band_fit(frame, background, picture_width, picture_band, anchor, shift)
+        return crop, band_fit(
+            frame, background, picture_width, picture_band, anchor, shift, (src_w, src_h)
+        )
 
     crop_w, crop_h = crop_size((src_w, src_h), frame)
     x = (src_w - crop_w) // 2
@@ -201,13 +203,22 @@ def band_fit(
     band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
     shift: tuple[int, int] = (0, 0),
+    size: tuple[int, int] | None = None,
 ) -> list[str]:
     """Scale a picture shown whole into `band` (rows of the frame, all of it by default)
-    without stretching it, against the band's `anchor` edge, and pad the rest of the frame;
-    `shift` moves it px right and down from there, kept inside the frame and up and down
-    inside the band, so the text above and below stays where it is."""
+    without stretching it, against the band's `anchor` edge, and pad the rest of the frame.
+    `shift` moves the picture (of `size`) px right and down from there, as picture_cut
+    says: what would run past the band, into the text above or below, is cut off."""
     width, height = frame
     top, bottom = band or (0, height)
+    if any(_shift(shift)) and size is not None:
+        # Moved: placed by exact numbers, the same ones the preview and the text use.
+        cut = picture_cut(size, frame, picture_width, band, anchor, shift)
+        parts = [f"scale={cut.width}:{cut.full}:flags=lanczos"]
+        if cut.full != cut.height:
+            parts.append(f"crop={cut.width}:{cut.height}:0:{cut.cut_top}")
+        parts.append(f"pad={width}:{height}:{cut.x}:{cut.y}:color={ffmpeg_color(background)}")
+        return parts
     if not band:
         y = "(oh-ih)/2"
     elif anchor == "top":
@@ -216,17 +227,10 @@ def band_fit(
         y = f"{bottom}-ih"
     else:
         y = f"{top}+({bottom - top}-ih)/2"
-    x = "(ow-iw)/2"
-    dx, dy = _shift(shift)
-    if dx:
-        x = f"'clip(trunc((ow-iw)/2){dx:+d},0,ow-iw)'"
-    if dy:
-        # Kept between the text (the band), so the text never has to make way for it.
-        y = f"'clip(trunc({y}){dy:+d},{top},{bottom}-ih)'"
     return [
         f"scale={_even(width * picture_width)}:{bottom - top}"
         ":force_original_aspect_ratio=decrease:flags=lanczos",
-        f"pad={width}:{height}:{x}:{y}:color={ffmpeg_color(background)}",
+        f"pad={width}:{height}:(ow-iw)/2:{y}:color={ffmpeg_color(background)}",
     ]
 
 
@@ -370,16 +374,38 @@ def _offset(spare: float, anchor: Anchor) -> float:
     return 0 if anchor == "top" else spare if anchor == "bottom" else spare / 2
 
 
-def picture_rect(
+@dataclass(frozen=True)
+class Cut:
+    """A picture shown whole, as placed: its scaled size (width, full), the rows of it
+    kept (from cut_top, `height` of them) and where those land in the frame (x, y)."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+    full: int
+    cut_top: int
+
+    @property
+    def rect(self) -> tuple[int, int, int, int]:
+        return self.x, self.y, self.x + self.width, self.y + self.height
+
+
+MIN_SHOWN = 0.25  # of a moved picture's height, the least that stays in view
+
+
+def picture_cut(
     size: tuple[int, int],
     frame: tuple[int, int],
     picture_width: float = 1.0,
     band: tuple[int, int] | None = None,
     anchor: Anchor = "middle",
     shift: tuple[int, int] = (0, 0),
-) -> tuple[int, int, int, int]:
-    """Where a picture of `size` shown whole lands in the frame, x0, y0, x1, y1, as
-    band_fit places it."""
+) -> Cut:
+    """Where a picture of `size` shown whole lands in the frame. `shift` moves it px right
+    and down: sideways it stays inside the frame; up or down, what would run past the band
+    (into the text above or below, or off the frame) is cut off, so the text stays where
+    it is, and at least MIN_SHOWN of it stays in view."""
     width, height = frame
     top, bottom = band or (0, height)
     box_w, box_h = _even(width * picture_width), bottom - top
@@ -391,9 +417,26 @@ def picture_rect(
     dx, dy = _shift(shift)
     if dx:
         x0 = min(max(x0 + dx, 0), width - w)
-    if dy:
-        y0 = min(max(y0 + dy, top), bottom - h)
-    return x0, y0, x0 + w, y0 + h
+    if not dy:
+        return Cut(x0, y0, w, h, h, 0)
+    least = _even(h * MIN_SHOWN) or 2
+    moved = min(max(y0 + dy, top - (h - least)), bottom - least)
+    cut_top = max(0, top - moved)
+    kept = min(bottom, moved + h) - max(top, moved)
+    return Cut(x0, moved + cut_top, w, kept, h, cut_top)
+
+
+def picture_rect(
+    size: tuple[int, int],
+    frame: tuple[int, int],
+    picture_width: float = 1.0,
+    band: tuple[int, int] | None = None,
+    anchor: Anchor = "middle",
+    shift: tuple[int, int] = (0, 0),
+) -> tuple[int, int, int, int]:
+    """Where a picture of `size` shown whole lands in the frame, x0, y0, x1, y1, as
+    band_fit places it (the part of it kept, when moved)."""
+    return picture_cut(size, frame, picture_width, band, anchor, shift).rect
 
 
 def video_band(
@@ -413,10 +456,10 @@ def video_band(
     scaled = min(bottom - top, _even(width * picture_width) * source[1] / source[0])
     if scaled >= height - 1:
         return None
+    if _shift(shift)[1]:
+        _, y0, _, y1 = picture_rect(source, frame, picture_width, band, anchor, shift)
+        return float(y0), float(y1)
     top += _offset(bottom - top - scaled, anchor if band else "middle")
-    if dy := _shift(shift)[1]:
-        low, high = band or (0, height)
-        top = min(max(int(top) + dy, low), high - scaled)
     return top, top + scaled
 
 
@@ -461,7 +504,7 @@ def build_graph(
             crop = [f"crop={first.width}:{h}:{first.x}:'{y}'"]
             fit = band_fit(
                 frame, background, preset.framing.picture_width, layers.picture_band,
-                layers.picture_anchor, picture_shift(preset),
+                layers.picture_anchor, picture_shift(preset), (first.width, h),
             )  # fmt: skip
             segment(label, crop, fit)
             continue
