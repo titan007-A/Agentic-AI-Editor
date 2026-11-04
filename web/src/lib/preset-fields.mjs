@@ -30,6 +30,21 @@ export function presetFields(preset, replaced = []) {
   return found;
 }
 
+/**
+ * The words a preset needs given for one of a PDF's items: its top and bottom text stand
+ * in for the preset's there, and a year the PDF writes beside the name is that item's
+ * {year}, so it isn't asked for (the notes carry it).
+ * @param {import("./api").Preset} preset
+ * @param {{ top?: string, bottom?: string, year?: string } | undefined} entry
+ * @returns {string[]}
+ */
+export function entryFields(preset, entry) {
+  if (!entry) return presetFields(preset);
+  const replaced = /** @type {const} */ (["top", "bottom"]).filter((a) => entry[a]);
+  const fromPdf = /^\d{4}$/.test(String(entry.year ?? "").trim()) ? ["year"] : [];
+  return presetFields(preset, [...replaced]).filter((name) => !fromPdf.includes(name));
+}
+
 /** "song_number" -> "Song number". @param {string} name */
 export function fieldLabel(name) {
   const words = name.replace(/_/g, " ").trim();

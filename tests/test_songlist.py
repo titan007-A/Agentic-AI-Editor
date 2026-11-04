@@ -73,3 +73,23 @@ def test_a_singer_first_list_can_be_swapped_and_labelled_lines_go_where_they_say
 
 def test_a_pdf_that_isnt_a_numbered_list_is_left_to_the_model():
     assert research.listed("Song: Felicità\nTop text: something\nBottom text: other") == []
+
+
+def test_a_year_after_the_singer_without_brackets_is_the_year():
+    lines = "\n".join(
+        f"{n}. {entry}\nUna frase." for n, entry in enumerate([
+            "Gracias a la vida - Violeta Parra - 1966",
+            "Alfonsina y el mar - Mercedes Sosa, 1969",
+            "Somos novios – Armando Manzanero – 1968.",
+            "1979 - Smashing Pumpkins",
+            "Eres tú (1973) - Mocedades",
+        ], 1)
+    )  # fmt: skip
+    entries = research.listed(lines)
+    assert [(e.song, e.singer, e.year) for e in entries] == [
+        ("Gracias a la vida", "Violeta Parra", "1966"),
+        ("Alfonsina y el mar", "Mercedes Sosa", "1969"),
+        ("Somos novios", "Armando Manzanero", "1968"),
+        ("1979", "Smashing Pumpkins", ""),  # a song called 1979 stays a song
+        ("Eres tú", "Mocedades", "1973"),
+    ]

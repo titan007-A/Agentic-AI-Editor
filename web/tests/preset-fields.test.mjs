@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   counts,
+  entryFields,
   fieldLabel,
   fieldNotes,
   nextValues,
@@ -92,4 +93,19 @@ test("an empty year is left for the editor to find", () => {
   assert.equal(optional("year"), true);
   assert.equal(fieldNotes(["year", "day"], { year: " ", day: "3" }, {}), "day: 3");
   assert.equal(fieldNotes(["year"], { year: "1981" }, {}), "year: 1981");
+});
+
+test("a year the PDF writes beside the name isn't asked for", () => {
+  const aman = {
+    name: "60s",
+    text_blocks: [
+      { anchor: "top", text: "{headline}\n\nSONG: { {song} }\n- {year} -" },
+      { anchor: "bottom", text: "Día {day}" },
+    ],
+  };
+  assert.deepEqual(entryFields(aman, { top: "Una frase", bottom: "", year: "1966" }), ["day"]);
+  assert.deepEqual(entryFields(aman, { top: "", bottom: "", year: "" }), ["year", "day"]);
+  assert.deepEqual(entryFields(aman, undefined), ["year", "day"]);
+  // the bottom text replaced by the PDF's: its fields go too
+  assert.deepEqual(entryFields(aman, { top: "", bottom: "Abajo", year: "1970" }), []);
 });

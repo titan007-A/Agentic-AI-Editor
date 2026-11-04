@@ -245,6 +245,7 @@ class PdfEntry(BaseModel):
     song: str = Field(max_length=160)
     top: str = Field(max_length=400)
     bottom: str = Field(max_length=400)
+    year: str = Field(max_length=4)
 
 
 class PdfEntries(BaseModel):
@@ -344,8 +345,9 @@ CHAT = (
 READ_PDF = (
     "This is the text of a PDF a video editor wrote: a list of songs to make Instagram "
     "reels of, each with the words to write above the video and below it. For each song "
-    "give singer, song, top (the words for above) and bottom (the words for below), copied "
-    "exactly as written, in their language, with \\n where a new line starts; '' for any "
+    "give singer, song, top (the words for above), bottom (the words for below) and year "
+    "(the year written beside the song's name, four digits), copied exactly as written, in "
+    "their language, with \\n where a new line starts; '' for any "
     "the PDF doesn't give. Don't translate, shorten or add anything. Leave out headings "
     "and anything that isn't a song.\n\nThe PDF:\n{text}"
 )
@@ -400,8 +402,15 @@ def listed(text: str) -> list[songlist.Listed]:
     return songlist.read(text, {"top": ABOVE, "bottom": BELOW})
 
 
+def _year(said: str, text: str) -> str:
+    """The model's year for a song, kept only if four digits the PDF itself has."""
+    said = said.strip()
+    return said if re.fullmatch(r"(?:1[89]|20)\d\d", said) and said in text else ""
+
+
 def pdf_entries(llm, text: str) -> list[dict]:
-    """The songs a PDF lists, each {"singer", "song", "top", "bottom"}, in its order."""
+    """The songs a PDF lists, each {"singer", "song", "top", "bottom", "year"}, in its
+    order."""
     prompt = READ_PDF.format(text=text.replace(songlist.PAGE_BREAK, "")[:PDF_TEXT])
     reply = parse(
         PdfEntries,
@@ -418,6 +427,7 @@ def pdf_entries(llm, text: str) -> list[dict]:
                     "song": e.song.strip(),
                     "top": e.top.strip().replace("\\n", "\n"),
                     "bottom": e.bottom.strip().replace("\\n", "\n"),
+                    "year": _year(e.year, text),
                 }
             )
     return [placed(entry, text) for entry in entries]

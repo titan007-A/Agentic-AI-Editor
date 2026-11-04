@@ -29,6 +29,8 @@ ENTRY = re.compile(r"^\s*(\d{1,4})\s*[.)]\s+(\S.*)$")
 # The dash between song and singer, spaced, so "Jay-Z" or "Ob-La-Di" isn't split.
 DASH = re.compile(r"\s+[-–—]\s+")
 YEAR = re.compile(r"\s*[(\[]\s*((?:1[89]|20)\d\d)\s*[)\]]")
+# A year after the singer without brackets: "Song - Singer - 1966", "Song - Singer, 1966".
+LAST_YEAR = re.compile(r"\s*(?:[-–—,]|\s[-–—])\s*((?:1[89]|20)\d\d)\s*\.?\s*$")
 PAGE_NUMBER = re.compile(
     r"^(?:page|página|pagina|pag\.?|seite|p\.)?\s*\d{1,4}(?:\s*/\s*\d+)?$", re.IGNORECASE
 )
@@ -85,6 +87,10 @@ def _split(rest: str) -> tuple[str, str, str]:
     if match := YEAR.search(rest):
         year = match.group(1)
         rest = (rest[: match.start()] + rest[match.end() :]).strip()
+    elif (match := LAST_YEAR.search(rest)) and DASH.search(rest[: match.start()]):
+        # Only beside a song and a singer both, so a song called "1979" stays a song.
+        year = match.group(1)
+        rest = rest[: match.start()].strip()
     parts = DASH.split(rest, maxsplit=1)
     first = parts[0].strip(" \t-–—")
     second = parts[1].strip(" \t-–—") if len(parts) > 1 else ""

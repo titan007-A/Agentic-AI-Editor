@@ -64,9 +64,10 @@ class Planner:
 # The songs the fake model reads from a PDF; the second has nothing to find.
 PDF_ENTRIES = [
     {"singer": "Bryan Adams", "song": "Heaven", "top": "Il capolavoro\\ndel 1985",
-     "bottom": "Seguici"},
-    {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": ""},
-    {"singer": " ", "song": " ", "top": "a heading", "bottom": ""},  # no song: left out
+     "bottom": "Seguici", "year": "1984"},
+    # a year the PDF doesn't write is the model's own: dropped
+    {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": "", "year": "1999"},
+    {"singer": " ", "song": " ", "top": "a heading", "bottom": "", "year": ""},  # no song: left out
 ]  # fmt: skip
 
 
@@ -677,13 +678,13 @@ def test_the_trend_radar_shows_fresh_fast_reels_and_songs_several_accounts_post(
 
 
 def test_a_pdf_of_songs_is_read_and_each_song_searched_for():
-    text = research.read_pdf(pdf(["1. Bryan Adams - Heaven", "Sopra: Il capolavoro"]))
+    text = research.read_pdf(pdf(["1. Bryan Adams - Heaven (1984)", "Sopra: Il capolavoro"]))
     assert "Bryan Adams - Heaven" in text and "Sopra: Il capolavoro" in text
     entries = research.pdf_entries(Planner(), text)
     assert entries == [
         {"singer": "Bryan Adams", "song": "Heaven", "top": "Il capolavoro\ndel 1985",
-         "bottom": "Seguici"},
-        {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": ""},
+         "bottom": "Seguici", "year": "1984"},
+        {"singer": "Nobody", "song": "Nothing", "top": "", "bottom": "", "year": ""},
     ]  # fmt: skip
 
     asked = []
