@@ -59,13 +59,16 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:20]
 
 
-def transcript_file(work_dir: Path, audio: str, router: ModelRouter) -> Path:
+def transcript_file(
+    work_dir: Path, audio: str, router: ModelRouter, language: str | None = None
+) -> Path:
     """Where the transcript of `audio` is kept. Another whisper model or backend hears it
-    differently, so each keeps its own."""
+    differently, so each keeps its own, and so does each language it was told to hear."""
     backend = router.backends.transcriber
     s = router.settings
     model = s.mlx_whisper_model if backend == "mlx" else s.whisper_model
-    name = re.sub(r"[^\w.-]+", "_", f"{backend}-{model}")
+    told = f"-{language}" if language else ""
+    name = re.sub(r"[^\w.-]+", "_", f"{backend}-{model}{told}")
     return work_dir / f"transcript-{audio}-{name}.json"
 
 
@@ -85,7 +88,10 @@ def analyze(
     router: ModelRouter,
     audio_source: AudioSource,
     progress: Progress = lambda stage, message: None,
+    language: str | None = None,
 ) -> Analysis:
+    """`language` is what is sung or said, when the preset says: whisper left to tell can
+    take a Spanish song for an Italian one and write Italian words."""
     work_dir.mkdir(parents=True, exist_ok=True)
     info = ffmpeg.probe(video)
     if not info.has_audio:
@@ -102,10 +108,10 @@ def analyze(
 
     def run_transcription():
         progress("transcribe", "transcribing")
-        return router.transcribe(timeline_audio).model_dump()
+        return router.transcribe(timeline_audio, language).model_dump()
 
     transcript = Transcript.model_validate(
-        cached(transcript_file(work_dir, audio_source, router), run_transcription)
+        cached(transcript_file(work_dir, audio_source, router, language), run_transcription)
     )
     sparse = len(transcript.words) < SPARSE_WORDS * info.duration / 60
     if audio_source == "original" and sparse:
@@ -119,8 +125,8 @@ def analyze(
         else:
             sung = Transcript.model_validate(
                 cached(
-                    transcript_file(work_dir, "vocals", router),
-                    lambda: router.transcribe(vocals).model_dump(),
+                    transcript_file(work_dir, "vocals", router, language),
+                    lambda: router.transcribe(vocals, language).model_dump(),
                 )
             )
             if len(sung.words) > len(transcript.words):

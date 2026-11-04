@@ -18,6 +18,7 @@ from agentic_editor.edl import EDL, Clip, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
+from agentic_editor.render.mark import layer as watermark_layer
 from agentic_editor.render.video import (
     Anchor,
     Layers,
@@ -46,6 +47,24 @@ def asset_path(name: str) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"preset asset not found: {path}")
     return path
+
+
+def backdrop(name: str, frame: tuple[int, int], dest: Path) -> Path:
+    """The preset's background picture scaled to fill the frame, its middle kept, saved
+    once as `dest` for the encoder to loop under the picture."""
+    from PIL import Image
+
+    with Image.open(asset_path(name)) as image:
+        image = image.convert("RGB")
+        scale = max(frame[0] / image.width, frame[1] / image.height)
+        size = (
+            max(frame[0], round(image.width * scale)),
+            max(frame[1], round(image.height * scale)),
+        )
+        image = image.resize(size, Image.Resampling.LANCZOS)
+        x, y = (size[0] - frame[0]) // 2, (size[1] - frame[1]) // 2
+        image.crop((x, y, x + frame[0], y + frame[1])).save(dest)
+    return dest
 
 
 def detect_black_bars(video: Path, start: float) -> tuple[int, int, int, int] | None:
@@ -472,6 +491,11 @@ def render(
     for clip in edl.clips:
         inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video)]
     layers = Layers()
+    if preset.framing.background_image:
+        still = backdrop(preset.framing.background_image, frame, work_dir / "background.png")
+        # One still, repeated for as long as the reel runs.
+        inputs += ["-loop", "1", "-framerate", str(preset.fps), "-i", str(still)]
+        layers.background_image = inputs.count("-i") - 1
     if edl.crop_mode == "smart":
         clip = edl.clips[0]
         layers.content = edl.picture or picture_area(
@@ -693,6 +717,14 @@ def render(
 
     if preset.logo.file:
         layers.logo = add_input(asset_path(preset.logo.file))
+    own = preset.watermark
+    if own.enabled and (own.text.strip() or own.file):
+        # The same PNG the preset preview pastes, so the mark lands where it showed.
+        picture = asset_path(own.file) if own.file else None
+        png, _ = watermark_layer(
+            own, frame, settings.fonts_dir, picture, work_dir / "watermark.png"
+        )
+        layers.own_mark = add_input(png)
 
     audio_index = add_input(soundtrack)
     graph, out = build_graph(edl, preset, source, layers)

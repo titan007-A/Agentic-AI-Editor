@@ -233,6 +233,10 @@ def quote(line: str, song: str) -> str:
     found = re.search(rf"[\"'‘’“”]?({re.escape(song)})[\"'‘’“”]?", line, re.I)
     if not found:
         return line
+    # Already in guillemets, as Spanish, French and Italian quote: «Llorarás», « Llorarás ».
+    before, after = line[: found.start(1)].rstrip(), line[found.end(1) :].lstrip()
+    if before.endswith(("«", "»", "‹", "„")) and after.startswith(("»", "«", "›", "“", "”")):
+        return line
     return line[: found.start()] + f"“{found.group(1)}”" + line[found.end() :]
 
 

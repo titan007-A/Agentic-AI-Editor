@@ -6,7 +6,13 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { LearnStyleDialog } from "@/components/learn-style-dialog";
-import { ImageBlocks, PresetSection, SECTIONS, TextBlocks } from "@/components/preset-fields";
+import {
+  ImageBlocks,
+  PresetSection,
+  SECTIONS,
+  TextBlocks,
+  WatermarkFields,
+} from "@/components/preset-fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -513,6 +519,15 @@ function Presets() {
           </CardHeader>
           <CardContent>
             <ImageBlocks preset={draft} onChange={edit} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Your watermark</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <WatermarkFields preset={draft} fonts={fonts} onChange={edit} />
           </CardContent>
         </Card>
 

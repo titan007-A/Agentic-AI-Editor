@@ -155,6 +155,26 @@ class Logo(Strict):
     margin: int = Field(default=48, ge=0)
 
 
+class OwnWatermark(Strict):
+    """Your own mark on every video, such as the page's name ("@oldsongs") or its logo, or
+    both (the picture above the words), where you put it. Set by hand: the style learner
+    never writes it. x and y are shares of the room beside the mark: 0 is flush with the
+    left (top) edge, 1 with the right (bottom), 0.5 the middle."""
+
+    enabled: bool = False
+    text: str = Field(default="", max_length=80)
+    file: str | None = Field(default=None, description="a picture in the assets")
+    font: FontName = "Montserrat-Bold"
+    size: int = Field(default=42, ge=8, le=400)
+    color: Color = "#FFFFFF"
+    outline: float = Field(default=2.0, ge=0, le=20)
+    outline_color: Color = "#000000"
+    width: int = Field(default=180, ge=8, le=4096, description="the picture's, in px")
+    opacity: float = Field(default=0.6, ge=0.05, le=1)
+    x: float = Field(default=0.5, ge=0, le=1)
+    y: float = Field(default=0.75, ge=0, le=1)
+
+
 class Music(Strict):
     file: str | None = None
     volume_db: float = Field(default=-20, ge=-60, le=0)
@@ -164,6 +184,9 @@ class Music(Strict):
 class Framing(Strict):
     mode: Literal["smart", "face", "center", "none"] = "smart"
     background: Color = "#000000"
+    # A picture behind everything, filling the frame (a file in the assets), instead of
+    # the colour: a page's starry sky, a paper texture.
+    background_image: str | None = None
     # Take the background colour from the footage instead, toned to keep text readable.
     auto_background: bool = False
     crop_black_bars: bool = False
@@ -220,6 +243,9 @@ class Audio(Strict):
     true_peak_db: float = Field(default=-1.5, ge=-20, le=0)
     fade_in: float = Field(default=0.03, ge=0)
     fade_out: float = Field(default=0.25, ge=0)
+    # What is sung or said, for the speech recognition (two letters, "es"); unset, it
+    # tells by itself, and can take a Spanish song for an Italian one.
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
 
 
 class BeatSync(Strict):
@@ -260,6 +286,7 @@ class Preset(Strict):
     headline: Headline = Headline()
     post_caption: PostCaption = PostCaption()
     logo: Logo = Logo()
+    watermark: OwnWatermark = OwnWatermark()
     intro: str | None = None
     outro: str | None = None
     music: Music = Music()

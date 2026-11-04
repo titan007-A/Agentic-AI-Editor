@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { counts, fieldLabel, nextValues } from "@/lib/preset-fields.mjs";
+import { counts, fieldLabel, nextValues, optional } from "@/lib/preset-fields.mjs";
 
 const KEY = "preset-fields";
 
@@ -69,7 +69,7 @@ export function PresetFieldInputs({
               <Label htmlFor={`${idPrefix}-${name}`}>{fieldLabel(name)}</Label>
               <Input
                 id={`${idPrefix}-${name}`}
-                required
+                required={!optional(name)}
                 inputMode={counts(name) || name === "year" ? "numeric" : undefined}
                 maxLength={60}
                 value={value}
@@ -81,7 +81,9 @@ export function PresetFieldInputs({
                 </p>
               )}
               {name === "year" && (
-                <p className="text-xs text-muted-foreground">The year of the song</p>
+                <p className="text-xs text-muted-foreground">
+                  The year of the song. Left empty, it is taken from the post or looked up
+                </p>
               )}
             </div>
           );

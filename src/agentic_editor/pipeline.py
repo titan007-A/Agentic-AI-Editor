@@ -731,8 +731,9 @@ def edit(
     out_dir.mkdir(parents=True, exist_ok=True)
     router = ModelRouter(settings, backends, progress)
     texts, notes = names.texts_from_notes(notes)
-    presets = [names.with_texts(p, texts) for p in presets]
     given_headline, notes = headline.from_notes(notes)
+    given_headline = given_headline or names.headline_from_texts(presets, texts)
+    presets = [names.with_texts(p, texts) for p in presets]
     # "song:" and "artist:" lines are always taken, so the instruction reader never sees
     # them; a preset that doesn't name the song still gets them for its reel's song.
     wanted = set().union({"song", "artist"}, *(names.wanted(p) for p in presets))
@@ -768,6 +769,14 @@ def edit(
             log.warning("couldn't read the song from the caption: %s", exc)
             return None
 
+    @functools.cache
+    def came_out(song: str, artist: str) -> str | None:
+        """The song's year for {year}: the post's caption says it, else MusicBrainz."""
+        if found := names.year_in(f"{source.title}\n{source.description}", song):
+            return found
+        progress("analyze", f"looking up when {song} came out")
+        return shazam.first_year(song, artist)
+
     for preset in presets:
         hear = heard if preset.auto_name else None
         try:
@@ -775,7 +784,7 @@ def edit(
                 songs[preset.name] = names.song_and_artist(source.title, given, hear)
             elif given.get("song") and given.get("artist"):
                 songs[preset.name] = (given["song"], given["artist"])
-            named.append(names.fill(preset, source.title, given, hear))
+            named.append(names.fill(preset, source.title, given, hear, came_out))
         except (names.UnnamedSong, names.MissingField) as exc:
             failed(preset.name, exc)
     presets = named
@@ -787,8 +796,11 @@ def edit(
 
     analyses: dict[str, Analysis] = {}
     for kind in dict.fromkeys(p.audio.source for p in presets):
+        # The language a preset says is sung or said there; the first one's, if they differ.
+        told = next((p.audio.language for p in presets
+                     if p.audio.source == kind and p.audio.language), None)  # fmt: skip
         try:
-            analyses[kind] = analyze(source.path, work_dir, router, kind, progress)
+            analyses[kind] = analyze(source.path, work_dir, router, kind, progress, told)
         except Exception as exc:
             # Vocals that can't be isolated sink the presets that need them, not the others.
             failed(", ".join(p.name for p in presets if p.audio.source == kind), exc)

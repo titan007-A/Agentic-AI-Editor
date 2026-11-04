@@ -8,15 +8,21 @@ const FOUND = new Set(["song", "artist", "headline"]);
 /**
  * The words a preset needs given, in the order its text has them. Blocks above or below
  * the video whose words `replaced` gives instead (a PDF's top and bottom text) don't count:
- * the edit drops them (names.with_texts).
+ * the edit drops them (names.with_texts), unless a block there writes {headline}.
  * @param {import("./api").Preset} preset
  * @param {string[]} [replaced] "top", "bottom"
  * @returns {string[]}
  */
 export function presetFields(preset, replaced = []) {
   const found = [];
-  for (const block of preset.text_blocks ?? []) {
-    if (replaced.includes(block.anchor)) continue;
+  const blocks = preset.text_blocks ?? [];
+  // Where a block writes {headline}, the given words are that headline and every block
+  // there stays.
+  const headlined = new Set(
+    blocks.filter((b) => String(b.text ?? "").includes("{headline}")).map((b) => b.anchor),
+  );
+  for (const block of blocks) {
+    if (replaced.includes(block.anchor) && !headlined.has(block.anchor)) continue;
     for (const [, name] of String(block.text ?? "").matchAll(FIELD)) {
       if (!FOUND.has(name) && !found.includes(name)) found.push(name);
     }
@@ -28,6 +34,12 @@ export function presetFields(preset, replaced = []) {
 export function fieldLabel(name) {
   const words = name.replace(/_/g, " ").trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Whether a field may be left empty: the editor finds the song's year by itself (from
+ * the post's caption, else MusicBrainz). @param {string} name */
+export function optional(name) {
+  return name === "year";
 }
 
 /** Whether a field counts up from one video to the next: a number, "song_number". */
@@ -45,6 +57,7 @@ export function counts(/** @type {string} */ name) {
  */
 export function fieldNotes(fields, values, used) {
   return fields
+    .filter((name) => !optional(name) || (values[name] ?? "").trim())
     .map((name) => {
       const typed = (values[name] ?? "").trim();
       let value = typed;

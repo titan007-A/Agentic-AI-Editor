@@ -268,3 +268,67 @@ def test_huge_learned_text_still_makes_a_valid_preset():
     fit = fit_font(m, [BOLD])
     assert fit.size > 300
     assert text_block(m, fit, (1080, 1920)).size == 300
+
+
+class Templater:
+    def __init__(self, **answer):
+        self.answer = {"song": "", "artist": "", "year": "", "headline": "", "language": "es",
+                       **answer}  # fmt: skip
+
+    def chat_json(self, messages, schema, **kwargs):
+        return self.answer
+
+
+def test_words_about_one_video_become_words_the_editor_fills():
+    text = "SONG:{ Estoy aquí }\n- 1995 -"
+    # The model's own template drops the page's braces; the words go in where they stand.
+    model = Templater(template="SONG: {song}\n{year}", song="Estoy aquí", year="1995")
+    shaped = style.template(model, text, "Video by page", "Estoy aquí (1995) - Shakira")
+    assert shaped == style.Templated("SONG:{ {song} }\n- {year} -", "", "es")
+    line = "Urgencia romántica, melodía afilada y una voz ya\ninconfundible anuncian a Shakira."
+    model = Templater(
+        template="... de {artist}.", artist="Shakira", headline=line.replace("\n", " ")
+    )
+    shaped = style.template(model, line, "", "")
+    assert shaped.template == "{headline}" and shaped.headline == line.replace("\n", " ")
+    hint = style.headline_for(shaped)
+    assert "Spanish" in hint.hint and shaped.headline in hint.hint and hint.language == "es"
+
+
+def test_the_page_s_own_line_stays_as_it_is():
+    text = (
+        "Buscando las mejores canciones de los años 80,\n¿cuáles deberían estar en nuestra lista?"
+    )
+    decade = Templater(template="Buscando las mejores canciones de los años {year}", year="80")
+    assert style.template(decade, text, "", "") is None  # a decade isn't a song's year
+    # Read as a sentence about the video, but it names no song or singer: the page's own.
+    slogan = Templater(template="{headline}", headline=text.replace("\n", " "))
+    assert style.template(slogan, text, "", "") is None
+    assert style.template(Templater(template=text), text, "", "") is None  # nothing changes
+
+
+def test_captions_on_a_song_hardly_heard_are_its_lyrics():
+    heard = Transcript(words=[Word(text="Sí", start=0, end=1)])
+    found = style.caption_mode(["para enamorarme ahora"], heard, True, "Spanish", 40.0)
+    assert found == ("lyrics", None)
+
+
+def test_caption_languages_have_codes_and_accents_do_not_count():
+    assert style.code_of("Spanish") == style.code_of("es") == "es"
+    assert style.code_of("Klingon") is None
+    heard = Transcript(
+        words=[Word(text="qué", start=0, end=1), Word(text="importa", start=1, end=2)]
+    )
+    assert style.heard_share(["Que importa"], heard) == 1.0
+
+
+def test_serif_letters_are_fitted_with_serif_fonts():
+    fonts = [Path("fonts/OpenSans-Regular.ttf"), Path("fonts/SourceSerif4-Regular.ttf")]
+    serif = [sighting("Buscando", t, 0.8, 0.82) for t in (1, 2, 3)]
+    serif = [Sighting(s.at, s.text, s.box, s.colour, "", look)
+             for s, look in zip(serif, ["serif", "serif", "sans-serif"], strict=True)]  # fmt: skip
+    assert style.fonts_for(serif, fonts) == [fonts[1]]
+    plain = [Sighting(s.at, s.text, s.box, s.colour, "", "sans-serif") for s in serif]
+    assert style.fonts_for(plain, fonts) == [fonts[0]]
+    unsure = [Sighting(s.at, s.text, s.box, s.colour) for s in serif]
+    assert style.fonts_for(unsure, fonts) == fonts

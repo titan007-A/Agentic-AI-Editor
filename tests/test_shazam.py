@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from agentic_editor import ffmpeg, shazam
@@ -133,3 +134,23 @@ def test_musicbrainz_is_asked_for_the_artist_s_titles(monkeypatch):
     assert "agentic-editor" in seen[0].headers["user-agent"]
     down = httpx.MockTransport(lambda request: httpx.Response(503))
     assert shazam.titles("Caruso", "Lucio Dalla", down) is None
+
+
+def test_a_songs_year_is_its_earliest_release(monkeypatch):
+    monkeypatch.setattr(shazam.time, "sleep", lambda seconds: None)
+
+    def reply(request):
+        found = [
+            {"title": "Maldita primavera", "first-release-date": "1981-05-01"},
+            {"title": "Maldita primavera (Live)", "first-release-date": "1979"},
+            {"title": "Maldita primavera de otoño", "first-release-date": "1960"},
+            {"title": "Maldita primavera", "first-release-date": "1995-02-02"},
+            {"title": "Otra canción", "first-release-date": "1970"},
+            {"title": "Maldita primavera"},
+        ]
+        return httpx.Response(200, json={"recordings": found})
+
+    assert shazam.first_year("Maldita primavera", "Yuri", httpx.MockTransport(reply)) == "1979"
+    assert shazam.first_year("Nada", "Yuri", httpx.MockTransport(reply)) is None
+    down = httpx.MockTransport(lambda request: httpx.Response(503))
+    assert shazam.first_year("Maldita primavera", "Yuri", down) is None

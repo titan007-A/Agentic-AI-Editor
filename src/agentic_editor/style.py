@@ -32,7 +32,8 @@ from pydantic import BaseModel, Field
 from scipy import ndimage
 
 from agentic_editor import assets, ffmpeg, slots
-from agentic_editor.analysis import layout
+from agentic_editor.agent import LANGUAGES
+from agentic_editor.analysis import layout, ocr
 from agentic_editor.analysis.layout import Box, Line
 from agentic_editor.analyze import (
     SPARSE_WORDS,
@@ -50,6 +51,7 @@ from agentic_editor.presets import (
     CaptionStyle,
     Framing,
     Grade,
+    Headline,
     Hook,
     ImageBlock,
     Preset,
@@ -92,6 +94,9 @@ MAX_LOUDNESS = -9.0
 PART = 0.6  # of the box's width: text narrower than this is likely only part of it
 DARK = 70  # brightest channel of a background a dark border would vanish into
 THICKEST = 0.3  # of the line's height: a border wider than this is the background
+READ_ALIKE = 0.8  # how alike a reading must be to OCR's words to stand for them
+BLOCK_STEP = 1.35  # a step between lines' tops this much past the usual starts a new block
+SENTENCE = 6  # words: text this long is something to read, never a page's branding
 
 FORMATS = {(9, 16): (1080, 1920), (4, 5): (1080, 1350), (3, 4): (1080, 1440),
            (1, 1): (1080, 1080), (4, 3): (1440, 1080), (16, 9): (1920, 1080)}  # fmt: skip
@@ -103,8 +108,11 @@ READ_PROMPT = (
     "Give each block of text one entry with its box [x0, y0, x1, y1] in 0-1000 coordinates "
     "relative to the image width and height, the colour of most of its letters (one word, "
     "e.g. white, yellow, black) in color, and in other_color the colour of any word drawn "
-    "in a different colour from the rest (empty if none). In scene, say in a few words "
-    "what the frame shows, e.g. 'a woman singing into a microphone on stage'."
+    "in a different colour from the rest (empty if none), and in lettering whether its "
+    "letters are serif (small strokes at the ends of the letters, like Times or Georgia), "
+    "sans-serif (plain strokes, like Arial or Helvetica), script (handwriting) or other. "
+    "In scene, say in a few words what the frame shows, e.g. 'a woman singing into a "
+    "microphone on stage'."
 )
 
 DESCRIBE_PROMPT = """You are helping set up a video editor that turns long videos into \
@@ -149,11 +157,51 @@ class _Kind(BaseModel):
     kind: Literal["slogan", "details"]
 
 
+# A text about one video becomes words in braces the editor fills for each next video, so
+# the preset doesn't put this video's song on every reel.
+TEMPLATE_PROMPT = """Text shown on a short video from a page that posts many videos:
+
+"{text}"
+
+The video's title: {title}
+Its description: {description}
+
+Some of these words are about this one video and would be different on the next one. \
+Write the text again as a template for the page's next videos: keep the page's own words, \
+line breaks and punctuation exactly, and put
+- {{song}} where the name of the song is,
+- {{artist}} where the singer or band is,
+- {{year}} where the year the song came out is,
+- {{headline}} in place of a whole sentence written about this one video (what it shows, \
+a review of the song or the performance): the sentence goes as a whole, even when it names \
+the singer or the song, since the next video gets a sentence of its own.
+Leave everything else as it is. Reply with the template, the words each of song, artist, \
+year and headline stood for (empty when the text doesn't have it), and language: the \
+two-letter code of the language the text is written in."""
+
+
+class _Template(BaseModel):
+    template: str
+    song: str
+    artist: str
+    year: str
+    headline: str
+    language: str
+
+
+PLACEHOLDER = re.compile(r"\{(song|artist|year|headline)\}")
+WHOLE = 0.85  # a sentence about the video this alike to the whole text is all of it
+
+
+Lettering = Literal["serif", "sans-serif", "script", "other"]
+
+
 class _Item(BaseModel):
     text: str
     box: list[int] = Field(min_length=4, max_length=4)
     color: str
     other_color: str
+    lettering: Lettering = "other"
 
 
 class _Read(BaseModel):
@@ -177,6 +225,7 @@ class Sighting:
     box: Box  # shares of the frame
     colour: str
     other: str = ""
+    lettering: str = ""  # "serif", "sans-serif"... as the vision model sees it
 
 
 @dataclass
@@ -312,7 +361,7 @@ def join_lines(items: list[Sighting]) -> list[Sighting]:
                 box = (min(last.box[0], item.box[0]), last.box[1],
                        max(last.box[2], item.box[2]), item.box[3])  # fmt: skip
                 merged[-1] = Sighting(last.at, f"{last.text}\n{item.text}", box, last.colour,
-                                      last.other or item.other)  # fmt: skip
+                                      last.other or item.other, last.lettering)  # fmt: skip
                 continue
         merged.append(item)
     return merged
@@ -352,6 +401,10 @@ def _group_box(g: list[Sighting]) -> Box:
 def _inside(box: Box, picture: Box) -> bool:
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
     return picture[0] < cx < picture[2] and picture[1] < cy < picture[3]
+
+
+def _overlaps(a: Box, b: Box) -> bool:
+    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
 
 
 def is_handle(texts: list[str], box: Box) -> bool:
@@ -663,6 +716,24 @@ def bundled_fonts(fonts_dir: Path) -> list[Path]:
     return sorted(p for p in fonts_dir.glob("*.[ot]tf"))
 
 
+# Font names that have serifs. Measuring can't tell a serif from a plain font of the same
+# width and weight, the vision model can.
+SERIF = re.compile(r"serif|rockwell|rokkitt|times|georgia|garamond|baskerville|playfair|lora"
+                   r"|merriweather|caslon|bodoni|didot", re.I)  # fmt: skip
+
+
+def fonts_for(g: list[Sighting], fonts: list[Path]) -> list[Path]:
+    """The fonts worth trying for a text: serif ones when most readings saw serifs (if any
+    are at hand), plain ones when most saw none, all of them otherwise."""
+    seen = [s.lettering for s in g if s.lettering in ("serif", "sans-serif")]
+    if not seen:
+        return fonts
+    serif = sum(s == "serif" for s in seen) > len(seen) / 2
+    plain = sum(s == "sans-serif" for s in seen) > len(seen) / 2
+    kept = [f for f in fonts if bool(SERIF.search(f.stem.replace("SansSerif", ""))) == serif]
+    return kept if (serif or plain) and kept else fonts
+
+
 def ass_ink(
     lines: list[str], font: Path, position: str, frame: tuple[int, int], settings: Settings
 ) -> tuple[int, int]:
@@ -808,22 +879,221 @@ def per_video(llm: OllamaClient, text: str) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class Templated:
+    """A text about one video as words the editor fills for each video."""
+
+    template: str
+    headline: str  # the sentence {headline} stood for, an example of how to write it
+    language: str  # two letters, "" when the model didn't say
+
+
+def template(llm: OllamaClient, text: str, title: str, description: str) -> Templated | None:
+    """The text with its song, artist, year and sentence about the video as {song},
+    {artist}, {year} and {headline}, as the model says they are; None when none of them
+    is in it."""
+    prompt = TEMPLATE_PROMPT.format(
+        text=text, title=title or "(none)", description=description.strip()[:1500] or "(none)"
+    )
+    try:
+        reply = _Template.model_validate(
+            llm.chat_json(
+                [{"role": "user", "content": prompt}],
+                _Template.model_json_schema(),
+                temperature=0.0,
+            )
+        )
+    except (LLMError, ValueError) as exc:
+        log.warning("could not make a template of %r: %s", text, exc)
+        return None
+    song, artist, year, line = (
+        v.strip() for v in (reply.song, reply.artist, reply.year, reply.headline)
+    )
+    language = reply.language.strip().lower()
+    language = language if re.fullmatch(r"[a-z]{2}", language) else ""
+    named = [n for n in (song, artist) if n and _plain(n) in _plain(text)]
+    # A sentence about this one video names its song or singer; a page's own line ("the
+    # best songs of the 80s, which should be on our list?") doesn't, however it reads.
+    if line and len(line.split()) >= SENTENCE and _alike(line, text) >= WHOLE and named:
+        return Templated("{headline}", " ".join(text.split()), language)
+    # The words are put in braces where they stand, so the page's own words, braces and
+    # dashes ("SONG:{ Estoy aquí }") stay exactly as read: the model's own template can
+    # drop them.
+    shape = text
+    for key, value in (("song", song), ("artist", artist), ("year", year)):
+        if not value or value not in shape:
+            continue
+        if key == "year" and not re.fullmatch(r"(?:19|20)\d\d", value):
+            continue  # "los años 80" is the page's decade, not a song's year
+        shape = shape.replace(value, "{" + key + "}", 1)
+    if shape == text:
+        log.info("nothing in %r changes from video to video", text)
+        return None
+    return Templated(shape, "", language)
+
+
+def _alike(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, _plain(a), _plain(b)).ratio()
+
+
+def _plain(text: str) -> str:
+    """For comparing readings: no accents, case or punctuation, OCR's and the model's
+    spellings of a word the same."""
+    bare = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return _normal(bare)
+
+
+def code_of(language: str) -> str | None:
+    """ "Spanish" or "es" -> "es"; None for a language the editor doesn't name."""
+    wanted = language.strip().lower()
+    if wanted in LANGUAGES:
+        return wanted
+    return next((code for code, name in LANGUAGES.items() if name.lower() == wanted), None)
+
+
+def split_blocks(g: list[Sighting], frame: np.ndarray, root: Path) -> list[list[Sighting]] | None:
+    """A text that stays, as the separate blocks it is drawn in: a line about the song
+    and, a line's height lower, "SONG: ..." over the year. The vision model reads them as
+    one text or two, differently on every frame; OCR's line boxes say where each line is
+    and the blank rows between blocks. The words come from the model's readings, which
+    keep their accents, line by line where one matches. None when OCR can't read it or
+    finds a single block (the reading stands as it is)."""
+    height, width, _ = frame.shape
+    x0, y0, x1, y1 = _group_box(g)
+    pad_x, pad_y = 0.03, 0.02
+    left, top = max(0, round((x0 - pad_x) * width)), max(0, round((y0 - pad_y) * height))
+    right = min(width, round((x1 + pad_x) * width))
+    bottom = min(height, round((y1 + pad_y) * height))
+    if right - left < 8 or bottom - top < 8:
+        return None
+    try:
+        read = ocr.read(Image.fromarray(frame[top:bottom, left:right]), root)
+    except Exception as exc:  # OCR is a help here, never a reason to fail
+        log.warning("OCR couldn't read the text %r: %s", g[0].text, exc)
+        return None
+    rows: list[list[ocr.Line]] = []
+    for line in sorted(read, key=lambda r: r.y0):
+        last = rows[-1] if rows else None
+        if last is not None:
+            overlap = min(last[-1].y1, line.y1) - max(last[-1].y0, line.y0)
+            if overlap > 0.5 * min(last[-1].y1 - last[-1].y0, line.y1 - line.y0):
+                last.append(line)  # the same row, read in pieces
+                continue
+        rows.append([line])
+    if not rows:
+        return None
+    # OCR's boxes are padded, so a blank line shows as a wider step from one line's top to
+    # the next, not as a gap.
+    tops = [min(p.y0 for p in r) for r in rows]
+    steps = [b - a for a, b in itertools.pairwise(tops)]
+    blocks: list[list[list[ocr.Line]]] = [[rows[0]]]
+    for row, step in zip(rows[1:], steps, strict=True):
+        if step > BLOCK_STEP * min(steps):
+            blocks.append([row])
+        else:
+            blocks[-1].append(row)
+    if len(blocks) < 2:
+        return None
+    readings = [[line.strip() for line in s.text.split("\n") if line.strip()] for s in g]
+    # Everything a reading has that could be one block: a line, or lines in a row.
+    spans = [" ".join(r[a:b]) for r in readings
+             for a in range(len(r)) for b in range(a + 1, len(r) + 1)]  # fmt: skip
+
+    def words(block: list[list[ocr.Line]]) -> str:
+        """The block's words as the model read them (it keeps the accents OCR loses),
+        broken where OCR saw the lines break; OCR's own when no reading matches."""
+        seen = [" ".join(p.text for p in sorted(row, key=lambda p: p.x0)) for row in block]
+        best = max(spans, key=lambda s: _alike(s, " ".join(seen)), default="")
+        if not best or _alike(best, " ".join(seen)) < READ_ALIKE:
+            return "\n".join(seen)
+        # Each word goes on the line OCR saw its letters on: by where it falls in the
+        # letters, as the two count words differently ("SONG:{ Llorarás}").
+        said = best.split()
+        sizes = [max(1, len(_plain(line).replace(" ", ""))) for line in seen]
+        ends = list(itertools.accumulate(sizes))
+        total = sum(len(_plain(w).replace(" ", "")) for w in said) or 1
+        lines: list[list[str]] = [[] for _ in seen]
+        done = 0
+        for word in said:
+            size = len(_plain(word).replace(" ", ""))
+            middle = (done + size / 2) * ends[-1] / total
+            at = next((i for i, e in enumerate(ends) if middle <= e), len(seen) - 1)
+            # A mark without letters ("-", "}") between two lines goes on the next one only
+            # if OCR saw that line start with it.
+            if not size and at + 1 < len(seen) and middle >= ends[at] - 1e-9:
+                at += seen[at + 1].lstrip().startswith(word[0])
+            lines[at].append(word)
+            done += size
+        lines = [" ".join(w) for w in lines]
+        return "\n".join(line for line in lines if line)
+
+    colour = statistics.mode(s.colour for s in g)
+    found = []
+    for block in blocks:
+        parts = [p for row in block for p in row]
+        box = (
+            (left + min(p.x0 for p in parts)) / width,
+            (top + min(p.y0 for p in parts)) / height,
+            (left + max(p.x1 for p in parts)) / width,
+            (top + max(p.y1 for p in parts)) / height,
+        )
+        text = words(block)
+        found.append([Sighting(s.at, text, box, colour, "", s.lettering) for s in g])
+    return found
+
+
+PLACEHOLDER_NOTES = {
+    "song": "{song} the song's name (from the video's name, the notes, or its sound)",
+    "artist": "{artist} who sings it",
+    "year": "{year} the year it came out (from the post, the notes, or MusicBrainz)",
+    "headline": "{headline} a sentence written for each video like this one",
+}
+
+
+def headline_for(shaped: Templated) -> Headline:
+    """How {headline} gets written for the next videos: like the reel's own sentence."""
+    language = LANGUAGES.get(shaped.language, "the same language")
+    example = shaped.headline
+    return Headline(
+        hint=(
+            f"One sentence in {language} like this one, about the song and how it is "
+            f"performed in this video: {example}"
+        ),
+        max_chars=min(300, max(90, len(example) + 30)),
+        language=shaped.language or "en",
+    )
+
+
 def quoted(text: str) -> str:
     return "“" + text.replace("\n", " / ") + "”"
 
 
 def caption_mode(
-    caption_texts: list[str], transcript: Transcript, singing: bool, language: str
+    caption_texts: list[str],
+    transcript: Transcript,
+    singing: bool,
+    language: str,
+    duration: float = 0.0,
 ) -> tuple[str, str | None]:
     """speech or lyrics when the captions are the words heard, translated when they are
-    in another language, visual when they are neither."""
-    heard = {_normal(w.text) for w in transcript.words}
-    shown = [w for t in caption_texts for w in _normal(t).split()]
-    if shown and sum(w in heard for w in shown) / len(shown) >= 0.5:
+    in another language, visual when they are neither. A song the speech recognition
+    hardly heard (a few words in a minute) can't show the captions are something else:
+    they are its lyrics."""
+    if heard_share(caption_texts, transcript) >= 0.5:
         return ("lyrics" if singing else "speech"), None
+    if singing and len(transcript.words) < SPARSE_WORDS * duration / 60:
+        return "lyrics", None
     if transcript.words and language:
         return "translated", language
     return "visual", None
+
+
+def heard_share(caption_texts: list[str], transcript: Transcript) -> float:
+    """How many of the captions' words were heard: accents aside, as captions and the
+    speech recognition spell them differently."""
+    heard = {w for word in transcript.words for w in _plain(word.text).split()}
+    shown = [w for t in caption_texts for w in _plain(t).split()]
+    return sum(w in heard for w in shown) / len(shown) if shown else 0.0
 
 
 def in_square(size: tuple[int, int]) -> tuple[float, float, float, float]:
@@ -891,9 +1161,54 @@ def read_frames(
             if x1 > x0 and y1 > y0 and item.text.strip():
                 log.info("%.1fs: %r at %s, %s", at, item.text, item.box, item.color)
                 items.append(Sighting(at, item.text, (x0, y0, x1, y1), item.color.strip(),
-                                      item.other_color.strip()))  # fmt: skip
+                                      item.other_color.strip(), item.lettering))  # fmt: skip
         sightings += join_lines(items)
     return sightings, scenes
+
+
+def settle(
+    found: list[tuple[str, list[Sighting]]],
+    stills: np.ndarray | None,
+    colour: tuple[int, int, int] | None,
+    picture: Box,
+    size: tuple[int, int],
+    full_frames: dict[float, np.ndarray | None],
+    settings: Settings,
+) -> list[tuple[str, list[Sighting]]]:
+    """The roles again for text on the padding, by its pixels: text drawn the same all
+    reel long stays, however the vision model read it (it read a page's line about the song
+    as captions, a line more on one frame, a line less on the next), and each block of it
+    is its own text (split_blocks)."""
+    if stills is None or colour is None:
+        return found
+    width, height = size
+    settled: list[tuple[str, list[Sighting]]] = []
+    for role, g in found:
+        box = _group_box(g)
+        if _inside(box, picture) or role in ("handle", "source"):
+            settled.append((role, g))
+            continue
+        pixels = (max(0, math.floor((box[0] - 0.02) * width)),
+                  max(0, math.floor((box[1] - 0.01) * height)),
+                  min(width, math.ceil((box[2] + 0.02) * width)),
+                  min(height, math.ceil((box[3] + 0.01) * height)))  # fmt: skip
+        if role != "fixed" and layout.steady(stills, colour, pixels):
+            log.info("%s %r stays the same all reel: text that stays", role, g[0].text)
+            role = "fixed"
+        if role != "fixed":
+            settled.append((role, g))
+            continue
+        shown = max(g, key=lambda s: len(s.text))
+        parts = None
+        if ocr.available() and full_frames.get(shown.at) is not None:
+            parts = split_blocks(g, full_frames[shown.at], settings.models_dir)
+        if parts:
+            log.info("%r is %d blocks: %s", g[0].text, len(parts),
+                     " | ".join(repr(p[0].text) for p in parts))  # fmt: skip
+            settled += [("fixed", p) for p in parts]
+        else:
+            settled.append((role, g))
+    return settled
 
 
 def learn(
@@ -967,6 +1282,19 @@ def _learn(
         at: layout.frame_at(source.path, at, frame, settings.ffmpeg_bin)
         for at in {s.at for _, g in found for s in g}
     }
+    # Frames spread over the whole reel, for what stays on the padding: the page's text and
+    # branding, and the picture behind them.
+    stills = None
+    if padded and colour is not None:
+        taken = [
+            layout.frame_at(
+                source.path, info.duration * (i + 0.5) / BRAND_FRAMES, frame, settings.ffmpeg_bin
+            )
+            for i in range(BRAND_FRAMES)
+        ]
+        taken = [f for f in taken if f is not None]
+        stills = np.stack(taken) if len(taken) >= 3 else None
+        found = settle(found, stills, colour, picture, (width, height), full_frames, settings)
 
     def measured(g: list[Sighting]) -> list[Measured]:
         found = []
@@ -983,7 +1311,7 @@ def _learn(
     for role, g in found:
         if role != "fixed":
             continue
-        agreed = consensus(measured(g), fonts)
+        agreed = consensus(measured(g), fonts_for(g, fonts))
         if agreed is None:
             notes.append(f"Couldn't measure the text {quoted(g[0].text)}; add it by hand")
             continue
@@ -993,18 +1321,20 @@ def _learn(
     # A page's avatar, name and handle on the padding: cut out and kept as pictures.
     images: list[ImageBlock] = []
     branded: list[Box] = []
-    if padded and colour is not None:
+    marks: list[tuple[int, int, int, int]] = []
+    if stills is not None:
         progress("analyze", "looking for the page's branding")
-        stills = [
-            layout.frame_at(
-                source.path, info.duration * (i + 0.5) / BRAND_FRAMES, frame, settings.ffmpeg_bin
-            )
-            for i in range(BRAND_FRAMES)
-        ]
-        stills = [f for f in stills if f is not None]
         rows = [(m.top, m.bottom) for _, m, _ in blocks]
-        found_marks = layout.branding(np.stack(stills), colour, picture, rows) if stills else []
+        found_marks = layout.branding(stills, colour, picture, rows)
         for i, ((x0, y0, x1, y1), cut) in enumerate(found_marks):
+            mark = (x0 / width, y0 / height, x1 / width, y1 / height)
+            said = [g[0].text for role, g in found if _overlaps(_group_box(g), mark)]
+            if any(len(s.split()) >= SENTENCE for s in said):
+                # Words to read aren't a page's avatar or name: a picture of them would put
+                # this video's sentence on every reel.
+                notes.append(f"Left out {quoted(said[0])}: couldn't measure it as text")
+                continue
+            marks.append((x0, y0, x1, y1))
             kept = assets.keep(png_bytes(cut), f"branding-{i + 1}.png", settings.media_dir)
             images.append(ImageBlock(file=assets.preset_value(kept), x=x0, y=y0, width=x1 - x0))
             branded.append((x0 / width, y0 / height, x1 / width, y1 / height))
@@ -1021,12 +1351,26 @@ def _learn(
             "they were. Replace them under \u201cPictures on every video\u201d if they aren't yours"
         )
 
+    # A picture behind it all (a starry sky) rather than a flat colour.
+    backdrop_file = None
+    if stills is not None:
+        covered = [(0, m.top, width, m.bottom) for _, m, _ in blocks]
+        covered += marks
+        sky = layout.backdrop(stills, colour, picture, covered)
+        if sky is not None:
+            out = io.BytesIO()
+            Image.fromarray(sky, "RGB").save(out, "PNG", optimize=True)
+            kept = assets.keep(out.getvalue(), "background.png", settings.media_dir)
+            backdrop_file = assets.preset_value(kept)
+
     # Captions moved off a face can show up as a second group; the main one sets the style.
     caption_groups = sorted((g for role, g in found if role == "captions"), key=len, reverse=True)
     caption_samples = measured(caption_groups[0]) if caption_groups else []
     caption_texts = [s.text for g in caption_groups for s in g]
     caption_settings, caption_notes = (
-        caption_style(caption_samples[:4], fonts, frame, settings) if caption_samples else ({}, [])
+        caption_style(caption_samples[:4], fonts_for(caption_groups[0], fonts), frame, settings)
+        if caption_samples
+        else ({}, [])
     )
     notes += caption_notes
 
@@ -1036,9 +1380,16 @@ def _learn(
             llm, info.duration, scenes, transcript, [b.text for b, _, _ in blocks], caption_texts
         )
         changing = {i for i, (b, _, _) in enumerate(blocks) if per_video(llm, b.text)}
+        if changing:
+            progress("plan", "finding the words that change from video to video")
+        templates = {
+            i: shaped
+            for i in sorted(changing)
+            if (shaped := template(llm, blocks[i][2], source.title, source.description))
+        }
     singing = described is not None and described.content == "singing"
 
-    instrument_free = False
+    instrument_free, vocals = False, None
     if singing and info.has_audio:
         vocals, instrument_free = isolate_vocals(original, work_dir, router, progress)
         if len(transcript.words) < SPARSE_WORDS * info.duration / 60 and not instrument_free:
@@ -1064,24 +1415,43 @@ def _learn(
     updates: dict = {}
 
     framing, note = framing_for(colour if padded else None, picture, blurred, blocks, height)
+    if backdrop_file:
+        framing.background_image = backdrop_file
+        note += ", with the picture behind it taken from the reel (under Background picture)"
     updates["framing"] = framing
     notes.append(note)
 
     # Text that stays.
     text_blocks = []
     font_folder = settings.models_dir / "fonts"
-    for i, (block, _, read) in enumerate(blocks):
-        block = with_symbols(block, read, settings.fonts_dir, font_folder)
+    for i, (block, measured_block, read) in enumerate(blocks):
+        shaped = templates.get(i)
+        if shaped is not None:
+            update: dict = {"text": shaped.template}
+            if "{headline}" in shaped.template:
+                # Wrapped to the width the reel's own sentence took.
+                widest = max(b[3] - b[2] for b in measured_block.boxes)
+                update["max_width"] = min(width - 2 * EDGE_MARGIN, max(400, widest + 40))
+                updates["headline"] = headline_for(shaped)
+            block = block.model_copy(update=update)
+        else:
+            block = with_symbols(block, read, settings.fonts_dir, font_folder)
         text_blocks.append(block)
         where = f"{block.offset} px from the {block.anchor}"
         notes.append(
             f"Text on every video: {quoted(block.text)} ({block.font} {block.size}, {block.color}, "
             f"{where})"
         )
-        if i in changing:
+        if shaped is not None:
+            notes.append(
+                f"{quoted(read)} is about this one video, so each reel gets its own: "
+                + ", ".join(PLACEHOLDER_NOTES[p] for p in dict.fromkeys(
+                    PLACEHOLDER.findall(shaped.template)))
+            )  # fmt: skip
+        elif i in changing:
             notes.append(f"{quoted(block.text)} looks like it changes from video to video: edit it")
         dropped = "".join(dict.fromkeys(c for c in read if c not in block.text and not c.isspace()))
-        if dropped:
+        if dropped and shaped is None:
             notes.append(f"Left out {dropped}: no font at hand draws it")
     updates["text_blocks"] = text_blocks
     if images:
@@ -1093,7 +1463,7 @@ def _learn(
         elif role == "handle":
             notes.append(f"Left out {quoted(g[0].text)}: a username or watermark (blurred anyway)")
         elif role == "title" and "title_overlay" not in updates:
-            agreed = consensus(measured(g), fonts)
+            agreed = consensus(measured(g), fonts_for(g, fonts))
             if agreed:
                 updates["title_overlay"] = title_overlay(*agreed, colour, height)
                 updates["hook"] = Hook(overlay=True)
@@ -1104,9 +1474,27 @@ def _learn(
 
     # Captions.
     if caption_settings:
-        mode, language = caption_mode(
-            caption_texts, transcript, singing, described.caption_language if described else ""
-        )
+        written_in = described.caption_language if described else ""
+        heard = transcript
+        code = code_of(written_in) if written_in else None
+        if code and info.has_audio and heard_share(caption_texts, transcript) < 0.5:
+            # Whisper took the song for one in another language (a Spanish song heard as
+            # Italian), or hardly heard it: told the captions' language, it hears the words
+            # they show.
+            progress("transcribe", f"listening again, for {LANGUAGES.get(code, code)}")
+            kind, sound = ("vocals", vocals) if singing and vocals else ("original", original)
+            told = Transcript.model_validate(
+                cached(
+                    transcript_file(work_dir, kind, router, code),
+                    lambda: router.transcribe(sound, code).model_dump(),
+                )
+            )
+            if heard_share(caption_texts, told) > heard_share(caption_texts, transcript):
+                heard = told
+        mode, language = caption_mode(caption_texts, heard, singing, written_in, info.duration)
+        if mode in ("lyrics", "speech") and code:
+            updates["audio"] = updates.get("audio", Audio()).model_copy(update={"language": code})
+            notes.append(f"Language sung or said: {LANGUAGES.get(code, code)}")
         caption_settings.update(mode=mode, language=language)
         captions = CaptionStyle(**caption_settings)
         updates["captions"] = captions
@@ -1122,7 +1510,9 @@ def _learn(
 
     # Sound.
     if singing and instrument_free:
-        updates["audio"] = Audio(source="vocals", highpass_hz=60, fade_in=0.02, fade_out=0.4)
+        updates["audio"] = updates.get("audio", Audio()).model_copy(
+            update={"source": "vocals", "highpass_hz": 60, "fade_in": 0.02, "fade_out": 0.4}
+        )
         updates["silence"] = Silence(threshold_db=-40, min_duration=0.35)
         notes.append("Sound: singing with no instruments, so the vocals get isolated")
     elif info.has_audio:
@@ -1149,7 +1539,7 @@ def _learn(
         "add those yourself if the reel had them"
     )
     preset = Preset.model_validate({**preset.model_dump(), **_dumped(updates)})
-    return Draft(preset, notes)
+    return Draft(preset, list(dict.fromkeys(notes)))
 
 
 def framing_for(

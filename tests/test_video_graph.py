@@ -248,3 +248,13 @@ def test_band_windows_move_at_once_on_a_cut_and_ease_inside_a_shot():
     expression = band_rows_expression(shots, 10)
     assert expression.startswith("300+200*gte(t,4.000)-80*")
     assert "clip((t-7.600)/0.8,0,1)" in expression
+
+
+def test_a_background_picture_shows_through_the_padding():
+    edl = EDL(clips=[Clip(start=0, end=5)], crop_mode="none")
+    graph, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers(background_image=1))
+    assert "format=rgba" in graph and "color=0x000000@0" in graph
+    assert "[1:v]setsar=1,format=rgba[backdrop]" in graph
+    assert "[backdrop][base]overlay=0:0:shortest=1[backed]" in graph
+    plain, _ = build_graph(edl, VERTICAL, (1920, 1080), Layers())
+    assert "backdrop" not in plain and "@0" not in plain
