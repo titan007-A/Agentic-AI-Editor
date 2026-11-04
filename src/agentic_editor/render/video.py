@@ -34,6 +34,7 @@ class Layers:
     line_overlay: int | None = None
     line_duration: float = 0.0  # 0 keeps it up for the whole reel
     logo: int | None = None
+    own_mark: int | None = None  # the preset's own watermark, a frame-sized still
     captions: Path | None = None
     fonts_dir: Path | None = None
     crop_commands: dict[int, Path] = field(default_factory=dict)
@@ -497,5 +498,7 @@ def build_graph(
         )
         parts.append(f"[{current}][logo]overlay={x}:{y}[branded]")
         current = "branded"
+    if layers.own_mark is not None:
+        overlay(layers.own_mark, "marked")
     step("format=yuv420p", "out")
     return ";".join(parts), current

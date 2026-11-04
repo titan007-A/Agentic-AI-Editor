@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from agentic_editor import subtitles
 from agentic_editor.edl import Cue
 from agentic_editor.presets import Preset
-from agentic_editor.render import compose, text
+from agentic_editor.render import compose, mark, text
 from agentic_editor.render.video import picture_rect
 from agentic_editor.settings import Settings
 
@@ -323,6 +323,7 @@ def render_checked(
 
     if preset.logo.file and not _logo(image, preset):
         notes.append("The logo file isn't there or isn't a picture; upload it again.")
+    notes += _watermark(image, preset, settings)
 
     out = io.BytesIO()
     image.save(out, "JPEG", quality=82)
@@ -357,3 +358,38 @@ def _logo(image: Image.Image, preset: Preset) -> bool:
     y = logo.margin if logo.position.startswith("top") else image.height - mark.height - logo.margin
     image.paste(mark, (x, y), mark)
     return True
+
+
+def _watermark(image: Image.Image, preset: Preset, settings: Settings) -> list[str]:
+    """The preset's own watermark pasted from the very PNG a render lays over the video,
+    and what to check about it."""
+    own = preset.watermark
+    if not own.enabled:
+        return []
+    if not own.text.strip() and not own.file:
+        return ["The watermark is on but has no words or picture; give it one."]
+    notes = []
+    picture = None
+    if own.file:
+        try:
+            picture = compose.asset_path(own.file)
+            with Image.open(picture):
+                pass
+        except (OSError, ValueError):
+            notes.append("The watermark picture isn't there or isn't a picture; upload it.")
+            picture = None
+            if not own.text.strip():
+                return notes
+    with tempfile.TemporaryDirectory() as folder:
+        png, where = mark.layer(own, preset.size, settings.fonts_dir, picture,
+                                Path(folder) / "watermark.png")  # fmt: skip
+        _lay(image, png)
+    w, h = where[2] - where[0], where[3] - where[1]
+    if w > preset.size[0] or h > preset.size[1]:
+        notes.append("The watermark is bigger than the frame; make it smaller.")
+    elif preset.platform == "instagram_reels" and mark.under_instagram(where, preset.size):
+        notes.append(
+            "The watermark sits where Instagram draws its buttons or caption over a reel; "
+            "move it up or left to keep it seen."
+        )
+    return notes

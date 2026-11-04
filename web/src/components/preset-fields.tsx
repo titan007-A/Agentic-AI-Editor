@@ -709,3 +709,203 @@ export function ImageBlocks({
     </div>
   );
 }
+
+const WATERMARK_FIELDS: Field[] = [
+  { path: "enabled", label: "Show my watermark", kind: "switch" },
+  { path: "text", label: "Words (like @yourpage)", kind: "text" },
+  { path: "file", label: "Picture (a logo; above the words)", kind: "file", accept: "image" },
+  { path: "font", label: "Font", kind: "font" },
+  { path: "size", label: "Text size", kind: "number" },
+  { path: "color", label: "Text color", kind: "color" },
+  { path: "outline", label: "Outline width", kind: "number", step: 0.5 },
+  { path: "outline_color", label: "Outline color", kind: "color" },
+  { path: "width", label: "Picture width (px)", kind: "number" },
+  { path: "opacity", label: "Opacity (0.05 to 1)", kind: "number", step: 0.05 },
+];
+// Where Instagram draws over a reel (render/mark.py): its buttons down the right from 45%
+// of the height, and its name and caption along the bottom fifth.
+const UI_RIGHT = 0.15;
+const UI_BOTTOM = 0.2;
+const BUTTONS_FROM = 0.45;
+const SPOTS: [number, number, string][] = [
+  [0, 0, "top left"],
+  [0.5, 0, "top middle"],
+  [1, 0, "top right"],
+  [0, 0.5, "middle left"],
+  [0.5, 0.5, "middle"],
+  [1, 0.5, "middle right"],
+  [0, 1, "bottom left"],
+  [0.5, 1, "bottom middle"],
+  [1, 1, "bottom right"],
+];
+
+const share = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 100) / 100;
+
+/** Where the watermark goes, by dragging a stand-in for it over the frame (or tapping, or
+ * the arrow keys). x and y are shares of the room beside the mark, as a render reads them:
+ * 0 flush with the left or top edge, 1 with the right or bottom. The preview shows the
+ * real mark there. */
+export function PositionPad({
+  x,
+  y,
+  resolution,
+  instagram,
+  onChange,
+}: {
+  x: number;
+  y: number;
+  resolution: string;
+  instagram: boolean;
+  onChange: (x: number, y: number) => void;
+}) {
+  const pad = useRef<HTMLDivElement>(null);
+  const [w, h] = resolution.split("x").map(Number);
+  const aspect = w > 0 && h > 0 ? `${w} / ${h}` : "9 / 16";
+
+  function at(clientX: number, clientY: number) {
+    const box = pad.current?.getBoundingClientRect();
+    if (!box) return;
+    onChange(share((clientX - box.left) / box.width), share((clientY - box.top) / box.height));
+  }
+
+  function key(e: React.KeyboardEvent) {
+    const step = e.shiftKey ? 0.1 : 0.01;
+    const moves: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, -step],
+      ArrowDown: [0, step],
+    };
+    const move = moves[e.key];
+    if (!move) return;
+    e.preventDefault();
+    onChange(share(x + move[0]), share(y + move[1]));
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start gap-4">
+        <div
+          ref={pad}
+          role="group"
+          tabIndex={0}
+          aria-label={`Watermark position: ${Math.round(x * 100)}% across, ${Math.round(
+            y * 100,
+          )}% down. Drag, tap, or use the arrow keys (Shift for bigger steps).`}
+          className="relative w-[150px] shrink-0 cursor-crosshair touch-none overflow-hidden rounded-md border-[1.5px] border-foreground bg-[#1f2937] focus-visible:ring-2 focus-visible:ring-[#1f5f63]"
+          style={{ aspectRatio: aspect }}
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            at(e.clientX, e.clientY);
+          }}
+          onPointerMove={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) at(e.clientX, e.clientY);
+          }}
+          onKeyDown={key}
+        >
+          {instagram && (
+            <>
+              <div
+                className="absolute right-0 bg-[#c2410c]/35"
+                style={{ top: `${BUTTONS_FROM * 100}%`, width: `${UI_RIGHT * 100}%`, bottom: 0 }}
+              />
+              <div
+                className="absolute inset-x-0 bottom-0 bg-[#c2410c]/35"
+                style={{ height: `${UI_BOTTOM * 100}%` }}
+              />
+            </>
+          )}
+          <div
+            className="pointer-events-none absolute h-[8%] w-[45%] rounded-sm border-2 border-white bg-white/40"
+            style={{
+              left: `${x * 100}%`,
+              top: `${y * 100}%`,
+              transform: `translate(-${x * 100}%, -${y * 100}%)`,
+            }}
+          />
+        </div>
+        <div className="space-y-2">
+          <div className="grid w-fit grid-cols-3 gap-1">
+            {SPOTS.map(([sx, sy, name]) => (
+              <button
+                key={name}
+                type="button"
+                aria-label={`Put it ${name}`}
+                aria-pressed={x === sx && y === sy}
+                onClick={() => onChange(sx, sy)}
+                className={`size-11 rounded-md border ${
+                  x === sx && y === sy ? "border-[#1f5f63] bg-[#1f5f63]" : "bg-background"
+                }`}
+              />
+            ))}
+          </div>
+          {instagram && (
+            <p className="max-w-[220px] text-xs text-muted-foreground">
+              Shaded: where Instagram draws its buttons and caption over a reel.
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        {(
+          [
+            ["x", "Across (%)", x],
+            ["y", "Down (%)", y],
+          ] as const
+        ).map(([axis, label, value]) => (
+          <div key={axis} className="space-y-2">
+            <Label htmlFor={`watermark-${axis}`}>{label}</Label>
+            <Input
+              id={`watermark-${axis}`}
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={100}
+              value={Math.round(value * 100)}
+              onChange={(e) => {
+                const v = share(Number(e.target.value) / 100);
+                onChange(axis === "x" ? v : x, axis === "y" ? v : y);
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The preset's own watermark: set here by hand, never learned from a reel. */
+export function WatermarkFields({
+  preset,
+  fonts,
+  onChange,
+}: {
+  preset: Preset;
+  fonts: string[];
+  onChange: (preset: Preset) => void;
+}) {
+  const mark: Obj = preset.watermark ?? {};
+  const set = (next: Obj) => onChange({ ...preset, watermark: { ...mark, ...next } });
+  return (
+    <div className="space-y-5">
+      <FieldGrid
+        prefix="watermark"
+        fields={WATERMARK_FIELDS}
+        values={mark}
+        fonts={fonts}
+        nullable={(path) => path === "file"}
+        onChange={(path, value) => onChange({ ...preset, watermark: setPath(mark, path, value) })}
+      />
+      <div className="space-y-2">
+        <p className="text-sm font-medium">Position</p>
+        <PositionPad
+          x={typeof mark.x === "number" ? mark.x : 0.5}
+          y={typeof mark.y === "number" ? mark.y : 0.75}
+          resolution={preset.resolution ?? "1080x1920"}
+          instagram={preset.platform === "instagram_reels"}
+          onChange={(x, y) => set({ x, y })}
+        />
+      </div>
+    </div>
+  );
+}

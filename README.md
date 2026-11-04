@@ -242,6 +242,16 @@ the preview says what looks wrong ("things to check"): text too long for its wid
 squeezed for room, text over the video or over other text, pictures off the frame or over
 text, files missing.
 
+"Your watermark" puts your own mark on every video: words ("@yourpage"), a picture (a
+logo, drawn above the words), or both, at the size, colour, outline and opacity you set.
+Its place is set by dragging it on a small frame, tapping one of nine spots, the arrow
+keys, or typing how far across and down it sits (0% flush with the left or top edge,
+100% with the right or bottom; it never runs off the frame). For Instagram reels the
+frame shades where Instagram draws its buttons and caption, and the preview warns when
+the mark sits there. The mark is drawn once into a transparent frame-sized picture that
+the render lays over every frame and the preview pastes, so it lands on the same pixels
+in both. It is set by hand only: learning a style never sets it.
+
 "Pictures on every video" places any picture (a page's avatar and name, a badge) at a
 position and width in frame pixels. With text on one side of the video only, the video
 keeps to that text at the gap set, instead of sitting in the middle of the space left.
@@ -420,6 +430,7 @@ render behaves:
 | `silence` | what counts as silence when trimming a quiet start or end |
 | `beat_sync` | start and end on the beat (bar lines from the original mix), and an optional zoom pulse on each bar or beat |
 | `hook` | `optimize` lets the editor choose where the reel starts: the strongest opening line (the planning model reads them for speech; the strongest entrance wins for music), and the strongest stretch when the plan runs long. Off, the planned opening stays and a long plan is cut from the end; `variants` makes up to five versions per video from different strong segments, saved as `preset-b.mp4` and so on |
+| `watermark` | your own mark (words, a picture or both) with `x` and `y` as shares of the room beside it (0 left/top, 1 right/bottom), `opacity`, `size`, `width`; off until `enabled`. Not the same as `watermarks`, which blurs marks burnt into the source |
 | `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 
@@ -523,7 +534,7 @@ the video `{headline}`, written for the next videos like the reel's own (its hin
 it). The planning model makes the template and it is kept only if, filled back with what
 it says each word stood for, it gives the text read; otherwise the text is flagged so you
 can edit it ("Day 28"). Words to read (six or more) are never cut out as branding.
-Logos, music beds, intros and outros are not learned.
+Logos, your watermark, music beds, intros and outros are not learned.
 
 The quickest way to make one by hand is to duplicate an existing preset on the web app's
 Presets page and edit it there; the server validates every save. Editing the YAML by

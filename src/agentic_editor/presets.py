@@ -155,6 +155,26 @@ class Logo(Strict):
     margin: int = Field(default=48, ge=0)
 
 
+class OwnWatermark(Strict):
+    """Your own mark on every video, such as the page's name ("@oldsongs") or its logo, or
+    both (the picture above the words), where you put it. Set by hand: the style learner
+    never writes it. x and y are shares of the room beside the mark: 0 is flush with the
+    left (top) edge, 1 with the right (bottom), 0.5 the middle."""
+
+    enabled: bool = False
+    text: str = Field(default="", max_length=80)
+    file: str | None = Field(default=None, description="a picture in the assets")
+    font: FontName = "Montserrat-Bold"
+    size: int = Field(default=42, ge=8, le=400)
+    color: Color = "#FFFFFF"
+    outline: float = Field(default=2.0, ge=0, le=20)
+    outline_color: Color = "#000000"
+    width: int = Field(default=180, ge=8, le=4096, description="the picture's, in px")
+    opacity: float = Field(default=0.6, ge=0.05, le=1)
+    x: float = Field(default=0.5, ge=0, le=1)
+    y: float = Field(default=0.75, ge=0, le=1)
+
+
 class Music(Strict):
     file: str | None = None
     volume_db: float = Field(default=-20, ge=-60, le=0)
@@ -266,6 +286,7 @@ class Preset(Strict):
     headline: Headline = Headline()
     post_caption: PostCaption = PostCaption()
     logo: Logo = Logo()
+    watermark: OwnWatermark = OwnWatermark()
     intro: str | None = None
     outro: str | None = None
     music: Music = Music()

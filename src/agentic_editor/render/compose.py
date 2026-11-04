@@ -18,6 +18,7 @@ from agentic_editor.edl import EDL, Clip, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, text
+from agentic_editor.render.mark import layer as watermark_layer
 from agentic_editor.render.video import (
     Anchor,
     Layers,
@@ -716,6 +717,14 @@ def render(
 
     if preset.logo.file:
         layers.logo = add_input(asset_path(preset.logo.file))
+    own = preset.watermark
+    if own.enabled and (own.text.strip() or own.file):
+        # The same PNG the preset preview pastes, so the mark lands where it showed.
+        picture = asset_path(own.file) if own.file else None
+        png, _ = watermark_layer(
+            own, frame, settings.fonts_dir, picture, work_dir / "watermark.png"
+        )
+        layers.own_mark = add_input(png)
 
     audio_index = add_input(soundtrack)
     graph, out = build_graph(edl, preset, source, layers)
