@@ -162,3 +162,22 @@ def test_a_word_wider_than_the_frame_does_not_stop_the_captions():
     out = fit_lines([cue], lambda line: 40.0 * len(line), max_width=950)
     assert " ".join(c.text.replace("\n", " ") for c in out) == cue.text
     assert out[0].start == 0 and out[-1].end == 2
+
+
+def test_a_one_liner_that_copies_the_guidance_s_example_is_written_again():
+    example = "Una demostración en primera persona muestra el manejo de un rifle equipado"
+
+    class Copier:
+        def __init__(self):
+            self.prompts = []
+
+        def chat_json(self, messages, schema, images=None, temperature=0.0):
+            self.prompts.append(messages[0]["content"])
+            if len(self.prompts) == 1:
+                return {"line": example}
+            return {"line": "Marines suben a un buque de guerra en el puerto"}
+
+    model = Copier()
+    line = one_line(model, ["a.jpg"], 12, f'Like "{example}"', "", None, "Spanish")
+    assert line == "Marines suben a un buque de guerra en el puerto"
+    assert len(model.prompts) == 2 and "don't copy" in model.prompts[1]

@@ -972,7 +972,6 @@ def language_of(llm: OllamaClient, text: str) -> str:
 def one_liner_from(block: TextBlock, read: str, language: str) -> OneLiner:
     """The one-liner that writes, for each video, words like `read` where `block` has them."""
     words = len(read.split())
-    sample = " ".join(read.split())[:300]
     return OneLiner(
         enabled=True,
         font=block.font,
@@ -982,11 +981,11 @@ def one_liner_from(block: TextBlock, read: str, language: str) -> OneLiner:
         position=block.anchor,
         offset=block.offset,
         max_words=min(20, max(2, words)),
-        # The example's way and length, never its words: a model given the sentence alone
+        # What it does, never the reel's own words: a model shown that video's sentence
         # copies it onto every video.
         hint=(
-            "Say what this video itself shows, in the way and about the length of this line "
-            f'written for another video (don\'t reuse its words): "{sample}"'
+            "One sentence saying what this video shows (what happens, who, with what), "
+            "the way a page describes each of its clips"
         ),
         language=language or None,
     )

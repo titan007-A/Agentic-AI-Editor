@@ -348,7 +348,8 @@ def test_words_about_one_video_with_nothing_to_fill_become_its_one_liner():
     assert line.enabled and line.position == "top" and line.offset == 372
     assert (line.font, line.size, line.color, line.box_color) == ("Montserrat-Bold", 26,
                                                                   "#FFFFFF", None)  # fmt: skip
-    assert line.max_words == 18 and line.language == "es" and read[:40] in line.hint
+    assert line.max_words == 18 and line.language == "es"
+    assert "rifle" not in line.hint  # the reel's words aren't handed on to be copied
 
     class Says:
         def __init__(self, code):
