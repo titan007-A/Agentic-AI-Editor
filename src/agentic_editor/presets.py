@@ -69,8 +69,11 @@ class OneLiner(Strict):
     duration: float | None = Field(default=None, gt=0, description="seconds; None for all")
     max_words: int = Field(default=10, ge=2, le=20)
     hint: str = Field(default="", description="what the line should be about or sound like")
-    # Stays where it is put even over faces, rather than moving to the frame's other end.
+    # Stays where it is put even over faces, rather than moving a little nearer its edge.
     fixed: bool = False
+    # What it is written in: a name ("Spanish") or two letters ("es"); unset, the captions'
+    # language when they are translated, else whatever the model writes.
+    language: str | None = Field(default=None, max_length=40)
 
 
 class TextBlock(Strict):

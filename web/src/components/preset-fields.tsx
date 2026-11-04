@@ -43,6 +43,7 @@ const NULLABLE = new Set([
   "captions.language",
   "one_liner.box_color",
   "one_liner.duration",
+  "one_liner.language",
   "grade.lut",
   "audio.language",
   "framing.background_image",
@@ -225,6 +226,11 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "one_liner.offset", label: "Offset from edge (px)", kind: "number" },
       { path: "one_liner.duration", label: "Seconds on screen (empty: all)", kind: "number" },
       { path: "one_liner.max_words", label: "Max words", kind: "number" },
+      {
+        path: "one_liner.language",
+        label: "Language (like Spanish or es; empty: the model picks)",
+        kind: "text",
+      },
     ],
   },
   {

@@ -24,6 +24,26 @@ const SHAPES: { value: PreviewShape; label: string }[] = [
 // on every letter.
 const SETTLE_MS = 350;
 const HIDDEN_KEY = "preset-preview-hidden";
+const SHAPE_KEY = "preset-preview-shape";
+
+/** The video shape a preset is drawn on first: the one last picked for it, else its own
+ * frame's (a 9:16 preset is mostly given 9:16 reels, and a reel's shape decides how it
+ * is cut between the text), so the preview starts as the render will look. */
+function startShape(preset: Preset): PreviewShape {
+  try {
+    const kept = window.localStorage.getItem(`${SHAPE_KEY}:${preset.name}`);
+    if (SHAPES.some((s) => s.value === kept)) return kept as PreviewShape;
+  } catch {}
+  const [w, h] = String(preset.resolution ?? "")
+    .split("x")
+    .map(Number);
+  if (!(w > 0 && h > 0)) return "9:16";
+  const own = SHAPES.map((s) => {
+    const [a, b] = s.value.split(":").map(Number);
+    return { value: s.value, off: Math.abs(Math.log(a / b / (w / h))) };
+  }).sort((x, y) => x.off - y.off)[0];
+  return own.value;
+}
 
 function frameAspect(resolution: string): string {
   const [w, h] = resolution.split("x").map(Number);
@@ -32,7 +52,19 @@ function frameAspect(resolution: string): string {
 
 /** A small phone-like screen that keeps showing what the preset being edited makes. */
 export function PresetPreview({ preset }: { preset: Preset }) {
-  const [shape, setShape] = useState<PreviewShape>("16:9");
+  const [shape, setShapeNow] = useState<PreviewShape>(() => startShape(preset));
+  // Another preset opened: drawn on its own shape (what was last picked for it).
+  const [shapeFor, setShapeFor] = useState(preset.name);
+  if (shapeFor !== preset.name) {
+    setShapeFor(preset.name);
+    setShapeNow(startShape(preset));
+  }
+  function setShape(next: PreviewShape) {
+    setShapeNow(next);
+    try {
+      window.localStorage.setItem(`${SHAPE_KEY}:${preset.name}`, next);
+    } catch {}
+  }
   const [url, setUrl] = useState<string | null>(null);
   // What the still on screen was drawn for; it's out of date while that isn't `key`.
   const [drawnFor, setDrawnFor] = useState<string | null>(null);

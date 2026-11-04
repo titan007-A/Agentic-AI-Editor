@@ -38,7 +38,7 @@ SAMPLES = {
 FIELD = re.compile(r"\{(\w+)\}")
 CAPTION = "this is how captions look on the video"
 # As long as a one-liner can be (its max_words): the preview shows its longest case.
-LINE = "A one-liner the model writes about what happens in the video, as long as allowed"
+LINE = compose.LONGEST_LINE
 TITLE = "The video's title"
 
 

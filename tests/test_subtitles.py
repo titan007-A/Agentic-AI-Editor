@@ -76,10 +76,19 @@ def test_the_one_liner_is_cut_to_its_word_limit():
     assert "about the singer" in model.prompts[0] and "we sang all night" in model.prompts[0]
 
 
-def test_one_liner_moves_to_the_other_end_when_faces_are_under_it():
-    faces_at_top = [(t, [(250.0, 420.0)]) for t in range(10)]
-    assert banner_top("top", 260, 90, 1920, faces_at_top) == 1920 - 260 - 90
+def test_a_one_liner_never_goes_to_the_other_end_only_a_little_nearer_its_own():
+    from agentic_editor.subtitles import overlap
+
+    faces = [(t, [(330.0, 500.0)]) for t in range(10)]
+    top = banner_top("top", 260, 90, 1920, faces)
+    assert 150 <= top < 260 and overlap((top, top + 90), [(330.0, 500.0)]) == 0
     assert banner_top("top", 260, 90, 1920, []) == 260
+    # faces it can't get clear of by a small move: it stays where it is put, at the top
+    everywhere = [(t, [(0.0, 900.0)]) for t in range(10)]
+    assert banner_top("top", 260, 90, 1920, everywhere) == 260
+    bottom = banner_top("bottom", 400, 90, 1920, [(t, [(1300.0, 1450.0)]) for t in range(10)])
+    assert bottom > 1920 - 400 - 90 and bottom + 90 <= 1920 - 330  # down a little, not up
+    assert banner_top("bottom", 400, 90, 1920, everywhere) == 1920 - 400 - 90
 
 
 def test_long_lines_wrap_into_two_and_split_into_timed_captions():
@@ -97,9 +106,9 @@ def test_a_banner_never_covers_one_already_placed():
     faces_at_top = [(t, [(250.0, 420.0)]) for t in range(10)]
     first = banner_top("top", 260, 90, 1920, faces_at_top)
     second = banner_top("top", 260, 90, 1920, faces_at_top, taken=[(first, first + 90)])
-    assert first == 1920 - 260 - 90
+    assert first == 260  # can't get clear by a small move: stays at the top
     assert second + 90 <= first or second >= first + 90
-    assert second + 90 <= 250 - 24 or second >= 420 + 24
+    assert second + 90 <= 960  # stacked beside it on its own half
 
 
 def test_speech_is_translated_a_sentence_at_a_time_and_keeps_its_timing():

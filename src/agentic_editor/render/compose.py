@@ -37,6 +37,11 @@ BANNER_GAP = 24  # px between a banner and anything else drawn on the frame
 # bottom ones; a banner moving off the picture doesn't go under them.
 SAFE_TOP = 150
 SAFE_BOTTOM = 330
+# As long as a one-liner can be (its max_words): the picture makes room for its longest.
+LONGEST_LINE = "A one-liner the model writes about what happens in the video, as long as allowed"
+# How far a banner may move nearer its own edge to keep off faces, in steps of NUDGE_STEP.
+NUDGE = 300
+NUDGE_STEP = 20
 SHRINK = 0.75  # the smallest share of its size a banner shrinks to, to keep off the picture
 LAYOUT_FRAMES = 24  # frames the picture's place in a padded layout is read from
 LAYOUT_WIDTH = 540  # px they are read at; half a 1080 frame, so edges land within 2 px
@@ -267,9 +272,33 @@ def picture_band(preset: Preset, face: Callable[..., text.Face]) -> tuple[int, i
             top = max(top, math.ceil(ink_bottom + gap))
         else:
             bottom = min(bottom, math.floor(ink_top - gap))
+    if (spot := line_rows(preset, face)) is not None:
+        # A one-liner up for the whole reel keeps its place: the picture makes way for it.
+        if preset.one_liner.position == "top":
+            top = max(top, math.ceil(spot[1] + BANNER_GAP))
+        else:
+            bottom = min(bottom, math.floor(spot[0] - BANNER_GAP))
     if (top, bottom) == (0, frame[1]) or bottom - top < frame[1] // 4:
         return None
     return math.ceil(top / 2) * 2, bottom // 2 * 2
+
+
+def line_rows(preset: Preset, face: Callable[..., text.Face]) -> tuple[float, float] | None:
+    """Rows the preset's one-liner takes at its longest (LONGEST_LINE cut to its words),
+    where it is set, when it is up for the whole reel; None otherwise."""
+    line = preset.one_liner
+    if not line.enabled or line.duration is not None:
+        return None
+    words = " ".join(LONGEST_LINE.split()[: line.max_words])
+    font = face(line.font, words)
+    wrapped = text.balance(words, font, line.size, preset.size[0] - 160)
+    above, below = text.banner_extent(wrapped, font, line.size, line.box_color, preset.size[0])
+    if line.position == "top":
+        # As off_picture measures it: from the offset, by the ink and box above and below.
+        return max(0.0, line.offset + above), line.offset + below
+    height = math.ceil(below - above)
+    start = min(max(preset.size[1] - line.offset - height, 0), max(0, preset.size[1] - height))
+    return start, start + height
 
 
 def picture_anchor(preset: Preset) -> Anchor:
@@ -282,6 +311,8 @@ def picture_anchor(preset: Preset) -> Anchor:
         b.anchor for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
         if gap is not None
     }  # fmt: skip
+    if preset.one_liner.enabled and preset.one_liner.duration is None:
+        sides.add(preset.one_liner.position)  # it holds its rows like a text block
     if sides == {"top"}:
         return "top"
     if sides == {"bottom"}:
@@ -419,16 +450,29 @@ def banner_top(
     until: float | None = None,
     taken: list[tuple[float, float]] = (),
 ) -> int:
-    """Top edge for a banner: its usual position if faces stay clear of it, else the other
-    end of the frame, else stacked beside a banner already there. `taken` are the bands of
-    banners placed before this one, which it must not cover."""
+    """Top edge for a banner: its usual position if faces stay clear of it, else a little
+    nearer its own edge of the frame (up for a top banner, down for a bottom one, at most
+    NUDGE px and not under Instagram's header or buttons), else stacked beside a banner
+    already there on its own half. It never goes to the frame's other end: a top banner
+    stays at the top, a bottom one at the bottom. `taken` are the bands of banners placed
+    before this one, which it must not cover."""
     gap = BANNER_GAP
-    near = offset if position == "top" else frame_height - offset - height
-    far = frame_height - offset - height if position == "top" else offset
-    options = [near, far]
+    top_end = position == "top"
+    near = offset if top_end else frame_height - offset - height
+    near = min(max(near, 0), max(0, frame_height - height))  # set past the frame: inside it
+    if top_end:
+        edge = max(0, min(near, SAFE_TOP), near - NUDGE)
+        options = [*range(near, edge - 1, -NUDGE_STEP), edge]
+    else:
+        edge = min(frame_height - height, max(near, frame_height - SAFE_BOTTOM - height),
+                   near + NUDGE)  # fmt: skip
+        options = [*range(near, edge + 1, NUDGE_STEP), edge]
+    half = frame_height / 2
     for top, bottom in taken:
-        options += [round(bottom + gap), round(top - gap - height)]
-    options = [o for o in options if 0 <= o <= frame_height - height]
+        for o in (round(bottom + gap), round(top - gap - height)):
+            if (o + height <= half) if top_end else (o >= half):
+                options.append(o)
+    options = list(dict.fromkeys(o for o in options if 0 <= o <= frame_height - height))
     if not options:
         options = [min(max(near, 0), max(0, frame_height - height))]
     seen = [bands for t, bands in rows if until is None or t <= until]
@@ -647,8 +691,8 @@ def render(
         taken = [(top, bottom) for _, _, top, bottom in obstacles]
         clear = [] if fixed else rows
         if picture_rows is not None:
-            # The picture counts like a face there all along: the other end of the frame is
-            # tried before a banner goes over it.
+            # The picture counts like a face there all along: the banner moves a little
+            # nearer its edge before it goes over it.
             clear = clear + [(t * 0.5, [picture_rows]) for t in range(int(until * 2) + 1)]
         top = banner_top(position, start, height, frame[1], clear, until, taken)
         obstacles.append((0.0, until, top, top + height))
@@ -694,7 +738,8 @@ def render(
         if any(not c.words for c in cues):
             cues = subtitles.fit_lines(cues, measure, room)
         scales = caption_scales(cues, measure, room, style.animation == "pop")
-        position = overrides.position or style.position
+        # The preset's place, not the planner's: top captions stay at the top.
+        position = style.position
         placements = None
         if style.avoid_faces and (rows or obstacles or picture_rows):
             blocked = rows + keep_clear(obstacles)

@@ -28,7 +28,9 @@ LINE_BREAK_PAUSE = 0.6  # a pause this long starts a new caption line
 LYRIC_BREAK = 0.8  # sung lines are longer and breathe less often
 LYRIC_WORDS = 8
 FACE_PAD = 24  # px kept clear around a face
-NEAR_EDGE = 220  # px from the frame edge for the fallback positions
+NEAR_EDGE = 220  # px from the frame edge a caption may move to, to keep off a face
+NUDGE = 300  # the most a caption moves nearer its edge for that
+NUDGE_STEP = 20
 SETTLE = 0.6  # a pause this long lets a moved caption go back to its usual place
 
 
@@ -340,22 +342,26 @@ def place(
     frame_height: int,
     faces: list[tuple[float, list[tuple[float, float]]]],
 ) -> list[Placement]:
-    """A position per cue that keeps it off every face on screen while it shows.
+    """A position per cue that keeps it off every face on screen while it shows, by moving
+    it no further than nearer its own edge of the frame.
 
     `faces` gives, at reel times, the rows each face (or other thing to keep clear)
     covers in the output frame. The preferred position wins whenever it is clear;
-    otherwise the clear position nearest to it. A caption that had to move stays where it
-    went, while that is clear, until the speaker pauses, so captions don't jump between
-    the top and bottom of the frame line by line."""
+    otherwise the clear position nearest to it at the same end. A caption that had to
+    move stays where it went, while that is clear, until the speaker pauses, so captions
+    don't jump about line by line."""
     first = Placement(_ALIGN[preferred], margin if preferred != "middle" else 0)
-    options = [
-        first,
-        Placement(2, margin),
-        Placement(2, NEAR_EDGE),
-        Placement(8, NEAR_EDGE),
-        Placement(8, margin),
-        Placement(5, 0),
-    ]
+    # Only nearer its own edge, never to the other end: top captions stay at the top,
+    # bottom ones at the bottom, middle ones in the middle.
+    options = [first]
+    if preferred != "middle":
+        nearest = min(margin, max(NEAR_EDGE, margin - NUDGE))
+        options += [
+            Placement(first.alignment, m)
+            for m in range(margin - NUDGE_STEP, nearest - 1, -NUDGE_STEP)
+        ]
+        options.append(Placement(first.alignment, nearest))
+    options = list(dict.fromkeys(options))
     chosen: list[Placement] = []
     for k, cue in enumerate(cues):
         covered = [

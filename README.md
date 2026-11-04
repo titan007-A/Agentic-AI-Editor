@@ -419,7 +419,7 @@ render behaves:
 | Section | Controls |
 | --- | --- |
 | `captions` | what they say (`speech`, `lyrics`, `translated` into `language`, or `visual`, written from the picture), font, size, colours, position, animation; kept off faces and off text already in the picture (name banners, titles) while it is on screen; lines break where they read well, never after a linking word like "the" or "de" when a better place is near, and each sentence starts a new line; on songs, presets that keep the original audio take their words from the isolated vocals when the full mix gives almost none; an .srt file is saved next to the video |
-| `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it |
+| `one_liner` | a single line the vision model writes about the video, burned in; `hint` steers it, `language` sets what it is written in |
 | `text_blocks` | fixed text drawn on every frame, such as a series tagline; `{song}` and `{artist}` come from a video named "Song - Artist" or, for a link, which can't be renamed, from notes lines `song: ...` and `artist: ...` (they also become the reel's title and the song its post caption is about), `{headline}` is written for each video (see `headline`), and any other word in braces is the preset's own, filled per reel from a notes line like `day: 103` for `{day}` (`{song_number}` from `song number: 5`); `{year}` can also come from the video's name, "Song (1980) - Artist", and otherwise from the post's caption (a line naming the song with its year) or MusicBrainz (the song's first release), so the job form doesn't need it |
 | `auto_name` | `true`: when neither the video's name nor the notes say the `{song}` and `{artist}`, they are recognised from its sound with Shazam (free, no key, through the unofficial `shazamio` library, so it can stop working). Shazam's notes about the take go, "(Live)", "(feat. ...)", "- Remastered 2011"; a bracket that doesn't say what it is stays only if MusicBrainz knows the song by the name with it, "(I Can't Get No) Satisfaction". Still nothing, and the job page asks for the song and artist and makes the reel with them |
 | `post_caption` | the post's caption (see below): `about` the `song` (from Wikipedia and Wikidata) or the `video` (from watching it, what is said, its post and Wikipedia); `enabled` writes it after every render, otherwise the video's card has a Write caption button; `language`, `style`, word range |
@@ -434,12 +434,25 @@ render behaves:
 | `title_overlay`, `logo`, `music`, `intro`, `outro` | optional extras |
 | `style_notes` | plain-language guidance the planner reads before choosing the edit |
 
-A picture shown whole (framing `none`) keeps the one-liner, title, hook and captions off
-it: a banner that runs long (the one-liner is written per video, so its length varies)
-is made smaller, down to three quarters of its size, then moved away from the picture,
-never under Instagram's header or buttons; captions take the clear place nearest theirs.
-The preset preview lays these out the same way, with the one-liner at its longest
-(`max_words`), and says when it had to shrink or move it.
+Text keeps its end of the frame. A top one-liner, title, hook or caption stays at the
+top and a bottom one at the bottom: to keep off a face or the picture it only moves a
+little nearer its own edge (at most 300 px, never under Instagram's header or buttons),
+and never to the other end. Captions keep the preset's place even when the planner
+would pick another. The video makes way instead: with framing `none`, a one-liner up
+for the whole reel holds its rows like a text block (at its longest, `max_words`), and
+the picture is cut or fitted between it and the other text. A banner that still runs
+long is made smaller, down to three quarters of its size, then moved toward its edge.
+The preset preview lays these out the same way and says when it had to shrink or move
+it. It starts on a video of the preset's own shape (9:16 for a 9:16 preset, as reels
+are), since the video's shape decides how it is cut; the shape you pick is kept per
+preset.
+
+The one-liner's `language` ("Spanish" or "es") says what it is written in; unset, it
+follows translated captions, else the model's choice. Learning a style turns words on
+the reel that are about that one video, a sentence long, with no song or year to fill
+in (a page's description of each clip), into the one-liner: its place, font, size,
+colour, length and language as the reel has them, written afresh for every video.
+Text is learned as text: a mark mostly covered by words is never cut out as a picture.
 
 Framing `smart` (the default) frames each shot so nothing that matters is cut. Heads
 come from the face detector; the vision model points out what else must stay whole (the

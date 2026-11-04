@@ -437,3 +437,21 @@ def test_auto_name_hears_the_song_once_for_every_preset(make_analysis, monkeypat
     assert [o.song for o in result.outputs] == [("Piano Man", "Billy Joel")] * 2
     assert len(heard) == 1
     assert result.failures[0].startswith("c: UnnamedSong: 'Talk' doesn't say the song")
+
+
+def test_the_one_liner_is_written_in_its_own_language():
+    from agentic_editor.pipeline import line_language
+    from agentic_editor.presets import CaptionStyle, OneLiner
+
+    base = Preset(name="p", label="p", min_duration=1, max_duration=60)
+    assert line_language(base) is None
+    spanish = base.model_copy(update={"one_liner": OneLiner(enabled=True, language="es")})
+    assert line_language(spanish) == "Spanish"
+    named = base.model_copy(update={"one_liner": OneLiner(enabled=True, language="Hindi")})
+    assert line_language(named) == "Hindi"
+    translated = base.model_copy(
+        update={"captions": CaptionStyle(mode="translated", language="Italian")}
+    )
+    assert line_language(translated) == "Italian"
+    both = translated.model_copy(update={"one_liner": spanish.one_liner})
+    assert line_language(both) == "Spanish"  # its own wins
