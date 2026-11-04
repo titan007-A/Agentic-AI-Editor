@@ -130,6 +130,18 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         kind: "number",
         step: 0.01,
       },
+      {
+        path: "framing.picture_x",
+        label: "Move video right (px; minus: left; video shown whole)",
+        kind: "number",
+        step: 10,
+      },
+      {
+        path: "framing.picture_y",
+        label: "Move video down (px; minus: up; stays between the text)",
+        kind: "number",
+        step: 10,
+      },
       { path: "framing.smoothing", label: "Tracking smoothing", kind: "number", step: 0.05 },
       { path: "framing.text_gap_above", label: "Gap above video (px)", kind: "number" },
       { path: "framing.text_gap_below", label: "Gap below video (px)", kind: "number" },

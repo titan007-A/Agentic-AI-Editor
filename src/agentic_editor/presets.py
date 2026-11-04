@@ -197,6 +197,11 @@ class Framing(Strict):
         description="share of the frame width the whole picture "
         "takes when it isn't cropped (mode none)",
     )
+    # Moves a picture shown whole (mode none) from where it goes, px right and down
+    # (negative: left and up); it never leaves the frame, nor the rows between the text
+    # above and below it, so the text stays where it is.
+    picture_x: int = Field(default=0, ge=-4000, le=4000)
+    picture_y: int = Field(default=0, ge=-4000, le=4000)
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     # Smart framing keeps where the picture moves too, not only faces and the vision
     # model's must-keep items: for footage whose point is an action (a fall, a trick).

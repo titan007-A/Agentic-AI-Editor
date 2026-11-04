@@ -25,6 +25,7 @@ from agentic_editor.render.video import (
     build_graph,
     crop_size,
     picture_rect,
+    picture_shift,
     video_band,
 )
 from agentic_editor.settings import ROOT, Settings, get_settings
@@ -540,7 +541,7 @@ def render(
             shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
         band = video_band(
             edl.crop_mode, shown_size, frame, preset.framing.picture_width, layers.picture_band,
-            layers.picture_anchor,
+            layers.picture_anchor, picture_shift(preset),
         )  # fmt: skip
         placed = [
             text.place(b, face(b.font, b.text), frame, band, gap)
@@ -565,7 +566,7 @@ def render(
             shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
         picture_rows = video_band(
             "none", shown_size, frame, preset.framing.picture_width, layers.picture_band,
-            layers.picture_anchor,
+            layers.picture_anchor, picture_shift(preset),
         )  # fmt: skip
 
     bars = layers.black_bars
@@ -575,6 +576,15 @@ def render(
         if faces or texts
         else []
     )
+    if rows and edl.crop_mode == "none" and any(picture_shift(preset)):
+        # Faces and burnt-in text move with the picture the preset moves.
+        shown_size = source
+        if edl.shots:
+            shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
+        args = (shown_size, frame, preset.framing.picture_width, layers.picture_band,
+                layers.picture_anchor)  # fmt: skip
+        moved = picture_rect(*args, picture_shift(preset))[1] - picture_rect(*args)[1]
+        rows = [(t, [(a + moved, b + moved) for a, b in spans]) for t, spans in rows]
 
     colour = preset.grade
     if colour.auto or preset.framing.auto_background:
@@ -598,7 +608,7 @@ def render(
             shown_size = (edl.shots[0].width, max(s.height or source[1] for s in edl.shots))
         rect = picture_rect(
             shown_size, frame, preset.framing.picture_width, layers.picture_band,
-            layers.picture_anchor,
+            layers.picture_anchor, picture_shift(preset),
         )  # fmt: skip
         fill = preset.framing.corner_color or layers.background or preset.framing.background
         corners = (rect, preset.framing.corner_radius, fill)
