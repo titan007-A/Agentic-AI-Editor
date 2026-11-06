@@ -10,6 +10,7 @@ import secrets
 import shutil
 import signal
 import threading
+import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -37,7 +38,7 @@ from agentic_editor import (
     research,
     songlist,
 )
-from agentic_editor.auth import LoginGuard
+from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -132,10 +133,15 @@ class ChooseRequest(BaseModel):
 class AccountRequest(BaseModel):
     username: str
     password: str
+    role: Literal["member", "admin"] = "member"
+    # The admin's own password, typed again to make another admin.
+    my_password: str = ""
 
 
 class PasswordRequest(BaseModel):
     password: str
+    # The admin's own password, typed again to change another admin's.
+    my_password: str = ""
 
 
 class AccountView(BaseModel):
@@ -1945,12 +1951,34 @@ def create_app(
             for a in rows
         ]
 
+    def confirm(me: Account, password: str, request: Request) -> None:
+        """Making an admin, or changing an admin's password, takes the admin's own password
+        typed again, so a session left open or stolen can't hand out the keys. Wrong ones
+        count with wrong logins from the same address and wait the same way."""
+        client = request.client.host if request.client else ""
+        wait = math.ceil(logins.wait(client))
+        if wait:
+            raise HTTPException(
+                429,
+                f"too many wrong passwords; try again in {wait} s",
+                headers={"Retry-After": str(wait)},
+            )
+        logins.failed(client)
+        if not password or not verify_password(password, me.password_hash):
+            time.sleep(FAILED_LOGIN_DELAY)
+            # 403, not 401: the session is fine, and a 401 sends the page to the login.
+            raise HTTPException(403, "that isn't your password; type your own to do this")
+        logins.succeeded(client)
+
     @app.post("/api/admin/users")
-    def create_account(body: AccountRequest, _: Admin, session: DB) -> AccountView:
-        # Only employees are made here: a stolen admin session can't make more admins.
+    def create_account(
+        body: AccountRequest, me: Admin, session: DB, request: Request
+    ) -> AccountView:
+        if body.role == accounts.ADMIN:
+            confirm(me, body.my_password, request)
         try:
             account = accounts.create(
-                session, body.username, body.password, accounts.MEMBER, settings.presets_dir
+                session, body.username, body.password, body.role, settings.presets_dir
             )
         except accounts.AccountError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -2006,8 +2034,12 @@ def create_app(
         return assigned(target, me)
 
     @app.post("/api/admin/users/{account_id}/password")
-    def reset_password(account_id: str, body: PasswordRequest, me: Admin, session: DB) -> dict:
+    def reset_password(
+        account_id: str, body: PasswordRequest, me: Admin, session: DB, request: Request
+    ) -> dict:
         target = find_account(account_id, session)
+        if target.role == accounts.ADMIN:
+            confirm(me, body.my_password, request)
         try:
             accounts.set_password(session, target, body.password)
         except accounts.AccountError as exc:
