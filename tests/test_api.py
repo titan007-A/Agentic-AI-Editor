@@ -648,13 +648,62 @@ def test_removing_an_employee_keeps_their_jobs_for_the_admin_unless_asked(env):
     assert env.client.get(f"/api/jobs/{gone}").status_code == 404
 
 
-def test_the_web_makes_only_employees_and_never_removes_an_admin(env):
+def test_the_web_makes_employees_unless_asked_and_never_removes_an_admin(env):
     me = env.client.get("/api/me").json()
     assert env.client.delete(f"/api/admin/users/{me['id']}").status_code == 422
     made = env.client.post("/api/admin/users", json={"username": "boss", "password": "12345678"})
     assert made.json()["role"] == "member"
     short = env.client.post("/api/admin/users", json={"username": "kid", "password": "short"})
     assert short.status_code == 422
+
+
+def test_an_admin_is_made_from_the_web_only_with_the_admins_own_password(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    ask = {"username": "arham", "password": "arham-pass-1", "role": "admin"}
+    assert env.client.post("/api/admin/users", json=ask).status_code == 403
+    wrong = env.client.post("/api/admin/users", json=ask | {"my_password": "nope"})
+    assert wrong.status_code == 403 and "your password" in wrong.json()["detail"]
+    assert "arham" not in [a["username"] for a in env.client.get("/api/admin/users").json()]
+    made = env.client.post("/api/admin/users", json=ask | {"my_password": PASSWORD})
+    assert made.status_code == 200 and made.json()["role"] == "admin"
+    # The new admin signs in, runs the People page, and shares the admin's presets.
+    arham = TestClient(env.client.app)
+    signed_in = arham.post("/api/login", json={"username": "arham", "password": "arham-pass-1"})
+    assert signed_in.status_code == 200
+    assert arham.get("/api/me").json()["role"] == "admin"
+    assert arham.get("/api/admin/users").status_code == 200
+    shared = {p["name"] for p in env.client.get("/api/presets").json()}
+    assert {p["name"] for p in arham.get("/api/presets").json()} == shared
+    # An employee can't make one, password or not.
+    _, riya = employee(env, presets=[])
+    sneaky = ask | {"username": "riya2", "my_password": "employee-pass-1"}
+    assert riya.post("/api/admin/users", json=sneaky).status_code == 403
+
+
+def test_wrong_passwords_for_making_an_admin_wait_like_wrong_logins(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    now = [1000.0]
+    env.client.app.state.logins.clock = lambda: now[0]
+    ask = {"username": "arham", "password": "arham-pass-1", "role": "admin", "my_password": "x"}
+    for _ in range(5):
+        assert env.client.post("/api/admin/users", json=ask).status_code == 403
+    right = ask | {"my_password": PASSWORD}
+    assert env.client.post("/api/admin/users", json=right).status_code == 429
+    now[0] += 31
+    assert env.client.post("/api/admin/users", json=right).status_code == 200
+
+
+def test_another_admins_password_changes_only_with_the_admins_own(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    ask = {"username": "arham", "password": "arham-pass-1", "role": "admin"}
+    other = env.client.post("/api/admin/users", json=ask | {"my_password": PASSWORD}).json()
+    url = f"/api/admin/users/{other['id']}/password"
+    assert env.client.post(url, json={"password": "taken-over-1"}).status_code == 403
+    changed = env.client.post(url, json={"password": "new-pass-11", "my_password": PASSWORD})
+    assert changed.status_code == 200
+    arham = TestClient(env.client.app)
+    signed_in = arham.post("/api/login", json={"username": "arham", "password": "new-pass-11"})
+    assert signed_in.status_code == 200
 
 
 def test_only_the_admin_watches_a_folder_on_the_computer(env, tmp_path):

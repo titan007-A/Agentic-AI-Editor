@@ -19,6 +19,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useMe } from "@/hooks/use-me";
 import { api, errorText, type Account, type Assigned } from "@/lib/api";
 
@@ -34,10 +41,14 @@ export default function PeoplePage() {
   const [people, setPeople] = useState<Account[] | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"member" | "admin">("member");
+  // The admin's own password, typed again to make an admin or change an admin's password.
+  const [myPassword, setMyPassword] = useState("");
   const [busy, setBusy] = useState(false);
   // The account a dialog is open for: a new password, or removing it.
   const [resetting, setResetting] = useState<Account | null>(null);
   const [newPassword, setNewPassword] = useState("");
+  const [resetMyPassword, setResetMyPassword] = useState("");
   const [removing, setRemoving] = useState<Account | null>(null);
   const [deleteWork, setDeleteWork] = useState(false);
   // Assigning presets to one employee: what they have now, and what is ticked.
@@ -68,10 +79,21 @@ export default function PeoplePage() {
     event.preventDefault();
     setBusy(true);
     try {
-      const made = await api.createAccount(username.trim().toLowerCase(), password);
-      toast.success(`${made.username} can log in now, with ${made.presets} presets of their own`);
+      const made = await api.createAccount(
+        username.trim().toLowerCase(),
+        password,
+        role,
+        role === "admin" ? myPassword : "",
+      );
+      toast.success(
+        made.role === "admin"
+          ? `${made.username} is an admin and can log in now`
+          : `${made.username} can log in now, with ${made.presets} presets of their own`,
+      );
       setUsername("");
       setPassword("");
+      setRole("member");
+      setMyPassword("");
       await load();
     } catch (err) {
       toast.error(errorText(err));
@@ -84,10 +106,15 @@ export default function PeoplePage() {
     if (!resetting) return;
     setBusy(true);
     try {
-      await api.resetPassword(resetting.id, newPassword);
+      await api.resetPassword(
+        resetting.id,
+        newPassword,
+        resetting.role === "admin" ? resetMyPassword : "",
+      );
       toast.success(`New password set; ${resetting.username} is logged out everywhere`);
       setResetting(null);
       setNewPassword("");
+      setResetMyPassword("");
     } catch (err) {
       toast.error(errorText(err));
     } finally {
@@ -169,10 +196,10 @@ export default function PeoplePage() {
 
       <Card className="tape">
         <CardHeader>
-          <CardTitle>Add an employee</CardTitle>
+          <CardTitle>Add a person</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={create} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <form onSubmit={create} className="grid gap-3 sm:grid-cols-2 sm:items-end">
             <div className="space-y-2">
               <Label htmlFor="new-username">Username</Label>
               <Input
@@ -196,17 +223,48 @@ export default function PeoplePage() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-role">Role</Label>
+              <Select value={role} onValueChange={(v) => setRole(v as "member" | "admin")}>
+                <SelectTrigger id="new-role" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="member">Employee</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {role === "admin" && (
+              <div className="space-y-2">
+                <Label htmlFor="my-password">Your password</Label>
+                <Input
+                  id="my-password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="to confirm it's you"
+                  value={myPassword}
+                  onChange={(e) => setMyPassword(e.target.value)}
+                />
+              </div>
+            )}
             <Button
               type="submit"
-              disabled={busy || username.trim().length < 3 || password.length < MIN_PASSWORD}
+              className="sm:col-span-2 sm:justify-self-start"
+              disabled={
+                busy ||
+                username.trim().length < 3 ||
+                password.length < MIN_PASSWORD ||
+                (role === "admin" && !myPassword)
+              }
             >
-              <UserPlus /> Add
+              <UserPlus /> Add {role === "admin" ? "admin" : "employee"}
             </Button>
           </form>
           <p className="mt-3 text-xs text-muted-foreground">
-            They start with no presets: tick the ones they should use with Assign presets on their
-            card below, or send one preset to several people from the Presets page. New accounts are
-            always employees: an admin is only made on the Mac (aiedit user add NAME --admin).
+            {role === "admin"
+              ? "An admin sees everyone's jobs, uses the same presets as you, and manages People, so type your own password to make one. Admins are removed only on the Mac (aiedit user remove NAME)."
+              : "They start with no presets: tick the ones they should use with Assign presets on their card below, or send one preset to several people from the Presets page."}
           </p>
         </CardContent>
       </Card>
@@ -228,6 +286,11 @@ export default function PeoplePage() {
                 {person.jobs} {person.jobs === 1 ? "job" : "jobs"} · {person.presets} presets · last
                 seen {seen(person.last_seen_at)}
               </p>
+              {person.role === "admin" && person.id !== me?.id && (
+                <Button variant="outline" onClick={() => setResetting(person)}>
+                  <KeyRound /> New password
+                </Button>
+              )}
               {person.role === "member" && (
                 <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={() => openAssign(person)}>
@@ -251,7 +314,15 @@ export default function PeoplePage() {
         ))}
       </div>
 
-      <Dialog open={resetting !== null} onOpenChange={(open) => !open && setResetting(null)}>
+      <Dialog
+        open={resetting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setResetting(null);
+            setResetMyPassword("");
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>New password for {resetting?.username}</DialogTitle>
@@ -270,8 +341,28 @@ export default function PeoplePage() {
               onChange={(e) => setNewPassword(e.target.value)}
             />
           </div>
+          {resetting?.role === "admin" && (
+            <div className="space-y-2">
+              <Label htmlFor="reset-my-password">Your password</Label>
+              <Input
+                id="reset-my-password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="to confirm it's you"
+                value={resetMyPassword}
+                onChange={(e) => setResetMyPassword(e.target.value)}
+              />
+            </div>
+          )}
           <DialogFooter>
-            <Button onClick={reset} disabled={busy || newPassword.length < MIN_PASSWORD}>
+            <Button
+              onClick={reset}
+              disabled={
+                busy ||
+                newPassword.length < MIN_PASSWORD ||
+                (resetting?.role === "admin" && !resetMyPassword)
+              }
+            >
               Set password
             </Button>
           </DialogFooter>

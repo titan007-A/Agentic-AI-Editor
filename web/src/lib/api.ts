@@ -568,10 +568,22 @@ export const api = {
     request<InstagramAccount>("POST", `/research/accounts/${id}/learn`),
   removeInstagramAccount: (id: string) => request("DELETE", `/research/accounts/${id}`),
   accounts: () => request<Account[]>("GET", "/admin/users"),
-  createAccount: (username: string, password: string) =>
-    request<Account>("POST", "/admin/users", { username, password }),
-  resetPassword: (id: string, password: string) =>
-    request("POST", `/admin/users/${id}/password`, { password }),
+  // An admin is only made with the admin's own password typed again (myPassword).
+  createAccount: (
+    username: string,
+    password: string,
+    role: "member" | "admin" = "member",
+    myPassword = "",
+  ) =>
+    request<Account>("POST", "/admin/users", {
+      username,
+      password,
+      role,
+      my_password: myPassword,
+    }),
+  // Another admin's password changes only with the admin's own (myPassword).
+  resetPassword: (id: string, password: string, myPassword = "") =>
+    request("POST", `/admin/users/${id}/password`, { password, my_password: myPassword }),
   assignedPresets: (id: string) => request<Assigned>("GET", `/admin/users/${id}/presets`),
   assignPresets: (id: string, names: string[], replace: boolean) =>
     request<Assigned>("PUT", `/admin/users/${id}/presets`, { names, replace }),
