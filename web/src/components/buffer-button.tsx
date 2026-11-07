@@ -1,9 +1,11 @@
 "use client";
 
 import { CalendarClock } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ChannelPicker, channelsOf, channelWarning } from "@/components/buffer-channels";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -25,7 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/hooks/use-me";
-import { api, errorText, type BufferMode, type BufferState, type Output } from "@/lib/api";
+import { api, errorText, type BufferMode, type Output, type OutputBuffer } from "@/lib/api";
 
 const MODES: { value: BufferMode; label: string }[] = [
   { value: "addToQueue", label: "Add to the queue" },
@@ -34,13 +36,17 @@ const MODES: { value: BufferMode; label: string }[] = [
   { value: "customScheduled", label: "At a time I pick" },
 ];
 
-/** Sends a finished reel to Buffer, with the signed-in account's own Buffer key. */
+const same = (a: string[], b: string[]) => a.length === b.length && a.every((id) => b.includes(id));
+
+/** Sends a finished reel to Buffer, to the accounts its preset is linked to on the Buffer
+ * page (the reel owner's keys and links, also when an admin posts it for them). */
 export function BufferButton({ output, title }: { output: Output; title: string }) {
   const me = useMe();
   const [open, setOpen] = useState(false);
-  const [state, setState] = useState<BufferState | null>(null);
-  const [key, setKey] = useState("");
+  const [data, setData] = useState<OutputBuffer | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [others, setOthers] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [text, setText] = useState("");
   const [comment, setComment] = useState("");
   const [mode, setMode] = useState<BufferMode>("addToQueue");
@@ -52,28 +58,18 @@ export function BufferButton({ output, title }: { output: Output; title: string 
   async function show() {
     setOpen(true);
     setText(output.caption || title);
-    setState(null);
+    setData(null);
     try {
-      const next = await api.buffer();
-      setState(next);
-      setChosen(next.channels.filter((c) => c.service === "instagram").map((c) => c.id));
+      const next = await api.outputBuffer(output.id);
+      const reachable = new Set(channelsOf(next.keys).map(({ channel }) => channel.id));
+      const linked = next.linked.filter((id) => reachable.has(id));
+      setData(next);
+      setChosen(linked);
+      setOthers(linked.length === 0);
+      // Someone else's preset links are theirs to change, on their Buffer page.
+      setRemember(next.linked.length === 0 && !next.owner);
     } catch (err) {
       toast.error(errorText(err));
-    }
-  }
-
-  async function connect() {
-    setBusy(true);
-    try {
-      const next = await api.connectBuffer(key.trim());
-      setState(next);
-      setKey("");
-      setChosen(next.channels.filter((c) => c.service === "instagram").map((c) => c.id));
-      toast.success(`Buffer connected: ${next.channels.length} channel(s)`);
-    } catch (err) {
-      toast.error(errorText(err));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -87,6 +83,7 @@ export function BufferButton({ output, title }: { output: Output; title: string 
         mode,
         due_at: due,
         first_comment: comment,
+        remember,
       });
       const failed = results.filter((r) => !r.ok);
       for (const r of results.filter((r) => r.ok)) toast.success(`Sent to Buffer: ${r.channel}`);
@@ -99,8 +96,15 @@ export function BufferButton({ output, title }: { output: Output; title: string 
     }
   }
 
-  const instagram = state?.channels.some((c) => chosen.includes(c.id) && c.service === "instagram");
+  const all = data ? channelsOf(data.keys).map(({ channel }) => channel) : [];
+  const reachable = new Set(all.map((c) => c.id));
+  const linked = data ? data.linked.filter((id) => reachable.has(id)) : [];
+  const gone = data ? data.linked.length - linked.length : 0;
+  const picked = all.filter((c) => chosen.includes(c.id));
+  const instagram = picked.some((c) => c.service === "instagram");
+  const warned = picked.filter((c) => c.broken || c.personal);
   const ready = chosen.length > 0 && (mode !== "customScheduled" || when !== "");
+  const whose = data?.owner ? `${data.owner}'s` : "your";
 
   return (
     <>
@@ -116,64 +120,87 @@ export function BufferButton({ output, title }: { output: Output; title: string 
               the Mac on until then.
             </DialogDescription>
           </DialogHeader>
-          {state === null && <p className="text-sm text-muted-foreground">Asking Buffer...</p>}
-          {state && !state.connected && (
-            <div className="space-y-2">
-              <Label htmlFor={`buffer-key-${output.id}`}>Buffer API key</Label>
-              <Input
-                id={`buffer-key-${output.id}`}
-                type="password"
-                autoComplete="off"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Make one in Buffer at{" "}
-                <a
-                  className="underline"
-                  href="https://publish.buffer.com/settings/api"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Settings &gt; API
-                </a>{" "}
-                (the Buffer account&apos;s owner can) and paste it here. It is kept for your account
-                only.
-              </p>
-              <Button disabled={busy || key.trim().length < 8} onClick={connect}>
-                Connect
-              </Button>
-            </div>
+          {data === null && <p className="text-sm text-muted-foreground">Loading...</p>}
+          {data && data.keys.length === 0 && (
+            <p className="text-sm">
+              {data.owner ? (
+                `${data.owner} hasn't added a Buffer key yet.`
+              ) : (
+                <>
+                  No Buffer keys yet: add one on the{" "}
+                  <Link className="underline" href="/buffer/">
+                    Buffer page
+                  </Link>
+                  .
+                </>
+              )}
+            </p>
           )}
-          {state?.connected && (
+          {data && data.keys.length > 0 && (
             <div className="space-y-4">
-              {state.error && <p className="text-sm text-destructive">{state.error}</p>}
-              <fieldset className="space-y-2">
-                <legend className="mb-1 text-sm font-medium">Channels</legend>
-                {state.channels.map((c) => (
-                  <label
-                    key={c.id}
-                    className="sketch-tile flex min-h-11 cursor-pointer items-center gap-3 p-2"
+              {data.owner && (
+                <p className="text-sm text-muted-foreground">
+                  {data.owner}&apos;s reel: it goes out with {data.owner}&apos;s Buffer keys.
+                </p>
+              )}
+              <div className="space-y-2">
+                <p className="text-sm font-medium">
+                  {linked.length
+                    ? `Accounts for ${data.preset_label}`
+                    : `${data.preset_label} isn't linked to any accounts yet`}
+                </p>
+                {gone > 0 && (
+                  <p className="text-sm text-destructive">
+                    {gone} of the preset&apos;s accounts {gone === 1 ? "is" : "are"} in none of{" "}
+                    {whose} keys any more: refresh the keys on the Buffer page.
+                  </p>
+                )}
+                {linked.length > 0 && (
+                  <ChannelPicker
+                    keys={data.keys}
+                    chosen={chosen}
+                    onChange={setChosen}
+                    only={(id) => linked.includes(id)}
+                    idPrefix={`buffer-${output.id}-linked`}
+                  />
+                )}
+                {linked.length > 0 && all.length > linked.length && (
+                  <button
+                    type="button"
+                    className="min-h-11 text-sm text-muted-foreground underline sm:min-h-0"
+                    onClick={() => setOthers((now) => !now)}
                   >
-                    <Checkbox
-                      checked={chosen.includes(c.id)}
-                      onCheckedChange={(on) =>
-                        setChosen((now) =>
-                          on === true ? [...now, c.id] : now.filter((id) => id !== c.id),
-                        )
-                      }
-                    />
-                    {c.avatar && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={c.avatar} alt="" className="size-7 rounded-full" />
-                    )}
-                    <span className="text-sm">
-                      {c.name} <span className="text-muted-foreground">({c.service})</span>
-                      {c.paused && <span className="text-muted-foreground"> · queue paused</span>}
-                    </span>
-                  </label>
-                ))}
-              </fieldset>
+                    {others ? "Hide other accounts" : "Other accounts"}
+                  </button>
+                )}
+                {others && (
+                  <ChannelPicker
+                    keys={data.keys}
+                    chosen={chosen}
+                    onChange={setChosen}
+                    only={(id) => !linked.includes(id)}
+                    idPrefix={`buffer-${output.id}-other`}
+                  />
+                )}
+              </div>
+              {warned.map((c) => (
+                <p key={c.id} className="text-sm text-destructive">
+                  {c.name}: {channelWarning(c)}
+                </p>
+              ))}
+              {chosen.length > 0 && !same(chosen, linked) && !data.owner && (
+                <label
+                  htmlFor={`buffer-remember-${output.id}`}
+                  className="flex min-h-11 cursor-pointer items-center gap-3 text-sm"
+                >
+                  <Checkbox
+                    id={`buffer-remember-${output.id}`}
+                    checked={remember}
+                    onCheckedChange={(on) => setRemember(on === true)}
+                  />
+                  Use these accounts for {data.preset_label} from now on
+                </label>
+              )}
               <div className="space-y-1">
                 <Label htmlFor={`buffer-text-${output.id}`}>Caption</Label>
                 <Textarea
@@ -219,22 +246,12 @@ export function BufferButton({ output, title }: { output: Output; title: string 
                   />
                 </div>
               )}
-              <button
-                type="button"
-                className="text-xs text-muted-foreground underline"
-                onClick={async () => {
-                  await api.disconnectBuffer().catch(() => {});
-                  setState({ connected: false, channels: [] });
-                }}
-              >
-                Disconnect Buffer
-              </button>
             </div>
           )}
-          {state?.connected && (
+          {data && data.keys.length > 0 && (
             <DialogFooter>
               <Button disabled={busy || !ready} onClick={send}>
-                {busy ? "Sending..." : `Send to ${chosen.length} channel(s)`}
+                {busy ? "Sending..." : `Send to ${chosen.length} account(s)`}
               </Button>
             </DialogFooter>
           )}

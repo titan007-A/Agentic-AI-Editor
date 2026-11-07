@@ -385,8 +385,33 @@ export type BufferChannel = {
   service: string;
   avatar: string | null;
   paused: boolean;
+  kind: string;
+  /** Disconnected or locked in Buffer: nothing can be posted there. */
+  broken: boolean;
+  /** An Instagram personal profile: Buffer only posts reels to Creator or Business ones. */
+  personal: boolean;
 };
-export type BufferState = { connected: boolean; channels: BufferChannel[]; error?: string };
+export type BufferKey = {
+  id: string;
+  label: string;
+  /** The key's last four letters; the key itself never comes back. */
+  tail: string;
+  channels: BufferChannel[];
+  error: string;
+  refreshed_at: string | null;
+  used_today: number;
+};
+export type BufferPresetLink = { name: string; label: string; channels: string[] };
+export type BufferState = { keys: BufferKey[]; presets: BufferPresetLink[] };
+/** What the Buffer dialog of one reel needs: its owner's keys and its preset's channels. */
+export type OutputBuffer = {
+  keys: BufferKey[];
+  preset: string;
+  preset_label: string;
+  linked: string[];
+  /** Whose reel it is, when it isn't the signed-in person's. */
+  owner: string | null;
+};
 export type BufferResult = { channel: string; ok: boolean; post?: string; error?: string };
 
 export type AssetKind = "image" | "video" | "audio" | "lut";
@@ -459,8 +484,15 @@ export const api = {
   sharePreset: (name: string, to: string[]) =>
     request<{ sent_to: string[] }>("POST", `/presets/${name}/share`, { to }),
   buffer: () => request<BufferState>("GET", "/buffer"),
-  connectBuffer: (key: string) => request<BufferState>("PUT", "/buffer", { key }),
-  disconnectBuffer: () => request("DELETE", "/buffer"),
+  addBufferKey: (label: string, key: string) =>
+    request<BufferState>("POST", "/buffer/keys", { label, key }),
+  renameBufferKey: (id: string, label: string) =>
+    request<BufferState>("PATCH", `/buffer/keys/${id}`, { label }),
+  refreshBufferKey: (id: string) => request<BufferState>("POST", `/buffer/keys/${id}/refresh`),
+  removeBufferKey: (id: string) => request<BufferState>("DELETE", `/buffer/keys/${id}`),
+  linkPresetChannels: (preset: string, channels: string[]) =>
+    request<BufferState>("PUT", `/buffer/presets/${preset}`, { channels }),
+  outputBuffer: (outputId: number) => request<OutputBuffer>("GET", `/outputs/${outputId}/buffer`),
   postToBuffer: (
     outputId: number,
     body: {
@@ -469,6 +501,7 @@ export const api = {
       mode: BufferMode;
       due_at: string | null;
       first_comment: string;
+      remember: boolean;
     },
   ) =>
     request<{ results: BufferResult[]; link: string }>("POST", `/outputs/${outputId}/buffer`, body),
