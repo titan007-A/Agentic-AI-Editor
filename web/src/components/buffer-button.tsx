@@ -34,7 +34,7 @@ const MODES: { value: BufferMode; label: string }[] = [
   { value: "customScheduled", label: "At a time I pick" },
 ];
 
-/** Sends a finished reel to Buffer: a prototype for admins with their own Buffer key. */
+/** Sends a finished reel to Buffer, with the signed-in account's own Buffer key. */
 export function BufferButton({ output, title }: { output: Output; title: string }) {
   const me = useMe();
   const [open, setOpen] = useState(false);
@@ -47,7 +47,7 @@ export function BufferButton({ output, title }: { output: Output; title: string 
   const [when, setWhen] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (me?.role !== "admin") return null;
+  if (!me) return null;
 
   async function show() {
     setOpen(true);

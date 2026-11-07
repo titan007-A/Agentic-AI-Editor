@@ -1653,7 +1653,7 @@ def create_app(
             output.path, media_type="video/mp4", filename=f"{name}.mp4" if download else None
         )
 
-    # Posting to Buffer, a prototype for admins: each keeps their own Buffer API key.
+    # Posting to Buffer: every account keeps its own Buffer API key and posts its own reels.
     def buffer_key(account: Account, session: Session) -> str | None:
         found = session.get(Setting, f"buffer_key:{account.id}")
         return found.value if found else None
@@ -1662,7 +1662,7 @@ def create_app(
         return [vars(c) for c in channels]
 
     @app.get("/api/buffer")
-    async def buffer_status(me: Admin, session: DB) -> dict:
+    async def buffer_status(me: User, session: DB) -> dict:
         key = buffer_key(me, session)
         if key is None:
             return {"connected": False, "channels": []}
@@ -1673,7 +1673,7 @@ def create_app(
         return {"connected": True, "channels": channel_views(channels)}
 
     @app.put("/api/buffer")
-    async def connect_buffer(body: BufferKeyRequest, me: Admin, session: DB) -> dict:
+    async def connect_buffer(body: BufferKeyRequest, me: User, session: DB) -> dict:
         key = body.key.strip()
         try:
             channels = await asyncio.to_thread(buffer.channels, key)
@@ -1684,7 +1684,7 @@ def create_app(
         return {"connected": True, "channels": channel_views(channels)}
 
     @app.delete("/api/buffer")
-    def disconnect_buffer(me: Admin, session: DB) -> dict:
+    def disconnect_buffer(me: User, session: DB) -> dict:
         found = session.get(Setting, f"buffer_key:{me.id}")
         if found is not None:
             session.delete(found)
@@ -1721,7 +1721,7 @@ def create_app(
 
     @app.post("/api/outputs/{output_id}/buffer")
     async def post_to_buffer(
-        output_id: int, body: BufferPostRequest, request: Request, me: Admin, session: DB
+        output_id: int, body: BufferPostRequest, request: Request, me: User, session: DB
     ) -> dict:
         output = find_output(output_id, session, me)
         key = buffer_key(me, session)
