@@ -398,6 +398,39 @@ class ResearchItem(Base):
     research: Mapped[Research] = relationship(back_populates="items")
 
 
+class BufferKey(Base):
+    """A Buffer API key someone added, named by them, and the channels Buffer showed through
+    it when last asked: kept so posting doesn't ask Buffer again each time."""
+
+    __tablename__ = "buffer_keys"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(80))
+    key: Mapped[str] = mapped_column(Text)
+    channels: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    # Why the last request with it failed, empty when it worked.
+    error: Mapped[str] = mapped_column(Text, default="")
+    refreshed_at: Mapped[datetime | None]
+    # Requests sent with it on `used_on` (a date): Buffer limits each account per day.
+    used_on: Mapped[str] = mapped_column(String(10), default="")
+    used: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class PresetBuffer(Base):
+    """The Buffer channels one person's preset posts to. Channels, not keys: a key replaced
+    after it expired still reaches the same channels, so the presets keep working."""
+
+    __tablename__ = "preset_buffer"
+
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    preset: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channels: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

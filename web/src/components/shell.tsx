@@ -22,7 +22,12 @@ const LINKS = [
   { href: "/autopilot/", label: "Autopilot" },
   { href: "/research/", label: "Researcher" },
   { href: "/presets/", label: "Presets" },
+  { href: "/buffer/", label: "Buffer" },
+];
+// Only admins run the Mac's side of things.
+const ADMIN_LINKS = [
   { href: "/system/", label: "System" },
+  { href: "/people/", label: "People" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -33,7 +38,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // Accepted on the server, or just now in this page.
   const [acceptedNow, setAcceptedNow] = useState(false);
   const noticeAccepted = !me || me.notice_accepted || acceptedNow;
-  const links = me?.role === "admin" ? [...LINKS, { href: "/people/", label: "People" }] : LINKS;
+  const links = me?.role === "admin" ? [...LINKS, ...ADMIN_LINKS] : LINKS;
 
   if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
 

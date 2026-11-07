@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useMe } from "@/hooks/use-me";
 import { api, errorText, type SystemInfo } from "@/lib/api";
 
 const ROWS: { key: keyof SystemInfo; label: string }[] = [
@@ -22,6 +23,8 @@ const ROWS: { key: keyof SystemInfo; label: string }[] = [
 ];
 
 export default function SystemPage() {
+  const me = useMe();
+  const admin = me?.role === "admin";
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -30,6 +33,7 @@ export default function SystemPage() {
   const [typed, setTyped] = useState("");
 
   useEffect(() => {
+    if (!admin) return;
     api
       .system()
       .then(setInfo)
@@ -41,7 +45,7 @@ export default function SystemPage() {
         setTyped(String(keep_days));
       })
       .catch(() => {});
-  }, []);
+  }, [admin]);
 
   async function saveKeep(event: React.FormEvent) {
     event.preventDefault();
@@ -68,6 +72,10 @@ export default function SystemPage() {
     } finally {
       setUpdating(false);
     }
+  }
+
+  if (me && !admin) {
+    return <p className="text-sm text-muted-foreground">Only an admin sees the system page.</p>;
   }
 
   return (

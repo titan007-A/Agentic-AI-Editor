@@ -17,7 +17,7 @@ Mode = Literal["addToQueue", "shareNext", "shareNow", "customScheduled"]
 CHANNELS = """
 query Channels($organizationId: OrganizationId!) {
   channels(input: { organizationId: $organizationId }) {
-    id name displayName service avatar isQueuePaused
+    id name displayName service type avatar isQueuePaused isDisconnected isLocked
   }
 }"""
 ORGANIZATIONS = "query Organizations { account { organizations { id name } } }"
@@ -30,8 +30,20 @@ mutation CreatePost($input: CreatePostInput!) {
 }"""
 
 
+# Buffer's words when an Instagram personal profile is asked to publish by itself.
+PERSONAL = "personal profile"
+
+
 class BufferError(RuntimeError):
     pass
+
+
+class Count:
+    """How many requests went to Buffer: its limits are per Buffer account (150 per 15 min
+    and 600 a day on the free plan), so the editor shows what it spent."""
+
+    def __init__(self) -> None:
+        self.n = 0
 
 
 @dataclass
@@ -41,12 +53,22 @@ class Channel:
     service: str
     avatar: str | None
     paused: bool
+    # The kind within its service: Buffer says profile, page, business and so on.
+    kind: str = ""
+    # Disconnected or locked (after a plan downgrade): Buffer can't post there.
+    broken: bool = False
 
 
 def call(
-    key: str, query: str, variables: dict | None = None, client: httpx.Client | None = None
+    key: str,
+    query: str,
+    variables: dict | None = None,
+    client: httpx.Client | None = None,
+    count: Count | None = None,
 ) -> dict:
     http = client or httpx.Client(timeout=30)
+    if count is not None:
+        count.n += 1
     try:
         response = http.post(
             API,
@@ -74,12 +96,16 @@ def call(
     return body["data"]
 
 
-def channels(key: str, client: httpx.Client | None = None) -> list[Channel]:
+def channels(
+    key: str, client: httpx.Client | None = None, count: Count | None = None
+) -> list[Channel]:
     """Every channel in every organization the key's account belongs to."""
     found = []
-    organizations = call(key, ORGANIZATIONS, client=client)["account"]["organizations"]
+    organizations = call(key, ORGANIZATIONS, client=client, count=count)["account"]["organizations"]
     for organization in organizations:
-        data = call(key, CHANNELS, {"organizationId": organization["id"]}, client=client)
+        data = call(
+            key, CHANNELS, {"organizationId": organization["id"]}, client=client, count=count
+        )
         for c in data["channels"]:
             found.append(
                 Channel(
@@ -88,6 +114,8 @@ def channels(key: str, client: httpx.Client | None = None) -> list[Channel]:
                     service=c.get("service") or "",
                     avatar=c.get("avatar"),
                     paused=bool(c.get("isQueuePaused")),
+                    kind=c.get("type") or "",
+                    broken=bool(c.get("isDisconnected") or c.get("isLocked")),
                 )
             )
     return found
@@ -121,9 +149,28 @@ def post_input(
     return data
 
 
-def create_post(key: str, data: dict, client: httpx.Client | None = None) -> str:
+def create_post(
+    key: str, data: dict, client: httpx.Client | None = None, count: Count | None = None
+) -> str:
     """The new post's id in Buffer."""
-    result = call(key, CREATE, {"input": data}, client=client)["createPost"]
+    result = call(key, CREATE, {"input": data}, client=client, count=count)["createPost"]
     if result.get("message") and not result.get("post"):
-        raise BufferError(result["message"])
+        raise BufferError(plain(result["message"]))
     return result["post"]["id"]
+
+
+def plain(message: str) -> str:
+    """Buffer's error in words that say what to do."""
+    if PERSONAL in message.lower():
+        return (
+            "this Instagram is a personal profile: Buffer posts reels only to a Creator or "
+            "Business account. Switch it in Instagram (Settings > Account type), then refresh "
+            "the key on the Buffer page"
+        )
+    return message
+
+
+def personal(channel: Channel | dict) -> bool:
+    """Looks like an Instagram personal profile, which Buffer can't publish to by itself."""
+    get = channel.get if isinstance(channel, dict) else lambda k: getattr(channel, k)
+    return get("service") == "instagram" and get("kind") == "profile"

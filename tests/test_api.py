@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import event
+from sqlalchemy import event, select
 
 from agentic_editor import api, jobs, pipeline, style
 from agentic_editor.api import create_app
@@ -1578,59 +1578,210 @@ def test_preset_files_are_checked_before_they_are_kept(env):
     assert TestClient(env.client.app).get("/api/assets/x.png").status_code == 401
 
 
-def test_admins_and_members_post_their_reels_to_buffer(env, monkeypatch):
+def fake_buffer(monkeypatch):
+    """Two Buffer accounts: key-one shows two Instagram pages, key-two one page and the
+    second of key-one's (an account in both). What was posted, with which key, is kept."""
     from agentic_editor import buffer
 
-    page = buffer.Channel("c1", "My page", "instagram", None, False)
-    monkeypatch.setattr(
-        buffer,
-        "channels",
-        lambda key: (
-            [page]
-            if key == "good-key-123"
-            else (_ for _ in ()).throw(buffer.BufferError("Buffer refused the API key"))
-        ),
-    )
-    sent = []
-    monkeypatch.setattr(buffer, "create_post", lambda key, data: sent.append(data) or "post-1")
-    assert env.client.get("/api/buffer").json() == {"connected": False, "channels": []}
-    assert env.client.put("/api/buffer", json={"key": "wrong-key-1"}).status_code == 422
-    connected = env.client.put("/api/buffer", json={"key": "good-key-123"}).json()
-    assert connected["channels"][0]["name"] == "My page"
+    def page(cid, name, kind="business"):
+        return buffer.Channel(cid, name, "instagram", None, False, kind)
 
-    job = start(env.client)[0]["id"]
-    output = env.client.get(f"/api/jobs/{job}").json()["outputs"][0]["id"]
-    body = {"channels": ["c1"], "text": "Caption", "mode": "addToQueue"}
-    plain = env.client.post(f"/api/outputs/{output}/buffer", json=body)
+    shown = {
+        "key-one-1234": [page("c1", "Spanish page"), page("c2", "Italian page")],
+        "key-two-5678": [page("c3", "English page"), page("c2", "Italian page")],
+        "key-personal": [page("c9", "My own", "profile")],
+    }
+
+    def channels(key, client=None, count=None):
+        if count is not None:
+            count.n += 2
+        if key not in shown:
+            raise buffer.BufferError("Buffer refused the API key: it may be wrong or expired")
+        return shown[key]
+
+    sent = []
+
+    def create_post(key, data, client=None, count=None):
+        if count is not None:
+            count.n += 1
+        if data["channelId"] == "c9":
+            raise buffer.BufferError(buffer.plain("Instagram personal profile channels require x"))
+        sent.append((key, data))
+        return f"post-{len(sent)}"
+
+    monkeypatch.setattr(buffer, "channels", channels)
+    monkeypatch.setattr(buffer, "create_post", create_post)
+    return shown, sent
+
+
+def output_of(client):
+    job = start(client)[0]["id"]
+    return client.get(f"/api/jobs/{job}").json()["outputs"][0]["id"]
+
+
+def test_keys_are_added_named_and_kept_apart(env, monkeypatch):
+    shown, _ = fake_buffer(monkeypatch)
+    admin = env.client
+    assert admin.get("/api/buffer").json()["keys"] == []
+    wrong = admin.post("/api/buffer/keys", json={"label": "x", "key": "wrong-key-1"})
+    assert wrong.status_code == 422 and "refused" in wrong.json()["detail"]
+    named = {"label": " Spanish  pages ", "key": "key-one-1234"}
+    state = admin.post("/api/buffer/keys", json=named)
+    (key,) = state.json()["keys"]
+    assert key["label"] == "Spanish pages" and key["tail"] == "1234"
+    assert "key-one" not in state.text  # the key itself never goes back to the browser
+    assert [c["name"] for c in key["channels"]] == ["Spanish page", "Italian page"]
+    assert key["used_today"] == 2
+    again = admin.post("/api/buffer/keys", json={"label": "y", "key": "key-one-1234"})
+    assert again.status_code == 422 and "Spanish pages" in again.json()["detail"]
+    state = admin.post("/api/buffer/keys", json={"key": "key-two-5678"}).json()
+    assert [k["label"] for k in state["keys"]] == ["Spanish pages", "Buffer 2"]
+    two = state["keys"][1]["id"]
+    renamed = admin.patch(f"/api/buffer/keys/{two}", json={"label": "English"}).json()
+    assert renamed["keys"][1]["label"] == "English"
+    # A channel gone from Buffer goes from the key when it is refreshed.
+    shown["key-two-5678"] = shown["key-two-5678"][:1]
+    refreshed = admin.post(f"/api/buffer/keys/{two}/refresh").json()["keys"][1]
+    assert [c["id"] for c in refreshed["channels"]] == ["c3"] and refreshed["used_today"] == 4
+
+    # Another person sees none of them and can't touch them.
+    _, riya = employee(env, presets=["square-1x1"])
+    assert riya.get("/api/buffer").json()["keys"] == []
+    assert riya.delete(f"/api/buffer/keys/{two}").status_code == 404
+    assert riya.patch(f"/api/buffer/keys/{two}", json={"label": "z"}).status_code == 404
+    # The same Buffer key may be someone else's too: theirs is kept apart.
+    assert riya.post("/api/buffer/keys", json={"key": "key-one-1234"}).status_code == 200
+    assert admin.delete(f"/api/buffer/keys/{two}").json()["keys"][0]["label"] == "Spanish pages"
+    assert len(riya.get("/api/buffer").json()["keys"]) == 1
+
+
+def test_a_preset_posts_to_its_own_channels(env, monkeypatch):
+    _, sent = fake_buffer(monkeypatch)
+    admin = env.client
+    admin.post("/api/buffer/keys", json={"label": "One", "key": "key-one-1234"})
+    admin.post("/api/buffer/keys", json={"label": "Two", "key": "key-two-5678"})
+    unknown = admin.put("/api/buffer/presets/square-1x1", json={"channels": ["c7"]})
+    assert unknown.status_code == 422
+    assert admin.put("/api/buffer/presets/nope", json={"channels": ["c1"]}).status_code == 404
+    state = admin.put("/api/buffer/presets/square-1x1", json={"channels": ["c3", "c1"]}).json()
+    linked = {p["name"]: p["channels"] for p in state["presets"]}
+    assert linked["square-1x1"] == ["c3", "c1"]
+
+    output = output_of(admin)
+    dialog = admin.get(f"/api/outputs/{output}/buffer").json()
+    assert dialog["preset"] == "square-1x1" and dialog["linked"] == ["c3", "c1"]
+    assert dialog["owner"] is None and len(dialog["keys"]) == 2
+
+    env.settings.public_url = "https://editor.example.com"
+    body = {"channels": ["c3", "c1"], "text": "Caption", "mode": "addToQueue"}
+    posted = admin.post(f"/api/outputs/{output}/buffer", json=body).json()
+    assert [r["ok"] for r in posted["results"]] == [True, True]
+    # Each channel goes out with the key that shows it.
+    used = [(k, d["channelId"]) for k, d in sent]
+    assert used == [("key-two-5678", "c3"), ("key-one-1234", "c1")]
+
+    # Posting elsewhere once, remembered, changes the preset's channels.
+    body = {"channels": ["c2"], "text": "x", "mode": "addToQueue", "remember": True}
+    assert admin.post(f"/api/outputs/{output}/buffer", json=body).json()["results"][0]["ok"]
+    assert admin.get(f"/api/outputs/{output}/buffer").json()["linked"] == ["c2"]
+    # An empty list unlinks; deleting the preset drops its link.
+    state = admin.put("/api/buffer/presets/square-1x1", json={"channels": []}).json()
+    assert {p["name"]: p["channels"] for p in state["presets"]}["square-1x1"] == []
+    admin.put("/api/buffer/presets/square-1x1", json={"channels": ["c1"]})
+    assert admin.delete("/api/presets/square-1x1").status_code == 200
+    with env.sessions() as session:
+        from agentic_editor.db import PresetBuffer
+
+        assert session.scalars(select(PresetBuffer)).all() == []
+
+
+def test_members_post_their_own_reels_with_their_own_keys(env, monkeypatch):
+    _, sent = fake_buffer(monkeypatch)
+    env.settings.public_url = "https://editor.example.com"
+    admin = env.client
+    admin.post("/api/buffer/keys", json={"key": "key-two-5678"})
+    admins_reel = output_of(admin)
+    member, riya = employee(env, presets=["square-1x1"])
+    body = {"channels": ["c1"], "text": "x", "mode": "addToQueue"}
+    assert riya.post(f"/api/outputs/{admins_reel}/buffer", json=body).status_code == 404
+    assert riya.get(f"/api/outputs/{admins_reel}/buffer").status_code == 404
+    reel = output_of(riya)
+    assert riya.post(f"/api/outputs/{reel}/buffer", json=body).status_code == 409
+    riya.post("/api/buffer/keys", json={"label": "Riya's", "key": "key-one-1234"})
+    riya.put("/api/buffer/presets/square-1x1", json={"channels": ["c1"]})
+    # The admin's own preset of that name stays unlinked.
+    admin_presets = {p["name"]: p for p in admin.get("/api/buffer").json()["presets"]}
+    assert admin_presets["square-1x1"]["channels"] == []
+    # A channel only the admin's key shows can't be used by her.
+    other = {"channels": ["c3"], "text": "x", "mode": "addToQueue"}
+    assert riya.post(f"/api/outputs/{reel}/buffer", json=other).status_code == 422
+    assert riya.post(f"/api/outputs/{reel}/buffer", json=body).json()["results"][0]["ok"]
+    # The admin opening her reel sees her keys and preset, and posts with them.
+    dialog = admin.get(f"/api/outputs/{reel}/buffer").json()
+    assert dialog["owner"] == "riya" and dialog["linked"] == ["c1"]
+    assert [k["label"] for k in dialog["keys"]] == ["Riya's"]
+    remembered = body | {"channels": ["c2"], "remember": True}
+    assert admin.post(f"/api/outputs/{reel}/buffer", json=remembered).json()["results"][0]["ok"]
+    assert riya.get(f"/api/outputs/{reel}/buffer").json()["linked"] == ["c1"]  # hers to change
+    assert [k for k, _ in sent] == ["key-one-1234", "key-one-1234"]
+    # Removing her takes her keys and links, not to whoever keeps her work.
+    assert admin.delete(f"/api/admin/users/{member['id']}").status_code == 200
+    assert [k["label"] for k in admin.get("/api/buffer").json()["keys"]] == ["Buffer 1"]
+    with env.sessions() as session:
+        from agentic_editor.db import BufferKey, PresetBuffer
+
+        assert len(session.scalars(select(BufferKey)).all()) == 1
+        assert session.scalars(select(PresetBuffer)).all() == []
+
+
+def test_buffer_says_plainly_what_went_wrong(env, monkeypatch):
+    fake_buffer(monkeypatch)
+    admin = env.client
+    state = admin.post("/api/buffer/keys", json={"key": "key-personal"}).json()
+    assert state["keys"][0]["channels"][0]["personal"] is True
+    output = output_of(admin)
+    body = {"channels": ["c9"], "text": "x", "mode": "addToQueue"}
+    plain = admin.post(f"/api/outputs/{output}/buffer", json=body)
     assert plain.status_code == 422 and "https" in plain.json()["detail"]  # the test client is http
     env.settings.public_url = "https://editor.example.com"
-    posted = env.client.post(f"/api/outputs/{output}/buffer", json=body).json()
-    assert posted["results"] == [{"channel": "My page", "ok": True, "post": "post-1"}]
-    link = posted["link"]
-    assert (
-        link.startswith("https://editor.example.com/api/pub/")
-        and sent[0]["assets"][0]["video"]["url"] == link
-    )
-    # Buffer fetches it without signing in.
+    (result,) = admin.post(f"/api/outputs/{output}/buffer", json=body).json()["results"]
+    assert not result["ok"] and "Creator or Business" in result["error"]
+    timed = {"channels": ["c9"], "text": "x", "mode": "customScheduled"}
+    assert admin.post(f"/api/outputs/{output}/buffer", json=timed).status_code == 422
+
+
+def test_the_one_buffer_key_of_before_becomes_a_named_key(env, monkeypatch):
+    fake_buffer(monkeypatch)
+    from agentic_editor.db import Setting
+
+    me = env.client.get("/api/me").json()
+    with env.sessions() as session:
+        session.add(Setting(key=f"buffer_key:{me['id']}", value="key-one-1234"))
+        session.commit()
+    (key,) = env.client.get("/api/buffer").json()["keys"]
+    assert key["label"] == "My Buffer" and len(key["channels"]) == 2
+    assert len(env.client.get("/api/buffer").json()["keys"]) == 1
+    with env.sessions() as session:
+        assert session.get(Setting, f"buffer_key:{me['id']}") is None
+
+
+def test_a_reels_public_link_needs_no_login(env, monkeypatch):
+    fake_buffer(monkeypatch)
+    env.client.post("/api/buffer/keys", json={"key": "key-one-1234"})
+    env.settings.public_url = "https://editor.example.com"
+    output = output_of(env.client)
+    body = {"channels": ["c1"], "text": "x", "mode": "addToQueue"}
+    link = env.client.post(f"/api/outputs/{output}/buffer", json=body).json()["link"]
     fetched = TestClient(env.client.app).get(link.removeprefix("https://editor.example.com"))
     assert fetched.status_code == 200 and fetched.headers["content-type"] == "video/mp4"
     assert TestClient(env.client.app).get("/api/pub/../app.db").status_code == 404
 
-    # A member gets Buffer too, with a key of their own, for their own reels only.
-    _, riya = employee(env, presets=["square-1x1"])
-    assert riya.get("/api/buffer").json() == {"connected": False, "channels": []}
-    assert riya.post(f"/api/outputs/{output}/buffer", json=body).status_code == 404
-    assert riya.put("/api/buffer", json={"key": "good-key-123"}).status_code == 200
-    assert riya.post(f"/api/outputs/{output}/buffer", json=body).status_code == 404
-    (own,) = start(riya, presets=["square-1x1"])
-    own_output = riya.get(f"/api/jobs/{own['id']}").json()["outputs"][0]["id"]
-    sent_by_riya = riya.post(f"/api/outputs/{own_output}/buffer", json=body).json()
-    assert sent_by_riya["results"] == [{"channel": "My page", "ok": True, "post": "post-1"}]
-    assert riya.delete("/api/buffer").status_code == 200
-    assert riya.get("/api/buffer").json()["connected"] is False
-    assert env.client.get("/api/buffer").json()["connected"] is True  # the admin's key stays
-    assert env.client.delete("/api/buffer").status_code == 200
-    assert env.client.post(f"/api/outputs/{output}/buffer", json=body).status_code == 409
+
+def test_only_admins_see_the_system_page(env, monkeypatch):
+    monkeypatch.setattr(api, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
+    _, riya = employee(env, presets=[])
+    assert riya.get("/api/system").status_code == 403
+    assert env.client.get("/api/system").status_code == 200
 
 
 def test_videos_carry_the_name_their_owner_gave_the_preset(env):
