@@ -1777,7 +1777,8 @@ def test_a_reels_public_link_needs_no_login(env, monkeypatch):
     assert TestClient(env.client.app).get("/api/pub/../app.db").status_code == 404
 
 
-def test_only_admins_see_the_system_page(env):
+def test_only_admins_see_the_system_page(env, monkeypatch):
+    monkeypatch.setattr(api, "get_backends", lambda: Backends("cpu", "cpu", "x264", "h264"))
     _, riya = employee(env, presets=[])
     assert riya.get("/api/system").status_code == 403
     assert env.client.get("/api/system").status_code == 200
