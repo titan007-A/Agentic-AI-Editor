@@ -1578,7 +1578,7 @@ def test_preset_files_are_checked_before_they_are_kept(env):
     assert TestClient(env.client.app).get("/api/assets/x.png").status_code == 401
 
 
-def test_the_admin_posts_a_finished_reel_to_buffer(env, monkeypatch):
+def test_admins_and_members_post_their_reels_to_buffer(env, monkeypatch):
     from agentic_editor import buffer
 
     page = buffer.Channel("c1", "My page", "instagram", None, False)
@@ -1616,8 +1616,19 @@ def test_the_admin_posts_a_finished_reel_to_buffer(env, monkeypatch):
     assert fetched.status_code == 200 and fetched.headers["content-type"] == "video/mp4"
     assert TestClient(env.client.app).get("/api/pub/../app.db").status_code == 404
 
-    _, riya = employee(env, presets=[])
-    assert riya.get("/api/buffer").status_code == 403
+    # A member gets Buffer too, with a key of their own, for their own reels only.
+    _, riya = employee(env, presets=["square-1x1"])
+    assert riya.get("/api/buffer").json() == {"connected": False, "channels": []}
+    assert riya.post(f"/api/outputs/{output}/buffer", json=body).status_code == 404
+    assert riya.put("/api/buffer", json={"key": "good-key-123"}).status_code == 200
+    assert riya.post(f"/api/outputs/{output}/buffer", json=body).status_code == 404
+    (own,) = start(riya, presets=["square-1x1"])
+    own_output = riya.get(f"/api/jobs/{own['id']}").json()["outputs"][0]["id"]
+    sent_by_riya = riya.post(f"/api/outputs/{own_output}/buffer", json=body).json()
+    assert sent_by_riya["results"] == [{"channel": "My page", "ok": True, "post": "post-1"}]
+    assert riya.delete("/api/buffer").status_code == 200
+    assert riya.get("/api/buffer").json()["connected"] is False
+    assert env.client.get("/api/buffer").json()["connected"] is True  # the admin's key stays
     assert env.client.delete("/api/buffer").status_code == 200
     assert env.client.post(f"/api/outputs/{output}/buffer", json=body).status_code == 409
 
