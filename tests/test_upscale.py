@@ -4,6 +4,7 @@ upscaler stands in for Real-ESRGAN and the face fixer is tested with a stand-in 
 import json
 import shutil
 import subprocess
+from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,9 @@ from agentic_editor.settings import get_settings
 
 BACKENDS = Backends("cpu", "cpu", "x264", "h264")
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+needs_ml = pytest.mark.skipif(
+    find_spec("torch") is None or find_spec("cv2") is None, reason="needs the ml extras"
+)
 
 
 def test_the_output_has_the_short_side_asked_for_and_the_model_sees_half_of_it_at_most():
@@ -67,6 +71,7 @@ def no_models(monkeypatch, tmp_path):
     monkeypatch.setattr(upscale, "_free", lambda dev: None)
 
 
+@needs_ml
 @needs_ffmpeg
 @pytest.mark.parametrize("audio", ["aac", "opus"])
 def test_a_video_is_written_bigger_with_its_sound_length_and_frame_rate(no_models, tmp_path, audio):
@@ -83,6 +88,7 @@ def test_a_video_is_written_bigger_with_its_sound_length_and_frame_rate(no_model
     assert said[0] == "upscaling 160x120 to 1440x1080"
 
 
+@needs_ml
 @needs_ffmpeg
 def test_a_silent_video_stays_silent(no_models, tmp_path):
     source = tmp_path / "silent.mp4"
@@ -96,6 +102,7 @@ def test_a_silent_video_stays_silent(no_models, tmp_path):
     assert (info.width, info.height) == (1080, 1440) and not info.has_audio
 
 
+@needs_ml
 @needs_ffmpeg
 def test_a_failure_mid_video_raises_instead_of_waiting_forever(no_models, monkeypatch, tmp_path):
     class Broken(Nearest):
@@ -130,6 +137,7 @@ def fixer(strength: float, redraw) -> upscale.FaceFixer:
 POINTS = np.array([[170, 180], [230, 180], [200, 215], [178, 245], [222, 245]], np.float32)
 
 
+@needs_ml
 def test_a_face_is_pasted_back_only_where_it_is_and_by_the_strength_asked():
     import torch
 
@@ -144,6 +152,7 @@ def test_a_face_is_pasted_back_only_where_it_is_and_by_the_strength_asked():
     assert np.abs(same(frame).astype(int) - 100).max() <= 1
 
 
+@needs_ml
 def test_no_face_or_no_strength_leaves_the_frame_untouched():
     import torch
 
@@ -161,6 +170,7 @@ def preset(name: str, **upscaling) -> Preset:
                   upscale=Upscale(**upscaling))  # fmt: skip
 
 
+@needs_ml
 @needs_ffmpeg
 def test_an_upscale_preset_is_made_from_the_whole_video_without_editing(
     no_models, monkeypatch, tmp_path
@@ -182,6 +192,7 @@ def test_an_upscale_preset_is_made_from_the_whole_video_without_editing(
     assert meta["title"] == "Old clip" and meta["url"] == "https://x.test/v"
 
 
+@needs_ml
 @needs_ffmpeg
 def test_upscale_and_edit_presets_in_one_job_each_get_their_own_and_one_failing_keeps_the_other(
     no_models, monkeypatch, tmp_path
