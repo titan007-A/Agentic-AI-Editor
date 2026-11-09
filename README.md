@@ -490,8 +490,22 @@ those sources; every capitalised name and every number of 10 or more in what it 
 appear in them, which is checked in code; and for each sentence stating a fact it must copy
 the sources' words that say so, which are then looked up in the sources. A caption that
 fails is written again once with what was wrong; what still fails is shown under it as
-"Check before posting", next to links to the articles it came from. A song Wikipedia has no
-article on gets no caption.
+"Check before posting", next to links to the articles it came from.
+
+A caption is always written, from whatever there is, in this order. The song's name comes
+from the person or the preset, else from the post's text, else from Shazam (and Shazam's
+name is tried too when the post's text names a song Wikipedia doesn't know: "bohemia" by
+"freddy"). Wikipedia is searched under the name as given and tidier (without ".mp3", a take
+note such as "(Live)", an account name's dots, or the second artist of "A y B"), and an
+article counts when its lead says whose song it is, not only Wikidata (whose lists can miss
+the singer: "Bad Romance" names only RedOne, "California Love" names Tupac Shakur, not
+2Pac); album and film articles of the same name never count. For a song Wikipedia hasn't
+covered, the caption is written from the artist's article (a musician's, never the
+article on the word: Juvenile the rapper) and what a web search says about the song (store
+and streaming pages left out), with a note naming them. With neither, or only a line or two
+from the web, it is written about what the video shows (see below), with a note saying so.
+Of 24 songs whose captions had failed on the Mac, 12 now find their own article and 11 the
+artist's, and the last is written from the video.
 
 A preset whose posts aren't about a song sets `post_caption.about: video` ("About" in the
 editor). Then the caption is written from the video itself: the vision model watches six

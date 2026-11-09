@@ -381,3 +381,21 @@ def test_a_web_search_that_answers_nothing_quoted_is_asked_again_unquoted():
     (found,) = caption.web_results("Hadal Ahbek", "Issam Alnajjar", find)
     assert asked == ['"Hadal Ahbek" Issam Alnajjar song', "Hadal Ahbek Issam Alnajjar"]
     assert found.url == "h"
+
+
+def test_store_pages_say_nothing_and_one_line_from_the_web_alone_is_too_thin(tmp_path):
+    def nothing(request):
+        return httpx.Response(200, json={"query": {"search": []}})
+
+    store = [
+        {"title": "Stream outro.wav by khalval", "href": "s", "body": "Stream outro.wav by "
+         "khalval on desktop and mobile. Play over 320 million tracks for free on SoundCloud."},
+        {"title": "outro.wav - YouTube", "href": "y", "body": "outro.wav khalval. Sign in to "
+         "create & share playlists, get personalized recommendations, and more."},
+        {"title": "outro.wav", "href": "b", "body": "outro.wav is a 2021 track by khalval, made "
+         "from a home recording on a phone."},
+    ]  # fmt: skip
+    assert [a.url for a in caption.web_results("outro.wav", "khalval", lambda q, n: store)] == ["b"]
+    with pytest.raises(caption.CaptionError, match="nothing found"):
+        caption.elsewhere("outro.wav", "khalval", "en", tmp_path, httpx.MockTransport(nothing),
+                          lambda q, n: store)  # fmt: skip
