@@ -4,8 +4,12 @@ say about the song (or another topic a person names), and checked before anyone 
 Accuracy comes from the sources, not the model's memory: the model is told to use only the
 articles and facts it is given, every name and number in what it writes must appear in them
 (checked in code, not by a model), and the model is then asked which sentences the sources
-don't back. A caption that still fails is kept with the reasons, for a person to look at;
-a song Wikipedia has no article on gets no caption rather than an invented one.
+don't back. A caption that still fails is kept with the reasons, for a person to look at.
+
+A song Wikipedia has no article on is still written about, from what else there is: the
+artist's article and what a web search says about the song (see `elsewhere`), and when even
+those are missing the job writes about what the video shows. The checks stay the same, so
+a thinner source makes a plainer caption, never an invented one.
 """
 
 import json
@@ -211,13 +215,25 @@ def relevant(text: str) -> str:
     return "\n\n".join(k for k in kept if k)[:ARTICLE_CHARS]
 
 
+# A title's bracket saying the article is about something else of the same name.
+OTHER_WORK = re.compile(
+    r"\((?:[^)]*\s)?(?:album|álbum|EP|film|película|pel[íi]cula|serie|series|TV|novel|novela|"
+    r"telenovela|band|banda|grupo|singer|cantante|rapper|discography|discografía)\b[^)]*\)",
+    re.I,
+)
+
+
 def articles(http: httpx.Client, language: str, song: str, artist: str):
     """Wikipedia articles in `language` that may be the song's, with their Wikidata ids:
     the title names the song (an exact match first) and the text names the artist."""
-    found = _wiki(http, language, action="query", list="search", srlimit=5,
-                  srsearch=f"{song} {artist}".strip())  # fmt: skip
     wanted_song, wanted_artist = plain(song), plain(artist)
-    titles = [hit["title"] for hit in found.get("query", {}).get("search", [])]
+    titles: list[str] = []
+    # The plain search ranks the artist's own pages first ("Givenchy duki" doesn't reach
+    # "Givenchy (Duki song)" in five); one for the song's name in the title does.
+    for query in (f"{song} {artist}".strip(), f'intitle:"{song.replace(chr(34), "")}" {artist}'):
+        found = _wiki(http, language, action="query", list="search", srlimit=5, srsearch=query)
+        titles += [h["title"] for h in found.get("query", {}).get("search", [])]
+    titles = [t for t in dict.fromkeys(titles) if not OTHER_WORK.search(t)]
 
     def closeness(title: str) -> int:
         # "Stronger" or "Stronger (Daft Punk song)" before "Harder, Better, Faster, Stronger".
@@ -252,11 +268,19 @@ def _entities(http: httpx.Client, ids: list[str], props: str, language: str) -> 
     return response.json().get("entities", {})
 
 
+# Words a sentence uses for a song that only borrows from the artist.
+BORROWS = re.compile(r"sampl|interpolat|mention|referenc|inspired|parod|answer|tribute", re.I)
+# An article's first sentence saying it is about a song, in the languages captions use.
+A_SONG = re.compile(
+    r"song|single|track|canci[oó]n|sencillo|tema|chanson|canzone|can[cç][aã]o|Lied", re.I
+)
+
+
 def performed_by(facts_found: list[str], artist: str, found: Article) -> bool:
     """Whether the song is the artist's: Wikidata names them as its performer (or, when it
-    names no performer, as a writer); with neither, the article's first sentence, which
-    says whose song it is, names them. Another song that merely samples or mentions them
-    names them later."""
+    names no performer, as a writer), or the article's lead says it is theirs. Wikidata's
+    lists are often short ("Bad Romance" names only RedOne) and go by legal names ("Tupac
+    Shakur" for 2Pac), so a list without them isn't the last word."""
     wanted = plain(artist)
     if not wanted:
         return True
@@ -264,9 +288,29 @@ def performed_by(facts_found: list[str], artist: str, found: Article) -> bool:
         named = [f.split(": ", 1)[1] for f in facts_found if f.startswith(kinds)]
         if named:
             names = [plain(n) for line in named for n in line.split(", ")]
-            return any(wanted in n or n in wanted for n in names)
-    first = SENTENCE_END.split(found.text.strip(), maxsplit=1)[0]
-    return any(part in plain(first) for part in [wanted, *wanted.split()[-1:]])
+            if any(wanted in n or n in wanted for n in names):
+                return True
+            break
+    return named_in_lead(found.text, artist)
+
+
+def named_in_lead(text: str, artist: str) -> bool:
+    """Whether the article's lead says the song is the artist's: its first sentence names
+    them ("a song by American singer Lady Gaga"), or a later lead sentence names them in
+    full without saying the song only borrows from them: "It is best known as Natalie
+    Imbruglia's debut single" counts, "It samples Daft Punk" doesn't, and neither does an
+    album's article that lists the songs it covers."""
+    wanted = plain(artist)
+    lead = SENTENCE_END.split(text.split("\n\n")[0].strip())
+    if not lead or not lead[0]:
+        return False
+    if any(part in plain(lead[0]) for part in [wanted, *wanted.split()[-1:]]):
+        return True
+    # A later sentence counts only in an article that opens by calling itself a song's:
+    # an album's article names many singers it isn't by.
+    if not A_SONG.search(lead[0]):
+        return False
+    return any(wanted in plain(s) and not BORROWS.search(s) for s in lead[1:])
 
 
 def _date(value: dict) -> str:
@@ -407,6 +451,144 @@ def gather_topic(
             item = item or qid
     if not sources.articles:
         raise CaptionError(f"Wikipedia has no article on “{topic}”")
+    cache.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"articles": [asdict(a) for a in sources.articles],
+                                "facts": sources.facts}), encoding="utf-8")  # fmt: skip
+    return sources
+
+
+QUOTES = " \"'“”‘’«»"
+FILE_NAME = re.compile(r"\.(?:mp3|mp4|m4a|wav|aac|ogg|mov)$", re.I)
+# Between the artists of a song made together: "Mike Towers y Jay Wheeler", "A x B".
+TOGETHER = re.compile(
+    r"\s+(?:x|&|y|e|and|junto a|con|with|feat\.?|ft\.?|featuring|vs\.?)\s+|\s*[,/+]\s*",
+    re.I,
+)
+EDGES = " \t-_,;:|/\\"
+HANDLE = re.compile(r"^\w+(?:[._]+\w+)+$")  # an account name: nicki.nicole, cris_emejota
+
+
+def names_to_try(song: str, artist: str) -> list[tuple[str, str]]:
+    """The song and artist as named, then tidier: the song without a file ending or a
+    note about the take ("(Live)", "- Remastered"), an account name's dots as spaces, and
+    the first of several artists. A model reading a post copies names as they are written
+    there ("Tour_En_Vivo.mp3", "nicki.nicole")."""
+    from agentic_editor.shazam import FEATURING, _tidy, _without_notes
+
+    song, artist = song.strip(QUOTES), artist.strip(QUOTES + "@")
+    songs = [song, _tidy(_without_notes(FILE_NAME.sub("", song).replace("_", " ")))]
+    tidy = re.sub(r"[._]+", " ", artist) if HANDLE.match(artist) else artist
+    tidy = _tidy(FEATURING.sub("", tidy))
+    artists = [artist, tidy, TOGETHER.split(tidy)[0].strip(EDGES)]
+    return list(dict.fromkeys((s, a) for s in songs for a in artists if s))
+
+
+def find_song(
+    song: str, artist: str, language: str, cache: Path, transport=None
+) -> tuple[Sources, tuple[str, str]]:
+    """The song's sources (see gather) under the first of its names (see names_to_try)
+    Wikipedia has an article for, with that name."""
+    first: CaptionError | None = None
+    for name in names_to_try(song, artist):
+        try:
+            return gather(*name, language, cache, transport), name
+        except CaptionError as exc:
+            first = first or exc
+    raise first or CaptionError(f"Wikipedia has no article on “{song}”")
+
+
+# What a musician's article says in its first lines, in the languages captions are written in.
+MUSICIAN = re.compile(
+    r"sing|rapper|band|musician|songwriter|composer|group|duo|DJ|producer|vocalist|cantante|"
+    r"cantautor|grupo|banda|músic|rapero|chanteu|chanteuse|groupe|musicien|cantor|compositor|"
+    r"Sänger|Musiker|cantant|gruppo|musicist|orchestra|choir|coro",
+    re.I,
+)
+WEB_RESULTS = 8
+
+
+def artist_article(http: httpx.Client, language: str, artist: str, song: str):
+    """The artist's Wikipedia article in `language`: a search hit whose title is their
+    name and whose first lines say they make music (a rapper called Juvenile, not the
+    article on juveniles). Kept: the lead, and the paragraphs that name the song."""
+    wanted = plain(artist)
+    if not wanted:
+        return None
+    found = _wiki(http, language, action="query", list="search", srlimit=5, srsearch=artist)
+    titles = [hit["title"] for hit in found.get("query", {}).get("search", [])]
+    for title in titles:
+        name = plain(title)
+        if not (name == wanted or name.startswith(wanted + " (")):
+            continue
+        pages = _wiki(http, language, action="query", prop="extracts|pageprops|info",
+                      explaintext=1, inprop="url", ppprop="wikibase_item|disambiguation",
+                      redirects=1, titles=title)["query"]["pages"]  # fmt: skip
+        page = pages[0] if pages else {}
+        text = page.get("extract") or ""
+        if "disambiguation" in page.get("pageprops", {}) or not MUSICIAN.search(text[:400]):
+            continue
+        parts = re.split(r"\n(?:==+ [^=\n]+ ==+)\n|\n", text)
+        lead = parts[0].strip()
+        about = [p.strip() for p in parts[1:] if plain(song) and plain(song) in plain(p)]
+        kept = "\n\n".join([lead, *about])[:ARTICLE_CHARS]
+        return Article(title=page["title"], url=page.get("fullurl", ""), text=kept)
+    return None
+
+
+def web_results(song: str, artist: str, find) -> list[Article]:
+    """What a web search says about the song: the results that name it, each its page's
+    title, address and the search engine's lines from it."""
+    try:
+        hits = find(f'"{song}" {artist} song', WEB_RESULTS)
+    except Exception as exc:  # the engines are a third party's: no answer is no results
+        log.warning("web search for %s failed: %s", song, exc)
+        return []
+    wanted = plain(song)
+    kept = []
+    for hit in hits:
+        body, title = " ".join(str(hit.get("body", "")).split()), str(hit.get("title", ""))
+        if len(body) < 60 or wanted not in plain(f"{title} {body}"):
+            continue
+        kept.append(Article(title=title or hit.get("href", ""), url=hit.get("href", ""), text=body))
+    return kept
+
+
+def _search(query: str, count: int) -> list[dict]:
+    from agentic_editor.research import _engines
+
+    return _engines(query, count)
+
+
+def elsewhere(
+    song: str, artist: str, language: str, cache: Path, transport=None, find=_search
+) -> Sources:
+    """For a song Wikipedia has no article on: the artist's article (in the caption's
+    language and in English) and what a web search says about the song, kept on disk like
+    a song's. Raises CaptionError when there is neither."""
+    key = re.sub(r"[^a-z0-9]+", "-", plain(f"elsewhere {song} {artist} {language}"))
+    path = cache / f"{key.strip('-')[:100]}.json"
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return Sources([Article(**a) for a in data["articles"]], data["facts"])
+    sources = Sources()
+    client = httpx.Client(
+        timeout=30, headers={"User-Agent": USER_AGENT}, follow_redirects=True, transport=transport
+    )
+    with client as http:
+        for name in dict.fromkeys(a for _, a in names_to_try(song, artist)):
+            for lang in dict.fromkeys([language, "en"]):
+                try:
+                    found = artist_article(http, lang, name, song)
+                except httpx.HTTPError as exc:
+                    log.warning("Wikipedia couldn't be asked about %s: %s", name, exc)
+                    found = None
+                if found:
+                    sources.articles.append(found)
+            if sources.articles:
+                break
+    sources.articles += web_results(song, artist, find)
+    if not sources.articles:
+        raise CaptionError(f"nothing found on “{song}” by {artist or 'its artist'}")
     cache.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"articles": [asdict(a) for a in sources.articles],
                                 "facts": sources.facts}), encoding="utf-8")  # fmt: skip

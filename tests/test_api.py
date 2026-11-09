@@ -773,6 +773,7 @@ def fake_captions(monkeypatch, env, fail=False):
 
     monkeypatch.setattr(caption, "identify", identify)
     monkeypatch.setattr(caption, "gather", lambda *args: caption.Sources())
+    monkeypatch.setattr(jobs, "heard_song", lambda *args: None)  # Shazam doesn't know it
     monkeypatch.setattr(
         caption,
         "write",
@@ -833,14 +834,41 @@ def test_a_reel_that_names_its_song_writes_the_caption_about_it(env, monkeypatch
     assert asked == [("Felicità", "Al Bano & Romina Power")]
 
 
-def test_a_caption_that_cant_be_written_says_why(env, monkeypatch):
+def test_an_unnamed_song_shazam_doesnt_know_is_written_about_from_the_video(env, monkeypatch):
+    from agentic_editor import caption
+
     fake_captions(monkeypatch, env, fail=True)
+    monkeypatch.setattr(
+        jobs,
+        "caption_from_video",
+        lambda *args: caption.Written("Un barco en el mar 🌊 ⛵", [{"title": "v", "url": ""}], []),
+    )
+    (job,) = start(env.client)
+    output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
+    env.client.post(f"/api/outputs/{output_id}/caption")
+    output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
+    assert output["caption_status"] == "done" and output["caption"] == "Un barco en el mar 🌊 ⛵"
+    assert output["caption_notes"] == [
+        "the video doesn't say which song it is and Shazam didn't recognise it: written about "
+        "what the video shows"
+    ]
+
+
+def test_a_caption_that_cant_be_written_says_why(env, monkeypatch):
+    from agentic_editor import caption
+
+    fake_captions(monkeypatch, env, fail=True)
+
+    def blind(*args):
+        raise caption.CaptionError("nothing is known about the video to write from")
+
+    monkeypatch.setattr(jobs, "caption_from_video", blind)
     (job,) = start(env.client)
     output_id = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]["id"]
     env.client.post(f"/api/outputs/{output_id}/caption")
     output = env.client.get(f"/api/outputs/{output_id}").json()["outputs"][0]
     assert output["caption_status"] == "failed"
-    assert output["caption_notes"] == ["the video doesn't say which song it is"]
+    assert output["caption_notes"] == ["nothing is known about the video to write from"]
 
 
 def test_a_song_named_by_hand_is_the_one_the_caption_is_about(env, monkeypatch):

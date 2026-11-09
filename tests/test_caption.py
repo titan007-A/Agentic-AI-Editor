@@ -257,3 +257,105 @@ def test_a_page_wish_adds_to_the_video_style_rather_than_replacing_it():
     styled = caption.video_style("related to the one-liner")
     assert styled.startswith(caption.VIDEO_STYLE) and "No hashtags" in styled
     assert styled.endswith("related to the one-liner")
+
+
+def test_a_song_wikidata_lists_without_its_singer_is_theirs_when_the_lead_says_so():
+    # Wikidata names only RedOne for "Bad Romance", and "Tupac Shakur" for 2Pac's song.
+    gaga = caption.Article("Bad Romance", "u", "Bad Romance is a song by Lady Gaga from 2009.")
+    assert caption.performed_by(["composer: RedOne"], "Lady Gaga", gaga)
+    pac = caption.Article("California Love", "u", "California Love is a song by 2Pac.")
+    assert caption.performed_by(["performer: Tupac Shakur"], "2Pac", pac)
+    # A cover the song is best known for, said in a later sentence of the lead.
+    torn = caption.Article(
+        "Torn (song)", "u",
+        "Torn is a song written by Scott Cutler in 1991. It is best known as Natalie "
+        "Imbruglia's 1997 debut single.\n\nBackground:\nEdnaswap recorded it first.",
+    )  # fmt: skip
+    assert caption.performed_by(["performer: Ednaswap"], "Natalie Imbruglia", torn)
+
+
+def test_a_song_that_only_samples_the_artist_or_an_album_naming_them_is_not_theirs():
+    kanye = caption.Article("Stronger", "u", STRONGER_KANYE)
+    assert not caption.performed_by(["performer: Kanye West"], "Daft Punk", kanye)
+    album = caption.Article(
+        "Mi Sueño (Marlon album)", "u",
+        "Mi Sueño is the debut album from Cuban singer Marlon. It features two songs from "
+        "famous singer Willie Colón.",
+    )  # fmt: skip
+    assert not caption.performed_by(["performer: Marlon"], "Willie Colón", album)
+
+
+def test_names_read_from_a_post_are_tried_tidier_too():
+    assert caption.names_to_try("Tour_En_Vivo.mp3", "@nicki.nicole") == [
+        ("Tour_En_Vivo.mp3", "nicki.nicole"),
+        ("Tour_En_Vivo.mp3", "nicki nicole"),
+        ("Tour En Vivo", "nicki.nicole"),
+        ("Tour En Vivo", "nicki nicole"),
+    ]
+    assert caption.names_to_try("“La curiosidad”", "Mike Towers y Jay Wheeler”") == [
+        ("La curiosidad", "Mike Towers y Jay Wheeler"),
+        ("La curiosidad", "Mike Towers"),
+    ]
+    assert caption.names_to_try("Summer of '69 (Live)", "Bryan Adams") == [
+        ("Summer of '69 (Live)", "Bryan Adams"),
+        ("Summer of '69", "Bryan Adams"),
+    ]
+
+
+def test_album_and_film_articles_are_never_taken_for_the_song():
+    for title in ("Mi Sueño (Marlon album)", "3 (álbum de Alejandro Sanz)", "Torn (film)"):
+        assert caption.OTHER_WORK.search(title), title
+    for title in ("Torn (song)", "Alone (Alan Walker song)", "Basket Case (canción)"):
+        assert not caption.OTHER_WORK.search(title), title
+
+
+def artists(request: httpx.Request) -> httpx.Response:
+    """Wikipedia with no article on the song, a rapper named Juvenile and the word's own
+    article."""
+    params = dict(request.url.params)
+    if params.get("list") == "search":
+        hits = [{"title": "Juvenile"}, {"title": "Juvenile (rapper)"}]
+        return httpx.Response(200, json={"query": {"search": hits}})
+    title = params["titles"]
+    text = (
+        "A juvenile is an individual organism that has not yet reached its adult form."
+        if title == "Juvenile"
+        else "Terius Gray, known as Juvenile, is an American rapper from New Orleans.\n"
+        "== Career ==\nHe joined Cash Money Records in 1997.\n"
+        "His single Back That Thang Up reached the top 20 in 1999."
+    )
+    page = {"title": title, "fullurl": f"https://en.wikipedia.org/wiki/{title}", "extract": text}
+    return httpx.Response(200, json={"query": {"pages": [page]}})
+
+
+def test_a_song_without_an_article_is_written_from_the_artist_s_and_the_web(tmp_path):
+    found = [
+        {"title": "Back That Thang Up - Lyrics", "href": "https://g.example/btu",
+         "body": "Back That Thang Up is a 1999 song by Juvenile featuring Mannie Fresh."},
+        {"title": "Video", "href": "https://y.example/v", "body": "Sign in to watch."},
+        {"title": "Other", "href": "https://o.example", "body": "A long page about something "
+         "else entirely, with no word of the song in it at all, none."},
+    ]  # fmt: skip
+    sources = caption.elsewhere(
+        "Back That Thang Up", "Juvenile", "en", tmp_path, httpx.MockTransport(artists),
+        find=lambda query, count: found,
+    )  # fmt: skip
+    rapper, web = sources.articles
+    assert rapper.title == "Juvenile (rapper)" and "Cash Money" not in rapper.text
+    assert "Back That Thang Up reached the top 20" in rapper.text
+    assert web.url == "https://g.example/btu" and "Mannie Fresh" in web.text
+    # Kept on disk like a song's.
+    again = caption.elsewhere("Back That Thang Up", "Juvenile", "en", tmp_path,
+                              httpx.MockTransport(None), find=None)  # fmt: skip
+    assert [a.url for a in again.articles] == [a.url for a in sources.articles]
+
+
+def test_nothing_on_the_song_or_artist_anywhere_says_so(tmp_path):
+    def nothing(request):
+        return httpx.Response(200, json={"query": {"search": []}})
+
+    def broken(query, count):
+        raise RuntimeError("engines refused")
+
+    with pytest.raises(caption.CaptionError, match="nothing found on “Song”"):
+        caption.elsewhere("Song", "Nobody", "es", tmp_path, httpx.MockTransport(nothing), broken)

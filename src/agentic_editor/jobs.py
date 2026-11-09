@@ -1,5 +1,6 @@
 """Background jobs: one job is one source video rendered with one or more presets."""
 
+import functools
 import json
 import logging
 import threading
@@ -12,7 +13,7 @@ from huey import SqliteHuey
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, caption, pipeline, research, style
+from agentic_editor import accounts, caption, pipeline, research, shazam, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -345,12 +346,116 @@ def caption_from_video(
     return written
 
 
+def heard_song(source_ref: str, settings: Settings) -> tuple[str, str] | None:
+    """The song Shazam hears in the reel's source video, or None (see shazam.song). The
+    match is kept with the video's other cached results, so a job already asked it."""
+    from agentic_editor.analyze import file_hash
+
+    try:
+        source = pipeline.resolve_source(source_ref, settings)
+        return shazam.song(source.path, settings.cache_dir / file_hash(source.path))
+    except Exception as exc:  # the source may be gone, or Shazam unreachable
+        log.warning("couldn't ask Shazam about %s: %s", source_ref, exc)
+        return None
+
+
+def caption_about_song(
+    router,
+    settings: Settings,
+    named: tuple[str, str],
+    text: tuple[str, str, str],
+    wanted: PostCaption,
+    source_ref: str,
+    edl: dict,
+    path: Path,
+    save_name,
+) -> caption.Written:
+    """A caption about the reel's song, from whatever can be found, in order:
+    - the song as a person or the preset named it, else as the post's text names it, else
+      as Shazam hears it (a name read from a post can be a file name or an account);
+    - its Wikipedia article, under its name or a tidier one (caption.find_song);
+    - for a song Wikipedia hasn't covered, the artist's article and a web search
+      (caption.elsewhere), noted for the person who posts it;
+    - with nothing about the song or the artist, what the video shows (caption_from_video).
+    Every way is checked against its sources the same way."""
+    title, description, headline = text
+    cache = settings.cache_dir / "captions"
+    words = (wanted.min_words, wanted.max_words)
+    names: list[tuple[str, str]] = []
+    unsure = ""  # why no name was read from the post, when none was
+    if named[0]:
+        names.append(named)
+    else:
+        try:
+            with router.planner() as llm:
+                llm.context = caption.CONTEXT
+                names.append(caption.identify(llm, title, description, headline))
+        except caption.CaptionError as exc:
+            unsure = str(exc)
+
+    @functools.cache
+    def heard() -> tuple[str, str] | None:
+        return heard_song(source_ref, settings)
+
+    def candidates():
+        yield from names
+        # Shazam only for a name read from the post: one a person gave stays.
+        if not named[0] and (found := heard()) and found not in names:
+            yield found
+
+    def written_about(song: str, artist: str, sources: caption.Sources, note: str = ""):
+        save_name(song, artist)
+        with router.planner() as llm:
+            llm.context = caption.CONTEXT
+            done = caption.write(
+                llm, song, artist, sources, wanted.language, headline, wanted.style, words
+            )
+        if note:
+            done.notes.insert(0, note)
+        return done
+
+    tried = []
+    for song, artist in candidates():
+        tried.append((song, artist))
+        try:
+            sources, (song, artist) = caption.find_song(song, artist, wanted.language, cache)
+        except caption.CaptionError:
+            continue
+        return written_about(song, artist, sources)
+    # Wikipedia has nothing on the song: Shazam's name first (the sound is the evidence).
+    best = None if named[0] else heard()
+    for song, artist in sorted(tried, key=lambda n: n != best):
+        try:
+            sources = caption.elsewhere(song, artist, wanted.language, cache)
+        except caption.CaptionError:
+            continue
+        note = (
+            f"Wikipedia has no article on “{song}”: written from "
+            + ", ".join(dict.fromkeys(a.title for a in sources.articles[:3]))
+            + (" and others" if len(sources.articles) > 3 else "")
+            + ". Check it before posting."
+        )
+        return written_about(song, artist, sources, note)
+    why = (
+        f"nothing found on “{tried[0][0]}” by {tried[0][1] or 'its artist'}"
+        if tried
+        else (unsure or "the song isn't named") + " and Shazam didn't recognise it"
+    )
+    log.info("caption about the video instead: %s", why)
+    done = caption_from_video(router, settings, source_ref, edl, path, description, headline,
+                              wanted)  # fmt: skip
+    done.notes.insert(0, f"{why}: written about what the video shows")
+    return done
+
+
 def run_caption(output_id: int, Session: sessionmaker, settings: Settings, router=None) -> None:
     """Write an output's post caption (see caption.py). Like a job, it never stays
     "writing": whatever happens is stored."""
     try:
         with Session() as db:
             output = db.get(Output, output_id)
+            if output is None:
+                return  # deleted while it waited
             output.caption_status = "writing"
             db.commit()
             owner = db.get(User, output.job.owner_id) if output.job.owner_id else None
@@ -367,34 +472,35 @@ def run_caption(output_id: int, Session: sessionmaker, settings: Settings, route
         cache = settings.cache_dir / "captions"
         words = (wanted.min_words, wanted.max_words)
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+
+        def save_name(song: str, artist: str) -> None:
+            with Session() as db:
+                if output := db.get(Output, output_id):
+                    output.caption_song, output.caption_artist = song, artist
+                    db.commit()
+
         if wanted.about == "video" and not topic and not named[0]:
             # A post about what the video shows (unless a person named a song or topic).
             written = caption_from_video(
                 router, settings, source_ref, edl, path, description, headline, wanted
             )
-        else:
+        elif topic:
+            # The preset's style is written for songs; a topic gets the general one.
+            sources = caption.gather_topic(topic, wanted.language, cache)
             with router.planner() as llm:
                 llm.context = caption.CONTEXT
-                if topic:
-                    # The preset's style is written for songs; a topic gets the general one.
-                    sources = caption.gather_topic(topic, wanted.language, cache)
-                    written = caption.write(
-                        llm, "", "", sources, wanted.language, headline, words=words, topic=topic
-                    )
-                else:
-                    song, artist = (
-                        named if named[0] else caption.identify(llm, title, description, headline)
-                    )
-                    with Session() as db:
-                        output = db.get(Output, output_id)
-                        output.caption_song, output.caption_artist = song, artist
-                        db.commit()
-                    sources = caption.gather(song, artist, wanted.language, cache)
-                    written = caption.write(
-                        llm, song, artist, sources, wanted.language, headline, wanted.style, words
-                    )
+                written = caption.write(
+                    llm, "", "", sources, wanted.language, headline, words=words, topic=topic
+                )
+        else:
+            written = caption_about_song(
+                router, settings, named, (title, description, headline), wanted, source_ref,
+                edl, path, save_name,
+            )  # fmt: skip
         with Session() as db:
             output = db.get(Output, output_id)
+            if output is None:
+                return
             output.caption, output.caption_sources = written.text, written.sources
             output.caption_notes, output.caption_status = written.notes, "done"
             db.commit()
@@ -405,8 +511,9 @@ def run_caption(output_id: int, Session: sessionmaker, settings: Settings, route
         )
         with Session() as db:
             output = db.get(Output, output_id)
-            output.caption_status, output.caption_notes = "failed", [reason]
-            db.commit()
+            if output is not None:
+                output.caption_status, output.caption_notes = "failed", [reason]
+                db.commit()
 
 
 def unused_name(base: str, taken: set[str]) -> str:
