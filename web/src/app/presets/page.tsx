@@ -10,6 +10,7 @@ import {
   ImageBlocks,
   PresetSection,
   SECTIONS,
+  UPSCALE_FIELDS,
   TextBlocks,
   VideoPosition,
   WatermarkFields,
@@ -397,6 +398,8 @@ function Presets() {
     );
   }
 
+  const upscaleOnly = draft.upscale?.enabled === true;
+
   return (
     <>
       {learnDialog}
@@ -404,7 +407,7 @@ function Presets() {
       {shareDialog}
       {me?.role === "admin" && <PresetNames onRenamed={() => load(draft?.name)} />}
       {ownerPicker}
-      <PresetPreview preset={draft} />
+      {!upscaleOnly && <PresetPreview preset={draft} />}
       <div className="space-y-6 pb-20">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1 space-y-2">
@@ -507,58 +510,79 @@ function Presets() {
 
         <Card>
           <CardHeader>
-            <CardTitle>On-screen text</CardTitle>
+            <CardTitle>Upscale only</CardTitle>
           </CardHeader>
-          <CardContent>
-            <TextBlocks preset={draft} fonts={fonts} onChange={edit} />
+          <CardContent className="space-y-3">
+            <PresetSection fields={UPSCALE_FIELDS} preset={draft} fonts={fonts} onChange={edit} />
+            <p className="text-xs text-muted-foreground">
+              Makes the whole video bigger and sharper with Real-ESRGAN, and lightly redraws blurry
+              faces with GFPGAN. The length, picture and sound stay as they are.
+            </p>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Pictures on every video</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ImageBlocks preset={draft} onChange={edit} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Your watermark</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <WatermarkFields preset={draft} fonts={fonts} onChange={edit} />
-          </CardContent>
-        </Card>
-
-        {SECTIONS.slice(1).map((section) => (
-          <Fragment key={section.title}>
+        {upscaleOnly ? (
+          <p className="text-sm text-muted-foreground">
+            This preset only upscales, so its editing settings aren&apos;t used and are hidden.
+          </p>
+        ) : (
+          <>
             <Card>
               <CardHeader>
-                <CardTitle>{section.title}</CardTitle>
+                <CardTitle>On-screen text</CardTitle>
               </CardHeader>
               <CardContent>
-                <PresetSection
-                  fields={section.fields}
-                  preset={draft}
-                  fonts={fonts}
-                  onChange={edit}
-                />
+                <TextBlocks preset={draft} fonts={fonts} onChange={edit} />
               </CardContent>
             </Card>
-            {section.title === "Framing" && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Video position</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <VideoPosition preset={draft} onChange={edit} />
-                </CardContent>
-              </Card>
-            )}
-          </Fragment>
-        ))}
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Pictures on every video</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ImageBlocks preset={draft} onChange={edit} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Your watermark</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <WatermarkFields preset={draft} fonts={fonts} onChange={edit} />
+              </CardContent>
+            </Card>
+
+            {SECTIONS.slice(1).map((section) => (
+              <Fragment key={section.title}>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{section.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <PresetSection
+                      fields={section.fields}
+                      preset={draft}
+                      fonts={fonts}
+                      onChange={edit}
+                    />
+                  </CardContent>
+                </Card>
+                {section.title === "Framing" && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Video position</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <VideoPosition preset={draft} onChange={edit} />
+                    </CardContent>
+                  </Card>
+                )}
+              </Fragment>
+            ))}
+          </>
+        )}
 
         <div className="hand-rule-top fixed inset-x-0 bottom-0 bg-background/90 backdrop-blur">
           <div className="mx-auto flex max-w-5xl items-center justify-end gap-2 px-4 py-3">

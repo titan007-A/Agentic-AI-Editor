@@ -1,0 +1,11 @@
+name: upscale-hd
+label: Upscale HD (no editing)
+min_duration: 1
+max_duration: 3600
+post_caption:
+  enabled: false
+upscale:
+  enabled: true
+  size: 1080p
+  faces: 0.5
+  denoise: 0.5

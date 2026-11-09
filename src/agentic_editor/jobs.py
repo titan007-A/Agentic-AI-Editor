@@ -3,6 +3,7 @@
 import functools
 import json
 import logging
+import re
 import threading
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -44,6 +45,7 @@ STAGE_PROGRESS = {
     "plan": 0.45,
 }
 RENDER_START = 0.55
+UPSCALED = re.compile(r"upscaled (\d+) of (\d+) frames")  # upscale.upscale's progress
 RELEARN_DAYS = 7  # a research learns its account again when it was learned longer ago
 SNAPSHOTS = 30  # an account's latest snapshots kept (see learn_account)
 TASTE = 12  # reels of each kind (liked, not wanted) a research is told of
@@ -88,6 +90,10 @@ class Tracker:
             value = RENDER_START + share * self.finished
         elif stage in ("render", "review"):
             value = RENDER_START + share * (self.finished + (0.3 if stage == "render" else 0.7))
+        elif stage == "upscale" and (counted := UPSCALED.search(message)):
+            # An upscale is one long render: its share fills as its frames are drawn.
+            done, total = map(int, counted.groups())
+            value = RENDER_START + share * (self.finished + 0.95 * done / max(total, 1))
         else:
             value = STAGE_PROGRESS.get(stage, self.value)
         self.value = max(self.value, min(value, 0.99))

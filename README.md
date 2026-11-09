@@ -519,6 +519,31 @@ preset's `style` then says what the page wants from the caption, on top of a def
 two AH-64 Apaches over Myrtle Beach on 4 July 2026 and the Semiquincentennial, in 58 s on
 the Mac, with nothing left to check.
 
+### Upscaling only
+
+A preset with `upscale.enabled: true` ("Upscale only" in the editor) makes the whole video
+bigger and sharper and changes nothing else: no cut, text, framing, grade or sound change,
+and the rest of the preset is ignored (the editor hides it). `presets/upscale-hd.yaml`
+("Upscale HD (no editing)") is the shared one for admins. Each frame goes through
+Real-ESRGAN's general model (`realesr-general-x4v3`, mixed with its weak-denoise twin by
+`upscale.denoise`: 0 keeps grain, 1 smooths most), at half the output's short side at most
+(the model's 4x is then brought down, which cleans edges), to `upscale.size` (`1080p`,
+`1440p` or `4k`, the short side; a 9:16 reel at 1080p is 1080x1920). Faces at least 14 px
+between the eyes are found by YuNet, lined up by their eyes, nose and mouth corners, redrawn
+by GFPGAN v1.4 and laid back over the upscaled face `upscale.faces` of the way (0.5 by
+default: sharper eyes and edges, still the same person; 0 leaves faces alone), with soft
+edges and their place smoothed from frame to frame. The sound is copied as it is (AAC, MP3,
+ALAC, AC-3) or put in AAC 256k, and the frame rate and length stay. An upscale preset can be
+picked together with editing presets in one job; each side's failure leaves the other's
+videos.
+
+The four models (360 MB, all free: Real-ESRGAN BSD 3-Clause, GFPGAN Apache 2.0, YuNet MIT)
+are downloaded into `models/upscale` on first use or by `aiedit fetch-models`, each checked
+against its known hash. The GFPGAN and Real-ESRGAN network code is copied into
+`upscale/archs.py` (licences in `upscale/LICENSES.md`), so basicsr isn't needed. GFPGAN runs
+in full precision: in half precision its colours drift (green and blue sank by a quarter).
+On the PC (RTX 5050) a 19 s 320x240 clip took 116 s to 1440x1080 with faces.
+
 ### Learning a style from a reel
 
 Give a reel that already looks the way you want, and a preset is drafted from it:
@@ -592,6 +617,7 @@ render with an error rather than showing as an empty box.
 | Transcription | `WHISPER_MODEL` / `MLX_WHISPER_MODEL` | `large-v3-turbo` |
 | Vocal isolation | `SEPARATION_MODEL` | `UVR-MDX-NET-Voc_FT.onnx` |
 | Text on screen | (fixed) | PaddleOCR PP-OCRv6 small, through RapidOCR on the CPU |
+| Upscaling, faces | (fixed) | Real-ESRGAN `realesr-general-x4v3`, GFPGAN v1.4, YuNet |
 
 Text on screen (burnt-in lyrics, captions, @handles) is found by OCR, not by the vision
 model: on 36 frames of 9 real reels the vision models (`qwen3.5:4b`, `qwen3.5:9b`) found
