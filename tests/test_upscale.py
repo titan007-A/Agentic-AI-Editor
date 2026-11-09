@@ -2,6 +2,7 @@
 upscaler stands in for Real-ESRGAN and the face fixer is tested with a stand-in network."""
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from agentic_editor.presets import Preset, Upscale
 from agentic_editor.settings import get_settings
 
 BACKENDS = Backends("cpu", "cpu", "x264", "h264")
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
 
 
 def test_the_output_has_the_short_side_asked_for_and_the_model_sees_half_of_it_at_most():
@@ -65,6 +67,7 @@ def no_models(monkeypatch, tmp_path):
     monkeypatch.setattr(upscale, "_free", lambda dev: None)
 
 
+@needs_ffmpeg
 @pytest.mark.parametrize("audio", ["aac", "opus"])
 def test_a_video_is_written_bigger_with_its_sound_length_and_frame_rate(no_models, tmp_path, audio):
     source = make_video(tmp_path / f"in-{audio}.mkv", audio=audio)
@@ -80,6 +83,7 @@ def test_a_video_is_written_bigger_with_its_sound_length_and_frame_rate(no_model
     assert said[0] == "upscaling 160x120 to 1440x1080"
 
 
+@needs_ffmpeg
 def test_a_silent_video_stays_silent(no_models, tmp_path):
     source = tmp_path / "silent.mp4"
     subprocess.run(
@@ -92,6 +96,7 @@ def test_a_silent_video_stays_silent(no_models, tmp_path):
     assert (info.width, info.height) == (1080, 1440) and not info.has_audio
 
 
+@needs_ffmpeg
 def test_a_failure_mid_video_raises_instead_of_waiting_forever(no_models, monkeypatch, tmp_path):
     class Broken(Nearest):
         def __call__(self, frames, out):
@@ -156,6 +161,7 @@ def preset(name: str, **upscaling) -> Preset:
                   upscale=Upscale(**upscaling))  # fmt: skip
 
 
+@needs_ffmpeg
 def test_an_upscale_preset_is_made_from_the_whole_video_without_editing(
     no_models, monkeypatch, tmp_path
 ):
@@ -176,6 +182,7 @@ def test_an_upscale_preset_is_made_from_the_whole_video_without_editing(
     assert meta["title"] == "Old clip" and meta["url"] == "https://x.test/v"
 
 
+@needs_ffmpeg
 def test_upscale_and_edit_presets_in_one_job_each_get_their_own_and_one_failing_keeps_the_other(
     no_models, monkeypatch, tmp_path
 ):
