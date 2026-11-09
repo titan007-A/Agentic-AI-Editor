@@ -207,12 +207,22 @@ Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.
 
-### Post to Buffer (prototype, admins)
+### Post to Buffer
 
-A finished reel's card has a Buffer button. The first time, paste a Buffer API key (Buffer:
-Settings > API; only the Buffer account's owner can make one); it is kept for that account.
-Pick channels, caption, an Instagram first comment, and when: add to the queue, next in the
-queue, now, or at a time. Instagram posts go as Reels shared to the feed. Buffer takes no
+Everyone, admin or employee, adds their own Buffer API keys on the Buffer page (Buffer:
+Settings > API; only the Buffer account's owner can make one), each with a name. One key
+reaches every channel of that Buffer account; the page lists them and how many requests went
+to Buffer today (its limits are per Buffer account: 600 a day on the free plan). Keys are
+never shown again and nobody else uses them. Below the keys, each preset is linked to the
+channels it posts to. Links are to channels, not keys, so a replaced key keeps the presets
+working; a channel no key shows any more is flagged in red.
+
+A finished reel's card has a Buffer button: it opens with the reel's preset's channels ticked
+(other channels folded away; the first post of an unlinked preset can remember its choice).
+An admin posting an employee's reel posts with that employee's keys and doesn't change their
+links. Pick caption, an Instagram first comment, and when: add to the queue, next in the
+queue, now, or at a time. Instagram posts go as Reels shared to the feed, so the Instagram
+account must be a Creator or Business one (Buffer refuses personal profiles). Buffer takes no
 uploads: it fetches the video from an unguessable link on this editor (/api/pub/...) when
 it posts, so the server must be reachable over https then (set PUBLIC_URL in .env if the
 editor is opened another way) and Cloudflare must let Buffer's fetch through.

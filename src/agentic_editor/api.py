@@ -48,6 +48,7 @@ from agentic_editor.db import (
     HiddenAccount,
     Job,
     Output,
+    PresetBuffer,
     Research,
     ResearchAccount,
     ResearchItem,
@@ -55,6 +56,7 @@ from agentic_editor.db import (
     Setting,
     StyleDraft,
 )
+from agentic_editor.db import BufferKey as BufferKeyRow
 from agentic_editor.db import User as Account
 from agentic_editor.download import update_ytdlp
 from agentic_editor.ffmpeg import probe as ffmpeg_probe
@@ -96,7 +98,16 @@ class LoginRequest(BaseModel):
 
 
 class BufferKeyRequest(BaseModel):
+    label: str = Field(default="", max_length=80)
     key: str = Field(min_length=8, max_length=4000)
+
+
+class BufferLabelRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+
+
+class PresetChannelsRequest(BaseModel):
+    channels: list[str] = Field(max_length=100)
 
 
 class BufferPostRequest(BaseModel):
@@ -105,6 +116,8 @@ class BufferPostRequest(BaseModel):
     mode: buffer.Mode = "addToQueue"
     due_at: datetime | None = None
     first_comment: str = ""
+    # Keep these channels as the reel's preset's from now on.
+    remember: bool = False
 
 
 class ShareRequest(BaseModel):
@@ -784,7 +797,7 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/system")
-    def system(_: User) -> dict:
+    def system(_: Admin) -> dict:
         import yt_dlp.version
 
         backends = get_backends()
@@ -903,7 +916,15 @@ def create_app(
         target = whose(account, owner, session)
         if name not in presets(target):
             raise HTTPException(404, "no such preset")
-        (presets_dir(target) / f"{name}.yaml").unlink()
+        folder = presets_dir(target)
+        (folder / f"{name}.yaml").unlink()
+        # Its Buffer channels go with it, for everyone who had it (admins share one folder).
+        for account in everyone(session):
+            if presets_dir(account) == folder:
+                found = session.get(PresetBuffer, (account.id, name))
+                if found is not None:
+                    session.delete(found)
+        session.commit()
         return {"ok": True}
 
     @app.post("/api/presets/{name}/share")
@@ -1653,43 +1674,169 @@ def create_app(
             output.path, media_type="video/mp4", filename=f"{name}.mp4" if download else None
         )
 
-    # Posting to Buffer: every account keeps its own Buffer API key and posts its own reels.
-    def buffer_key(account: Account, session: Session) -> str | None:
-        found = session.get(Setting, f"buffer_key:{account.id}")
-        return found.value if found else None
+    # Posting to Buffer: everyone adds their own Buffer API keys, named, and links each preset
+    # to Buffer channels. Buffer's limits are per Buffer account, so the editor asks it as
+    # little as it can: channels are kept from when a key was added or refreshed.
+    def buffer_rows(account: Account, session: Session) -> list[BufferKeyRow]:
+        old = session.get(Setting, f"buffer_key:{account.id}")
+        if old is not None:  # the one key of before, kept as a named key
+            session.add(BufferKeyRow(owner_id=account.id, label="My Buffer", key=old.value))
+            session.delete(old)
+            session.commit()
+        query = select(BufferKeyRow).where(BufferKeyRow.owner_id == account.id)
+        return list(session.scalars(query.order_by(BufferKeyRow.created_at)))
 
-    def channel_views(channels: list[buffer.Channel]) -> list[dict]:
-        return [vars(c) for c in channels]
+    def spent(row: BufferKeyRow, count: buffer.Count) -> None:
+        today = date.today().isoformat()
+        if row.used_on != today:
+            row.used_on, row.used = today, 0
+        row.used += count.n
+
+    async def refresh_key(row: BufferKeyRow) -> None:
+        count = buffer.Count()
+        try:
+            found = await asyncio.to_thread(buffer.channels, row.key, None, count)
+        except buffer.BufferError as exc:
+            row.error = str(exc)
+        else:
+            row.channels = [vars(c) for c in found]
+            row.error = ""
+            row.refreshed_at = datetime.now(UTC)
+        spent(row, count)
+
+    def key_view(row: BufferKeyRow) -> dict:
+        today = date.today().isoformat()
+        return {
+            "id": row.id,
+            "label": row.label,
+            "tail": row.key[-4:],
+            "channels": [c | {"personal": buffer.personal(c)} for c in row.channels],
+            "error": row.error,
+            "refreshed_at": row.refreshed_at,
+            "used_today": row.used if row.used_on == today else 0,
+        }
+
+    def find_key(key_id: str, account: Account, session: Session) -> BufferKeyRow:
+        row = session.get(BufferKeyRow, key_id)
+        if row is None or row.owner_id != account.id:
+            raise HTTPException(404, "no such key")
+        return row
+
+    def preset_links(account: Account, session: Session) -> dict[str, list[str]]:
+        query = select(PresetBuffer).where(PresetBuffer.owner_id == account.id)
+        return {link.preset: link.channels for link in session.scalars(query)}
+
+    def link_preset(account: Account, name: str, channels: list[str], session: Session) -> None:
+        found = session.get(PresetBuffer, (account.id, name))
+        if not channels:
+            if found is not None:
+                session.delete(found)
+        elif found is None:
+            session.add(PresetBuffer(owner_id=account.id, preset=name, channels=channels))
+        else:
+            found.channels = channels
+        session.commit()
+
+    def reachable(rows: list[BufferKeyRow]) -> dict[str, BufferKeyRow]:
+        """Each channel and the key to post to it with: a working key first, else the one
+        added first."""
+        found: dict[str, BufferKeyRow] = {}
+        for row in sorted(rows, key=lambda r: bool(r.error)):
+            for channel in row.channels:
+                found.setdefault(channel["id"], row)
+        return found
+
+    async def buffer_state(account: Account, session: Session) -> dict:
+        rows = buffer_rows(account, session)
+        for row in rows:
+            if row.refreshed_at is None and not row.error:  # a key from before, never asked
+                await refresh_key(row)
+        session.commit()
+        links = preset_links(account, session)
+        return {
+            "keys": [key_view(row) for row in rows],
+            "presets": [
+                {"name": p.name, "label": p.label, "channels": links.get(p.name, [])}
+                for p in sorted(presets(account).values(), key=lambda p: p.label.casefold())
+            ],
+        }
 
     @app.get("/api/buffer")
     async def buffer_status(me: User, session: DB) -> dict:
-        key = buffer_key(me, session)
-        if key is None:
-            return {"connected": False, "channels": []}
-        try:
-            channels = await asyncio.to_thread(buffer.channels, key)
-        except buffer.BufferError as exc:
-            return {"connected": True, "channels": [], "error": str(exc)}
-        return {"connected": True, "channels": channel_views(channels)}
+        return await buffer_state(me, session)
 
-    @app.put("/api/buffer")
-    async def connect_buffer(body: BufferKeyRequest, me: User, session: DB) -> dict:
+    @app.post("/api/buffer/keys")
+    async def add_buffer_key(body: BufferKeyRequest, me: User, session: DB) -> dict:
         key = body.key.strip()
-        try:
-            channels = await asyncio.to_thread(buffer.channels, key)
-        except buffer.BufferError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        session.merge(Setting(key=f"buffer_key:{me.id}", value=key))
+        rows = buffer_rows(me, session)
+        same = next((r for r in rows if r.key == key), None)
+        if same is not None:
+            raise HTTPException(422, f"you added this key already, as {same.label}")
+        label = " ".join(body.label.split()) or f"Buffer {len(rows) + 1}"
+        row = BufferKeyRow(owner_id=me.id, label=label, key=key)
+        await refresh_key(row)
+        if row.error:
+            raise HTTPException(422, row.error)
+        session.add(row)
         session.commit()
-        return {"connected": True, "channels": channel_views(channels)}
+        return await buffer_state(me, session)
 
-    @app.delete("/api/buffer")
-    def disconnect_buffer(me: User, session: DB) -> dict:
-        found = session.get(Setting, f"buffer_key:{me.id}")
-        if found is not None:
-            session.delete(found)
-            session.commit()
-        return {"ok": True}
+    @app.patch("/api/buffer/keys/{key_id}")
+    async def rename_buffer_key(
+        key_id: str, body: BufferLabelRequest, me: User, session: DB
+    ) -> dict:
+        label = " ".join(body.label.split())
+        if not label:
+            raise HTTPException(422, "give the key a name")
+        find_key(key_id, me, session).label = label
+        session.commit()
+        return await buffer_state(me, session)
+
+    @app.post("/api/buffer/keys/{key_id}/refresh")
+    async def refresh_buffer_key(key_id: str, me: User, session: DB) -> dict:
+        await refresh_key(find_key(key_id, me, session))
+        session.commit()
+        return await buffer_state(me, session)
+
+    @app.delete("/api/buffer/keys/{key_id}")
+    async def remove_buffer_key(key_id: str, me: User, session: DB) -> dict:
+        session.delete(find_key(key_id, me, session))
+        session.commit()
+        return await buffer_state(me, session)
+
+    @app.put("/api/buffer/presets/{name}")
+    async def link_preset_channels(
+        name: str, body: PresetChannelsRequest, me: User, session: DB
+    ) -> dict:
+        if name not in presets(me):
+            raise HTTPException(404, "no such preset")
+        wanted = list(dict.fromkeys(body.channels))
+        known = reachable(buffer_rows(me, session))
+        if any(c not in known for c in wanted):
+            raise HTTPException(422, "none of your keys shows that channel; refresh the keys")
+        link_preset(me, name, wanted, session)
+        return await buffer_state(me, session)
+
+    def poster(output: Output, me: Account, session: Session) -> Account:
+        """Whose keys and preset links a reel is posted with: its owner's, also when an
+        admin posts it for them."""
+        owner = output.job.owner_id
+        found = session.get(Account, owner) if owner else None
+        return found or me
+
+    @app.get("/api/outputs/{output_id}/buffer")
+    async def output_buffer(output_id: int, me: User, session: DB) -> dict:
+        output = find_output(output_id, session, me)
+        who = poster(output, me, session)
+        state = await buffer_state(who, session)
+        preset = presets(who).get(output.preset)
+        return {
+            "keys": state["keys"],
+            "preset": output.preset,
+            "preset_label": preset.label if preset else output.preset,
+            "linked": preset_links(who, session).get(output.preset, []),
+            "owner": None if who.id == me.id else who.username,
+        }
 
     pub_dir = settings.media_dir / "pub"
 
@@ -1724,34 +1871,49 @@ def create_app(
         output_id: int, body: BufferPostRequest, request: Request, me: User, session: DB
     ) -> dict:
         output = find_output(output_id, session, me)
-        key = buffer_key(me, session)
-        if key is None:
-            raise HTTPException(409, "connect Buffer first")
+        who = poster(output, me, session)
         if body.mode == "customScheduled" and body.due_at is None:
             raise HTTPException(422, "pick a time to post it")
-        try:
-            channels = {c.id: c for c in await asyncio.to_thread(buffer.channels, key)}
-        except buffer.BufferError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        unknown = [c for c in body.channels if c not in channels]
-        if unknown:
-            raise HTTPException(422, "Buffer doesn't have that channel any more; reload")
+        rows = buffer_rows(who, session)
+        if not rows:
+            raise HTTPException(409, "add a Buffer key on the Buffer page first")
+        keys = reachable(rows)
+        wanted = list(dict.fromkeys(body.channels))
+        if any(c not in keys for c in wanted):
+            raise HTTPException(
+                422, "none of the keys shows that channel any more; refresh them on the Buffer page"
+            )
         link = public_link(output, request)
         due = body.due_at
         if due is not None and due.tzinfo is None:
             due = due.replace(tzinfo=UTC)
         results = []
-        for channel_id in body.channels:
-            channel = channels[channel_id]
+        for channel_id in wanted:
+            row = keys[channel_id]
+            channel = buffer.Channel(**next(c for c in row.channels if c["id"] == channel_id))
+            count = buffer.Count()
             try:
                 data = buffer.post_input(
                     channel, link, body.text, body.mode, due, body.first_comment
                 )
-                post = await asyncio.to_thread(buffer.create_post, key, data)
+                post = await asyncio.to_thread(buffer.create_post, row.key, data, None, count)
                 results.append({"channel": channel.name, "ok": True, "post": post})
             except buffer.BufferError as exc:
+                if "refused the API key" in str(exc):
+                    row.error = str(exc)
                 results.append({"channel": channel.name, "ok": False, "error": str(exc)})
-        log.info("buffer: output %s -> %s", output_id, results)
+            spent(row, count)
+        # Only the preset's own person changes its links, not an admin posting for them.
+        mine_now = who.id == me.id
+        if body.remember and mine_now and presets(who).get(output.preset) is not None:
+            link_preset(who, output.preset, wanted, session)
+        session.commit()
+        log.info(
+            "buffer: output %s by %s -> %s",
+            output_id,
+            who.username,
+            [r | {"key": keys[c].label} for r, c in zip(results, wanted, strict=True)],
+        )
         return {"results": results, "link": link}
 
     @app.get("/api/outputs/{output_id}/subtitles")
