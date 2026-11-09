@@ -495,3 +495,21 @@ def test_a_restart_counts_job_and_caption_turns_together(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "learn_style", lambda *a: None)
     jobs.recover(Session)
     assert started == [] and captions == [1]
+
+
+def test_an_upscale_fills_its_render_share_as_frames_are_drawn(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(Job(id="j1", source="s", presets=["upscale-hd"]))
+        db.commit()
+    track = jobs.Tracker(Session, "j1", 1)
+    track("render", "upscaling for upscale-hd")
+    start = track.value
+    track("upscale", "upscaling 320x240 to 1440x1080")
+    assert track.value == start  # no count yet: where it was
+    track("upscale", "upscaled 120 of 240 frames")
+    assert track.value == pytest.approx(jobs.RENDER_START + 0.45 * 0.95 * 0.5)
+    track("upscale", "upscaled 240 of 240 frames")
+    assert track.value == pytest.approx(jobs.RENDER_START + 0.45 * 0.95)
+    track("done", "upscale-hd -> out.mp4")
+    assert track.value == 0.99
