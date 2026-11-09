@@ -117,6 +117,9 @@ class ModelRouter:
         faces.model_file(s.models_dir)
         if ocr.available():
             ocr.fetch_model(s.models_dir)
+        from agentic_editor import upscale
+
+        upscale.fetch_models(s.models_dir)
 
     def planner(self) -> OllamaClient:
         """The planning model, holding the GPU while open."""

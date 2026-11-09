@@ -738,6 +738,95 @@ def edit(
     progress: Progress,
     run_id: str,
 ) -> Result:
+    """Every preset's version of the video. A preset that only upscales (preset.upscale)
+    is made from the whole video by itself; the others are edited together (edit_presets),
+    and one side failing doesn't lose what the other made."""
+    upscaling = [p for p in presets if p.upscale.enabled]
+    if not upscaling:
+        return edit_presets(source, work_dir, presets, settings, backends, notes, progress,
+                            run_id)  # fmt: skip
+    out_dir = settings.media_dir / "outputs" / work_dir.name / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outputs: list[Output] = []
+    failures: list[str] = []
+    errors: list[Exception] = []
+    for preset in upscaling:
+        try:
+            outputs.append(upscaled(source, preset, out_dir, settings, backends, progress))
+        except Exception as exc:
+            log.exception("upscaling %s failed", preset.name)
+            failures.append(f"{preset.name}: {type(exc).__name__}: {exc}")
+            errors.append(exc)
+    rest = [p for p in presets if not p.upscale.enabled]
+    if rest:
+        try:
+            edited = edit_presets(source, work_dir, rest, settings, backends, notes, progress,
+                                  run_id)  # fmt: skip
+            outputs += edited.outputs
+            failures += edited.failures
+        except Exception as exc:
+            if not outputs:
+                raise
+            log.exception("editing failed")
+            failures.append(f"{type(exc).__name__}: {exc}")
+    else:
+        meta = {"title": source.title, "url": source.url, "notes": notes,
+                "uploader": source.uploader, "description": source.description}  # fmt: skip
+        (out_dir / "source.json").write_text(json.dumps(meta))
+    if not outputs:
+        if len(errors) == 1:
+            raise errors[0]
+        raise RuntimeError("; ".join(failures)) from errors[-1]
+    return Result(source.title, outputs, failures)
+
+
+def upscaled(
+    source: download.Source,
+    preset: Preset,
+    out_dir: Path,
+    settings: Settings,
+    backends: Backends,
+    progress: Progress,
+) -> Output:
+    """The whole video, bigger and sharper and otherwise as it was (see upscale/)."""
+    from agentic_editor import upscale
+
+    dest = out_dir / f"{preset.name}.mp4"
+    wanted = preset.upscale
+    progress("render", f"upscaling for {preset.name}")
+    sizes = upscale.upscale(source.path, dest, settings.models_dir, backends, wanted.size,
+                            wanted.faces, wanted.denoise, progress)  # fmt: skip
+    length = ffmpeg.probe(dest).duration
+    thumbnail = out_dir / f"{preset.name}-thumb.jpg"
+    try:
+        ffmpeg.run(["-y", "-ss", f"{length / 3:.2f}", "-i", str(dest), "-frames:v", "1",
+                    "-vf", "scale=720:-2", "-q:v", "3", str(thumbnail)])  # fmt: skip
+    except ffmpeg.FFmpegError as exc:
+        log.warning("no thumbnail for %s: %s", preset.name, exc)
+        thumbnail = None
+    (w, h), (ow, oh) = sizes.source, sizes.out
+    faces = f", faces {wanted.faces:.0%}" if wanted.faces else ", faces left as they were"
+    edl = EDL(
+        clips=[Clip(start=0.0, end=max(length, 0.1), reason="the whole video, upscaled")],
+        title=source.title,
+        crop_mode="none",
+        decisions=[f"upscaled {w}x{h} to {ow}x{oh}{faces}, denoise {wanted.denoise:.0%}"],
+    )
+    (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
+    progress("done", f"{preset.name} -> {dest}")
+    return Output(preset.name, dest, edl, "upscale", thumbnail)
+
+
+def edit_presets(
+    source: download.Source,
+    work_dir: Path,
+    presets: list[Preset],
+    settings: Settings,
+    backends: Backends,
+    notes: str | None,
+    progress: Progress,
+    run_id: str,
+) -> Result:
     progress("analyze", f"analyzing {source.title}")
     out_dir = settings.media_dir / "outputs" / work_dir.name / run_id
     out_dir.mkdir(parents=True, exist_ok=True)

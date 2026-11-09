@@ -275,6 +275,18 @@ class Silence(Strict):
     min_duration: float = Field(default=0.4, gt=0)
 
 
+class Upscale(Strict):
+    """A preset that only makes the video bigger and sharper (upscale/): no cut, text,
+    framing, grade or sound change; the rest of the preset is left unused."""
+
+    enabled: bool = False
+    size: Literal["1080p", "1440p", "4k"] = "1080p"  # the output's short side
+    # How much of GFPGAN's redrawn face is laid over the upscaled one; 0 leaves faces be.
+    faces: float = Field(default=0.5, ge=0, le=1)
+    # Real-ESRGAN's denoise strength: 0 keeps grain and texture, 1 smooths most.
+    denoise: float = Field(default=0.5, ge=0, le=1)
+
+
 class Preset(Strict):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     label: str
@@ -310,6 +322,7 @@ class Preset(Strict):
     audio: Audio = Audio()
     bitrate_mbps: float = Field(default=12.0, gt=0, le=100)
     style_notes: str = ""
+    upscale: Upscale = Upscale()
 
     @model_validator(mode="before")
     @classmethod

@@ -95,6 +95,33 @@ const NULLABLE = new Set([
   "framing.text_gap_below",
 ]);
 
+/** A preset that only makes the video bigger and sharper: nothing else in it is used. */
+export const UPSCALE_FIELDS: Field[] = [
+  {
+    path: "upscale.enabled",
+    label: "Only upscale (no cutting, text or sound changes)",
+    kind: "switch",
+  },
+  {
+    path: "upscale.size",
+    label: "Size (the short side: 1080p is 1080x1920 for a reel)",
+    kind: "select",
+    options: ["1080p", "1440p", "4k"],
+  },
+  {
+    path: "upscale.faces",
+    label: "Face fix (0 off, 0.5 light, 1 full)",
+    kind: "number",
+    step: 0.05,
+  },
+  {
+    path: "upscale.denoise",
+    label: "Smoothing (0 keeps grain, 1 smooths most)",
+    kind: "number",
+    step: 0.05,
+  },
+];
+
 export const SECTIONS: { title: string; fields: Field[] }[] = [
   {
     title: "General",
