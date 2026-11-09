@@ -359,3 +359,25 @@ def test_nothing_on_the_song_or_artist_anywhere_says_so(tmp_path):
 
     with pytest.raises(caption.CaptionError, match="nothing found on “Song”"):
         caption.elsewhere("Song", "Nobody", "es", tmp_path, httpx.MockTransport(nothing), broken)
+
+
+def test_the_song_and_artist_asked_about_and_possessives_are_not_unsupported():
+    corpus = "Terius Gray, known as Juvenile, is an American rapper."
+    text = "Juvenile sings Back That Thang Up. Gray's voice carries it."
+    assert caption.unsupported_terms(text, corpus) == ["Back", "That", "Thang"]
+    assert caption.unsupported_terms(text, corpus + "\nBack That Thang Up\nJuvenile") == []
+
+
+def test_a_web_search_that_answers_nothing_quoted_is_asked_again_unquoted():
+    asked = []
+
+    def find(query, count):
+        asked.append(query)
+        if query.startswith('"'):
+            return []
+        return [{"title": "Hadal Ahbek", "href": "h", "body": "Hadal Ahbek is the 2020 debut "
+                 "single of Issam Alnajjar, and it went viral on TikTok."}]  # fmt: skip
+
+    (found,) = caption.web_results("Hadal Ahbek", "Issam Alnajjar", find)
+    assert asked == ['"Hadal Ahbek" Issam Alnajjar song', "Hadal Ahbek Issam Alnajjar"]
+    assert found.url == "h"

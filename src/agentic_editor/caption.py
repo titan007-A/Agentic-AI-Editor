@@ -538,11 +538,15 @@ def artist_article(http: httpx.Client, language: str, artist: str, song: str):
 def web_results(song: str, artist: str, find) -> list[Article]:
     """What a web search says about the song: the results that name it, each its page's
     title, address and the search engine's lines from it."""
-    try:
-        hits = find(f'"{song}" {artist} song', WEB_RESULTS)
-    except Exception as exc:  # the engines are a third party's: no answer is no results
-        log.warning("web search for %s failed: %s", song, exc)
-        return []
+    hits: list[dict] = []
+    # Quoted first; engines often answer nothing to a quoted name, so then without.
+    for query in (f'"{song}" {artist} song', f"{song} {artist}"):
+        try:
+            hits = find(query, WEB_RESULTS)
+        except Exception as exc:  # the engines are a third party's: no answer is no results
+            log.warning("web search for %s failed: %s", query, exc)
+        if hits:
+            break
     wanted = plain(song)
     kept = []
     for hit in hits:
@@ -605,6 +609,7 @@ def unsupported_terms(text: str, corpus: str) -> list[str]:
     doesn't open a sentence, a quoted title's words, any number of 10 or more. Checked in
     code, so a model's slip can't wave it through."""
     words = set(NAME.findall(plain(corpus)))
+    words |= {re.sub(r"['’]s$", "", w) for w in words}  # "Gray's" is Gray
     numbers = {int(re.sub(r"[.,]", "", n)) for n in NUMBER.findall(corpus)}
     missing: list[str] = []
     for sentence in SENTENCE_END.split(text):
@@ -613,7 +618,8 @@ def unsupported_terms(text: str, corpus: str) -> list[str]:
             word = token.group()
             opens = i == 0 or sentence[: token.start()].rstrip()[-1:] in '¡¿:“"«'
             name = word[:1].isupper() and not opens and len(word) > 2
-            if name and plain(word) not in words and word not in missing:
+            known = plain(word) in words or re.sub(r"['’]s$", "", plain(word)) in words
+            if name and not known and word not in missing:
                 missing.append(word)
         for number in NUMBER.findall(sentence):
             value = int(re.sub(r"[.,]", "", number))
@@ -697,8 +703,12 @@ def problems(
     words: tuple[int, int],
     headline: str = "",
     style_wants_emoji: bool = True,
+    subject: str = "",
 ) -> list[str]:
-    found = [f"not in the sources: {term}" for term in unsupported_terms(text, sources.corpus())]
+    """What is wrong with a caption. `subject` is what it was asked to be about (the
+    song and artist): their names are given, not taken from the sources."""
+    corpus = f"{sources.corpus()}\n{subject}"
+    found = [f"not in the sources: {term}" for term in unsupported_terms(text, corpus)]
     count = len(re.findall(r"\w+", text))
     if not words[0] <= count <= words[1]:
         found.append(f"{count} words, not {words[0]}-{words[1]}")
@@ -743,7 +753,8 @@ def write(
     messages = [{"role": "user", "content": prompt}]
     text = _write(llm, messages)
     emojis = "emoji" in style.casefold()
-    wrong = problems(text, sources, llm, words, headline, emojis)
+    named = f"{song}\n{artist}"
+    wrong = problems(text, sources, llm, words, headline, emojis, named)
     if wrong:
         messages += [
             {"role": "assistant", "content": json.dumps({"paragraphs": text.split("\n\n")})},
@@ -753,7 +764,7 @@ def write(
              + "\n- ".join(wrong)},
         ]  # fmt: skip
         text = _write(llm, messages)
-        wrong = problems(text, sources, llm, words, headline, emojis)
+        wrong = problems(text, sources, llm, words, headline, emojis, named)
     used = [{"title": a.title, "url": a.url} for a in sources.articles]
     return Written(text=text, sources=used, notes=wrong)
 
