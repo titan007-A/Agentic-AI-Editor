@@ -270,3 +270,36 @@ def test_a_vocal_stem_that_never_falls_silent_is_planned_from_its_sound(make_ana
     lines = build_lines(analysis)
     assert lines[0].start == 0.0 and lines[-1].end == 30.0
     assert sum(ln.end - ln.start for ln in lines) == 30.0
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        # A word Whisper timed 30.0-30.0 right where the plan ends: the job hung in "plan".
+        [
+            Line(0, 0.0, 10.0, [], "n"),
+            Line(1, 10.0, 30.0, [], "n"),
+            Line(2, 30.0, 30.0, [], "n"),
+            Line(3, 31.0, 40.0, [], "n"),
+        ],
+        # And one right where it starts.
+        [Line(0, 0.0, 5.0, [], "n"), Line(1, 10.0, 10.0, [], "n"), Line(2, 10.0, 30.0, [], "n")],
+        # Nothing at all to grow into but lines of no length.
+        [Line(0, 10.0, 10.0, [], "n"), Line(1, 30.0, 30.0, [], "n")],
+    ],
+)
+def test_growing_a_short_plan_skips_lines_of_no_length_and_always_ends(lines):
+    import threading
+
+    preset = Preset(name="t", label="t", min_duration=35, max_duration=60)
+    done = []
+    worker = threading.Thread(
+        target=lambda: done.append(fit_duration([Clip(start=10.0, end=30.0)], lines, preset)),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(5)
+    assert done, "fit_duration never returned"
+    clip = done[0][0]
+    assert clip.start <= 10.0 and clip.end >= 30.0
+    assert clip.end - clip.start <= preset.max_duration

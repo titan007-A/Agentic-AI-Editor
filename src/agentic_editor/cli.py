@@ -1,6 +1,8 @@
 import argparse
+import faulthandler
 import logging
 import os
+import signal
 import subprocess
 import sys
 
@@ -138,6 +140,9 @@ def _serve(args: argparse.Namespace) -> int:
         # the Mac slept whenever the charger came out). The display may still sleep; a
         # closed lid on battery still sleeps.
         subprocess.Popen(["/usr/bin/caffeinate", "-i", "-s", "-w", str(os.getpid())])
+    # `kill -USR1 <pid>` writes every thread's Python stack to the log: what a stuck job is
+    # doing, without the root that py-spy needs on macOS.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_config=None)
     return 0
 
