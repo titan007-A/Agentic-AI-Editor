@@ -513,3 +513,19 @@ def test_an_upscale_fills_its_render_share_as_frames_are_drawn(tmp_path):
     assert track.value == pytest.approx(jobs.RENDER_START + 0.45 * 0.95)
     track("done", "upscale-hd -> out.mp4")
     assert track.value == 0.99
+
+
+def test_videos_go_before_a_caption_until_it_has_waited_ten_minutes(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    # Rishab's caption was asked for at 10:20, his next video at 10:21.
+    _caption(Session, 1, "r0", "rishab", 20)
+    _queue(Session, ("rishab1", "rishab", 21), ("rishab2", "rishab", 22))
+    # At 10:25 the videos go first, though the caption was asked for earlier.
+    assert _order(Session, minute=25) == ["rishab1", "rishab2", "caption 1"]
+
+
+def test_a_caption_that_waited_ten_minutes_takes_its_turn_like_a_video(tmp_path):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    _caption(Session, 1, "r0", "rishab", 20)
+    _queue(Session, ("rishab1", "rishab", 21))
+    assert _order(Session, minute=31) == ["caption 1", "rishab1"]

@@ -14,7 +14,7 @@ from huey import SqliteHuey
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, caption, pipeline, research, shazam, style
+from agentic_editor import accounts, caption, pipeline, research, shazam, slots, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -106,6 +106,9 @@ class Tracker:
 
 # An autopilot job waits behind people's own jobs only this long; then it is one of them.
 AGING = timedelta(minutes=30)
+# A post caption starts after the queued videos (owner: video first) for this long; then
+# it takes its turn like one of them, so captions still get written while jobs keep coming.
+CAPTION_AGING = timedelta(minutes=10)
 _claiming = threading.Lock()
 
 
@@ -120,7 +123,8 @@ Turn = tuple[str, str | int]  # ("job", job id) or ("caption", output id)
 def next_turn(db, now: datetime) -> Turn | None:
     """The queued job or post caption whose turn it is. Jobs and captions share the
     workers and the GPU, so they take turns together: people's own work before
-    autopilot's (until it has waited AGING), then the account with the least running,
+    autopilot's (until it has waited AGING), videos before captions (until a caption has
+    waited CAPTION_AGING), then the account with the least running,
     then the one served longest ago, then the oldest. One person's long queue (jobs, and
     the captions each of them adds) never holds everyone else up."""
     jobs_ = db.scalars(select(Job).where(Job.status == "queued")).all()
@@ -154,14 +158,18 @@ def next_turn(db, now: datetime) -> Turn | None:
         served[owner] = max(served.get(owner, _utc(at)), _utc(at))
     never = datetime.min.replace(tzinfo=UTC)
 
-    def turn(owner: str | None, job_id: str, asked: datetime, ident: str):
+    def turn(owner: str | None, job_id: str, asked: datetime, ident: str, later: bool = False):
         background = job_id in automatic and now - asked < AGING
-        return (background, running[owner], served.get(owner, never), asked, ident)
+        waits = later and now - asked < CAPTION_AGING
+        return (background, waits, running[owner], served.get(owner, never), asked, ident)
 
     options = [
         (turn(j.owner_id, j.id, _utc(j.created_at), f"j{j.id}"), ("job", j.id)) for j in jobs_
     ] + [
-        (turn(owner, job_id, _utc(asked or made), f"c{output_id:09d}"), ("caption", output_id))
+        (
+            turn(owner, job_id, _utc(asked or made), f"c{output_id:09d}", later=True),
+            ("caption", output_id),
+        )
         for output_id, asked, job_id, owner, made in captions
     ]
     return min(options, key=lambda option: option[0])[1]
@@ -456,7 +464,13 @@ def caption_about_song(
 
 def run_caption(output_id: int, Session: sessionmaker, settings: Settings, router=None) -> None:
     """Write an output's post caption (see caption.py). Like a job, it never stays
-    "writing": whatever happens is stored."""
+    "writing": whatever happens is stored. Videos go first: a job waiting for the GPU
+    gets it before the caption's next model call (slots.behind)."""
+    with slots.behind():
+        _write_caption(output_id, Session, settings, router)
+
+
+def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, router) -> None:
     try:
         with Session() as db:
             output = db.get(Output, output_id)
