@@ -476,6 +476,16 @@ framing so it doesn't jump at each cut. Fresh moments are then re-checked by geo
 any shot whose edge would cut something is widened before rendering. `face`, `center` and
 `none` (show the whole picture) remain for fixed looks.
 
+`framing.only_with_text` (with `smart`; "Smart crop only a video with text on it" in the
+editor) is for reposting found reels as they are. OCR reads the clip every two seconds:
+a line of two or more words, at least 15% of the frame wide, seen twice or more, and not a
+watermark (those are blurred) is the video's own text, such as another page's title or
+captions. A video with such text is smart-cropped inside the tallest run of rows its text
+leaves, so the text goes; text on padding around the picture is already outside it. A
+video without any is shown whole, as it came (mode `none`). When text leaves under 40% of
+the picture, it is framed smartly on the whole picture instead. A sign or a username in
+a corner doesn't count.
+
 `framing.picture_width` shows the whole picture narrower than the frame (0.74 of its
 width, say), centred on the background, for pages that inset their videos.
 
