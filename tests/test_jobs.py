@@ -515,17 +515,17 @@ def test_an_upscale_fills_its_render_share_as_frames_are_drawn(tmp_path):
     assert track.value == 0.99
 
 
-def test_videos_go_before_a_caption_until_it_has_waited_ten_minutes(tmp_path):
+def test_videos_go_before_a_caption_until_it_has_waited_a_minute(tmp_path):
     Session = make_sessionmaker(tmp_path / "app.db")
-    # Rishab's caption was asked for at 10:20, his next video at 10:21.
+    # Rishab's caption was asked for at 10:20, his next videos a few seconds later.
     _caption(Session, 1, "r0", "rishab", 20)
-    _queue(Session, ("rishab1", "rishab", 21), ("rishab2", "rishab", 22))
-    # At 10:25 the videos go first, though the caption was asked for earlier.
-    assert _order(Session, minute=25) == ["rishab1", "rishab2", "caption 1"]
+    _queue(Session, ("rishab1", "rishab", 20), ("rishab2", "rishab", 20))
+    # Within the minute the videos go first, though the caption was asked for first.
+    assert _order(Session, minute=20) == ["rishab1", "rishab2", "caption 1"]
 
 
-def test_a_caption_that_waited_ten_minutes_takes_its_turn_like_a_video(tmp_path):
+def test_a_caption_that_waited_a_minute_takes_its_turn_like_a_video(tmp_path):
     Session = make_sessionmaker(tmp_path / "app.db")
     _caption(Session, 1, "r0", "rishab", 20)
     _queue(Session, ("rishab1", "rishab", 21))
-    assert _order(Session, minute=31) == ["caption 1", "rishab1"]
+    assert _order(Session, minute=22) == ["caption 1", "rishab1"]

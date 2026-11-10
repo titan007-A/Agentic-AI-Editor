@@ -30,7 +30,7 @@ def _log(stage: str, message: str) -> None:
 # Video before post captions (owner, 2026-11-10): a thread in `behind()` (a caption being
 # written) lets any other thread waiting for a slot go first, for up to YIELD_FOR in all,
 # so a caption still gets written when jobs keep coming.
-YIELD_FOR = 600.0
+YIELD_FOR = 60.0
 YIELD_POLL = 0.25
 _behind = threading.local()
 
