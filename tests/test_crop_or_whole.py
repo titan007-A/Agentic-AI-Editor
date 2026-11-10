@@ -107,3 +107,22 @@ def test_smart_framing_leaves_text_out_of_what_must_stay():
     assert pipeline.drops_text(preset(only_with_text=True))
     assert pipeline.drops_text(preset(keep_action=True))
     assert not pipeline.drops_text(preset())
+
+
+def test_the_vision_model_looks_at_most_max_looks_times_spread_over_the_reel():
+    from agentic_editor.pipeline import MAX_LOOKS, looked_at
+
+    few = [0.5, 2.0, 3.5]
+    assert looked_at(few) == few
+    many = [i * 1.5 for i in range(56)]  # a concert cut every second and a half
+    picked = looked_at(many)
+    assert len(picked) == MAX_LOOKS
+    assert picked[0] == many[0] and picked[-1] == many[-1]
+    assert picked == sorted(set(picked))  # no time twice
+    assert looked_at(many) == picked  # the same ones every time, so the cache holds
+
+
+def test_ffmpeg_runs_below_everything_else_where_nice_exists():
+    from agentic_editor import ffmpeg
+
+    assert ffmpeg.NICE in ([], ["nice", "-n", "10"])

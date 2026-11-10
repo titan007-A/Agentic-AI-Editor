@@ -159,3 +159,53 @@ def test_a_job_whose_progress_note_fails_after_waiting_lets_the_slot_go():
     thread.start()
     thread.join()
     assert taken == [True]
+
+
+def test_a_caption_behind_lets_a_waiting_job_take_the_slot_first(monkeypatch):
+    monkeypatch.setattr(slots, "YIELD_POLL", 0.01)
+    slot = Slot("GPU")
+    order, holding, job_waits = [], threading.Event(), threading.Event()
+
+    def holder():
+        with slot.turn():
+            holding.set()
+            job_waits.wait(2)
+            time.sleep(0.1)  # the caption is asking by now as well
+
+    def job():
+        with slot.turn():
+            order.append("job")
+            time.sleep(0.05)
+
+    def caption():
+        with slots.behind(), slot.turn():
+            order.append("caption")
+
+    first = threading.Thread(target=holder)
+    first.start()
+    holding.wait(2)
+    c = threading.Thread(target=caption)
+    c.start()
+    time.sleep(0.05)
+    j = threading.Thread(target=job)
+    j.start()
+    time.sleep(0.05)
+    job_waits.set()
+    for t in (first, c, j):
+        t.join(5)
+    assert order == ["job", "caption"]
+
+
+def test_a_caption_behind_stops_giving_way_once_its_budget_is_spent(monkeypatch):
+    monkeypatch.setattr(slots, "YIELD_POLL", 0.01)
+    slot = Slot("GPU")
+    slot._waiting = 1  # a job keeps waiting for good
+    started = time.monotonic()
+    with slots.behind(yield_for=0.1), slot.turn():
+        pass
+    assert 0.08 <= time.monotonic() - started < 1
+    # Outside behind(), nobody gives way.
+    started = time.monotonic()
+    with slot.turn():
+        pass
+    assert time.monotonic() - started < 0.05

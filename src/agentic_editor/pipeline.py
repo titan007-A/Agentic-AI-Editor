@@ -179,7 +179,7 @@ def subject_samples(
     if vision is not None:
         cache = work_dir / f"subjects-{vision.model.replace(':', '_').replace('/', '_')}.json"
         known = json.loads(cache.read_text()) if cache.exists() else {}
-        missing = [t for t in times if f"{t:.3f}" not in known]
+        missing = [t for t in looked_at(times) if f"{t:.3f}" not in known]
         if missing:
             size = (analysis.width, analysis.height)
             asked = subjects.find(
@@ -199,6 +199,18 @@ def subject_samples(
     return [(t, found[t]) for t in times]
 
 
+def looked_at(times: list[float]) -> list[float]:
+    """The times the vision model looks at: all of them up to MAX_LOOKS, else that many
+    spread evenly over them. A video cut every second (a concert) had 56 shots, 14 calls
+    of up to a minute each; the faces (face detector) and text (OCR) of the others are
+    still found."""
+    if len(times) <= MAX_LOOKS:
+        return list(times)
+    step = (len(times) - 1) / (MAX_LOOKS - 1)
+    return [times[round(i * step)] for i in range(MAX_LOOKS)]
+
+
+MAX_LOOKS = 24
 OCR_VERSION = 2
 TEXT_EVERY = 2.0  # seconds between OCR looks for the picture band's edge text
 
@@ -673,7 +685,10 @@ def onscreen_text(
         times = framing.view_times(clip, analysis.scenes)
         found = [
             (t, (s.x0, s.y0, s.x1, s.y1))
-            for t, items in subject_samples(vision, video, times, analysis, settings, work_dir)
+            # Only its text is wanted, which OCR reads when it can: no vision calls then.
+            for t, items in subject_samples(
+                None if ocr.available() else vision, video, times, analysis, settings, work_dir
+            )
             for s in items
             if s.kind == "text"
         ]

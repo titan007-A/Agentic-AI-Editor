@@ -2,6 +2,7 @@
 
 import json
 import logging
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,8 +28,14 @@ class MediaInfo:
     has_video: bool
 
 
+# Encodes run a little below everything else: x264 takes every core, and the vision model
+# (whose JSON-constrained answers need the CPU too) slowed to a third beside it on the Mac.
+# Alone, an encode still gets all of the machine.
+NICE = ["nice", "-n", "10"] if shutil.which("nice") else []
+
+
 def run(args: list[str], *, capture: bool = True) -> subprocess.CompletedProcess[str]:
-    cmd = [get_settings().ffmpeg_bin, "-hide_banner", "-nostdin", *args]
+    cmd = [*NICE, get_settings().ffmpeg_bin, "-hide_banner", "-nostdin", *args]
     log.debug("ffmpeg %s", " ".join(args))
     result = subprocess.run(cmd, capture_output=capture, text=True, errors="replace")
     if result.returncode != 0:
