@@ -9,6 +9,7 @@ import {
   nextValues,
   optional,
   presetFields,
+  textFields,
 } from "../src/lib/preset-fields.mjs";
 
 // rishab's IMG_5071 and IMG_5101, as the server sends them.
@@ -108,4 +109,12 @@ test("a year the PDF writes beside the name isn't asked for", () => {
   assert.deepEqual(entryFields(aman, undefined), ["year", "day"]);
   // the bottom text replaced by the PDF's: its fields go too
   assert.deepEqual(entryFields(aman, { top: "", bottom: "Abajo", year: "1970" }), []);
+});
+
+test("a random field isn't asked for, but can still be made random", () => {
+  const random = { ...series, random_fields: { day: [1, 100], song_number: [1, 5] } };
+  assert.deepEqual(presetFields(random), []);
+  assert.deepEqual(presetFields({ ...series, random_fields: { day: [1, 100] } }), ["song_number"]);
+  assert.deepEqual(textFields(random), ["day", "song_number"]);
+  assert.deepEqual(textFields(named), ["year"]);
 });

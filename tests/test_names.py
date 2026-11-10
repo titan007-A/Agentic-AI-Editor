@@ -103,6 +103,35 @@ def test_the_preset_s_own_words_come_from_lines_in_the_notes():
         names.fill(preset, "IMG_5071", {"day": "103"})
 
 
+def test_random_fields_get_a_new_number_for_every_reel_unless_the_notes_give_one():
+    preset = stories("Day {day}\nSong {song_number}").model_copy(
+        update={"random_fields": {"day": (1, 100), "song_number": (1, 5)}}
+    )
+    seen_days, seen_songs = set(), set()
+    for _ in range(300):
+        day, song = names.fill(preset, "IMG_5071").text_blocks[1].text.split("\n")
+        seen_days.add(int(day.removeprefix("Day ")))
+        seen_songs.add(int(song.removeprefix("Song ")))
+    assert seen_songs == {1, 2, 3, 4, 5}
+    assert min(seen_days) >= 1 and max(seen_days) <= 100 and len(seen_days) > 50
+    # A number in the notes wins; the other stays random.
+    filled = names.fill(preset, "IMG_5071", {"day": "7"}).text_blocks[1].text
+    assert filled.startswith("Day 7\nSong ") and 1 <= int(filled.split()[-1]) <= 5
+    # A range for a word the text doesn't write changes nothing, and asks for nothing.
+    plain = stories("Sígueme").model_copy(update={"random_fields": {"day": (1, 9)}})
+    assert names.fill(plain, "IMG_5071").text_blocks[1].text == "Sígueme"
+
+
+@pytest.mark.parametrize(
+    "ranges",
+    [{"day": (5, 1)}, {"song": (1, 5)}, {"headline": (1, 2)}, {"two words": (1, 2)}],
+)
+def test_random_fields_refuse_a_backwards_range_or_a_word_the_editor_fills(ranges):
+    preset = load_presets(ROOT / "presets")["voicehq-9x16"]
+    with pytest.raises(ValueError):
+        Preset.model_validate({**preset.model_dump(), "random_fields": ranges})
+
+
 def test_a_preset_with_auto_name_hears_the_song_when_nothing_names_it():
     preset = load_presets(ROOT / "presets")["voicehq-9x16"]
     heard = []

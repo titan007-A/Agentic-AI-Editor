@@ -21,8 +21,26 @@ export function presetFields(preset, replaced = []) {
   const headlined = new Set(
     blocks.filter((b) => String(b.text ?? "").includes("{headline}")).map((b) => b.anchor),
   );
+  // A random field is picked by the editor for each reel (random_fields), so not asked.
+  const random = new Set(Object.keys(preset.random_fields ?? {}));
   for (const block of blocks) {
     if (replaced.includes(block.anchor) && !headlined.has(block.anchor)) continue;
+    for (const [, name] of String(block.text ?? "").matchAll(FIELD)) {
+      if (!FOUND.has(name) && !random.has(name) && !found.includes(name)) found.push(name);
+    }
+  }
+  return found;
+}
+
+/**
+ * Every word in braces a preset's text writes that a random number can fill: not the song,
+ * artist or headline, which the editor finds.
+ * @param {import("./api").Preset} preset
+ * @returns {string[]}
+ */
+export function textFields(preset) {
+  const found = [];
+  for (const block of preset.text_blocks ?? []) {
     for (const [, name] of String(block.text ?? "").matchAll(FIELD)) {
       if (!FOUND.has(name) && !found.includes(name)) found.push(name);
     }
