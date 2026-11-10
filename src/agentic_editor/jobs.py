@@ -107,8 +107,9 @@ class Tracker:
 # An autopilot job waits behind people's own jobs only this long; then it is one of them.
 AGING = timedelta(minutes=30)
 # A post caption starts after the queued videos (owner: video first) for this long; then
-# it takes its turn like one of them, so captions still get written while jobs keep coming.
-CAPTION_AGING = timedelta(minutes=10)
+# it takes its turn like one of them, so captions still get written while jobs keep coming
+# (owner: "10 min ka nhi, jada se jada 1 min ka wait").
+CAPTION_AGING = timedelta(minutes=1)
 _claiming = threading.Lock()
 
 
