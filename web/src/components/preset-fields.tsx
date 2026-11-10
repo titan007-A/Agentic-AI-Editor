@@ -28,6 +28,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorText, type AssetKind, type Preset } from "@/lib/api";
+import { fieldLabel, textFields } from "@/lib/preset-fields.mjs";
 
 type Field =
   | {
@@ -754,7 +755,81 @@ export function TextBlocks({
       <Button variant="outline" size="sm" onClick={() => update([...blocks, NEW_TEXT_BLOCK])}>
         <Plus /> Add text
       </Button>
+      <RandomFields preset={preset} onChange={onChange} />
     </div>
+  );
+}
+
+/** For each word in braces the text writes ({day}, {song_number}): a random number for every
+ * reel instead of one typed for each job. */
+function RandomFields({
+  preset,
+  onChange,
+}: {
+  preset: Preset;
+  onChange: (preset: Preset) => void;
+}) {
+  const names: string[] = textFields(preset);
+  if (names.length === 0) return null;
+  const ranges: Record<string, [number, number]> = preset.random_fields ?? {};
+  const set = (name: string, range: [number, number] | null) => {
+    const next = { ...ranges };
+    if (range) next[name] = range;
+    else delete next[name];
+    onChange({ ...preset, random_fields: next });
+  };
+  const whole = (text: string) => (/^-?\d+$/.test(text.trim()) ? Number(text) : 0);
+
+  return (
+    <fieldset className="space-y-3 rounded-md border p-3">
+      <legend className="px-1 text-sm font-medium">Random numbers</legend>
+      <p className="text-xs text-muted-foreground">
+        Ticked, a word in braces gets a new random number on every reel, and the job doesn&apos;t
+        ask for it. A line like &quot;day: 5&quot; in a job&apos;s notes still wins.
+      </p>
+      {names.map((name) => {
+        const range = ranges[name];
+        const id = `random-${name}`;
+        return (
+          <div key={name} className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={id}
+                checked={!!range}
+                onCheckedChange={(on) => set(name, on ? [1, 100] : null)}
+              />
+              <Label htmlFor={id}>
+                {fieldLabel(name)} <span className="text-muted-foreground">{`{${name}}`}</span>
+              </Label>
+            </div>
+            {range && (
+              <div className="flex items-center gap-2">
+                <Input
+                  aria-label={`${fieldLabel(name)} from`}
+                  className="w-20"
+                  inputMode="numeric"
+                  value={String(range[0])}
+                  onChange={(e) => set(name, [whole(e.target.value), range[1]])}
+                />
+                <span className="text-sm">to</span>
+                <Input
+                  aria-label={`${fieldLabel(name)} to`}
+                  className="w-20"
+                  inputMode="numeric"
+                  value={String(range[1])}
+                  onChange={(e) => set(name, [range[0], whole(e.target.value)])}
+                />
+                {range[0] > range[1] && (
+                  <span className="text-xs text-destructive">
+                    the first must not be above the second
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </fieldset>
   );
 }
 

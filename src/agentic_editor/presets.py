@@ -305,6 +305,9 @@ class Preset(Strict):
     title_overlay: TitleOverlay = TitleOverlay()
     one_liner: OneLiner = OneLiner()
     text_blocks: list[TextBlock] = []
+    # Words in braces in the text filled with a random whole number for each reel, low to
+    # high both included: {"day": (1, 100)}. A line "day: 5" in the job's notes still wins.
+    random_fields: dict[str, tuple[int, int]] = {}
     images: list[ImageBlock] = []
     # When neither the video's name nor the notes say the {song} and {artist}, recognise
     # them from its sound (shazam.py); still nothing, and the job asks for them. On unless
@@ -341,6 +344,16 @@ class Preset(Strict):
             elif silence is None:
                 data.pop("silence", None)  # a section left empty once max_pause went
         return data
+
+    @field_validator("random_fields")
+    @classmethod
+    def _random_ranges(cls, value: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
+        for name, (low, high) in value.items():
+            if not re.fullmatch(r"\w+", name) or name in {"song", "artist", "headline"}:
+                raise ValueError(f"random_fields can't fill {{{name}}}")
+            if not -1_000_000 <= low <= high <= 1_000_000:
+                raise ValueError(f"random_fields {name}: the low number must not be above the high")
+        return value
 
     @field_validator("resolution")
     @classmethod

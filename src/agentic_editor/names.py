@@ -4,12 +4,14 @@ name ("Video by illusive.paradox") can't be changed, so lines "song: ..." and "a
 in the job's notes give them instead, and win over the name.
 
 Other words in braces are the preset's own, filled per reel: {year} from a "(1980)" in the
-video's name, and any of them, {day} say, from a line "day: 103" in the job's notes.
+video's name, and any of them, {day} say, from a line "day: 103" in the job's notes, else
+a random number when the preset's random_fields gives the field a range.
 
 Lines "top text: ..." and "bottom text: ..." replace the preset's own words above and below
 the video for one job (the researcher's PDF mode gives each reel its own); "\\n" in them
 starts a new line."""
 
+import random
 import re
 from collections.abc import Callable
 
@@ -218,6 +220,9 @@ def fill(
         values["year"] = year
     if names_song(preset):
         values["song"], values["artist"] = song_and_artist(title, values, hear)
+    for name, (low, high) in preset.random_fields.items():
+        if name in own and not values.get(name, "").strip():
+            values[name] = str(random.randint(low, high))
     looked = "year" in own and "year" not in values and find_year and values.get("song")
     if looked and (year := find_year(values["song"], values.get("artist", ""))):
         values["year"] = year

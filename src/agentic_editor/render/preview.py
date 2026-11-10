@@ -42,8 +42,18 @@ LINE = compose.LONGEST_LINE
 TITLE = "The video's title"
 
 
-def sample_text(words: str) -> str:
-    return FIELD.sub(lambda m: SAMPLES.get(m.group(1), m.group(1).replace("_", " ")), words)
+def sample_text(words: str, random_fields: dict[str, tuple[int, int]] | None = None) -> str:
+    """The words with a sample for each field; a random one shows its highest number, the
+    widest it gets on the reel."""
+    ranges = random_fields or {}
+
+    def sample(m: re.Match) -> str:
+        name = m.group(1)
+        if name in ranges:
+            return str(ranges[name][1])
+        return SAMPLES.get(name, name.replace("_", " "))
+
+    return FIELD.sub(sample, words)
 
 
 def stand_in(size: tuple[int, int]) -> Image.Image:
@@ -191,7 +201,8 @@ def render_checked(
     shown = preset.model_copy(
         update={
             "text_blocks": [
-                b.model_copy(update={"text": sample_text(b.text)}) for b in preset.text_blocks
+                b.model_copy(update={"text": sample_text(b.text, preset.random_fields)})
+                for b in preset.text_blocks
             ]
         }
     )

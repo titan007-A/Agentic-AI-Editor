@@ -27,6 +27,8 @@ def test_placeholders_get_sample_words():
     assert preview.sample_text("Song: {song}\nDay {day} {unknown_thing}") == (
         "Song: Bohemian Rhapsody\nDay 103 unknown thing"
     )
+    # A random field shows its highest number, the widest the reel gets.
+    assert preview.sample_text("Day {day}", {"day": (1, 100)}) == "Day 100"
 
 
 def test_with_text_on_one_side_only_the_picture_keeps_the_gap_set_to_that_text():
