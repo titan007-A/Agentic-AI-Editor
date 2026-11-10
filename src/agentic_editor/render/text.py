@@ -5,6 +5,7 @@ fonts and can't measure ink, and laying text out here keeps the result identical
 every machine as long as the bundled fonts are used. Text a bundled font can't draw is
 drawn in the Noto font for its script (see fonts)."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -129,6 +130,8 @@ class Placed:
     top: float
     color: str
     line_height: float
+    # (words, colour, which place or None for all) in their own colour; see colored_lines.
+    word_colors: tuple[tuple[str, str, int | None], ...] = ()
 
     @property
     def band(self) -> tuple[float, float]:
@@ -211,7 +214,47 @@ def place(
     # picture is better than running off the frame.
     ink_top, ink_bottom = ink_extent(lines, face, size, block.line_spacing)
     top = min(max(top, EDGE_MARGIN - ink_top), height - EDGE_MARGIN - ink_bottom)
-    return Placed(lines, face, size, top, block.color, line_height(face, size, block.line_spacing))
+    return Placed(
+        lines, face, size, top, block.color, line_height(face, size, block.line_spacing),
+        tuple((w.words, w.color, w.occurrence) for w in block.word_colors),
+    )  # fmt: skip
+
+
+def words_pattern(words: str) -> "re.Pattern[str] | None":
+    """The words as the editor finds them in the text: any case, any run of spaces or line
+    breaks between them (a headline wraps where a space was). The web's twin is
+    wordsPattern in preset-fields.mjs, which counts the place a selection is."""
+    parts = words.split()
+    return re.compile(r"\s+".join(map(re.escape, parts)), re.IGNORECASE) if parts else None
+
+
+def colored_lines(
+    lines: list[str], color: str, word_colors: tuple[tuple[str, str, int | None], ...]
+) -> list[list[tuple[str, str]]]:
+    """Each line in pieces of one colour: a part of the text given a colour has it (the
+    words found in any case, at the place counted or at all of them; a later one wins
+    where two overlap), the rest the block's colour."""
+    text = "\n".join(lines)
+    colors = [color] * len(text)
+    for words, own, occurrence in word_colors:
+        if not (pattern := words_pattern(words)):
+            continue
+        found = list(pattern.finditer(text))
+        if occurrence is not None:
+            found = found[occurrence : occurrence + 1]
+        for match in found:
+            colors[match.start() : match.end()] = [own] * (match.end() - match.start())
+    result, at = [], 0
+    for line in lines:
+        pieces: list[tuple[str, str]] = []
+        for char, own in zip(line, colors[at : at + len(line)], strict=True):
+            if pieces and pieces[-1][1] == own:
+                pieces[-1] = (pieces[-1][0] + char, own)
+            else:
+                pieces.append((char, own))
+        result.append(pieces or [(line, color)])
+        at += len(line) + 1
+    return result
 
 
 Corners = tuple[tuple[int, int, int, int], int, str]  # picture x0, y0, x1, y1; radius; colour
@@ -252,10 +295,13 @@ def draw(
         image.alpha_composite(mark, (max(0, x), max(0, y)), (max(0, -x), max(0, -y)))
     canvas = ImageDraw.Draw(image)
     for block in placed:
-        for i, line in enumerate(block.lines):
+        colored = colored_lines(block.lines, block.color, block.word_colors)
+        for i, (line, pieces) in enumerate(zip(block.lines, colored, strict=True)):
             x = (width - block.font.length(line, block.size)) / 2
-            block.font.draw(canvas, (x, block.top + i * block.line_height), line, block.size,
-                            block.color)  # fmt: skip
+            y = block.top + i * block.line_height
+            for piece, color in pieces:
+                block.font.draw(canvas, (x, y), piece, block.size, color)
+                x += block.font.length(piece, block.size)
     image.save(dest)
     return dest
 

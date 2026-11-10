@@ -28,7 +28,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorText, type AssetKind, type Preset } from "@/lib/api";
-import { fieldLabel, textFields } from "@/lib/preset-fields.mjs";
+import { fieldLabel, hasWords, selectionColor, textFields } from "@/lib/preset-fields.mjs";
 
 type Field =
   | {
@@ -713,6 +713,8 @@ export function TextBlocks({
 }) {
   const blocks: Obj[] = preset.text_blocks ?? [];
   const update = (next: Obj[]) => onChange({ ...preset, text_blocks: next });
+  // Where each block's text is selected, start and end, for colouring that part.
+  const [selections, setSelections] = useState<Record<number, [number, number]>>({});
 
   return (
     <div className="space-y-4">
@@ -738,8 +740,18 @@ export function TextBlocks({
               onChange={(e) =>
                 update(blocks.map((b, j) => (j === i ? { ...b, text: e.target.value } : b)))
               }
+              onSelect={(e) => {
+                const { selectionStart, selectionEnd } = e.currentTarget;
+                setSelections((all) => ({ ...all, [i]: [selectionStart, selectionEnd] }));
+              }}
             />
           </div>
+          <WordColors
+            index={i}
+            block={block}
+            selection={selections[i]}
+            onChange={(next) => update(blocks.map((b, j) => (j === i ? next : b)))}
+          />
           <FieldGrid
             prefix={`block-${i}`}
             fields={TEXT_BLOCK_FIELDS}
@@ -756,6 +768,104 @@ export function TextBlocks({
         <Plus /> Add text
       </Button>
       <RandomFields preset={preset} onChange={onChange} />
+    </div>
+  );
+}
+
+type WordColor = { words: string; color: string; occurrence: number | null };
+
+/** Parts of a block's text in their own colour: select them in the text, pick a colour,
+ * press the button. The preview shows them as the reel will. */
+function WordColors({
+  index,
+  block,
+  selection,
+  onChange,
+}: {
+  index: number;
+  block: Obj;
+  selection: [number, number] | undefined;
+  onChange: (block: Obj) => void;
+}) {
+  const [color, setColor] = useState("#FFE000");
+  const text = String(block.text ?? "");
+  const colors: WordColor[] = block.word_colors ?? [];
+  const chosen =
+    selection && selection[1] > selection[0] ? selectionColor(text, ...selection) : null;
+  const set = (next: WordColor[]) => onChange({ ...block, word_colors: next });
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="color"
+          aria-label={`Text ${index + 1} colour for the selection`}
+          className="h-9 w-10 shrink-0 cursor-pointer rounded-[6px_3px_7px_3px] border-[1.5px] border-foreground bg-transparent p-1"
+          value={color}
+          onChange={(e) => setColor(e.target.value.toUpperCase())}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!chosen}
+          // Keeps the selection in the text: the button doesn't take the focus on press.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => chosen && set([...colors, { ...chosen, color }])}
+        >
+          Colour the selection
+        </Button>
+        {!chosen && (
+          <span className="text-xs text-muted-foreground">
+            Select words in the text above to give them a colour
+          </span>
+        )}
+      </div>
+      {colors.length > 0 && (
+        <ul className="flex flex-wrap gap-2" aria-label={`Text ${index + 1} coloured words`}>
+          {colors.map((c, k) => {
+            const missing = !hasWords(text, c.words);
+            return (
+              <li
+                key={k}
+                className="flex max-w-full items-center gap-1 rounded-md border bg-neutral-900 py-1 pr-1 pl-2"
+              >
+                <span
+                  className="truncate text-sm font-semibold"
+                  style={{ color: c.color }}
+                  title={c.words}
+                >
+                  {c.words.replace(/\s+/g, " ")}
+                </span>
+                {missing && <span className="text-xs text-red-300">not in the text</span>}
+                <input
+                  type="color"
+                  aria-label={`Colour of ${c.words}`}
+                  className="h-7 w-8 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0.5"
+                  value={c.color}
+                  onChange={(e) =>
+                    set(
+                      colors.map((o, m) =>
+                        m === k ? { ...o, color: e.target.value.toUpperCase() } : o,
+                      ),
+                    )
+                  }
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-white hover:text-black"
+                  aria-label={`Remove the colour of ${c.words}`}
+                  onClick={() => set(colors.filter((_, m) => m !== k))}
+                >
+                  <X />
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

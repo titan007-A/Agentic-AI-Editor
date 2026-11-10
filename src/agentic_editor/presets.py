@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -76,6 +77,16 @@ class OneLiner(Strict):
     language: str | None = Field(default=None, max_length=40)
 
 
+class WordColor(Strict):
+    """A part of a text block drawn in its own colour: the words as selected in the editor
+    (any case, across lines too) and which of their places in the text it is, counted from
+    0; None colours every place they stand, as in a {headline} written for each reel."""
+
+    words: str = Field(min_length=1, max_length=500)
+    color: Color
+    occurrence: int | None = Field(default=None, ge=0)
+
+
 class TextBlock(Strict):
     """A fixed piece of text drawn on every frame, such as a series tagline."""
 
@@ -91,6 +102,14 @@ class TextBlock(Strict):
     max_shrink: float = Field(
         default=1.0, gt=0, le=1, description="smallest scale allowed when making room"
     )
+    # Later entries win where two cover the same letters.
+    word_colors: list[WordColor] = []
+
+    def filled(self, text: str, fill: Callable[[str], str]) -> "TextBlock":
+        """The block showing `text`, its words in braces filled by `fill`, with its coloured
+        words filled the same way, so "Song {song_number}" stays coloured as "Song 3"."""
+        colors = [w.model_copy(update={"words": fill(w.words)}) for w in self.word_colors]
+        return self.model_copy(update={"text": text, "word_colors": colors})
 
 
 class ImageBlock(Strict):

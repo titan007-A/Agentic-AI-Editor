@@ -118,3 +118,17 @@ test("a random field isn't asked for, but can still be made random", () => {
   assert.deepEqual(textFields(random), ["day", "song_number"]);
   assert.deepEqual(textFields(named), ["year"]);
 });
+
+test("a selection becomes its words and which place in the text it is", async () => {
+  const { selectionColor, hasWords } = await import("../src/lib/preset-fields.mjs");
+  const text = "WHERE MUSIC SPEAKS\nlouder than music";
+  const second = text.lastIndexOf("music");
+  assert.deepEqual(selectionColor(text, second, second + 5), { words: "music", occurrence: 1 });
+  assert.deepEqual(selectionColor(text, 6, 11), { words: "MUSIC", occurrence: 0 });
+  // Spaces around are left out; across the line break; part of a word.
+  assert.deepEqual(selectionColor(text, 11, 25), { words: "SPEAKS\nlouder", occurrence: 0 });
+  assert.deepEqual(selectionColor(text, 14, 17), { words: "EAK", occurrence: 0 });
+  assert.equal(selectionColor(text, 5, 6), null);
+  assert.equal(hasWords(text, "speaks louder"), true);
+  assert.equal(hasWords(text, "rock"), false);
+});

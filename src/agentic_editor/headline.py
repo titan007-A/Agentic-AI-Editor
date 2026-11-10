@@ -317,6 +317,6 @@ def fill(preset: Preset, headline: str, face: Callable[..., text.Face]) -> Prese
                 lines(row, face(block.font, row), block.size, block.max_width)
                 for row in filled.split("\n")
             )
-            block = block.model_copy(update={"text": wrapped})
+            block = block.filled(wrapped, lambda w: w.replace(PLACEHOLDER, headline))
         blocks.append(block)
     return preset.model_copy(update={"text_blocks": blocks})
