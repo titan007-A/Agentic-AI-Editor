@@ -365,6 +365,9 @@ def drops_text(preset: Preset) -> bool:
 OWN_TEXT_WIDTH = 0.15
 OWN_TEXT_PAD = 0.01  # of the picture's height, around each line
 OWN_TEXT_LEAST = 0.4  # the share of the picture's rows the crop must keep, or none is cut
+# Text is cropped away only along the picture's top or bottom, within this share of its
+# height: text across the middle (sung lyrics over a face) would take the subject with it.
+OWN_TEXT_EDGE = 0.35
 
 
 def own_text(
@@ -406,12 +409,14 @@ def clear_band(
     content: tuple[int, int, int, int], rows: list[tuple[int, int]]
 ) -> tuple[int, int, int, int] | None:
     """The tallest stretch of the picture's rows without text, at its full width, or None
-    when text leaves too little of it (OWN_TEXT_LEAST)."""
+    when text crosses its middle or leaves too little of it (OWN_TEXT_EDGE, _LEAST)."""
     x, y, width, height = content
     edges, top = [], y
     for a, b in rows:
         if b <= y or a >= y + height:
             continue
+        if b > y + OWN_TEXT_EDGE * height and a < y + (1 - OWN_TEXT_EDGE) * height:
+            return None
         if a > top:
             edges.append((top, a))
         top = max(top, b)
@@ -461,7 +466,10 @@ def crop_or_whole(
     seen = ", ".join(f"{a}-{b}" for a, b in rows)
     band = clear_band(content, rows)
     if band is None:
-        note = f"text on the video (rows {seen}) covers too much to crop away; framed smartly"
+        note = (
+            f"text on the video (rows {seen}) crosses the middle of the picture or covers too "
+            "much of it to crop away; framed smartly on the whole picture"
+        )
         return edl.model_copy(update={"picture": content, "decisions": [*edl.decisions, note]})
     note = (
         f"text on the video (rows {seen}): cropped away, framed smartly inside rows "

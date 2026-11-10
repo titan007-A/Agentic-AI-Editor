@@ -44,6 +44,10 @@ def test_the_crop_keeps_the_tallest_rows_without_text():
     assert pipeline.clear_band(whole, [(1481, 1579)]) == (0, 0, 1080, 1480)
     assert pipeline.clear_band(whole, [(181, 279), (1481, 1579)]) == (0, 280, 1080, 1200)
     assert pipeline.clear_band(whole, [(100, 1700)]) is None  # too little left
+    assert pipeline.clear_band(whole, [(900, 960)]) is None  # lyrics across a face
+    landscape = (0, 0, 1416, 1080)  # a real one: sung words at rows 509-575
+    assert pipeline.clear_band(landscape, [(509, 575)]) is None
+    assert pipeline.clear_band(landscape, [(960, 1040)]) == (0, 0, 1416, 960)
     band = (0, 470, 1080, 608)  # a picture between padding: text on the padding is outside
     assert pipeline.clear_band(band, [(181, 279), (1481, 1579)]) == band
 
@@ -84,7 +88,7 @@ def test_text_everywhere_is_framed_smartly_on_the_whole_picture(reel):
     big = line("words all over the picture", 0, 100, 1080, 1800)
     out = reel(lambda times: {t: [big] for t in times})
     assert out.crop_mode == "smart" and out.picture == (0, 0, *SIZE)
-    assert "covers too much" in out.decisions[-1]
+    assert "crosses the middle" in out.decisions[-1]
 
 
 def test_presets_without_the_switch_are_left_as_they_were(reel):

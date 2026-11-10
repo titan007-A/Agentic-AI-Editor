@@ -483,8 +483,9 @@ watermark (those are blurred) is the video's own text, such as another page's ti
 captions. A video with such text is smart-cropped inside the tallest run of rows its text
 leaves, so the text goes; text on padding around the picture is already outside it. A
 video without any is shown whole, as it came (mode `none`). When text leaves under 40% of
-the picture, it is framed smartly on the whole picture instead. A sign or a username in
-a corner doesn't count.
+the picture, or crosses its middle (sung words over a face: a crop would take the face
+with them), it is framed smartly on the whole picture instead. Only text within the top or
+bottom 35% of the picture is cropped. A sign or a username in a corner doesn't count.
 
 `framing.picture_width` shows the whole picture narrower than the frame (0.74 of its
 width, say), centred on the background, for pages that inset their videos.
