@@ -399,3 +399,24 @@ def test_store_pages_say_nothing_and_one_line_from_the_web_alone_is_too_thin(tmp
     with pytest.raises(caption.CaptionError, match="nothing found"):
         caption.elsewhere("outro.wav", "khalval", "en", tmp_path, httpx.MockTransport(nothing),
                           lambda q, n: store)  # fmt: skip
+
+
+def test_after_the_search_engines_fail_the_web_is_left_alone_for_a_while(monkeypatch):
+    from agentic_editor import caption, research
+
+    asked = []
+
+    def engines(query, count):
+        asked.append(query)
+        raise TimeoutError("operation timed out")
+
+    monkeypatch.setattr(research, "_engines", engines)
+    monkeypatch.setattr(caption, "_engines_down_until", 0.0)
+    # Four searches (two names, quoted and not) cost one timeout, not four.
+    for name in ("Antonio & Paco", "Nino Bravo"):
+        assert caption.web_results("Te Quiero, Te Quiero", name, caption._search) == []
+    assert len(asked) == 1
+    # Once the rest is over, the web is asked again.
+    monkeypatch.setattr(caption, "_engines_down_until", 0.0)
+    caption.web_results("Te Quiero", "Nino Bravo", caption._search)
+    assert len(asked) == 2

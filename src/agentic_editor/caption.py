@@ -15,6 +15,7 @@ a thinner source makes a plainer caption, never an invented one.
 import json
 import logging
 import re
+import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -569,10 +570,24 @@ def web_results(song: str, artist: str, find) -> list[Article]:
     return kept
 
 
+# When the search engines time out or refuse, they do for the next query too: a caption
+# once waited 4 x 12 s on DuckDuckGo timing out. For ENGINES_REST after a failure, the
+# web isn't asked; the artist's article and the video still give the caption.
+ENGINES_REST = 120.0
+_engines_down_until = 0.0
+
+
 def _search(query: str, count: int) -> list[dict]:
+    global _engines_down_until
     from agentic_editor.research import _engines
 
-    return _engines(query, count)
+    if time.monotonic() < _engines_down_until:
+        raise CaptionError("the search engines failed just now; not asked again yet")
+    try:
+        return _engines(query, count)
+    except Exception:
+        _engines_down_until = time.monotonic() + ENGINES_REST
+        raise
 
 
 def elsewhere(
