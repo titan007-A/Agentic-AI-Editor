@@ -187,6 +187,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         kind: "select",
         options: ["smart", "face", "center", "none"],
       },
+      {
+        path: "framing.only_with_text",
+        label:
+          "Smart crop only a video with text on it, cropping the text away (one without stays whole)",
+        kind: "switch",
+      },
       { path: "framing.background", label: "Background", kind: "color" },
       {
         path: "framing.background_image",

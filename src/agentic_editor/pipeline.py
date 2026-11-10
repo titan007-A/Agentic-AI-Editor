@@ -353,6 +353,123 @@ def without_text(items: list[subjects.Subject]) -> list[subjects.Subject]:
     return [s for s in items if s.kind != "text"]
 
 
+def drops_text(preset: Preset) -> bool:
+    """Whether smart framing leaves text out of what must stay in view: footage whose
+    point is the action, or a preset that crops a video's own text away."""
+    return preset.framing.keep_action or preset.framing.only_with_text
+
+
+# A video's own text, for only_with_text: a line of at least two words this wide (of the
+# picture), seen at two looks or more (one, when there is only one), and not a watermark
+# (those get blurred). A sign or a username in a corner is not the video's text.
+OWN_TEXT_WIDTH = 0.15
+OWN_TEXT_PAD = 0.01  # of the picture's height, around each line
+OWN_TEXT_LEAST = 0.4  # the share of the picture's rows the crop must keep, or none is cut
+
+
+def own_text(
+    times: list[float],
+    found: dict[float, list[subjects.Subject]],
+    size: tuple[int, int],
+    marks: list[Watermark],
+) -> list[tuple[int, int]]:
+    """The rows of the frame that hold the video's own text, merged, from what was read at
+    `times`; empty when it has none."""
+
+    def counts(s: subjects.Subject) -> bool:
+        words = s.label.split()
+        if len(words) < 2 or sum(c.isalpha() for c in s.label) < 6:
+            return False
+        if s.x1 - s.x0 < OWN_TEXT_WIDTH * size[0]:
+            return False
+        middle = ((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2)
+        return not any(
+            m.x <= middle[0] <= m.x + m.width and m.y <= middle[1] <= m.y + m.height for m in marks
+        )
+
+    seen = [[s for s in found.get(t, []) if s.kind == "text" and counts(s)] for t in times]
+    looks = sum(bool(lines) for lines in seen)
+    if looks == 0 or (looks < 2 and len(times) > 1):
+        return []
+    pad = OWN_TEXT_PAD * size[1]
+    rows = sorted((max(0, s.y0 - pad), min(size[1], s.y1 + pad)) for lines in seen for s in lines)
+    merged: list[list[float]] = []
+    for top, bottom in rows:
+        if merged and top <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], bottom)
+        else:
+            merged.append([top, bottom])
+    return [(round(a), round(b)) for a, b in merged]
+
+
+def clear_band(
+    content: tuple[int, int, int, int], rows: list[tuple[int, int]]
+) -> tuple[int, int, int, int] | None:
+    """The tallest stretch of the picture's rows without text, at its full width, or None
+    when text leaves too little of it (OWN_TEXT_LEAST)."""
+    x, y, width, height = content
+    edges, top = [], y
+    for a, b in rows:
+        if b <= y or a >= y + height:
+            continue
+        if a > top:
+            edges.append((top, a))
+        top = max(top, b)
+    if top < y + height:
+        edges.append((top, y + height))
+    if not edges:
+        return None
+    a, b = max(edges, key=lambda e: e[1] - e[0])
+    a, b = (a + 1) // 2 * 2, b // 2 * 2
+    if b - a < OWN_TEXT_LEAST * height:
+        return None
+    return x, a, width, b - a
+
+
+def crop_or_whole(
+    edl: EDL,
+    preset: Preset,
+    analysis: Analysis,
+    video: Path,
+    settings: Settings,
+    work_dir: Path,
+    vision: OllamaClient | None,
+) -> EDL:
+    """For only_with_text: a video with text of its own keeps smart framing, inside the
+    rows its text leaves; one without is shown whole (mode none)."""
+    if edl.crop_mode != "smart" or not preset.framing.only_with_text:
+        return edl
+    clip = edl.clips[0]
+    size = (analysis.width, analysis.height)
+    times = framing.view_times(clip, analysis.scenes, every=TEXT_EVERY)
+    found = text_lines(video, times, analysis, settings, work_dir)
+    if found is None:
+        if vision is None:
+            return edl.noted("couldn't look for the video's own text (no OCR, no vision model)")
+        found = dict(subject_samples(vision, video, times, analysis, settings, work_dir))
+    rows = own_text(times, found, size, analysis.watermarks)
+    if not rows:
+        return edl.model_copy(
+            update={
+                "crop_mode": "none",
+                "picture": None,
+                "shots": [],
+                "decisions": [*edl.decisions, "no text of its own on the video: shown whole"],
+            }
+        )
+    content = edl.picture or compose.picture_area(video, clip.start, clip.end, size)
+    seen = ", ".join(f"{a}-{b}" for a, b in rows)
+    band = clear_band(content, rows)
+    if band is None:
+        note = f"text on the video (rows {seen}) covers too much to crop away; framed smartly"
+        return edl.model_copy(update={"picture": content, "decisions": [*edl.decisions, note]})
+    note = (
+        f"text on the video (rows {seen}): cropped away, framed smartly inside rows "
+        f"{band[1]}-{band[1] + band[3]}"
+    )
+    return edl.model_copy(update={"picture": band, "decisions": [*edl.decisions, note]})
+
+
 def recheck_framing(
     shots: list[Shot],
     sampled: list[float],
@@ -384,7 +501,7 @@ def recheck_framing(
                 shot, seen, face_samples, content, analysis.width, preset.framing.smoothing
             )
             x = min(path, key=lambda p: abs(p[0] - (t - shot.start)))[1]
-        items = without_text(found[t]) if preset.framing.keep_action else found[t]
+        items = without_text(found[t]) if drops_text(preset) else found[t]
         spans = framing.keep_spans(items, face_samples, t, analysis.width)
         cut = framing.crossing(spans, x, shot.width)
         if cut:
@@ -491,6 +608,8 @@ def smart_framing(
     width = framing.crop_width(content, preset.size)
     times = framing.view_times(clip, analysis.scenes)
     samples = subject_samples(vision, video, times, analysis, settings, work_dir)
+    if preset.framing.only_with_text:
+        samples = [(t, without_text(items)) for t, items in samples]
     if preset.framing.keep_action:
         size = (analysis.width, analysis.height)
         actions = compose.action_subjects(video, clip.start, clip.end, analysis.scenes, size,
@@ -643,6 +762,7 @@ def produce(
     target = preset
     renders = 1
     remux = False
+    edl = crop_or_whole(edl, preset, analysis, video, settings, work_dir, vision)
     while True:
         if not remux:
             if edl.crop_mode == "smart":
