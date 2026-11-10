@@ -212,6 +212,10 @@ class Framing(Strict):
     # Smart framing keeps where the picture moves too, not only faces and the vision
     # model's must-keep items: for footage whose point is an action (a fall, a trick).
     keep_action: bool = False
+    # Smart framing only for a video with text of its own on it (another page's title or
+    # captions), and that text cropped away; a video without any is shown whole, as it
+    # came (mode none). Only with mode smart.
+    only_with_text: bool = False
     text_gap_above: int | None = 0
     text_gap_below: int | None = 130
     # Rows of the frame, top and bottom, a picture shown whole goes in, cut to fill them
