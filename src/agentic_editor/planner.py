@@ -260,9 +260,28 @@ def fit_duration(
     def total() -> float:
         return sum(c.duration for c in clips)
 
-    while total() < preset.min_duration:
-        after = next((ln for ln in lines if ln.start >= clips[-1].end - 1e-6), None)
-        before = next((ln for ln in reversed(lines) if ln.end <= clips[0].start + 1e-6), None)
+    # Each step takes in a whole line that makes the plan longer: a line of no length (a
+    # word Whisper timed 30.0-30.0) at the plan's edge once grew it by nothing, again and
+    # again, and the job hung in "plan" holding the GPU. Bounded besides, by the lines.
+    for _ in range(len(lines) + 1):
+        if total() >= preset.min_duration:
+            break
+        after = next(
+            (
+                ln
+                for ln in lines
+                if ln.start >= clips[-1].end - 1e-6 and ln.end > clips[-1].end + 1e-6
+            ),
+            None,
+        )
+        before = next(
+            (
+                ln
+                for ln in reversed(lines)
+                if ln.end <= clips[0].start + 1e-6 and ln.start < clips[0].start - 1e-6
+            ),
+            None,
+        )
         if not grow_back:
             before = None
         # A line that would carry the plan past the maximum is left out, even if that
