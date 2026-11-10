@@ -27,12 +27,33 @@ def _log(stage: str, message: str) -> None:
     log.info("%s: %s", stage, message)
 
 
+# Video before post captions (owner, 2026-11-10): a thread in `behind()` (a caption being
+# written) lets any other thread waiting for a slot go first, for up to YIELD_FOR in all,
+# so a caption still gets written when jobs keep coming.
+YIELD_FOR = 600.0
+YIELD_POLL = 0.25
+_behind = threading.local()
+
+
+@contextmanager
+def behind(yield_for: float = YIELD_FOR) -> Iterator[None]:
+    """Run the calling thread's work behind everyone else's: on taking a slot it waits
+    while any other thread waits for it, up to `yield_for` seconds over the whole block."""
+    _behind.budget = yield_for
+    try:
+        yield
+    finally:
+        _behind.budget = None
+
+
 class Slot:
     """A lock one thread holds at a time, which the holding thread may take again, and
     which other processes see through `lock_file`."""
 
     def __init__(self, name: str, lock_file: Callable[[], Path] | None = None):
         self.name = name
+        self._waiting = 0  # threads, not behind() ones, waiting for the slot right now
+        self._waiting_lock = threading.Lock()
         self._lock = threading.Lock()
         self._owner: int | None = None
         self._depth = 0
@@ -60,9 +81,28 @@ class Slot:
                 progress("wait", f"waiting for the {self.name}" + (f" to {why}" if why else ""))
                 waited = True
 
-        if not self._lock.acquire(blocking=False):
+        budget = getattr(_behind, "budget", None)
+        if budget:
+            # Behind: whoever else waits for the slot goes first while the budget lasts. It
+            # asks in short tries, so one who starts waiting meanwhile still goes first.
+            while True:
+                if self._waiting and _behind.budget > 0:
+                    wait()
+                    time.sleep(YIELD_POLL)
+                    _behind.budget -= YIELD_POLL
+                    continue
+                if self._lock.acquire(timeout=YIELD_POLL):
+                    break
+                wait()
+        elif not self._lock.acquire(blocking=False):
             wait()
-            self._lock.acquire()
+            with self._waiting_lock:
+                self._waiting += 1
+            try:
+                self._lock.acquire()
+            finally:
+                with self._waiting_lock:
+                    self._waiting -= 1
         if self._lock_file is not None:
             try:
                 path = self._lock_file()
