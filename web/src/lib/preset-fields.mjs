@@ -121,3 +121,42 @@ export function nextValues(values, used) {
   }
   return next;
 }
+
+/**
+ * Words as the editor finds them in a text block (render/text.py words_pattern): any case,
+ * any spaces or line breaks between them. Null for a selection of only spaces.
+ * @param {string} words
+ * @returns {RegExp | null}
+ */
+export function wordsPattern(words) {
+  const parts = words.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  const escaped = parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(escaped.join("\\s+"), "gi");
+}
+
+/**
+ * A colour for the part of `text` selected from `start` to `end`: its words (spaces at the
+ * ends left out) and which of their places in the text it is, as the render counts them.
+ * Null when nothing but spaces is selected.
+ * @param {string} text
+ * @param {number} start
+ * @param {number} end
+ * @returns {{ words: string, occurrence: number | null } | null}
+ */
+export function selectionColor(text, start, end) {
+  const selected = text.slice(start, end);
+  const words = selected.trim();
+  const pattern = wordsPattern(words);
+  if (!pattern) return null;
+  const at = start + (selected.length - selected.trimStart().length);
+  const found = [...text.matchAll(pattern)].map((m) => m.index);
+  const occurrence = found.indexOf(at);
+  return { words, occurrence: occurrence >= 0 ? occurrence : null };
+}
+
+/** Whether the words of a colour are still in the text. @param {string} text @param {string} words */
+export function hasWords(text, words) {
+  const pattern = wordsPattern(words);
+  return !!pattern && pattern.test(text);
+}

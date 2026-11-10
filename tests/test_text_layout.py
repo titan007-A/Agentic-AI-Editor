@@ -148,3 +148,74 @@ def test_the_overlay_rounds_off_the_corners_of_the_picture(tmp_path):
     assert image.getpixel((16, 416))[3] == 0  # inside the curve the picture shows
     assert image.getpixel((540, 400))[3] == 0  # along the edge, too
     assert image.getpixel((540, 200))[3] == 0  # and nothing off the picture is touched
+
+
+def test_a_selected_part_of_the_text_gets_its_own_colour():
+    from agentic_editor.render.text import colored_lines
+
+    lines = ["WHERE MUSIC SPEAKS", "louder than music"]
+    white, gold, red = "#FFFFFF", "#FFE000", "#FF0000"
+    # Only the place selected: the first MUSIC, not the second.
+    assert colored_lines(lines, white, (("music", gold, 0),)) == [
+        [("WHERE ", white), ("MUSIC", gold), (" SPEAKS", white)],
+        [("louder than music", white)],
+    ]
+    # Every place, part of a word, and across the line break; a later one wins.
+    assert colored_lines(lines, white, (("SPEAKS louder", gold, None), ("eak", red, None))) == [
+        [("WHERE MUSIC ", white), ("SP", gold), ("EAK", red), ("S", gold)],
+        [("louder", gold), (" than music", white)],
+    ]
+    # Words no longer in the text, or a place past the last, change nothing.
+    assert colored_lines(lines, white, (("rock", gold, None), ("music", gold, 5))) == [
+        [("WHERE MUSIC SPEAKS", white)],
+        [("louder than music", white)],
+    ]
+
+
+def test_coloured_words_are_drawn_in_their_colour_where_the_plain_text_would_be(tmp_path):
+    from PIL import Image
+
+    from agentic_editor.presets import WordColor
+    from agentic_editor.render.text import draw
+
+    path = font_file(FONTS, "OpenSans-ExtraBold")
+    plain = place(block(text="Day 7 Song 2", anchor="top", offset=300), path, FRAME, None, None)
+    gold = place(
+        block(
+            text="Day 7 Song 2",
+            anchor="top",
+            offset=300,
+            word_colors=[WordColor(words="song 2", color="#FFE000")],
+        ),
+        path, FRAME, None, None,
+    )  # fmt: skip
+    assert (gold.top, gold.size) == (plain.top, plain.size)
+    a = Image.open(draw([plain], FRAME, tmp_path / "a.png"))
+    b = Image.open(draw([gold], FRAME, tmp_path / "b.png"))
+    # The same ink in the same place: only the colour changed.
+    assert a.getchannel("A").getbbox() == b.getchannel("A").getbbox()
+    x0, y0, x1, y1 = b.getchannel("A").getbbox()
+    middle = (x0 + x1) // 2
+
+    def colours(image, left, right):
+        return {
+            image.getpixel((x, y))[:3]
+            for x in range(left, right)
+            for y in range(y0, y1)
+            if image.getpixel((x, y))[3] == 255
+        }
+
+    assert colours(b, x0, middle - 60) == {(255, 255, 255)}
+    assert colours(b, middle + 40, x1) == {(255, 224, 0)}
+    assert colours(a, middle + 40, x1) == {(255, 255, 255)}
+
+
+def test_a_word_colour_needs_words_and_a_colour():
+    import pytest
+
+    from agentic_editor.presets import WordColor
+
+    for bad in [{"words": "", "color": "#FFE000"}, {"words": "a", "color": "gold"},
+                {"words": "a", "color": "#FFE000", "occurrence": -1}]:  # fmt: skip
+        with pytest.raises(ValueError):
+            WordColor(**bad)

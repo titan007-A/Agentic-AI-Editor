@@ -343,3 +343,23 @@ def test_a_song_already_in_guillemets_is_not_quoted_again():
     quoted = "«Maldita primavera» cautiva"
     assert quote(quoted, "Maldita primavera") == quoted
     assert quote("Maldita primavera cautiva", "Maldita primavera") == "“Maldita primavera” cautiva"
+
+
+def test_a_coloured_headline_keeps_its_colour_however_it_wraps():
+    from agentic_editor.presets import WordColor
+    from agentic_editor.render.text import colored_lines
+
+    base = preset(uppercase=True)
+    block = base.text_blocks[0].model_copy(
+        update={"word_colors": [WordColor(words="{headline}", color="#FFE000")]}
+    )
+    base = base.model_copy(update={"text_blocks": [block, *base.text_blocks[1:]]})
+    words = "Así sonaría “Shape of You” de Ed Sheeran en versión swing jazz"
+    filled = headline.fill(base, words, lambda name, *texts: FONT).text_blocks[0]
+    assert "\n" in filled.text  # wrapped
+    colored = colored_lines(
+        filled.text.split("\n"),
+        "#FFFFFF",
+        tuple((w.words, w.color, w.occurrence) for w in filled.word_colors),
+    )
+    assert {color for line in colored for _, color in line} == {"#FFE000"}

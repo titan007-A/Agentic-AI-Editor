@@ -243,5 +243,5 @@ def fill(
     def filled(text: str) -> str:
         return FIELD.sub(lambda m: values.get(m.group(1), m.group(0)), text)
 
-    blocks = [block.model_copy(update={"text": filled(block.text)}) for block in preset.text_blocks]
+    blocks = [block.filled(filled(block.text), filled) for block in preset.text_blocks]
     return preset.model_copy(update={"text_blocks": blocks})

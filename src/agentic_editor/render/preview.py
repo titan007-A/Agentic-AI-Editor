@@ -201,7 +201,10 @@ def render_checked(
     shown = preset.model_copy(
         update={
             "text_blocks": [
-                b.model_copy(update={"text": sample_text(b.text, preset.random_fields)})
+                b.filled(
+                    sample_text(b.text, preset.random_fields),
+                    lambda w: sample_text(w, preset.random_fields),
+                )
                 for b in preset.text_blocks
             ]
         }

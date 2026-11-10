@@ -254,3 +254,26 @@ def test_words_for_above_the_video_fill_a_headline_and_keep_the_rest():
     assert names.headline_from_texts([plain], texts) is None
     assert [b.text for b in names.with_texts(plain, texts).text_blocks] == [
         "Una línea\nde la lista", "Del PDF"]  # fmt: skip
+
+
+def test_coloured_words_with_a_field_in_them_keep_their_colour_once_it_is_filled():
+    from agentic_editor.presets import WordColor
+    from agentic_editor.render.text import colored_lines
+
+    preset = stories("Day {day}\nSong {song_number}")
+    block = preset.text_blocks[1].model_copy(
+        update={"word_colors": [WordColor(words="Song {song_number}", color="#FFE000")]}
+    )
+    preset = preset.model_copy(
+        update={
+            "text_blocks": [preset.text_blocks[0], block],
+            "random_fields": {"song_number": (3, 3)},
+        }
+    )
+    filled = names.fill(preset, "IMG_5071", {"day": "7"}).text_blocks[1]
+    assert filled.text == "Day 7\nSong 3"
+    assert [w.words for w in filled.word_colors] == ["Song 3"]
+    assert colored_lines(filled.text.split("\n"), "#FFFFFF", (("Song 3", "#FFE000", 0),)) == [
+        [("Day 7", "#FFFFFF")],
+        [("Song 3", "#FFE000")],
+    ]
