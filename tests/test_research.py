@@ -625,7 +625,8 @@ def test_a_research_looks_at_the_accounts_source_pages_too():
         return {"channel": channel, "description": f"Bryan Adams {code}", "like_count": 100}
 
     def channel(url, count):
-        assert url == "https://www.youtube.com/@ChiaraTomao/shorts" and count == research.PER_SOURCE
+        # Two pages share the 20 places of the 50 rated: 10 asked of each.
+        assert url == "https://www.youtube.com/@ChiaraTomao/shorts" and count == 10
         return [{"url": "https://www.youtube.com/shorts/CHIARA00001", "title": "Bryan Adams live"},
                 {"url": "https://www.youtube.com/watch?v=NOTASHORT01"}]  # fmt: skip
 
@@ -947,3 +948,63 @@ def test_an_artist_asked_for_by_name_may_fill_the_research_a_song_still_twice():
     assert len(picked) == 8 and passed == {"same song": 1}
     picked, _, _ = research.pick(ranked, asked="female pop singers live")
     assert len(picked) == 2  # not asked for by name: two of her at most
+
+
+def test_source_pages_get_40_of_every_100_shown_the_searches_60():
+    def reel(code, score, source="", artist=""):
+        handle = "gira" if source else code.lower()
+        return Reel(code, "", "", handle=handle, artist=artist, score=score, source=source)
+
+    # One page, all one singer, all better than the searches' reels.
+    page = [reel(f"P{n}", 0.99 - n / 100, "instagram:gira", "Mina") for n in range(10)]
+    searched = [reel(f"S{n}", 0.8 - n / 100) for n in range(12)]
+    picked, passed, cutoff = research.pick(page + searched, count=15, sourced=6)
+    codes = [r.code for r in picked]
+    # 6 from the page though it is one account of one singer; 9 from the searches.
+    assert codes == [f"P{n}" for n in range(6)] + [f"S{n}" for n in range(9)]
+    assert passed == {} and cutoff == pytest.approx(0.93)  # P6, the best left
+
+    # A page with too few: the searches fill its places; and the other way round.
+    picked, _, _ = research.pick(page[:2] + searched, count=15, sourced=6)
+    assert [r.code for r in picked] == ["P0", "P1"] + [f"S{n}" for n in range(12)]
+    picked, _, _ = research.pick(page + searched[:3], count=15, sourced=6)
+    assert [r.code for r in picked] == [f"P{n}" for n in range(6)] + ["S0", "S1", "S2"] + [
+        f"P{n}" for n in range(6, 10)
+    ]
+
+    # Two pages share the 6 places, 3 each; a song still comes twice at most.
+    other = [reel(f"Q{n}", 0.97 - n / 100, "youtube:@q") for n in range(5)]
+    for r in other:
+        r.handle = "q"
+    picked, passed, _ = research.pick(page + other + searched, count=15, sourced=6)
+    handles = [r.handle for r in picked]
+    assert handles.count("gira") == 3 and handles.count("q") == 3
+    assert passed == {"same account": 7}  # P3 to P9: the first page had its 3
+
+    # Without source pages nothing changes: two of one account.
+    picked, _, _ = research.pick(page + searched, count=15)
+    assert sum(r.handle == "gira" for r in picked) == 2
+
+
+def test_a_research_with_a_source_page_rates_20_of_its_reels_and_shows_6():
+    llm = Planner()
+
+    def find(query, count):
+        if query.endswith('"gira"'):  # the source page, by name
+            return [hit(f"GIRA{n:05}") for n in range(40)]
+        return [hit(f"WEB{n:06}") for n in range(40)]
+
+    def info(url):
+        code = research.code_of(url)
+        likes = 1000 - int(code[-2:])
+        owner = "gira" if code.startswith("GIRA") else code.lower()
+        return {"channel": owner, "description": f"Bryan Adams {code}", "like_count": likes}
+
+    context = research.Context(sources=["instagram:gira"])
+    result = research.run(
+        "Bryan Adams", lambda: nullcontext(llm), set(), set(), lambda *a: None, find, info, 0,
+        context,
+    )  # fmt: skip
+    assert result.considered == research.MAX_REELS == 50
+    assert len(result.reels) == research.SHOWN == 15
+    assert sum(r.source == "instagram:gira" for r in result.reels) == 6

@@ -74,12 +74,17 @@ LABEL = re.compile(r"^\W*([^:]{1,30}):")
 MAX_SOURCES = 10  # source pages an account may have
 TREND_DAYS = 14  # the trend radar looks at reels posted, and researches made, this recently
 TRENDING = 10  # reels it shows
-PER_SOURCE = 5  # the latest reels taken from each
+PER_SOURCE = 5  # the latest reels taken from each, at least
 QUALITY = {"HD": 1.0, "SD": 0.85, "": 0.95}  # "" when the site didn't say
 MAX_QUERIES = 16
 PER_QUERY = 30  # results asked of the engines for each search
-MAX_REELS = 40  # reels looked up and rated, in the order the searches found them
-SHOWN = 10  # the best this many are kept: the owner picks the ones to edit from them
+MAX_REELS = 50  # reels looked up and rated, in the order the searches found them
+SHOWN = 15  # the best this many are kept: the owner picks the ones to edit from them
+# With source pages, this share of the reels rated and of those shown is theirs, the rest
+# the searches' (owner: "40 reference, 60 online search"). A side with too few that fit
+# leaves its places to the other.
+SOURCE_SHARE = 0.4
+PDF_REELS = 10  # reels looked up for one song of a PDF in each search round
 PER_ACCOUNT = 2  # of them at most from one account, so one page doesn't fill the research
 PER_SONG = 2  # and from one song: the owner's "a song may come twice", not seven times
 PER_ARTIST = 2  # and of one singer or band: liked reels mustn't make it all one artist
@@ -118,6 +123,7 @@ class Reel:
     views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
     long: bool = False  # a YouTube video, not a Short: left out
     page: str = ""  # the Instagram source page it was searched for: kept only when its own
+    source: str = ""  # the source page it came from ("instagram:name"), "" when a search's
     width: int | None = None  # of the best version the site offers
     height: int | None = None
     bitrate: float | None = None  # kbit/s of that version
@@ -793,17 +799,21 @@ def _channel_shorts(url: str, count: int) -> list[dict]:
 
 
 def from_sources(
-    sources: list[str], find=_engines, pause: float | None = None, channel=_channel_shorts
+    sources: list[str],
+    find=_engines,
+    pause: float | None = None,
+    channel=_channel_shorts,
+    each: int = PER_SOURCE,
 ) -> list[Reel]:
-    """The latest reels of each source page: a YouTube channel's Shorts tab lists them; an
-    Instagram page can't be listed without signing in, so it is searched for, and what the
-    search finds is kept only when it is the page's own (see run)."""
+    """The latest `each` reels of each source page: a YouTube channel's Shorts tab lists
+    them; an Instagram page can't be listed without signing in, so it is searched for, and
+    what the search finds is kept only when it is the page's own (see run)."""
     found: dict[str, Reel] = {}
     for source in sources[:MAX_SOURCES]:
         kind, name = source.split(":", 1)
         if kind == "youtube":
             try:
-                entries = channel(f"https://www.youtube.com/{name}/shorts", PER_SOURCE)
+                entries = channel(f"https://www.youtube.com/{name}/shorts", each)
             except Exception as exc:
                 log.warning("couldn't list %s's Shorts: %s", name, exc)
                 continue
@@ -812,11 +822,13 @@ def from_sources(
                 code = code_of(link)
                 if code and "/shorts/" in link and code not in found:  # never a video
                     title = entry.get("title") or ""
-                    found[code] = Reel(code, reel_url(code), f"from {name}", title=title)
+                    reel = Reel(code, reel_url(code), f"from {name}", title=title)
+                    reel.source = source
+                    found[code] = reel
         else:
             reels, _ = search([f'"{name}"'], find, pause)
-            for reel in reels[: PER_SOURCE * 2]:  # half of what a search finds is others'
-                reel.query, reel.page = f"from @{name}", name
+            for reel in reels[: each * 2]:  # half of what a search finds is others'
+                reel.query, reel.page, reel.source = f"from @{name}", name, source
                 found.setdefault(reel.code, reel)
     return list(found.values())
 
@@ -964,46 +976,81 @@ def pick(
     per_song: int = PER_SONG,
     per_artist: int | None = PER_ARTIST,
     asked: str = "",
+    sourced: int | None = None,
 ) -> tuple[list[Reel], dict[str, int], float | None]:
     """The best `count` of the ranked reels, at most `per_account` from one account (by its
     Instagram name, its display name when that isn't known), `per_song` of one song and
     `per_artist` of one singer or band, so one page, one hit or one artist doesn't fill
     the research, unless the person `asked` for that artist by name ("Adele's songs": all
     may be Adele's, still no more than `per_song` of one song); how many were passed over
-    for each, and the best score left. A reel itself is never given twice (see run)."""
+    for each, and the best score left. A reel itself is never given twice (see run).
+
+    With `sourced`, that many places are the source pages' and the rest the searches':
+    a side with too few leaves its places to the other. The pages were chosen by the
+    owner, so they share their places between them, whatever `per_account` (and fill the
+    searches' empty ones with no cap), and a singer's own channel isn't held to
+    `per_artist`."""
     named = f" {_same(asked)} "
     picked: list[Reel] = []
     passed = {"same account": 0, "same song": 0, "same artist": 0}
     accounts: dict[str, int] = {}
     songs: dict[str, int] = {}
     artists: dict[str, int] = {}
-    rest: list[Reel] = []
+    pages = len({r.source for r in ranked if r.source}) or 1
+    page_cap = max(per_account, -(-(sourced or 0) // pages))
+    places = {True: sourced, False: None if sourced is None else count - sourced}
+    taken = {True: 0, False: 0}
+    waiting: list[Reel] = []  # its side's places were full: they may fill the other's
+    skipped: set[int] = set()
+
+    def blocked(reel: Reel, filling: bool = False) -> str | None:
+        who, song, artist = _same(reel.handle or reel.account), _same(reel.song), _same(reel.artist)
+        cap = per_account
+        if reel.source:  # a page filling the searches' empty places has no cap of its own
+            cap = count if filling else page_cap
+        if who and accounts.get(who, 0) >= cap:
+            return "same account"
+        if song and songs.get(song, 0) >= per_song:
+            return "same song"
+        wanted = artist and f" {artist} " in named
+        free = wanted or (reel.source and sourced is not None)
+        if per_artist is not None and artist and not free and artists.get(artist, 0) >= per_artist:
+            return "same artist"
+        return None
+
+    def take(reel: Reel) -> None:
+        picked.append(reel)
+        taken[bool(reel.source)] += 1
+        for seen, key in (
+            (accounts, _same(reel.handle or reel.account)),
+            (songs, _same(reel.song)),
+            (artists, _same(reel.artist)),
+        ):
+            seen[key] = seen.get(key, 0) + 1
+
     for reel in ranked:
         if len(picked) == count:
-            rest.append(reel)
+            break
+        side = bool(reel.source)
+        if places[side] is not None and taken[side] >= places[side]:
+            waiting.append(reel)
             continue
-        who, song = _same(reel.handle or reel.account), _same(reel.song)
-        if who and accounts.get(who, 0) >= per_account:
-            passed["same account"] += 1
+        if why := blocked(reel):
+            passed[why] += 1
+            skipped.add(id(reel))
             continue
-        if song and songs.get(song, 0) >= per_song:
-            passed["same song"] += 1
+        take(reel)
+    for reel in waiting:
+        if len(picked) == count:
+            break
+        if why := blocked(reel, filling=True):
+            passed[why] += 1
+            skipped.add(id(reel))
             continue
-        artist = _same(reel.artist)
-        wanted = artist and f" {artist} " in named
-        if (
-            per_artist is not None
-            and artist
-            and not wanted
-            and artists.get(artist, 0) >= per_artist
-        ):
-            passed["same artist"] += 1
-            continue
-        picked.append(reel)
-        accounts[who] = accounts.get(who, 0) + 1
-        songs[song] = songs.get(song, 0) + 1
-        artists[artist] = artists.get(artist, 0) + 1
-    cutoff = rest[0].score if rest else None
+        take(reel)
+    chosen = {id(r) for r in picked} | skipped
+    left = [r.score for r in ranked if id(r) not in chosen]
+    cutoff = max(left, default=None) if len(picked) == count else None
     return picked, {k: n for k, n in passed.items() if n}, cutoff
 
 
@@ -1100,8 +1147,10 @@ def run(
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
     if context.sources:
         progress("looking at your source pages", 0.42)
-        # The pages first, up to half of what is looked up, so the searches still count.
-        picked = from_sources(context.sources, find, pause, channel)[: MAX_REELS // 2]
+        # The pages first, their share of what is looked up, so the searches still count.
+        share = round(MAX_REELS * SOURCE_SHARE)
+        each = max(PER_SOURCE, -(-share // len(context.sources[:MAX_SOURCES])))
+        picked = from_sources(context.sources, find, pause, channel, each)[:share]
         taken = {r.code for r in picked}
         reels = picked + [r for r in reels if r.code not in taken]
     left_out = {
@@ -1136,7 +1185,8 @@ def run(
     spread(fitting)
     # Only the person's own words (and answers) free an artist: the model's brief may name
     # examples of a genre they didn't ask for.
-    picked, passed, cutoff = pick(rank(fitting), asked=description)
+    sourced = round(SHOWN * SOURCE_SHARE) if context.sources else None
+    picked, passed, cutoff = pick(rank(fitting), asked=description, sourced=sourced)
     left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
     return Result(
         queries,
@@ -1193,7 +1243,7 @@ def run_pdf(
             queries = _tidy(queries)
             reels, failed = search(queries, find, pause, sites=sites)
             answered = answered or len(failed) < len(queries) * len(sites)
-            reels = [r for r in reels if r.code not in taken | looked][: MAX_REELS // 4]
+            reels = [r for r in reels if r.code not in taken | looked][:PDF_REELS]
             looked |= {r.code for r in reels}
             look_up(reels, info)
             reels = [

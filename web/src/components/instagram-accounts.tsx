@@ -77,7 +77,8 @@ function SourcePages({
       <p className="text-sm">
         Source pages{" "}
         <span className="text-muted-foreground">
-          (their latest reels are looked at in every research)
+          (their latest reels are looked at in every research: 4 in 10 of the reels it gives come
+          from them)
         </span>
       </p>
       {account.sources.length > 0 && (

@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { HiddenAccounts } from "@/components/hidden-accounts";
 import { InstagramAccounts, learning } from "@/components/instagram-accounts";
 import { PdfChooser } from "@/components/pdf-chooser";
-import { ReelCard } from "@/components/reel-card";
+import { fromPage, ReelCard } from "@/components/reel-card";
 import { ResearchChat } from "@/components/research-chat";
 import { TrendRadar } from "@/components/trend-radar";
 import { ResearchQuestions } from "@/components/research-questions";
@@ -89,9 +89,17 @@ function entryNotes(entry: PdfEntry): string {
 }
 
 // Of the reels a research gives, how many can be edited at once.
-const MAX_CHOSEN = 5;
+const MAX_CHOSEN = 10;
 
 type Started = { item: ResearchItem; jobId: string };
+
+/** How many of the reels given came from the account's source pages, and how many from
+ * the searches; nothing when none came from a page. */
+function fromPages(r: Research): string {
+  const given = r.items.filter((i) => i.entry === null);
+  const pages = given.filter((i) => fromPage(i)).length;
+  return pages ? `. ${pages} from your source pages, ${given.length - pages} from the search` : "";
+}
 
 /** A research's name: the account it was for, and what it asked for. */
 function named(r: Research): string {
@@ -292,8 +300,9 @@ function Researcher() {
         <h1 className="font-hand text-4xl font-bold">Researcher</h1>
         <p className="text-sm text-muted-foreground">
           It searches Instagram and YouTube Shorts through web search engines for reels like your
-          account&apos;s best ones, or for what you describe, and gives the 10 that fit best and are
-          most viral, never one it showed you before. Choose up to 5 of them to edit.
+          account&apos;s best ones, or for what you describe, and gives the 15 that fit best and are
+          most viral (of up to 50 it rates), never one it showed you before. With source pages, 4 in
+          10 come from them and 6 from the search. Choose up to 10 of them to edit.
         </p>
       </div>
 
@@ -476,6 +485,7 @@ function Researcher() {
                 <p className="text-sm text-muted-foreground">
                   {current.message}
                   {current.considered > 0 && ` (${current.considered} rated)`}
+                  {fromPages(current)}
                   {leftOut(current)}
                 </p>
               )}
