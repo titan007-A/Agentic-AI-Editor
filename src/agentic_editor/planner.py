@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field, ValidationError
 
+from agentic_editor.agent import LANGUAGES
 from agentic_editor.analyze import Analysis
 from agentic_editor.edl import EDL, CaptionOverrides, Clip, Zoom, problems
 from agentic_editor.llm import LLMError, OllamaClient, parse
@@ -348,6 +349,7 @@ def finalize(
     # preset's minimum; a plan using all of it is as long as it can be.
     opening = lines[candidates[0].start_line].start if keep_start else lines[0].start
     available = lines[-1].end - opening
+    language = onscreen_language(preset)  # the hook is shown on screen: the reel's words' language
     prompt = (
         f"{_brief(preset, analysis)}\n\n"
         f"Candidate segments:\n{_describe_candidates(candidates, lines)}\n\n"
@@ -355,7 +357,9 @@ def finalize(
         f"hook and a length of {preset.min_duration:g}-{preset.max_duration:g} seconds; a "
         "longer one is trimmed at its start or end afterwards. Also write: hook, a short on-screen "
         "line of at most 8 words that makes people keep watching; title, at most 60 "
-        "characters; caption_position, one of top, middle, bottom or null." + _editor_notes(notes)
+        "characters; caption_position, one of top, middle, bottom or null."
+        + (f" Write the hook and title in {language}." if language else "")
+        + _editor_notes(notes)
     )
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     schema = FinalPlan.model_json_schema()
@@ -489,6 +493,17 @@ def plan_variants(
             for e in edls
         ]
     return edls
+
+
+def onscreen_language(preset: Preset) -> str | None:
+    """The language of the words a reel shows, by name, for its hook and title: the
+    one-liner's, else the captions' when translated, else the post caption's; None (the
+    model's choice, mostly English) when none is set."""
+    translated = preset.captions.language if preset.captions.mode == "translated" else None
+    for code in (preset.one_liner.language, translated, preset.post_caption.language):
+        if code and code.strip():
+            return LANGUAGES.get(code.strip().lower(), code.strip())
+    return None
 
 
 def dead_air(candidate: Candidate, lines: list[Line], analysis: Analysis, preset: Preset) -> float:

@@ -818,6 +818,10 @@ def box_rows(
         for x0, y0, x1, y1 in found:
             if left is not None and (x1 < left or x0 > left + span):
                 continue  # cropped out of this shot
+            # Above or below the picture shown (black bars cut off, say) it isn't on screen.
+            y0, y1 = max(y0, top), min(y1, top + picture_height)
+            if y1 <= y0:
+                continue
             bands.append(((y0 - top) * scale + offset, (y1 - top) * scale + offset))
         rows.append((t - clip.start, bands))
     return rows
