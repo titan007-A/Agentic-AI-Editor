@@ -609,7 +609,37 @@ def one_line(
         return one_line(vision, frames, max_words, hint + f" Your line had {len(line.split())} "
                         f"words: write a complete one of at most {max_words}.", context, notes,
                         language, retried=True)  # fmt: skip
-    return shortened(line, max_words)
+    line = shortened(line, max_words)
+    if language and language.strip().lower() not in ("english", "en"):
+        line = in_language(vision, line, language, max_words)
+    return line
+
+
+def in_language(vision, line: str, language: str, max_words: int) -> str:
+    """The line in `language`: a small vision model asked for it still writes English
+    now and then, mostly when the guidance is English, so it is given once more to turn
+    it into that language (one already in it comes back as it is). The line as it was
+    when that fails."""
+    try:
+        reply = vision.chat_json(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        f"This line is shown on screen over a video: {line}\n"
+                        f"Give it in {language}: translate it if it is in any other language, "
+                        f"or return it unchanged if it is already in {language}. Keep its "
+                        f"meaning, at most {max_words} words, no quotation marks."
+                    ),
+                }
+            ],
+            _Line.model_json_schema(),
+            temperature=0.2,
+        )
+        written = parse(_Line, reply).line.strip().strip('"')
+    except LLMError:
+        return line
+    return shortened(written, max_words) if written else line
 
 
 def shortened(line: str, max_words: int) -> str:

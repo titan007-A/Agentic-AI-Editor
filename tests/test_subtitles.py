@@ -209,4 +209,37 @@ def test_a_one_liner_that_copies_the_guidance_s_example_is_written_again():
     model = Copier()
     line = one_line(model, ["a.jpg"], 12, f'Like "{example}"', "", None, "Spanish")
     assert line == "Marines suben a un buque de guerra en el puerto"
-    assert len(model.prompts) == 2 and "don't copy" in model.prompts[1]
+    assert len(model.prompts) == 3 and "don't copy" in model.prompts[1]
+    assert "Give it in Spanish" in model.prompts[2]  # the language made sure of
+
+
+def test_a_one_liner_the_model_wrote_in_english_is_given_in_the_preset_s_language():
+    class Vision:
+        def __init__(self):
+            self.prompts = []
+
+        def chat_json(self, messages, schema, images=None, temperature=0.0):
+            self.prompts.append(messages[0]["content"])
+            if len(self.prompts) == 1:
+                return {"line": "Driving away at sunset, two souls find peace together."}
+            return {"line": "Al atardecer, dos almas encuentran la paz juntas."}
+
+    model = Vision()
+    line = one_line(model, ["a.jpg"], 12, "what happens", "", None, "Spanish")
+    assert line == "Al atardecer, dos almas encuentran la paz juntas."
+    assert "Write it in Spanish." in model.prompts[0] and "Give it in Spanish" in model.prompts[1]
+    # English asked for, or none: no second call.
+    for language in ("English", None):
+        model = Vision()
+        one_line(model, ["a.jpg"], 12, "what happens", "", None, language)
+        assert len(model.prompts) == 1
+
+    class Broken(Vision):
+        def chat_json(self, messages, schema, images=None, temperature=0.0):
+            if self.prompts:
+                raise LLMError("no answer")
+            return super().chat_json(messages, schema, images, temperature)
+
+    assert one_line(Broken(), ["a.jpg"], 12, "", "", None, "Spanish") == (
+        "Driving away at sunset, two souls find peace together."
+    )  # kept as written when the second call fails
