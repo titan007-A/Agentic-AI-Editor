@@ -49,10 +49,20 @@ function tooShort(item: ResearchItem, presets: Preset[]): number | null {
 /** The model's words ended with one full stop, whether they came with one or not. */
 const ended = (text: string) => text.replace(/[.\s]+$/, "") + ".";
 
+/** Whether it came from one of the account's source pages: their reels are found as
+ * "from @name" (research.from_sources), never by a search of the model's. */
+export function fromPage(item: ResearchItem): boolean {
+  return item.query.startsWith("from ");
+}
+
 /** Why the researcher chose this reel, step by step, from what it stored of its thinking. */
 export function reasons(item: ResearchItem, research: Research, presets: Preset[]): string[] {
   const label = presets.find((p) => p.name === item.preset)?.label ?? item.preset;
-  const lines = [`Found by the search “${item.query}”.`];
+  const lines = [
+    fromPage(item)
+      ? `From your source page ${item.query.slice(5)}.`
+      : `Found by the search “${item.query}”.`,
+  ];
   lines.push(
     item.relevance === null
       ? "The model couldn't rate how well it fits, so it counted as half a fit."
