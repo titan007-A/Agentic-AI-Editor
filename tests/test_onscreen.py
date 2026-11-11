@@ -46,3 +46,17 @@ def test_text_maps_to_the_rows_it_covers_in_the_reel():
     (t, [(top, bottom)]), (later, outside) = rows
     assert t == 2.0 and round(top) == 1103 and round(bottom) == 1220
     assert later == 7.0 and outside == []  # cropped out of that shot
+
+
+def test_text_above_or_below_the_picture_shown_isnt_on_screen():
+    # A 9:16 reel whose picture is rows 500-1400 (black bars above and below, cut off),
+    # shown whole in the band 520-1420: its own caption in the top bar is off screen.
+    clip = Clip(start=0.0, end=10.0)
+    in_bar = (100.0, 300.0, 980.0, 420.0)
+    across = (100.0, 450.0, 980.0, 600.0)  # half in the bar, half on the picture
+    rows = box_rows(
+        [(1.0, [in_bar, across])], clip, [], (0, 500, 1080, 900), (1080, 1920), (1080, 1920),
+        1080, (520, 1420),
+    )  # fmt: skip
+    [(t, bands)] = rows
+    assert t == 1.0 and [(round(a), round(b)) for a, b in bands] == [(520, 620)]

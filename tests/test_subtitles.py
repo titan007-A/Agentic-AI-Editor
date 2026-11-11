@@ -74,6 +74,35 @@ def test_the_one_liner_is_cut_to_its_word_limit():
     line = one_line(model, ["a.jpg"], 6, "about the singer", "we sang all night", None)
     assert line == "A voice that stops the whole"
     assert "about the singer" in model.prompts[0] and "we sang all night" in model.prompts[0]
+    # Too long, it was asked once more for a complete shorter line before the cut.
+    assert len(model.prompts) == 2 and "at most 6" in model.prompts[1]
+
+
+def test_a_long_one_liner_is_asked_again_then_cut_at_a_sentence_end():
+    long = "Conducción de un coche convertible al atardecer en la carretera. ¿Quién? Un conductor"
+
+    class Shorter:
+        def __init__(self):
+            self.prompts = []
+
+        def chat_json(self, messages, schema, **kwargs):
+            self.prompts.append(messages[-1]["content"])
+            first = len(self.prompts) == 1
+            return {"line": long if first else "Un conductor en un convertible al atardecer"}
+
+    model = Shorter()
+    assert one_line(model, ["a.jpg"], 12, "", "", None, "Spanish") == (
+        "Un conductor en un convertible al atardecer"
+    )
+    assert "had 13 words" in model.prompts[1]
+    # Still too long the second time: cut at its last sentence end, not mid-sentence.
+    line = one_line(Model({"line": long}), ["a.jpg"], 12, "", "", None)
+    assert line == "Conducción de un coche convertible al atardecer en la carretera. ¿Quién?"
+    # No sentence end in the first half: cut at the limit, no dangling comma.
+    line = one_line(
+        Model({"line": "one two three, four five six seven"}), ["a.jpg"], 3, "", "", None
+    )
+    assert line == "one two three"
 
 
 def test_a_one_liner_never_goes_to_the_other_end_only_a_little_nearer_its_own():

@@ -303,3 +303,23 @@ def test_growing_a_short_plan_skips_lines_of_no_length_and_always_ends(lines):
     clip = done[0][0]
     assert clip.start <= 10.0 and clip.end >= 30.0
     assert clip.end - clip.start <= preset.max_duration
+
+
+def test_the_hook_and_title_are_written_in_the_reels_language(make_analysis):
+    from agentic_editor.planner import onscreen_language
+
+    spanish = PRESET.model_copy(
+        update={"one_liner": PRESET.one_liner.model_copy(update={"language": "es"})}
+    )
+    llm = FakeLLM(candidates((1, 3)), final(0), {"words": ["Silent!"]})
+    plan_with_llm(llm, make_analysis(transcript(), 20.0), spanish)
+    assert "Write the hook and title in Spanish." in llm.prompts[1][-1]["content"]
+    assert onscreen_language(spanish) == "Spanish"
+    italian = PRESET.model_copy(
+        update={"post_caption": PRESET.post_caption.model_copy(update={"language": "it"})}
+    )
+    assert onscreen_language(italian) == "Italian"  # the post caption's, with no one-liner's
+    llm = FakeLLM(candidates((1, 3)), final(0), {"words": ["Silent!"]})
+    plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
+    # Nothing set: the post caption's default, English, as the model mostly wrote anyway.
+    assert "Write the hook and title in English." in llm.prompts[1][-1]["content"]

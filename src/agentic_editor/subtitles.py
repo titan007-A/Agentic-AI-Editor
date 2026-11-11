@@ -604,7 +604,25 @@ def one_line(
         return one_line(vision, frames, max_words, hint + " Describe this video in your own "
                         "words; don't copy any example.", context, notes, language,
                         retried=True)  # fmt: skip
-    return " ".join(line.split()[:max_words])
+    if len(line.split()) > max_words and not retried:
+        # Cut, it would stop mid-sentence ("... ¿Quién? Un"): asked once more, shorter.
+        return one_line(vision, frames, max_words, hint + f" Your line had {len(line.split())} "
+                        f"words: write a complete one of at most {max_words}.", context, notes,
+                        language, retried=True)  # fmt: skip
+    return shortened(line, max_words)
+
+
+def shortened(line: str, max_words: int) -> str:
+    """The line within `max_words`: up to its last sentence end that keeps at least half of
+    them, else cut there, without a trailing comma or colon."""
+    words = line.split()
+    if len(words) <= max_words:
+        return line
+    kept = words[:max_words]
+    for n in range(len(kept), max(1, max_words // 2) - 1, -1):
+        if re.search(r"[.!?…]['\")»]*$", kept[n - 1]):
+            return " ".join(kept[:n])
+    return " ".join(kept).rstrip(",;:–—-")
 
 
 def _echoes(line: str, quoted: str) -> bool:
