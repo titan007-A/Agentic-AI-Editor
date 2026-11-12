@@ -4,7 +4,7 @@ import { Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { FunPanel } from "@/components/fun-panel";
+import { BadgeStrip } from "@/components/badge-strip";
 import { JobList } from "@/components/job-list";
 import { NewJobForm } from "@/components/new-job-form";
 import { Button } from "@/components/ui/button";
@@ -81,7 +81,7 @@ export default function Dashboard() {
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      {fun && <FunPanel tick={finished} />}
+      {fun && <BadgeStrip tick={finished} />}
       <NewJobForm onCreated={refresh} />
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-2">

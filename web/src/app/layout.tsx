@@ -33,7 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{if(localStorage.getItem('aiedit-theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}",
+              "try{var t=localStorage.getItem('aiedit-theme');if(t==='dark')t='midnight';if(t==='midnight'||t==='darkroom'||t==='blueprint'){document.documentElement.classList.add('dark');document.documentElement.setAttribute('data-night',t)}}catch(e){}",
           }}
         />
       </head>

@@ -1,146 +1,27 @@
 "use client";
 
-import {
-  Award,
-  Clapperboard,
-  Flame,
-  Moon,
-  PenLine,
-  Send,
-  Shapes,
-  Sunrise,
-  Sparkles,
-  Target,
-  Trophy,
-  Volume2,
-  VolumeX,
-  Zap,
-} from "lucide-react";
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { Award, Flame, Sparkles, Target, Volume2, VolumeX } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wrapped } from "@/components/wrapped";
-import { api, type FunBadge, type FunStats } from "@/lib/api";
-import { confetti } from "@/lib/confetti";
-import { cheer } from "@/lib/fun-events";
+import { useFunStats } from "@/hooks/use-fun-stats";
+import { ICONS } from "@/lib/badge-icons";
 import { setSounds, sounds, soundsOn } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 
-const SEEN_KEY = "aiedit-badges-seen";
-// The streak last cheered, so a longer one gets a sparkle once.
-const STREAK_KEY = "aiedit-streak-seen";
-// The day whose quest was last cheered as done.
-const QUEST_KEY = "aiedit-quest-done";
-const ICONS: Record<string, typeof Award> = {
-  first_reel: Clapperboard,
-  reels_10: Clapperboard,
-  reels_100: Clapperboard,
-  reels_500: Clapperboard,
-  reels_1000: Trophy,
-  day_10: Zap,
-  day_25: Zap,
-  streak_3: Flame,
-  streak_7: Flame,
-  streak_30: Flame,
-  night_owl: Moon,
-  early_bird: Sunrise,
-  captions_25: PenLine,
-  posts_10: Send,
-  variety_5: Shapes,
-};
 type Span = "today" | "week" | "month";
 
-function seen(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(SEEN_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
-function remember(ids: string[]) {
-  try {
-    localStorage.setItem(SEEN_KEY, JSON.stringify(ids));
-  } catch {
-    // private window: a badge may be cheered again next time
-  }
-}
-
-/** The team board on the jobs page, for accounts trying the fun feature: the person's
+/** The team board (its own tab), for accounts trying the fun feature: the person's
  * streak and counts, who made most reels today, this week and this month, and badges.
  * A badge newly won gets confetti once. `tick` changes when jobs finish, to count again. */
-export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBadge) => void }) {
-  const [stats, setStats] = useState<FunStats | null>(null);
+export function FunPanel({ tick }: { tick: number }) {
+  const stats = useFunStats(tick);
   const [span, setSpan] = useState<Span>("week");
   const [loud, setLoud] = useState(soundsOn);
   const [wrapped, setWrapped] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      api
-        .fun()
-        .then((next) => live && setStats(next))
-        .catch(() => {});
-    load();
-    const every = window.setInterval(load, 60000);
-    return () => {
-      live = false;
-      window.clearInterval(every);
-    };
-  }, [tick]);
-
-  useEffect(() => {
-    if (!stats) return;
-    const known = new Set(seen());
-    const fresh = stats.badges.filter((b) => b.won_at && !known.has(b.id));
-    if (!fresh.length) return;
-    remember([...known, ...fresh.map((b) => b.id)]);
-    confetti();
-    sounds.badge();
-    cheer("badge");
-    for (const badge of fresh.slice(0, 3)) {
-      toast.success(`Badge won: ${badge.name}`, { description: badge.description });
-      onBadge?.(badge);
-    }
-    if (fresh.length > 3) toast.success(`And ${fresh.length - 3} more badges`);
-  }, [stats, onBadge]);
-
-  useEffect(() => {
-    if (!stats) return;
-    let last: number | null = null;
-    try {
-      const kept = localStorage.getItem(STREAK_KEY);
-      last = kept === null ? null : Number(kept);
-      localStorage.setItem(STREAK_KEY, String(stats.me.streak));
-    } catch {
-      return;
-    }
-    // The first look only notes it; a longer run after that gets a sparkle.
-    if (last !== null && stats.me.streak > last && stats.me.streak > 1) {
-      sounds.streak();
-      toast.success(`${stats.me.streak} days in a row!`, {
-        description: "Keep it going tomorrow.",
-      });
-    }
-  }, [stats]);
-
-  useEffect(() => {
-    if (!stats?.quest.done) return;
-    try {
-      if (localStorage.getItem(QUEST_KEY) === stats.quest.day) return;
-      localStorage.setItem(QUEST_KEY, stats.quest.day);
-    } catch {
-      return;
-    }
-    confetti(90);
-    sounds.badge();
-    cheer("badge");
-    toast.success("Daily quest done!", { description: stats.quest.text });
-  }, [stats]);
 
   if (!stats) return null;
   const { me, leaderboard, badges, quest } = stats;

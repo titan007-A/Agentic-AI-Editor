@@ -40,9 +40,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // Accepted on the server, or just now in this page.
   const [acceptedNow, setAcceptedNow] = useState(false);
   const noticeAccepted = !me || me.notice_accepted || acceptedNow;
-  const extra = me?.features?.includes("niche_finder")
-    ? [{ href: "/accounts/", label: "Accounts" }]
-    : [];
+  const extra = [
+    ...(me?.features?.includes("fun") ? [{ href: "/team/", label: "Team" }] : []),
+    ...(me?.features?.includes("niche_finder") ? [{ href: "/accounts/", label: "Accounts" }] : []),
+  ];
   const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])];
 
   if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
@@ -97,7 +98,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
           {me && (
-            <span className="hidden text-sm text-muted-foreground md:inline" title={me.role}>
+            <span
+              // With many tabs the name gives its room to them (the log out button says it).
+              className={cn(
+                "hidden text-sm text-muted-foreground",
+                links.length <= 7 && "md:inline",
+              )}
+              title={me.role}
+            >
               {me.user}
             </span>
           )}

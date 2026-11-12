@@ -556,82 +556,161 @@ body::before {
 }
 
 /*
- * Aurora: the winter night version of the notebook, for admins who turn it on. Slate-black
- * paper, frost-white ink, aurora teal and violet where the day look has teal and tangerine,
- * ice blue where it has mustard. Same wobbly lines and hand lettering.
+ * Night looks, for admins (components/theme-toggle.tsx): the same notebook after dark, in
+ * three moods. Each sets its colours as variables; the rules below them are shared.
+ *   midnight  - our own teal, tangerine and mustard on espresso paper with cream ink
+ *   darkroom  - a photo darkroom: warm black, a red safelight glow, film-amber notes
+ *   blueprint - a storyboard plan: Prussian blue grid paper, chalk ink, red-pencil marks
  */
 .dark {
   color-scheme: dark;
-  --paper: #0d1218;
-  --paper-deep: #19222d;
-  --paper-light: #131a22;
-  --ink: #d6e2ec;
-  --ink-soft: #95a6b6;
-  --teal: #3dd6c2;
-  --teal-light: #79ecdc;
-  --tangerine: #b48cff;
-  --mustard: #7cc8f5;
-  --brick: #ff6f86;
-  --olive: #8fd78a;
-  --cream-hover: #1b2633;
-  --note-bg: #2a1f3d;
-  --note-ink: #e2cfff;
-  --field: #0a0f14;
-  --hard-shadow: rgb(0 0 0 / 0.7);
-  --scribble: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6c14-4 22 2 36-1s24-4 38 0 26 2 42-2' fill='none' stroke='%23b48cff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
-  --rule: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4c40-2 70 2 110 0s80-3 120 0 60 2 90-1 50 1 80 1' fill='none' stroke='%23d6e2ec' stroke-opacity='.55' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
-  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .8 0 0 0 0 .9 0 0 0 0 1 0 0 0 .18 -.08'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-
-  --primary-foreground: #04201c;
-  --muted: #1a2430;
-  --accent: #241d3a;
+  --primary-foreground: var(--paper);
   --accent-foreground: var(--ink);
-  --border: color-mix(in oklab, var(--ink) 28%, transparent);
+  --border: color-mix(in oklab, var(--ink) 30%, transparent);
   --input: color-mix(in oklab, var(--ink) 55%, transparent);
-  --sidebar-primary-foreground: #04201c;
+  --sidebar-primary-foreground: var(--paper);
+  --rule: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4c40-2 70 2 110 0s80-3 120 0 60 2 90-1 50 1 80 1' fill='none' stroke='%23ffffff' stroke-opacity='.45' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
 }
 
-/* The night sky behind the pages: aurora glows and a few far stars. */
+.dark[data-night="midnight"],
+.dark:not([data-night]) {
+  --paper: #1d1714;
+  --paper-deep: #2a221d;
+  --paper-light: #241d19;
+  --ink: #f2eadb;
+  --ink-soft: #b9ab97;
+  --teal: #4fb3b0;
+  --teal-light: #7fd0cc;
+  --tangerine: #ef8148;
+  --mustard: #e9b949;
+  --brick: #ef6a55;
+  --olive: #9cbf6e;
+  --cream-hover: #33291f;
+  --note-bg: #3a2a1c;
+  --note-ink: #f6d7b5;
+  --field: #16110e;
+  --hard-shadow: rgb(0 0 0 / 0.65);
+  --glow: 233 185 73;
+  --muted: #2e2620;
+  --accent: #3a2c20;
+  --badge-1: #3b3018;
+  --badge-1-ink: #f3d98b;
+  --badge-2: #1f3433;
+  --badge-2-ink: #a6e0dc;
+  --badge-3: #3d1d18;
+  --badge-3-ink: #f6b4a8;
+  --scribble: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6c14-4 22 2 36-1s24-4 38 0 26 2 42-2' fill='none' stroke='%23ef8148' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
+  --night-sky:
+    radial-gradient(120% 70% at 50% -10%, rgb(233 185 73 / 0.08), transparent 60%),
+    radial-gradient(70% 60% at 105% 105%, rgb(79 179 176 / 0.12), transparent 70%),
+    radial-gradient(60% 50% at -5% 100%, rgb(239 129 72 / 0.08), transparent 70%);
+}
+
+.dark[data-night="darkroom"] {
+  --paper: #120c0b;
+  --paper-deep: #22140f;
+  --paper-light: #1a110e;
+  --ink: #f1e2cc;
+  --ink-soft: #b49a83;
+  --teal: #e0473a;
+  --teal-light: #f2715f;
+  --tangerine: #ffab3d;
+  --mustard: #ffc46b;
+  --brick: #ff5a4e;
+  --olive: #c9b37a;
+  --cream-hover: #2a1814;
+  --note-bg: #3a1712;
+  --note-ink: #ffd0c4;
+  --field: #0c0807;
+  --hard-shadow: rgb(0 0 0 / 0.75);
+  --glow: 224 71 58;
+  --muted: #26170f;
+  --accent: #3a1a14;
+  --badge-1: #3d2610;
+  --badge-1-ink: #ffd18f;
+  --badge-2: #3a1512;
+  --badge-2-ink: #ffb3a8;
+  --badge-3: #43120f;
+  --badge-3-ink: #ff9f95;
+  --scribble: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6c14-4 22 2 36-1s24-4 38 0 26 2 42-2' fill='none' stroke='%23ffab3d' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
+  /* The safelight's glow from above, and the faint edge of a film strip down the side. */
+  --night-sky:
+    radial-gradient(70% 45% at 50% -12%, rgb(224 71 58 / 0.22), transparent 70%),
+    radial-gradient(40% 30% at 100% 100%, rgb(255 171 61 / 0.07), transparent 70%),
+    repeating-linear-gradient(to bottom, transparent 0 26px, rgb(241 226 204 / 0.035) 26px 38px)
+      left / 14px 100% no-repeat;
+}
+
+.dark[data-night="blueprint"] {
+  --paper: #0f2a47;
+  --paper-deep: #163659;
+  --paper-light: #133152;
+  --ink: #e9f2fb;
+  --ink-soft: #a9c2dd;
+  --teal: #7fd6ea;
+  --teal-light: #b3e8f3;
+  --tangerine: #ff7b5c;
+  --mustard: #ffe27a;
+  --brick: #ff6f61;
+  --olive: #a9e3a0;
+  --cream-hover: #1b406a;
+  --note-bg: #3b2a3a;
+  --note-ink: #ffd2c6;
+  --field: #0b2139;
+  --hard-shadow: rgb(4 14 28 / 0.75);
+  --glow: 127 214 234;
+  --muted: #183a60;
+  --accent: #1f4675;
+  --primary-foreground: #08223a;
+  --sidebar-primary-foreground: #08223a;
+  --badge-1: #3a3a1c;
+  --badge-1-ink: #fff0a8;
+  --badge-2: #123f52;
+  --badge-2-ink: #bff0fb;
+  --badge-3: #4a2230;
+  --badge-3-ink: #ffc2b5;
+  --scribble: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6c14-4 22 2 36-1s24-4 38 0 26 2 42-2' fill='none' stroke='%23ff7b5c' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
+  /* Drafting grid: fine lines every 24 px, a stronger one every 120 px. */
+  --night-sky:
+    linear-gradient(rgb(233 242 251 / 0.07) 1px, transparent 1px) 0 0 / 120px 120px,
+    linear-gradient(90deg, rgb(233 242 251 / 0.07) 1px, transparent 1px) 0 0 / 120px 120px,
+    linear-gradient(rgb(233 242 251 / 0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, rgb(233 242 251 / 0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+    radial-gradient(90% 60% at 50% 0%, rgb(127 214 234 / 0.1), transparent 70%);
+}
+
 .dark body::before {
-  background-image:
-    var(--grain), radial-gradient(1px 1px at 12% 18%, rgb(214 226 236 / 0.7), transparent 60%),
-    radial-gradient(1px 1px at 68% 9%, rgb(214 226 236 / 0.55), transparent 60%),
-    radial-gradient(1.5px 1.5px at 84% 32%, rgb(214 226 236 / 0.5), transparent 60%),
-    radial-gradient(1px 1px at 37% 41%, rgb(214 226 236 / 0.35), transparent 60%),
-    radial-gradient(1px 1px at 22% 76%, rgb(214 226 236 / 0.3), transparent 60%),
-    radial-gradient(90% 45% at 20% -8%, rgb(61 214 194 / 0.16), transparent 70%),
-    radial-gradient(70% 40% at 85% -5%, rgb(180 140 255 / 0.14), transparent 70%),
-    radial-gradient(60% 50% at 105% 105%, rgb(124 200 245 / 0.08), transparent 70%);
+  background: var(--night-sky);
 }
 
 .dark [data-slot="card"],
 .dark [data-slot="dialog-content"],
 .dark [data-slot="select-content"],
 .dark [data-slot="dropdown-menu-content"] {
-  border-color: color-mix(in oklab, var(--ink) 60%, transparent);
+  border-color: color-mix(in oklab, var(--ink) 70%, transparent);
   box-shadow:
     4px 5px 0 var(--hard-shadow),
-    0 0 22px rgb(61 214 194 / 0.07);
+    0 0 24px rgb(var(--glow) / 0.06);
 }
 
 .dark .marker {
   background: linear-gradient(
     100deg,
     transparent 1%,
-    rgb(180 140 255 / 0.45) 3%,
-    rgb(61 214 194 / 0.35) 60%,
-    rgb(180 140 255 / 0.45) 96%,
+    rgb(var(--glow) / 0.45) 3%,
+    rgb(var(--glow) / 0.3) 60%,
+    rgb(var(--glow) / 0.45) 96%,
     transparent 99%
   );
 }
 
 .dark .tape::before {
-  background: rgb(124 200 245 / 0.35);
-  border-inline-color: rgb(13 18 24 / 0.7);
+  background: rgb(var(--glow) / 0.35);
+  border-inline-color: color-mix(in oklab, var(--paper) 70%, transparent);
 }
 
 .dark .tape-right::before {
-  background: rgb(180 140 255 / 0.35);
+  background: color-mix(in oklab, var(--teal) 40%, transparent);
 }
 
 .dark
@@ -643,19 +722,12 @@ body::before {
 }
 
 .dark
-  [data-variant]:is([data-slot="button"], [data-slot="dialog-trigger"])[data-variant="default"] {
-  box-shadow:
-    2px 3px 0 var(--ink),
-    0 0 14px rgb(61 214 194 / 0.25);
-}
-
-.dark
   [data-variant]:is(
     [data-slot="button"],
     [data-slot="dialog-trigger"]
   )[data-variant="ghost"]:hover:not(:disabled),
 .dark [data-slot="select-item"][data-highlighted] {
-  background: rgb(124 200 245 / 0.14);
+  background: rgb(var(--glow) / 0.16);
 }
 
 .dark
@@ -663,40 +735,36 @@ body::before {
     [data-slot="button"],
     [data-slot="dialog-trigger"]
   )[data-variant="destructive"] {
-  color: #1c0509;
+  color: var(--paper);
 }
 
 .dark [data-slot="badge"][data-variant="secondary"] {
-  background: #1d3346;
-  color: #cbe9ff;
+  background: var(--badge-1);
+  color: var(--badge-1-ink);
 }
 
 .dark [data-slot="badge"][data-variant="outline"] {
-  background: #15302b;
-  color: #a8f0e3;
+  background: var(--badge-2);
+  color: var(--badge-2-ink);
 }
 
-.dark [data-slot="badge"][data-variant="destructive"] {
-  background: #3d1720;
-  color: #ffc2cc;
-}
-
+.dark [data-slot="badge"][data-variant="destructive"],
 .dark [data-slot="badge"][data-tone="ask"] {
-  background: #2b2045;
-  color: #e2cfff;
+  background: var(--badge-3);
+  color: var(--badge-3-ink);
 }
 
 .dark [data-slot="checkbox"][data-state="checked"] {
-  color: #04201c;
+  color: var(--paper);
 }
 
 .dark [data-slot="dialog-overlay"] {
-  background: rgb(3 6 10 / 0.6);
+  background: rgb(0 0 0 / 0.55);
   backdrop-filter: blur(2px);
 }
 
 .dark [data-slot="alert"] {
-  background: rgb(124 200 245 / 0.08);
+  background: rgb(var(--glow) / 0.08);
 }
 
 .dark [data-sonner-toast] {
@@ -705,26 +773,26 @@ body::before {
 }
 
 .dark [data-sonner-toast][data-type="error"] {
-  background: #2c141b !important;
+  background: var(--badge-3) !important;
 }
 
 .dark [data-sonner-toast][data-type="success"] {
-  background: #10261f !important;
+  background: var(--badge-2) !important;
 }
 
 .dark .filmstrip {
-  background: #05080b;
+  background: #050403;
   box-shadow:
     3px 4px 0 rgb(0 0 0 / 0.5),
-    0 0 18px rgb(180 140 255 / 0.12);
+    0 0 18px rgb(var(--glow) / 0.12);
 }
 
 .dark .sketch-tile:has([data-state="checked"]) {
-  background: #1c2e3c;
+  background: var(--cream-hover);
 }
 
 .dark ::selection {
-  background: rgb(180 140 255 / 0.5);
+  background: rgb(var(--glow) / 0.5);
   color: #fff;
 }
 
