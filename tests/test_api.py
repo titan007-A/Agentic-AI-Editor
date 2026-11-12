@@ -1967,3 +1967,58 @@ def test_a_trial_reel_goes_to_buffer_as_a_tagged_draft_for_accounts_trying_it(en
     (result,) = admin.post(f"/api/outputs/{output}/buffer", json=body).json()["results"]
     assert result["ok"] and result["draft"] and not result["tagged"]
     assert "tag limit reached" in result["note"] and sent[-1][1]["saveToDraft"] is True
+
+
+def test_the_fun_board_counts_reels_kept_after_their_job_is_gone(env, monkeypatch):
+    import json as json_
+
+    from agentic_editor.db import ReelLog, Setting
+
+    admin = env.client
+    name = admin.get("/api/me").json()["user"]
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:fun", value=json_.dumps(["someone-else"])))
+        session.commit()
+    assert admin.get("/api/fun").status_code == 403
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:fun", value=json_.dumps([name])))
+        session.commit()
+    job = start(admin)[0]["id"]  # made after the log was kept: logged by the job
+    got = admin.get("/api/fun").json()
+    assert got["me"]["total"] == 1 and got["me"]["today"] == 1
+    assert got["leaderboard"]["today"] == [{"user": name, "reels": 1}]
+    assert {b["id"] for b in got["badges"] if b["won_at"]} >= {"first_reel"}
+    # The job cleaned away: its reel still counts.
+    assert admin.delete(f"/api/jobs/{job}").status_code == 200
+    assert admin.get("/api/fun").json()["me"]["total"] == 1
+    # Reels from before the log: added once, at their job's time.
+    with env.sessions() as session:
+        session.query(ReelLog).delete()
+        session.commit()
+    start(admin)
+    with env.sessions() as session:
+        session.query(ReelLog).delete()
+        session.commit()
+    assert admin.get("/api/fun").json()["me"]["total"] == 1
+    assert admin.get("/api/fun").json()["me"]["total"] == 1
+
+
+def test_wrapped_is_for_accounts_trying_the_fun_feature(env):
+    import json as json_
+
+    from agentic_editor.db import Setting
+
+    admin = env.client
+    name = admin.get("/api/me").json()["user"]
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:fun", value=json_.dumps([name])))
+        session.commit()
+    start(admin)
+    got = admin.get("/api/fun/wrapped").json()
+    assert got["reels"] == 1 and got["team_place"] == 1
+    assert admin.get("/api/fun").json()["quest"]["text"].startswith("Make")
+    assert admin.get("/api/fun/wrapped?month=2026-13").status_code == 422
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:fun", value=json_.dumps([])))
+        session.commit()
+    assert admin.get("/api/fun/wrapped").status_code == 403

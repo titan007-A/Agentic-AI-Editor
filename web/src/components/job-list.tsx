@@ -3,11 +3,14 @@
 import Link from "next/link";
 
 import { JobStatus, jobLabel } from "@/components/job-status";
+import { Snowman } from "@/components/snowman";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { useFun } from "@/hooks/use-fun";
 import type { Job } from "@/lib/api";
 
 export function JobList({ jobs }: { jobs: Job[] }) {
+  const fun = useFun();
   if (jobs.length === 0) {
     return <p className="text-sm text-muted-foreground">No jobs yet.</p>;
   }
@@ -26,7 +29,10 @@ export function JobList({ jobs }: { jobs: Job[] }) {
               <span>{new Date(job.created_at + "Z").toLocaleString()}</span>
             </div>
             {(job.status === "running" || job.status === "queued") && (
-              <Progress value={job.progress * 100} className="h-1.5" />
+              <div className="flex items-center gap-2">
+                {fun && <Snowman value={job.progress} size={30} falling={false} />}
+                <Progress value={job.progress * 100} className="h-1.5 flex-1" />
+              </div>
             )}
           </Card>
         </Link>

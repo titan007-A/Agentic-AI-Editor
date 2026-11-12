@@ -520,6 +520,41 @@ body::before {
   background: #f6e3ae;
 }
 
+/* Confetti for a badge won (see lib/confetti.ts). */
+.confetti-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.confetti-bit {
+  position: absolute;
+  top: -16px;
+  width: 9px;
+  height: 14px;
+  border-radius: 2px 4px 1px 3px;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.6, 0.45, 1);
+  animation-fill-mode: forwards;
+}
+
+.confetti-snow {
+  width: auto;
+  height: auto;
+  font-size: 16px;
+  color: var(--mustard);
+  background: none;
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translate(var(--drift), 105vh) rotate(var(--spin));
+    opacity: 0.2;
+  }
+}
+
 /*
  * Aurora: the winter night version of the notebook, for admins who turn it on. Slate-black
  * paper, frost-white ink, aurora teal and violet where the day look has teal and tangerine,
@@ -691,4 +726,128 @@ body::before {
 .dark ::selection {
   background: rgb(180 140 255 / 0.5);
   color: #fff;
+}
+
+/* Snow falling round the snowman while a job runs. */
+.snowman-snow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(2px 2px at 20% 10%, var(--ink-soft) 60%, transparent 61%),
+    radial-gradient(1.5px 1.5px at 70% 30%, var(--ink-soft) 60%, transparent 61%),
+    radial-gradient(2px 2px at 85% 60%, var(--ink-soft) 60%, transparent 61%),
+    radial-gradient(1.5px 1.5px at 35% 75%, var(--ink-soft) 60%, transparent 61%),
+    radial-gradient(1.5px 1.5px at 55% 50%, var(--ink-soft) 60%, transparent 61%);
+  background-size: 100% 50%;
+  animation: snowman-snow 4s linear infinite;
+  opacity: 0.7;
+}
+
+@keyframes snowman-snow {
+  from {
+    background-position: 0 -50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .snowman-snow {
+    animation: none;
+  }
+}
+
+/* The penguin (components/penguin.tsx). */
+.penguin-idle {
+  animation: penguin-sway 4s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+.penguin-idle .penguin-eye {
+  animation: penguin-blink 5s infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.penguin-dance {
+  animation: penguin-dance 0.45s ease-in-out infinite alternate;
+  transform-origin: 50% 100%;
+}
+
+.penguin-sad {
+  transform: rotate(-8deg) translateY(4px);
+  filter: saturate(0.6);
+  transition: transform 300ms ease;
+}
+
+@keyframes penguin-sway {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(2deg);
+  }
+}
+
+@keyframes penguin-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes penguin-dance {
+  from {
+    transform: rotate(-12deg) translateY(0);
+  }
+  to {
+    transform: rotate(12deg) translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .penguin-idle,
+  .penguin-idle .penguin-eye,
+  .penguin-dance {
+    animation: none;
+  }
+}
+
+/* A Wrapped slide: the page's colours in a soft aurora. */
+.wrapped-slide {
+  border: 2px solid var(--ink);
+  border-radius: var(--wobble-lg);
+  background:
+    radial-gradient(
+      90% 70% at 15% 10%,
+      color-mix(in oklab, var(--teal) 35%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      80% 70% at 90% 95%,
+      color-mix(in oklab, var(--tangerine) 30%, transparent),
+      transparent 70%
+    ),
+    var(--paper-light);
+  animation: wrapped-in 280ms ease-out;
+}
+
+@keyframes wrapped-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) rotate(-1deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wrapped-slide {
+    animation: none;
+  }
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { Penguin } from "@/components/penguin";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UsageNotice } from "@/components/usage-notice";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             onNavigate={guard}
             className="flex min-h-11 items-center gap-2 sm:min-h-0"
             aria-label="Agentic AI Editor, jobs"
+            data-logo
           >
             <span className="grid size-9 -rotate-6 place-items-center rounded-[50%_45%_55%_40%] border-2 border-foreground bg-[var(--mustard)]">
               <Clapperboard className="size-5" />
@@ -109,6 +111,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </header>
       <main className="mx-auto w-full max-w-5xl px-4 py-6">{children}</main>
       <UsageNotice open={!noticeAccepted} onAccept={() => setAcceptedNow(true)} />
+      {me?.features?.includes("fun") && <Penguin />}
     </>
   );
 }

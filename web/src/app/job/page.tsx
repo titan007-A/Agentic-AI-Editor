@@ -19,9 +19,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Snowman } from "@/components/snowman";
 import { Progress } from "@/components/ui/progress";
+import { useFun } from "@/hooks/use-fun";
 import { useJobEvents } from "@/hooks/use-job-events";
 import { api, ApiError, errorText, type Job } from "@/lib/api";
+import { confetti } from "@/lib/confetti";
+import { cheer } from "@/lib/fun-events";
+import { sounds } from "@/lib/sounds";
 
 function JobDetail() {
   const id = useSearchParams().get("id") ?? "";
@@ -62,6 +67,19 @@ function JobDetail() {
   }, [id, load]);
 
   const active = job?.status === "queued" || job?.status === "running";
+  const fun = useFun();
+  // Watched while it ran and now done: a little snowfall and a bell.
+  const was = useRef<string | null>(null);
+  useEffect(() => {
+    const status = job?.status ?? null;
+    const watched = was.current === "running" || was.current === "queued";
+    if (fun && watched && status === "done") {
+      confetti(60, true);
+      sounds.ready();
+      cheer("done");
+    } else if (fun && watched && status === "failed") cheer("failed");
+    was.current = status;
+  }, [job?.status, fun]);
   const events = useJobEvents(id, active, follow);
   const latest = events.at(-1);
   const progress = latest?.progress ?? job?.progress ?? 0;
@@ -113,8 +131,20 @@ function JobDetail() {
 
       {active && (
         <Card className="gap-3 p-4">
-          <Progress value={progress * 100} />
-          <p className="text-sm">{latest?.message ?? "Waiting for a free slot..."}</p>
+          {fun ? (
+            <div className="flex items-center gap-4">
+              <Snowman value={progress} label="Job progress" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <Progress value={progress * 100} />
+                <p className="text-sm">{latest?.message ?? "Waiting for a free slot..."}</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Progress value={progress * 100} />
+              <p className="text-sm">{latest?.message ?? "Waiting for a free slot..."}</p>
+            </>
+          )}
           <ul className="max-h-48 space-y-1 overflow-y-auto font-mono text-xs text-muted-foreground">
             {events.map((e, i) => (
               <li key={i}>
