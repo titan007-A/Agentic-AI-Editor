@@ -547,10 +547,13 @@ def band_framing(
     detections: dict[tuple[float, float], list[faces.Sample]],
     vision: OllamaClient | None,
 ) -> EDL:
-    """Cut a picture shown whole to fit the band between the preset's text (or its
-    picture_rows), at the frame's full width: top and bottom go, around the faces, and
-    with them any text the picture brings along its edges."""
-    if not preset.text_blocks and preset.framing.picture_rows is None:
+    """Cut a picture shown whole to fit the band between the preset's text (its text
+    blocks, a whole-reel one-liner, or its picture_rows), at the frame's full width: top
+    and bottom go, around the faces, and with them any text the picture brings along its
+    edges. The preview lays it out the same way."""
+    line = preset.one_liner
+    whole_reel_line = line.enabled and line.duration is None
+    if not preset.text_blocks and preset.framing.picture_rows is None and not whole_reel_line:
         return edl.model_copy(update={"shots": []})
     face = compose.text_face(settings, compose.text_language(preset, analysis))
     band = compose.picture_band(preset, face)
