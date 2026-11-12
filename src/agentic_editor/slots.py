@@ -10,6 +10,7 @@ temp folder, so every run on the machine takes turns, whatever its settings.
 
 import fcntl
 import logging
+import os
 import tempfile
 import threading
 import time
@@ -64,6 +65,52 @@ class Slot:
         """How many times the calling thread holds the slot."""
         return self._depth if self._owner == threading.get_ident() else 0
 
+    def _marks(self) -> Path | None:
+        return None if self._lock_file is None else self._lock_file().parent
+
+    @contextmanager
+    def _waiting_mark(self) -> Iterator[None]:
+        """A file saying this thread waits for the slot, so long work in another process
+        (an upscale, a test run) sees it and lets it go first (others_waiting)."""
+        folder = self._marks()
+        mark = None
+        if folder is not None:
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                mark = folder / f"{self.name}.wait.{os.getpid()}.{threading.get_ident()}"
+                mark.touch()
+            except OSError:
+                mark = None
+        try:
+            yield
+        finally:
+            if mark is not None:
+                mark.unlink(missing_ok=True)
+
+    def others_waiting(self) -> bool:
+        """Whether a thread here or in another process waits for the slot (not one that
+        runs behind()); marks left by a process that died don't count."""
+        if self._waiting:
+            return True
+        folder = self._marks()
+        if folder is None or not folder.exists():
+            return False
+        me = f".{os.getpid()}.{threading.get_ident()}"
+        for mark in folder.glob(f"{self.name}.wait.*"):
+            if mark.name.endswith(me):
+                continue
+            try:
+                os.kill(int(mark.name.split(".")[-2]), 0)
+            except (ValueError, IndexError):
+                continue
+            except ProcessLookupError:
+                mark.unlink(missing_ok=True)
+                continue
+            except PermissionError:
+                pass  # alive, someone else's
+            return True
+        return False
+
     def acquire(self, why: str = "", times: int = 1, progress: Progress | None = None) -> None:
         """Take the slot. If another job has it, say so through `progress` ("wait"), and
         again once it's ours ("resume"), so a job's stage doesn't read "wait" all through
@@ -86,7 +133,7 @@ class Slot:
             # Behind: whoever else waits for the slot goes first while the budget lasts. It
             # asks in short tries, so one who starts waiting meanwhile still goes first.
             while True:
-                if self._waiting and _behind.budget > 0:
+                if _behind.budget > 0 and self.others_waiting():
                     wait()
                     time.sleep(YIELD_POLL)
                     _behind.budget -= YIELD_POLL
@@ -99,7 +146,8 @@ class Slot:
             with self._waiting_lock:
                 self._waiting += 1
             try:
-                self._lock.acquire()
+                with self._waiting_mark():
+                    self._lock.acquire()
             finally:
                 with self._waiting_lock:
                     self._waiting -= 1
@@ -112,7 +160,11 @@ class Slot:
                     fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     wait()
-                    fcntl.flock(self._file, fcntl.LOCK_EX)
+                    if budget:
+                        fcntl.flock(self._file, fcntl.LOCK_EX)
+                    else:
+                        with self._waiting_mark():
+                            fcntl.flock(self._file, fcntl.LOCK_EX)
             except BaseException:
                 if self._file is not None:
                     self._file.close()

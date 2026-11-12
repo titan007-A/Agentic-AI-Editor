@@ -979,7 +979,7 @@ def upscaled(
     wanted = preset.upscale
     progress("render", f"upscaling for {preset.name}")
     sizes = upscale.upscale(source.path, dest, settings.models_dir, backends, wanted.size,
-                            wanted.faces, wanted.denoise, progress)  # fmt: skip
+                            wanted.faces, wanted.denoise, progress, wanted.codec)  # fmt: skip
     length = ffmpeg.probe(dest).duration
     thumbnail = out_dir / f"{preset.name}-thumb.jpg"
     try:
@@ -994,7 +994,10 @@ def upscaled(
         clips=[Clip(start=0.0, end=max(length, 0.1), reason="the whole video, upscaled")],
         title=source.title,
         crop_mode="none",
-        decisions=[f"upscaled {w}x{h} to {ow}x{oh}{faces}, denoise {wanted.denoise:.0%}"],
+        decisions=[
+            f"upscaled {w}x{h} to {ow}x{oh}{faces}, denoise {wanted.denoise:.0%}, "
+            + ("HEVC 10-bit" if wanted.codec == "hevc10" else "H.264")
+        ],
     )
     (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
     progress("done", f"{preset.name} -> {dest}")

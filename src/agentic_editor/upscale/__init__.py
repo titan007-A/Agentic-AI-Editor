@@ -12,13 +12,22 @@ All four models are free to use and are downloaded once into models/upscale:
 
 The model runs at a size where it does the most for the time it takes: half the output's
 short side at most (a 1080p reel is drawn at 2160 and brought down, which cleans edges), or
-the source's own size when that is smaller."""
+the source's own size when that is smaller. It sees each frame in tiles, so its memory stays
+the same whatever the size (a 4K frame drawn whole needs gigabytes).
+
+Colour stays clean end to end: frames go in and out as 16-bit RGB, BT.709 throughout, and
+the encoder gets them dithered down to 10-bit 4:2:0 HEVC (no banding in skies and soft
+light), or 8-bit H.264 for players that need it.
+
+It never holds a live job up: between frames it gives the GPU and the encoder to any job
+waiting for them and carries on after (slots.others_waiting)."""
 
 import logging
 import math
 import queue
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,7 +75,14 @@ MIN_EYES = 14  # px between the eyes in the output: smaller faces are left as dr
 DETECT_SIDE = 640  # faces are looked for in a copy this long
 FOLLOW = 0.5  # how much of a face's last place carries into the next frame (less jitter)
 COPY_AUDIO = {"aac", "mp3", "alac", "ac3", "eac3"}  # MP4 takes these as they are
-BATCH = 4  # frames through the model together
+TILE = 256  # px of the model's input a tile covers
+TILE_PAD = 24  # px of picture around each tile it sees, so the seams don't show
+TILE_BATCH = 8  # tiles through the model together
+QUEUE = 8  # decoded frames kept ready
+# HEVC 10-bit for the best picture: constant quality (CRF) rather than a bit rate, SAO off
+# and a stronger adaptive quantiser so fine texture and flat gradients both survive.
+HEVC_CRF = 15
+HEVC_PARAMS = "aq-mode=3:no-sao=1:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
 
 
 class UpscaleError(RuntimeError):
@@ -158,22 +174,61 @@ class Upscaler:
         self.net = (net.half() if self.half else net).eval().to(dev)
         self.device = dev
 
-    def __call__(self, frames: np.ndarray, out: tuple[int, int]) -> np.ndarray:
-        """Frames (n, h, w, 3) uint8 RGB, drawn 4x bigger and brought to `out` (w, h)."""
+    def __call__(self, frame: np.ndarray, out: tuple[int, int]) -> np.ndarray:
+        """A frame (h, w, 3) RGB, uint16 or uint8, drawn 4x bigger in tiles and brought to
+        `out` (w, h): float32 RGB on 0-255."""
         import torch
         import torch.nn.functional as F
 
+        top = 65535.0 if frame.dtype == np.uint16 else 255.0
         with torch.inference_mode():
-            x = torch.from_numpy(frames).to(self.device).permute(0, 3, 1, 2).contiguous()
-            x = x.half() if self.half else x.float()
-            y = self.net(x / 255.0)
+            x = torch.from_numpy(frame.astype(np.float32) / top).to(self.device)
+            x = x.permute(2, 0, 1)[None]
+            x = x.half() if self.half else x
+            y = tiled(self.net, x, SCALE)
             width, height = out
             if y.shape[-1] != width or y.shape[-2] != height:
                 shrinking = y.shape[-1] > width
                 y = F.interpolate(y, size=(height, width), mode="bicubic",
                                   antialias=shrinking, align_corners=False)  # fmt: skip
-            y = (y.clamp(0, 1) * 255.0).round().byte().permute(0, 2, 3, 1)
+            y = (y.float().clamp(0, 1) * 255.0)[0].permute(1, 2, 0)
             return y.cpu().numpy()
+
+
+def tiled(net, x, scale: int, tile: int = TILE, pad: int = TILE_PAD, batch: int = TILE_BATCH):
+    """`net` (a `scale`x upscaler) run on x (1, c, h, w) in tiles of `tile` px, each seen
+    with `pad` px of picture around it (mirrored at the frame's edges) and only its middle
+    kept, so the memory is a few tiles' whatever the frame's size."""
+    import torch
+    import torch.nn.functional as F
+
+    _, channels, height, width = x.shape
+    rows, cols = math.ceil(height / tile), math.ceil(width / tile)
+    full_h, full_w = rows * tile, cols * tile
+    mode = (
+        "reflect"
+        if min(height, width) > pad + max(full_h - height, full_w - width)
+        else "replicate"
+    )
+    padded = F.pad(x, (pad, pad + full_w - width, pad, pad + full_h - height), mode=mode)
+    canvas = torch.empty((1, channels, full_h * scale, full_w * scale), dtype=x.dtype,
+                         device=x.device)  # fmt: skip
+    spots = [(r, c) for r in range(rows) for c in range(cols)]
+    side, inner = (tile + 2 * pad) * scale, tile * scale
+    for start in range(0, len(spots), batch):
+        group = spots[start : start + batch]
+        span = tile + 2 * pad
+        tiles = torch.cat(
+            [padded[:, :, r * tile : r * tile + span, c * tile : c * tile + span] for r, c in group]
+        )
+        drawn = net(tiles)
+        if drawn.shape[-1] != side:
+            raise UpscaleError("the model didn't scale by its factor")
+        for (r, c), one in zip(group, drawn, strict=True):
+            canvas[0, :, r * inner : (r + 1) * inner, c * inner : (c + 1) * inner] = one[
+                :, pad * scale : pad * scale + inner, pad * scale : pad * scale + inner
+            ]
+    return canvas[:, :, : height * scale, : width * scale]
 
 
 class FaceFixer:
@@ -216,6 +271,7 @@ class FaceFixer:
         scale = min(1.0, DETECT_SIDE / max(width, height))
         small = cv2.resize(frame, (round(width * scale), round(height * scale)),
                            interpolation=cv2.INTER_AREA) if scale < 1 else frame  # fmt: skip
+        small = small.round().clip(0, 255).astype(np.uint8)  # YuNet reads 8-bit
         self.detector.setInputSize((small.shape[1], small.shape[0]))
         _, found = self.detector.detect(cv2.cvtColor(small, cv2.COLOR_RGB2BGR))
         faces = []
@@ -233,6 +289,7 @@ class FaceFixer:
         return faces
 
     def __call__(self, frame: np.ndarray) -> np.ndarray:
+        """A frame, float32 RGB on 0-255, with its faces redrawn; the same type back."""
         import torch
 
         cv2 = self.cv2
@@ -256,9 +313,9 @@ class FaceFixer:
             x = torch.from_numpy(np.stack(crops)).to(self.device).permute(0, 3, 1, 2).contiguous()
             x = x.half() if self.half else x.float()
             y, _ = self.net(x / 127.5 - 1.0, return_rgb=False, randomize_noise=False)
-            y = ((y.float().clamp(-1, 1) + 1) * 127.5).round().byte().permute(0, 2, 3, 1)
+            y = ((y.float().clamp(-1, 1) + 1) * 127.5).permute(0, 2, 3, 1)
             fixed = y.cpu().numpy()
-        out = frame.astype(np.float32)
+        out = frame.astype(np.float32, copy=True)
         height, width = frame.shape[:2]
         for crop, face, warp in zip(crops, fixed, warps, strict=True):
             face = self.strength * face.astype(np.float32) + (1 - self.strength) * crop
@@ -277,7 +334,7 @@ class FaceFixer:
             alpha = cv2.warpAffine(self.mask, shift, box, flags=cv2.INTER_LINEAR)[..., None]
             region = out[y0:y1, x0:x1]
             out[y0:y1, x0:x1] = alpha * pasted + (1 - alpha) * region
-        return out.round().clip(0, 255).astype(np.uint8)
+        return out
 
     def unload(self) -> None:
         self.net = None
@@ -299,14 +356,50 @@ def audio_codec(video: Path) -> str | None:
 
 
 def _reader(proc: subprocess.Popen, size: tuple[int, int], frames: queue.Queue) -> None:
+    """Decoded frames, 16-bit RGB, into `frames`, then None."""
     width, height = size
-    length = width * height * 3
+    length = width * height * 6
     while True:
         data = proc.stdout.read(length)
         if len(data) < length:
             frames.put(None)
             return
-        frames.put(np.frombuffer(data, np.uint8).reshape(height, width, 3))
+        frames.put(np.frombuffer(data, "<u2").reshape(height, width, 3))
+
+
+def encode_args(codec: str, backends: Backends, size: str) -> list[str]:
+    """The encoder's output settings: HEVC 10-bit at constant quality for the best picture,
+    or H.264 8-bit (the editor's usual encoder) for players without HEVC."""
+    if codec == "hevc10":
+        return [
+            "-c:v", "libx265", "-preset", "slow", "-crf", str(HEVC_CRF),
+            "-pix_fmt", "yuv420p10le", "-profile:v", "main10", "-tag:v", "hvc1",
+            "-x265-params", f"{HEVC_PARAMS}:log-level=error",
+        ]  # fmt: skip
+    return [*encoder_args(backends, BITRATES[SIZES[size]]), "-pix_fmt", "yuv420p"]
+
+
+def free_memory() -> int | None:
+    """Per cent of memory free (macOS's own measure, or MemAvailable on Linux); None if
+    it can't be told."""
+    try:
+        found = subprocess.run(["sysctl", "-n", "kern.memorystatus_level"], capture_output=True,
+                               text=True, timeout=5)  # fmt: skip
+        if found.returncode == 0 and found.stdout.strip().isdigit():
+            return int(found.stdout.strip())
+        fields = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+        total = int(fields["MemTotal"].split()[0])
+        return round(100 * int(fields["MemAvailable"].split()[0]) / total)
+    except (OSError, KeyError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def eta(seconds: float) -> str:
+    if seconds < 90:
+        return "about a minute left"
+    if seconds < 3600:
+        return f"about {round(seconds / 60)} min left"
+    return f"about {seconds / 3600:.1f} h left"
 
 
 def upscale(
@@ -318,6 +411,7 @@ def upscale(
     faces: float = 0.5,
     denoise: float = 0.5,
     progress: Progress = lambda stage, message: None,
+    codec: str = "hevc10",
 ) -> Plan:
     """Write `video` upscaled to `dest` (see the module's description)."""
     from agentic_editor.settings import get_settings
@@ -330,79 +424,119 @@ def upscale(
     bin_ = get_settings().ffmpeg_bin
     total = max(1, math.ceil(info.duration * sizes.fps))
     rate = f"{sizes.fps:.6g}"
-    progress("upscale", f"upscaling {info.width}x{info.height} to {sizes.out[0]}x{sizes.out[1]}")
+    what = "HEVC 10-bit" if codec == "hevc10" else "H.264"
+    progress(
+        "upscale", f"upscaling {info.width}x{info.height} to {sizes.out[0]}x{sizes.out[1]}, {what}"
+    )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    codec = audio_codec(video)
+    sound_codec = audio_codec(video)
     sound = (
         []
-        if codec is None
+        if sound_codec is None
         else ["-map", "1:a:0", "-c:a", "copy"]
-        if codec in COPY_AUDIO
+        if sound_codec in COPY_AUDIO
         else ["-map", "1:a:0", "-c:a", "aac", "-b:a", "256k"]
     )
     decode = [
         bin_, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(video),
         "-map", "0:v:0", "-vf",
-        f"fps={rate},scale={sizes.model_in[0]}:{sizes.model_in[1]}:flags=area"
-        ":in_color_matrix=auto:out_color_matrix=bt709,format=rgb24",
+        # Not full_chroma_int with accurate_rnd: FFmpeg 9's swscale halves the green when
+        # the two meet on a frame it doesn't resize.
+        f"fps={rate},scale={sizes.model_in[0]}:{sizes.model_in[1]}"
+        ":flags=area+accurate_rnd+full_chroma_inp"
+        ":in_color_matrix=auto:out_color_matrix=bt709:in_range=auto:out_range=full,format=rgb48le",
         "-f", "rawvideo", "-",
     ]  # fmt: skip
+    # 16-bit RGB in, BT.709 limited range out, dithered to the encoder's depth.
+    depth = "yuv420p10le" if codec == "hevc10" else "yuv420p"
     encode = [
         bin_, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{sizes.out[0]}x{sizes.out[1]}",
+        "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{sizes.out[0]}x{sizes.out[1]}",
         "-framerate", rate, "-i", "-", "-i", str(video), "-map", "0:v:0", *sound,
-        "-vf", "scale=in_color_matrix=bt709:out_color_matrix=bt709:out_range=tv",
-        *encoder_args(backends, BITRATES[SIZES[size]]),
+        "-vf", "zscale=matrix=709:transfer=709:primaries=709:range=limited"
+        f":transferin=709:primariesin=709:rangein=full:dither=error_diffusion,format={depth}",
+        *encode_args(codec, backends, size),
         "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-        "-movflags", "+faststart", "-shortest", str(dest),
+        "-color_range", "tv", "-movflags", "+faststart", "-shortest", str(dest),
     ]  # fmt: skip
     dev = device()
-    with slots.gpu.turn("upscale the video", progress), slots.encoder.turn("encode", progress):
+    slots.gpu.acquire("upscale the video", progress=progress)
+    try:
+        slots.encoder.acquire("encode", progress=progress)
+    except BaseException:
+        slots.gpu.release()
+        raise
+    held = True
+    upscaler = fixer = None
+    reader = writer = None
+    done = 0
+    try:
+        free = free_memory()
+        if free is not None and free < 10:
+            progress("upscale", f"memory is low ({free}% free): this upscale may go slowly")
         upscaler = Upscaler(folder, denoise, dev)
         fixer = FaceFixer(folder, faces, dev) if faces > 0 else None
         reader = subprocess.Popen(decode, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         writer = subprocess.Popen(encode, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        frames: queue.Queue = queue.Queue(maxsize=BATCH * 3)
+        frames: queue.Queue = queue.Queue(maxsize=QUEUE)
         threading.Thread(target=_reader, args=(reader, sizes.model_in, frames),
                          daemon=True).start()  # fmt: skip
-        done = 0
+        working, said = 0.0, 0.0
         try:
-            finished = False
-            while not finished:
-                batch = []
-                while len(batch) < BATCH:
-                    frame = frames.get()
-                    if frame is None:
-                        finished = True
-                        break
-                    batch.append(frame)
-                if not batch:
-                    break
-                for drawn in upscaler(np.stack(batch), sizes.out):
-                    if fixer is not None:
-                        drawn = fixer(drawn)
-                    writer.stdin.write(drawn.tobytes())
-                done += len(batch)
-                if done % (BATCH * 30) < BATCH:
-                    progress("upscale", f"upscaled {min(done, total)} of {total} frames")
+            while (frame := frames.get()) is not None:
+                if slots.gpu.others_waiting() or slots.encoder.others_waiting():
+                    # A live job wants the GPU or the encoder: it goes first.
+                    slots.encoder.release()
+                    slots.gpu.release()
+                    held = False
+                    _free(dev)
+                    progress("wait", "letting a waiting job go first")
+                    with slots.behind(24 * 3600):
+                        slots.gpu.acquire("upscale the video", progress=progress)
+                        try:
+                            slots.encoder.acquire("encode", progress=progress)
+                        except BaseException:
+                            slots.gpu.release()
+                            raise
+                    held = True
+                started = time.monotonic()
+                drawn = upscaler(frame, sizes.out)
+                if fixer is not None:
+                    drawn = fixer(drawn)
+                writer.stdin.write((drawn * 257.0).round().clip(0, 65535).astype("<u2").tobytes())
+                working += time.monotonic() - started
+                done += 1
+                if time.monotonic() - said > 20 or done == total:
+                    said = time.monotonic()
+                    left = (total - done) * working / done
+                    progress(
+                        "upscale", f"upscaled {min(done, total)} of {total} frames, {eta(left)}"
+                    )
             writer.stdin.close()
         except BrokenPipeError:
             pass
-        except BaseException:
+    except BaseException:
+        if writer is not None:
             writer.kill()  # it would wait for frames that never come
-            raise
-        finally:
+        raise
+    finally:
+        if reader is not None:
             if reader.poll() is None:
                 reader.kill()
             reader.wait()
-            written = writer.wait()
-            del upscaler, fixer
-            _free(dev)
-        if written != 0 or done == 0:
-            tail = (writer.stderr.read() or b"").decode(errors="replace")[-1500:]
-            err = (reader.stderr.read() or b"").decode(errors="replace")[-1500:]
-            raise UpscaleError(f"the upscaled video couldn't be written: {tail or err}".strip())
-    log.info("upscaled %s: %d frames %s -> %s", video.name, done, sizes.source, sizes.out)
+        written = writer.wait() if writer is not None else 1
+        del upscaler, fixer
+        _free(dev)
+        if held:
+            slots.encoder.release()
+            slots.gpu.release()
+    if written != 0 or done == 0:
+        tail = (writer.stderr.read() or b"").decode(errors="replace")[-1500:]
+        err = (reader.stderr.read() or b"").decode(errors="replace")[-1500:]
+        raise UpscaleError(f"the upscaled video couldn't be written: {tail or err}".strip())
+    log.info(
+        "upscaled %s: %d frames %s -> %s (%s)", video.name, done, sizes.source, sizes.out, codec
+    )
     return sizes
 
 

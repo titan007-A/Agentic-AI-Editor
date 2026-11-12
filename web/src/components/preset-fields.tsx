@@ -121,6 +121,12 @@ export const UPSCALE_FIELDS: Field[] = [
     kind: "number",
     step: 0.05,
   },
+  {
+    path: "upscale.codec",
+    label: "File (hevc10: best picture, 10-bit; h264: plays everywhere)",
+    kind: "select",
+    options: ["hevc10", "h264"],
+  },
 ];
 
 export const SECTIONS: { title: string; fields: Field[] }[] = [
