@@ -312,6 +312,9 @@ class Upscale(Strict):
     faces: float = Field(default=0.5, ge=0, le=1)
     # Real-ESRGAN's denoise strength: 0 keeps grain and texture, 1 smooths most.
     denoise: float = Field(default=0.5, ge=0, le=1)
+    # hevc10: HEVC 10-bit at constant quality, the cleanest picture (no banding); h264:
+    # 8-bit H.264, for players and sites that don't take HEVC.
+    codec: Literal["hevc10", "h264"] = "hevc10"
 
 
 class Preset(Strict):
