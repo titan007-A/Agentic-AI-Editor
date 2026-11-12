@@ -17,7 +17,7 @@ Mode = Literal["addToQueue", "shareNext", "shareNow", "customScheduled"]
 CHANNELS = """
 query Channels($organizationId: OrganizationId!) {
   channels(input: { organizationId: $organizationId }) {
-    id name displayName service type avatar isQueuePaused isDisconnected isLocked
+    id name displayName service type avatar isQueuePaused isDisconnected isLocked organizationId
   }
 }"""
 ORGANIZATIONS = "query Organizations { account { organizations { id name } } }"
@@ -29,6 +29,24 @@ mutation CreatePost($input: CreatePostInput!) {
   }
 }"""
 
+
+# Buffer's API can't mark a reel as an Instagram trial reel: one meant as a trial goes in as
+# a draft under this tag, and the person turns Trial on in Buffer's composer.
+TRIAL_TAG = "Trial reel"
+TRIAL_COLOR = "#8B5CF6"
+TAGS = """
+query Tags($organizationId: OrganizationId!) {
+  tagsV2(first: 100, input: { organizationId: $organizationId }) { edges { node { id name } } }
+}"""
+CREATE_TAG = """
+mutation CreateTag($input: CreateTagInput!) {
+  createTag(input: $input) {
+    ... on TagActionSuccess { tag { id } }
+    ... on MutationError { message }
+  }
+}"""
+CHANNEL_ORGANIZATION = """
+query ChannelOrganization($id: ChannelId!) { channel(input: { id: $id }) { organizationId } }"""
 
 # Buffer's words when an Instagram personal profile is asked to publish by itself.
 PERSONAL = "personal profile"
@@ -57,6 +75,9 @@ class Channel:
     kind: str = ""
     # Disconnected or locked (after a plan downgrade): Buffer can't post there.
     broken: bool = False
+    # The Buffer organization it's in (its tags live there); empty in channels kept from
+    # before it was asked for.
+    organization: str = ""
 
 
 def call(
@@ -116,6 +137,7 @@ def channels(
                     paused=bool(c.get("isQueuePaused")),
                     kind=c.get("type") or "",
                     broken=bool(c.get("isDisconnected") or c.get("isLocked")),
+                    organization=c.get("organizationId") or organization["id"],
                 )
             )
     return found
@@ -128,7 +150,10 @@ def post_input(
     mode: Mode,
     due_at: datetime | None = None,
     first_comment: str = "",
+    draft: bool = False,
+    tags: list[str] = (),
 ) -> dict:
+    """createPost's input. A `draft` is kept in Buffer's drafts, not scheduled."""
     data: dict = {
         "channelId": channel.id,
         "text": text,
@@ -146,7 +171,38 @@ def post_input(
         if first_comment.strip():
             instagram["firstComment"] = first_comment.strip()
         data["metadata"] = {"instagram": instagram}
+    if draft:
+        data["saveToDraft"] = True
+    if tags:
+        data["tagIds"] = list(tags)
     return data
+
+
+def trial_tag(
+    key: str, channel: Channel, client: httpx.Client | None = None, count: Count | None = None
+) -> str:
+    """The id of the TRIAL_TAG tag in the channel's organization, made the first time."""
+    organization = channel.organization
+    if not organization:
+        found = call(key, CHANNEL_ORGANIZATION, {"id": channel.id}, client=client, count=count)
+        organization = (found.get("channel") or {}).get("organizationId") or ""
+    if not organization:
+        raise BufferError("Buffer didn't say which organization the channel is in")
+    edges = call(key, TAGS, {"organizationId": organization}, client=client, count=count)
+    for edge in edges["tagsV2"]["edges"]:
+        if edge["node"]["name"].strip().casefold() == TRIAL_TAG.casefold():
+            return edge["node"]["id"]
+    made = call(
+        key,
+        CREATE_TAG,
+        {"input": {"organizationId": organization,
+                   "tag": {"name": TRIAL_TAG, "color": TRIAL_COLOR}}},
+        client=client,
+        count=count,
+    )["createTag"]  # fmt: skip
+    if not made.get("tag"):
+        raise BufferError(made.get("message") or "Buffer didn't make the tag")
+    return made["tag"]["id"]
 
 
 def create_post(

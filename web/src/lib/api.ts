@@ -299,6 +299,8 @@ export type Me = {
   id: string;
   role: "admin" | "member";
   notice_accepted: boolean;
+  /** Features this account tries first (trial_reel, fun). */
+  features?: string[];
 };
 
 export type Account = {
@@ -412,7 +414,16 @@ export type OutputBuffer = {
   /** Whose reel it is, when it isn't the signed-in person's. */
   owner: string | null;
 };
-export type BufferResult = { channel: string; ok: boolean; post?: string; error?: string };
+export type BufferResult = {
+  channel: string;
+  ok: boolean;
+  post?: string;
+  error?: string;
+  /** Sent as a trial reel: kept in Buffer's drafts, under the "Trial reel" tag if made. */
+  draft?: boolean;
+  tagged?: boolean;
+  note?: string;
+};
 
 export type AssetKind = "image" | "video" | "audio" | "lut";
 
@@ -502,6 +513,7 @@ export const api = {
       due_at: string | null;
       first_comment: string;
       remember: boolean;
+      trial?: boolean;
     },
   ) =>
     request<{ results: BufferResult[]; link: string }>("POST", `/outputs/${outputId}/buffer`, body),
