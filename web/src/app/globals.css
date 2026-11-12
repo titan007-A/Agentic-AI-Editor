@@ -758,3 +758,64 @@ body::before {
     animation: none;
   }
 }
+
+/* The penguin (components/penguin.tsx). */
+.penguin-idle {
+  animation: penguin-sway 4s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+.penguin-idle .penguin-eye {
+  animation: penguin-blink 5s infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.penguin-dance {
+  animation: penguin-dance 0.45s ease-in-out infinite alternate;
+  transform-origin: 50% 100%;
+}
+
+.penguin-sad {
+  transform: rotate(-8deg) translateY(4px);
+  filter: saturate(0.6);
+  transition: transform 300ms ease;
+}
+
+@keyframes penguin-sway {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(2deg);
+  }
+}
+
+@keyframes penguin-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes penguin-dance {
+  from {
+    transform: rotate(-12deg) translateY(0);
+  }
+  to {
+    transform: rotate(12deg) translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .penguin-idle,
+  .penguin-idle .penguin-eye,
+  .penguin-dance {
+    animation: none;
+  }
+}

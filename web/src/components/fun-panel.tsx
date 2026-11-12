@@ -22,6 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, type FunBadge, type FunStats } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
+import { cheer } from "@/lib/fun-events";
 import { setSounds, sounds, soundsOn } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +95,7 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
     remember([...known, ...fresh.map((b) => b.id)]);
     confetti();
     sounds.badge();
+    cheer("badge");
     for (const badge of fresh.slice(0, 3)) {
       toast.success(`Badge won: ${badge.name}`, { description: badge.description });
       onBadge?.(badge);

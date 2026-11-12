@@ -25,6 +25,7 @@ import { useFun } from "@/hooks/use-fun";
 import { useJobEvents } from "@/hooks/use-job-events";
 import { api, ApiError, errorText, type Job } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
+import { cheer } from "@/lib/fun-events";
 import { sounds } from "@/lib/sounds";
 
 function JobDetail() {
@@ -71,10 +72,12 @@ function JobDetail() {
   const was = useRef<string | null>(null);
   useEffect(() => {
     const status = job?.status ?? null;
-    if (fun && status === "done" && (was.current === "running" || was.current === "queued")) {
+    const watched = was.current === "running" || was.current === "queued";
+    if (fun && watched && status === "done") {
       confetti(60, true);
       sounds.ready();
-    }
+      cheer("done");
+    } else if (fun && watched && status === "failed") cheer("failed");
     was.current = status;
   }, [job?.status, fun]);
   const events = useJobEvents(id, active, follow);
