@@ -60,6 +60,8 @@ def test_stats_give_my_counts_and_the_teams_board(tmp_path):
         got = fun.stats(s, me, now)
     assert got["me"]["today"] == 1 and got["me"]["week"] == 2 and got["me"]["total"] == 3
     assert got["me"]["streak"] == 2 and got["me"]["made_today"] and got["me"]["posts"] == 1
+    assert got["me"]["minutes_saved"] == 3 * fun.MANUAL_MINUTES
+    assert got["team_minutes_saved"] == 5 * fun.MANUAL_MINUTES
     assert got["leaderboard"]["today"] == [{"user": "rishab", "reels": 2},
                                            {"user": "siddhant", "reels": 1}]  # fmt: skip
     assert (

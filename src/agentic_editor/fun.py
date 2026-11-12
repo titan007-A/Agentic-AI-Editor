@@ -17,6 +17,9 @@ from agentic_editor.db import User as Account
 ZONE = ZoneInfo("Asia/Kolkata")
 # Reels from before accounts existed (no owner) were made by the owner's account.
 OWNER = "siddhant"
+# What one reel takes by hand (find the moment, cut, frame, text, captions, export): the
+# editor's time saved is counted at this, a modest guess.
+MANUAL_MINUTES = 15
 
 
 @dataclass(frozen=True)
@@ -207,12 +210,15 @@ def stats(session: Session, me: Account, now: datetime | None = None) -> dict:
             "week": sum(1 for r in mine if local(r.made_at).date() >= week),
             "month": sum(1 for r in mine if local(r.made_at).date() >= month),
             "total": len(mine),
+            "minutes_saved": len(mine) * MANUAL_MINUTES,
             "streak": current,
             "best_streak": best,
             "made_today": today in days,
             "captions": sum(r.captioned for r in mine),
             "posts": sum(r.posted for r in mine),
         },
+        "team_minutes_saved": sum(1 for r in rows if who(r.owner_id)) * MANUAL_MINUTES,
+        "manual_minutes": MANUAL_MINUTES,
         "leaderboard": {
             span: [{"user": u, "reels": n} for u, n in counts.most_common(10)]
             for span, counts in board.items()

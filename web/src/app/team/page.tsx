@@ -1,6 +1,7 @@
 "use client";
 
 import { FunPanel } from "@/components/fun-panel";
+import { FunSettings } from "@/components/fun-settings";
 import { useMe } from "@/hooks/use-me";
 
 /** The team board on its own tab: leaderboard, streak, quest, badges and Wrapped. */
@@ -15,6 +16,7 @@ export default function TeamPage() {
   return (
     <div className="grid gap-6">
       <FunPanel tick={0} />
+      <FunSettings />
     </div>
   );
 }
