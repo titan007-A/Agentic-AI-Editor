@@ -34,7 +34,7 @@ ANY = {"", "any", "all", "none", "-", "anywhere", "no", "n/a"}
 
 RUN_SIZE = 100  # accounts kept by one run
 PER_QUERY = 30  # results asked of the engines for each search
-ROUNDS = 5  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
+ROUNDS = 8  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
 QUERIES = 12  # searches the model writes a round
 KNOWN = 30  # accounts the model is asked to name a round
 LOOKUPS = 90  # handles without a follower count looked up by name, a round

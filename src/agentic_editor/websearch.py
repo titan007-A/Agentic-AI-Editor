@@ -104,23 +104,24 @@ def yahoo_results(page: str) -> list[dict]:
     return hits
 
 
-_yahoo_client = None
-_yahoo_lock = threading.Lock()
+# One client a thread: searches running at once on one connection were turned away by
+# Yahoo ("excessive load", too many streams on one HTTP/2 connection).
+_yahoo_clients = threading.local()
 
 
 def _client(fresh: bool = False):
-    """One browser-like client, kept between searches (its cookies too); a fresh one, with
-    another browser's fingerprint, after a failure."""
-    global _yahoo_client
+    """A browser-like client for this thread, kept between searches (its cookies too); a
+    fresh one, with another browser's fingerprint, after a failure."""
     import primp
 
-    with _yahoo_lock:
-        if fresh or _yahoo_client is None:
-            _yahoo_client = primp.Client(
-                impersonate="random", impersonate_os="random", timeout=TIMEOUT,
-                follow_redirects=True,
-            )  # fmt: skip
-        return _yahoo_client
+    client = getattr(_yahoo_clients, "client", None)
+    if fresh or client is None:
+        client = primp.Client(
+            impersonate="random", impersonate_os="random", timeout=TIMEOUT,
+            follow_redirects=True,
+        )  # fmt: skip
+        _yahoo_clients.client = client
+    return client
 
 
 def _yahoo_page(query: str, first: int) -> list[dict]:
