@@ -12,15 +12,14 @@ Follower counts are what the search engine last saw, so they can be a little old
 
 import logging
 import re
-import time
-from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 import httpx
 from pydantic import BaseModel, Field
 
+from agentic_editor import websearch
 from agentic_editor.llm import LLMError, parse
 
 log = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ KNOWN = 30  # accounts the model is asked to name a round
 LOOKUPS = 90  # handles without a follower count looked up by name, a round
 LIST_PAGES = 4  # pages listing accounts read a round
 LIST_HANDLES = 60  # handles taken from one such page at most
-WORKERS = 3  # searches at once
 PAUSE = 1.0  # s between one worker's searches, so the engines don't turn it away
 MIN_FIT = 6  # of 10
 RATE_BATCH = 15
@@ -128,8 +126,6 @@ class Filters:
 
 def engines(query: str, count: int, page: int = 1) -> list[dict]:
     """Web results for a query (see websearch); none when it found none."""
-    from agentic_editor import websearch
-
     return websearch.search(query, count, page)
 
 
@@ -203,27 +199,6 @@ def name_of(title: str, handle: str) -> str:
     return "" if name.lower() in ("instagram", handle) else name[:80]
 
 
-def _each(items: list, work: Callable, pause: float, workers: int = WORKERS) -> Iterable:
-    """(item, work(item) or the exception it raised) for each item, in order, `workers` at a
-    time; each worker pauses `pause` after its own, so the engines aren't asked too fast."""
-
-    def paced(item):
-        try:
-            return work(item)
-        except Exception as exc:  # the engines are third parties: one failing is one less
-            return exc
-        finally:
-            if pause:
-                time.sleep(pause)
-
-    if workers <= 1 or len(items) <= 1:
-        for item in items:
-            yield item, paced(item)
-        return
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="niche") as pool:
-        yield from zip(items, pool.map(paced, items), strict=True)
-
-
 def gather(
     queries: list[str], find: Find, pause: float = PAUSE, progress: Progress | None = None,
     at: tuple[float, float] = (0.0, 1.0), lists: dict[str, str] | None = None,
@@ -241,7 +216,8 @@ def gather(
     asks += [(q, f"site:instagram.com {q}", 1) for q in queries]
     asks += [(q, f"best {q} instagram accounts to follow", 1) for q in queries[: len(queries) // 3]]
     done = 0
-    for (query, asked, _), hits in _each(asks, lambda ask: find(ask[1], PER_QUERY, ask[2]), pause):
+    answers = websearch.each(asks, lambda ask: find(ask[1], PER_QUERY, ask[2]), pause)
+    for (query, asked, _), hits in answers:
         done += 1
         if progress:
             progress(f"searching: {query}", at[0] + (at[1] - at[0]) * done / len(asks))
@@ -325,7 +301,7 @@ def listed(page: str) -> list[str]:
 def read_lists(pages: dict[str, str], read: Callable[[str], str]) -> dict[str, Account]:
     """Accounts the pages that list accounts (link: title) name."""
     found: dict[str, Account] = {}
-    for url, page in _each(list(pages), read, 0.0):
+    for url, page in websearch.each(list(pages), read, 0.0):
         if isinstance(page, Exception):
             log.info("couldn't read %s: %s", url, page)
             continue
@@ -347,7 +323,7 @@ def look_up(
     def ask(account: Account) -> list[dict]:
         return find(f'site:instagram.com/{account.handle} "followers"', 5, 1)
 
-    for account, hits in _each(todo, ask, pause):
+    for account, hits in websearch.each(todo, ask, pause):
         if isinstance(hits, Exception):
             log.warning("looking up @%s failed: %s", account.handle, hits)
             continue

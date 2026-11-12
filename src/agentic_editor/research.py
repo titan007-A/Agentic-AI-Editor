@@ -24,7 +24,6 @@ they didn't want (with why) go to planning and rating, and accounts they hid are
 import logging
 import math
 import re
-import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -674,20 +673,20 @@ def search(
 ) -> tuple[list[Reel], list[str]]:
     """Reels the searches find on each of `sites` (see SITES), each once, in the order
     found; and the searches that failed (an engine turned it away, or none answered)."""
+    from agentic_editor import websearch
+
     pause = PAUSE if pause is None else pause
     found: dict[str, Reel] = {}
     failed = []
     asked = [(query, site) for query in queries for site in sites]
-    for n, (query, site) in enumerate(asked):
-        if n and pause:
-            time.sleep(pause)
+    # A few searches at once (each pausing after its own): kept in the order asked.
+    answers = websearch.each(asked, lambda ask: find(f"{SITES[ask[1]]} {ask[0]}", PER_QUERY), pause)
+    for n, ((query, site), hits) in enumerate(answers):
         if progress:
             where = " (YouTube Shorts)" if site == "shorts" else ""
-            progress(f"searching: {query}{where}", 0.05 + 0.35 * n / len(asked))
-        try:
-            hits = find(f"{SITES[site]} {query}", PER_QUERY)
-        except Exception as exc:  # the engines are third parties: one failing is one less
-            log.warning("search %r on %s failed: %s", query, site, exc)
+            progress(f"searching: {query}{where}", 0.05 + 0.35 * (n + 1) / len(asked))
+        if isinstance(hits, Exception):  # the engines are third parties: one failing is one less
+            log.warning("search %r on %s failed: %s", query, site, hits)
             failed.append(query)
             continue
         for hit in hits:

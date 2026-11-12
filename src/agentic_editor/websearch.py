@@ -21,7 +21,8 @@ import re
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from secrets import token_urlsafe
 
@@ -35,6 +36,7 @@ REST = 120.0  # s
 TIMEOUT = 12.0  # s, one request
 YAHOO_PAGES = 5  # Yahoo pages asked at most for one search
 YAHOO_PAUSE = 0.4  # s between the pages of one search
+WORKERS = 3  # searches at once, for a caller with many
 
 
 class SearchError(RuntimeError):
@@ -307,3 +309,24 @@ def search(query: str, count: int = 30, page: int = 1) -> list[dict]:
         _keep(query, count, page, hits)
         return hits
     raise SearchError("; ".join(problems))
+
+
+def each(items: list, work: Callable, pause: float, workers: int = WORKERS) -> Iterator:
+    """(item, work(item) or the exception it raised) for each item, in order, `workers` at a
+    time; each worker pauses `pause` after its own, so the engines aren't asked too fast."""
+
+    def paced(item):
+        try:
+            return work(item)
+        except Exception as exc:  # the engines are third parties: one failing is one less
+            return exc
+        finally:
+            if pause:
+                time.sleep(pause)
+
+    if workers <= 1 or len(items) <= 1:
+        for item in items:
+            yield item, paced(item)
+        return
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="search") as pool:
+        yield from zip(items, pool.map(paced, items), strict=True)
