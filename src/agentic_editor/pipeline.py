@@ -555,18 +555,15 @@ def recheck_framing(
     return framing.harmonize(updated, width, content, shared), [note]
 
 
-def centred(
-    edl: EDL, preset: Preset, analysis: Analysis, video: Path, settings: Settings
-) -> tuple[Preset, EDL]:
-    """The preset laid out so this video's picture, as it is shown, sits in the middle of
-    the frame (framing picture_center), the text that follows it going along."""
-    clip = edl.clips[0]
-    size = (analysis.width, analysis.height)
-    picture = size
-    if preset.framing.crop_black_bars or preset.framing.auto_background:
-        picture = compose.picture_area(video, clip.start, clip.end, size)[2:]
+def centred(edl: EDL, preset: Preset, analysis: Analysis, settings: Settings) -> tuple[Preset, EDL]:
+    """The preset laid out so this video's picture, as band framing shows it (its tallest
+    window, else the whole picture), sits in the middle of the frame (framing
+    picture_center), the text that follows it going along. The band keeps its size, so
+    the windows still fit it."""
+    _, _, width, height = edl.picture or (0, 0, analysis.width, analysis.height)
+    tallest = max((s.height or height for s in edl.shots), default=height)
     face = compose.text_face(settings, compose.text_language(preset, analysis))
-    target, dy = compose.centered(preset, picture, face)
+    target, dy = compose.centered(preset, (width, tallest), face)
     if not dy:
         return target, edl.noted("the video is already in the middle of the frame")
     way = "up" if dy < 0 else "down"
@@ -825,8 +822,7 @@ def produce(
     renders = 1
     remux = False
     edl = crop_or_whole(edl, preset, analysis, video, settings, work_dir, vision)
-    if edl.crop_mode == "none" and preset.framing.picture_center:
-        target, edl = centred(edl, target, analysis, video, settings)
+    centre = edl.crop_mode == "none" and preset.framing.picture_center
     while True:
         if not remux:
             if edl.crop_mode == "smart":
@@ -837,6 +833,10 @@ def produce(
                 edl = band_framing(
                     edl, target, analysis, video, settings, work_dir, detections, vision
                 )
+                if centre:
+                    # Once band framing has cut the picture to what is shown: that's centred.
+                    target, edl = centred(edl, target, analysis, settings)
+                    centre = False
                 commands = {}
             else:
                 commands = face_commands(
