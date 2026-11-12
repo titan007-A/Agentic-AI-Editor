@@ -34,6 +34,8 @@ from agentic_editor import (
     autopilot,
     buffer,
     cleanup,
+    features,
+    fun,
     jobs,
     research,
     songlist,
@@ -118,6 +120,9 @@ class BufferPostRequest(BaseModel):
     first_comment: str = ""
     # Keep these channels as the reel's preset's from now on.
     remember: bool = False
+    # An Instagram trial reel: Buffer's API can't say so, so it goes in as a draft tagged
+    # buffer.TRIAL_TAG, for the person to turn Trial on in Buffer (feature trial_reel).
+    trial: bool = False
 
 
 class ShareRequest(BaseModel):
@@ -787,7 +792,17 @@ def create_app(
             "id": account.id,
             "role": account.role,
             "notice_accepted": accepted,
+            "features": features.of(account, session),
         }
+
+    @app.get("/api/fun")
+    def fun_stats(me: User, session: DB) -> dict:
+        """The leaderboard, streak and badges, for accounts trying the fun feature."""
+        if not features.enabled(me, "fun", session):
+            raise HTTPException(403, "not on for this account yet")
+        if fun.backfill(session):
+            session.commit()
+        return fun.stats(session, me)
 
     @app.post("/api/notice")
     def accept_notice(account: User, session: DB) -> dict:
@@ -1874,6 +1889,8 @@ def create_app(
         who = poster(output, me, session)
         if body.mode == "customScheduled" and body.due_at is None:
             raise HTTPException(422, "pick a time to post it")
+        if body.trial and not features.enabled(me, "trial_reel", session):
+            raise HTTPException(403, "trial reels aren't on for this account yet")
         rows = buffer_rows(who, session)
         if not rows:
             raise HTTPException(409, "add a Buffer key on the Buffer page first")
@@ -1892,17 +1909,36 @@ def create_app(
             row = keys[channel_id]
             channel = buffer.Channel(**next(c for c in row.channels if c["id"] == channel_id))
             count = buffer.Count()
+            # A trial is an Instagram reel's; other channels get the post as asked.
+            trial = body.trial and channel.service == "instagram"
             try:
+                tags, note = [], ""
+                if trial:
+                    try:
+                        tag = await asyncio.to_thread(
+                            buffer.trial_tag, row.key, channel, None, count
+                        )
+                        tags = [tag]
+                    except buffer.BufferError as exc:
+                        if "refused the API key" in str(exc):
+                            raise
+                        note = f"saved without the {buffer.TRIAL_TAG} tag ({exc})"
                 data = buffer.post_input(
-                    channel, link, body.text, body.mode, due, body.first_comment
-                )
+                    channel, link, body.text, body.mode, due, body.first_comment,
+                    draft=trial, tags=tags,
+                )  # fmt: skip
                 post = await asyncio.to_thread(buffer.create_post, row.key, data, None, count)
-                results.append({"channel": channel.name, "ok": True, "post": post})
+                result = {"channel": channel.name, "ok": True, "post": post}
+                if trial:
+                    result |= {"draft": True, "tagged": bool(tags), "note": note}
+                results.append(result)
             except buffer.BufferError as exc:
                 if "refused the API key" in str(exc):
                     row.error = str(exc)
                 results.append({"channel": channel.name, "ok": False, "error": str(exc)})
             spent(row, count)
+        if any(r["ok"] for r in results):
+            fun.mark(session, output.id, posted=1)
         # Only the preset's own person changes its links, not an admin posting for them.
         mine_now = who.id == me.id
         if body.remember and mine_now and presets(who).get(output.preset) is not None:

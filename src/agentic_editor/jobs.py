@@ -14,7 +14,7 @@ from huey import SqliteHuey
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, caption, pipeline, research, shazam, slots, style
+from agentic_editor import accounts, caption, fun, pipeline, research, shazam, slots, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -264,6 +264,8 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
                     )
                 )
             job.status, job.stage, job.progress = "done", "done", 1.0
+            db.flush()
+            fun.record(db, list(job.outputs), job.owner_id)
             # Some versions made and some not is still a finished job; the rest is in its error.
             job.error = "; ".join(result.failures) or None
             message = "all presets rendered" if not result.failures else "rendered, with failures"
@@ -524,6 +526,7 @@ def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, ro
                 return
             output.caption, output.caption_sources = written.text, written.sources
             output.caption_notes, output.caption_status = written.notes, "done"
+            fun.mark(db, output_id, captioned=True)
             db.commit()
     except Exception as exc:
         log.exception("caption for output %s failed", output_id)

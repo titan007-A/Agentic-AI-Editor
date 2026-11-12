@@ -47,6 +47,7 @@ export function BufferButton({ output, title }: { output: Output; title: string 
   const [chosen, setChosen] = useState<string[]>([]);
   const [others, setOthers] = useState(false);
   const [remember, setRemember] = useState(false);
+  const [trial, setTrial] = useState(false);
   const [text, setText] = useState("");
   const [comment, setComment] = useState("");
   const [mode, setMode] = useState<BufferMode>("addToQueue");
@@ -54,9 +55,11 @@ export function BufferButton({ output, title }: { output: Output; title: string 
   const [busy, setBusy] = useState(false);
 
   if (!me) return null;
+  const canTrial = me.features?.includes("trial_reel") ?? false;
 
   async function show() {
     setOpen(true);
+    setTrial(false);
     setText(output.caption || title);
     setData(null);
     try {
@@ -84,9 +87,19 @@ export function BufferButton({ output, title }: { output: Output; title: string 
         due_at: due,
         first_comment: comment,
         remember,
+        ...(canTrial && trial && instagram ? { trial: true } : {}),
       });
       const failed = results.filter((r) => !r.ok);
-      for (const r of results.filter((r) => r.ok)) toast.success(`Sent to Buffer: ${r.channel}`);
+      for (const r of results.filter((r) => r.ok)) {
+        if (r.draft) {
+          toast.success(
+            `${r.channel}: saved as a draft in Buffer${r.tagged ? ", tagged Trial reel" : ""}. ` +
+              "Open it in Buffer, turn Trial on and schedule it.",
+            { duration: 10000 },
+          );
+          if (r.note) toast.warning(`${r.channel}: ${r.note}`);
+        } else toast.success(`Sent to Buffer: ${r.channel}`);
+      }
       for (const r of failed) toast.error(`${r.channel}: ${r.error}`);
       if (!failed.length) setOpen(false);
     } catch (err) {
@@ -200,6 +213,28 @@ export function BufferButton({ output, title }: { output: Output; title: string 
                   />
                   Use these accounts for {data.preset_label} from now on
                 </label>
+              )}
+              {canTrial && instagram && (
+                <div className="space-y-1">
+                  <label
+                    htmlFor={`buffer-trial-${output.id}`}
+                    className="flex min-h-11 cursor-pointer items-center gap-3 text-sm"
+                  >
+                    <Checkbox
+                      id={`buffer-trial-${output.id}`}
+                      checked={trial}
+                      onCheckedChange={(on) => setTrial(on === true)}
+                    />
+                    Send as trial reel
+                  </label>
+                  {trial && (
+                    <p className="text-xs text-muted-foreground">
+                      Buffer can&apos;t mark a trial reel by itself, so on Instagram it goes into
+                      your Buffer drafts, tagged &ldquo;Trial reel&rdquo;. Open it in Buffer, turn
+                      Trial on (Auto or Manual) and schedule it. Other accounts get it as usual.
+                    </p>
+                  )}
+                </div>
               )}
               <div className="space-y-1">
                 <Label htmlFor={`buffer-text-${output.id}`}>Caption</Label>

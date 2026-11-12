@@ -224,7 +224,7 @@ export function PresetPreview({ preset }: { preset: Preset }) {
             <button
               type="button"
               onClick={() => setOpen(true)}
-              className="w-full rounded-md bg-[#fde7d4] px-1 py-1 text-left text-[11px] leading-tight text-[#9a3412]"
+              className="w-full rounded-md bg-[var(--note-bg)] px-1 py-1 text-left text-[11px] leading-tight text-[var(--note-ink)]"
             >
               {notes.length === 1 ? "1 thing to check" : `${notes.length} things to check`}
             </button>
@@ -257,7 +257,7 @@ export function PresetPreview({ preset }: { preset: Preset }) {
           </DialogHeader>
           {shapes}
           {notes.length > 0 && (
-            <ul className="list-disc space-y-1 rounded-md bg-[#fde7d4] py-2 pr-2 pl-6 text-sm text-[#9a3412]">
+            <ul className="list-disc space-y-1 rounded-md bg-[var(--note-bg)] py-2 pr-2 pl-6 text-sm text-[var(--note-ink)]">
               {notes.map((note) => (
                 <li key={note}>{note}</li>
               ))}

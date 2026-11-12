@@ -54,7 +54,7 @@ export function ResearchChat({
               key={m.id}
               className={cn(
                 "max-w-[90%] rounded-md border p-2 text-sm break-words whitespace-pre-wrap",
-                m.role === "user" ? "ml-auto bg-[#fdf3dc]" : "bg-muted/40",
+                m.role === "user" ? "ml-auto bg-[var(--cream-hover)]" : "bg-muted/40",
               )}
             >
               {m.text}

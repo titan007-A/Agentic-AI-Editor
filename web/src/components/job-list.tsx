@@ -3,11 +3,14 @@
 import Link from "next/link";
 
 import { JobStatus, jobLabel } from "@/components/job-status";
+import { Snowman } from "@/components/snowman";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { useFun } from "@/hooks/use-fun";
 import type { Job } from "@/lib/api";
 
 export function JobList({ jobs }: { jobs: Job[] }) {
+  const fun = useFun();
   if (jobs.length === 0) {
     return <p className="text-sm text-muted-foreground">No jobs yet.</p>;
   }
@@ -15,7 +18,7 @@ export function JobList({ jobs }: { jobs: Job[] }) {
     <div className="space-y-2">
       {jobs.map((job) => (
         <Link key={job.id} href={`/job/?id=${job.id}`} className="block">
-          <Card className="gap-2 px-4 py-3 transition-transform hover:-rotate-[0.6deg] hover:bg-[#fdf3dc]">
+          <Card className="gap-2 px-4 py-3 transition-transform hover:-rotate-[0.6deg] hover:bg-[var(--cream-hover)]">
             <div className="flex items-center justify-between gap-3">
               <span className="truncate text-sm font-medium">{jobLabel(job)}</span>
               <JobStatus job={job} />
@@ -26,7 +29,10 @@ export function JobList({ jobs }: { jobs: Job[] }) {
               <span>{new Date(job.created_at + "Z").toLocaleString()}</span>
             </div>
             {(job.status === "running" || job.status === "queued") && (
-              <Progress value={job.progress * 100} className="h-1.5" />
+              <div className="flex items-center gap-2">
+                {fun && <Snowman value={job.progress} size={30} falling={false} />}
+                <Progress value={job.progress * 100} className="h-1.5 flex-1" />
+              </div>
             )}
           </Card>
         </Link>

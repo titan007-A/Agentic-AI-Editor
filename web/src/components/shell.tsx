@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
 import { UsageNotice } from "@/components/usage-notice";
 import { Button } from "@/components/ui/button";
 import { forgetMe, useMe } from "@/hooks/use-me";
@@ -95,6 +96,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {me.user}
             </span>
           )}
+          <ThemeToggle me={me} />
           <Button
             variant="ghost"
             size="icon"

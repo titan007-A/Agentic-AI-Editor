@@ -1,9 +1,10 @@
 "use client";
 
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { FunPanel } from "@/components/fun-panel";
 import { JobList } from "@/components/job-list";
 import { NewJobForm } from "@/components/new-job-form";
 import { Button } from "@/components/ui/button";
@@ -15,9 +16,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useMe } from "@/hooks/use-me";
 import { usePolling } from "@/hooks/use-polling";
 import { api, errorText, type Job } from "@/lib/api";
+import { confetti } from "@/lib/confetti";
 import { keepIfSame } from "@/lib/poller.mjs";
+import { sounds } from "@/lib/sounds";
 
 // Quick while something is being edited; slower otherwise, so jobs the autopilot or
 // another device starts still show up.
@@ -30,6 +34,21 @@ export default function Dashboard() {
   const [busyClearing, setBusyClearing] = useState(false);
   const busy = jobs.some((j) => j.status === "queued" || j.status === "running");
   const finished = jobs.filter((j) => j.status === "done" || j.status === "failed").length;
+  const me = useMe();
+  const fun = me?.features?.includes("fun") ?? false;
+  // A job seen running that is now done: snowfall and a bell (once, however many).
+  const seenRunning = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let finishedNow = false;
+    for (const job of jobs) {
+      if (job.status === "queued" || job.status === "running") seenRunning.current.add(job.id);
+      else if (seenRunning.current.delete(job.id) && job.status === "done") finishedNow = true;
+    }
+    if (fun && finishedNow) {
+      confetti(60, true);
+      sounds.ready();
+    }
+  }, [jobs, fun]);
 
   const refresh = usePolling(
     () =>
@@ -56,6 +75,7 @@ export default function Dashboard() {
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {fun && <FunPanel tick={finished} />}
       <NewJobForm onCreated={refresh} />
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-2">

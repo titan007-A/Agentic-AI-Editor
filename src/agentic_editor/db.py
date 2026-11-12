@@ -431,6 +431,23 @@ class PresetBuffer(Base):
     channels: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
+class ReelLog(Base):
+    """One line per reel made, kept when its job is cleaned up: what the leaderboard, the
+    streaks and the badges count. No link to the output, which may be gone."""
+
+    __tablename__ = "reel_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    output_id: Mapped[int] = mapped_column(unique=True)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    preset: Mapped[str] = mapped_column(String(64))
+    song: Mapped[str] = mapped_column(Text, default="")
+    artist: Mapped[str] = mapped_column(Text, default="")
+    made_at: Mapped[datetime] = mapped_column(default=_now, index=True)
+    captioned: Mapped[bool] = mapped_column(default=False)
+    posted: Mapped[int] = mapped_column(default=0)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

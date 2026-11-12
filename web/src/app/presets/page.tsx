@@ -343,7 +343,7 @@ function Presets() {
           {members.map((m) => (
             <label
               key={m.id}
-              className="sketch-tile flex min-h-11 cursor-pointer items-center gap-3 p-3 hover:bg-[#fdf3dc]"
+              className="sketch-tile flex min-h-11 cursor-pointer items-center gap-3 p-3 hover:bg-[var(--cream-hover)]"
             >
               <Checkbox
                 checked={sendTo.includes(m.id)}
