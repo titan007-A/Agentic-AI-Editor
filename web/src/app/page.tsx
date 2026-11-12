@@ -1,7 +1,7 @@
 "use client";
 
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { FunPanel } from "@/components/fun-panel";
@@ -19,7 +19,9 @@ import {
 import { useMe } from "@/hooks/use-me";
 import { usePolling } from "@/hooks/use-polling";
 import { api, errorText, type Job } from "@/lib/api";
+import { confetti } from "@/lib/confetti";
 import { keepIfSame } from "@/lib/poller.mjs";
+import { sounds } from "@/lib/sounds";
 
 // Quick while something is being edited; slower otherwise, so jobs the autopilot or
 // another device starts still show up.
@@ -34,6 +36,19 @@ export default function Dashboard() {
   const finished = jobs.filter((j) => j.status === "done" || j.status === "failed").length;
   const me = useMe();
   const fun = me?.features?.includes("fun") ?? false;
+  // A job seen running that is now done: snowfall and a bell (once, however many).
+  const seenRunning = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let finishedNow = false;
+    for (const job of jobs) {
+      if (job.status === "queued" || job.status === "running") seenRunning.current.add(job.id);
+      else if (seenRunning.current.delete(job.id) && job.status === "done") finishedNow = true;
+    }
+    if (fun && finishedNow) {
+      confetti(60, true);
+      sounds.ready();
+    }
+  }, [jobs, fun]);
 
   const refresh = usePolling(
     () =>

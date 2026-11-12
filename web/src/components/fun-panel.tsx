@@ -10,18 +10,24 @@ import {
   Shapes,
   Sunrise,
   Trophy,
+  Volume2,
+  VolumeX,
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, type FunBadge, type FunStats } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
+import { setSounds, sounds, soundsOn } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 
 const SEEN_KEY = "aiedit-badges-seen";
+// The streak last cheered, so a longer one gets a sparkle once.
+const STREAK_KEY = "aiedit-streak-seen";
 const ICONS: Record<string, typeof Award> = {
   first_reel: Clapperboard,
   reels_10: Clapperboard,
@@ -63,6 +69,7 @@ function remember(ids: string[]) {
 export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBadge) => void }) {
   const [stats, setStats] = useState<FunStats | null>(null);
   const [span, setSpan] = useState<Span>("week");
+  const [loud, setLoud] = useState(soundsOn);
 
   useEffect(() => {
     let live = true;
@@ -86,12 +93,32 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
     if (!fresh.length) return;
     remember([...known, ...fresh.map((b) => b.id)]);
     confetti();
+    sounds.badge();
     for (const badge of fresh.slice(0, 3)) {
       toast.success(`Badge won: ${badge.name}`, { description: badge.description });
       onBadge?.(badge);
     }
     if (fresh.length > 3) toast.success(`And ${fresh.length - 3} more badges`);
   }, [stats, onBadge]);
+
+  useEffect(() => {
+    if (!stats) return;
+    let last: number | null = null;
+    try {
+      const kept = localStorage.getItem(STREAK_KEY);
+      last = kept === null ? null : Number(kept);
+      localStorage.setItem(STREAK_KEY, String(stats.me.streak));
+    } catch {
+      return;
+    }
+    // The first look only notes it; a longer run after that gets a sparkle.
+    if (last !== null && stats.me.streak > last && stats.me.streak > 1) {
+      sounds.streak();
+      toast.success(`${stats.me.streak} days in a row!`, {
+        description: "Keep it going tomorrow.",
+      });
+    }
+  }, [stats]);
 
   if (!stats) return null;
   const { me, leaderboard, badges } = stats;
@@ -107,6 +134,21 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
           <span className="font-sans text-sm font-normal text-muted-foreground">
             {won} of {badges.length} badges
           </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto"
+            onClick={() => {
+              setSounds(!loud);
+              setLoud(!loud);
+              if (!loud) sounds.ready();
+            }}
+            aria-label={loud ? "Turn sounds off" : "Turn sounds on"}
+            aria-pressed={loud}
+            title={loud ? "Sounds on" : "Sounds off"}
+          >
+            {loud ? <Volume2 /> : <VolumeX />}
+          </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
