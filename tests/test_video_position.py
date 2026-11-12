@@ -314,3 +314,21 @@ def test_centring_is_the_default_and_a_hand_moved_picture_keeps_its_place():
     assert Framing(picture_y=-160).picture_center is False  # saved before the default
     assert Framing(picture_y=-160, picture_center=True).picture_center is True  # said so
     assert Framing.model_validate({"mode": "none", "picture_y": 0}).picture_center is True
+
+
+def test_the_pages_watermark_and_images_move_with_the_layout():
+    from agentic_editor.presets import ImageBlock, OwnWatermark
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    face = compose.text_face(get_settings(), None)
+    preset = _one_liner_only(picture_center=True).model_copy(
+        update={
+            "watermark": OwnWatermark(enabled=True, text="@page", y=0.8),
+            "images": [ImageBlock(file="logo.png", x=40, y=300, width=120)],
+        }
+    )
+    placed, dy = compose.centered(compose.moved_layout(preset, face), (1080, 1920), face)
+    assert dy
+    assert placed.watermark.y == pytest.approx(0.8 + dy / 1920)
+    assert placed.images[0].y == 300 + dy

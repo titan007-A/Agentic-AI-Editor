@@ -326,10 +326,13 @@ def shifted(preset: Preset, dy: int, face: Callable[..., text.Face] | None = Non
         rows = (max(0, rows[0]), min(preset.size[1], rows[1]))
     held = rows is not None or whole_reel or any(g is not None for g in gaps)
     framing = f.model_copy(update={"picture_rows": rows, "picture_y": 0 if held else dy})
-    # The captions and the title (and the hook under it) go along too: all the text moves.
+    # The captions and the title (and the hook under it) go along too: all the text moves,
+    # and the page's own watermark and images laid out with it.
     c = preset.captions
     margin = c.margin + (dy if c.position == "top" else -dy if c.position == "bottom" else 0)
     title = preset.title_overlay
+    mark = preset.watermark
+    height = preset.size[1]
     return preset.model_copy(
         update={
             "text_blocks": blocks,
@@ -337,6 +340,8 @@ def shifted(preset: Preset, dy: int, face: Callable[..., text.Face] | None = Non
             "framing": framing,
             "captions": c.model_copy(update={"margin": max(0, margin)}),
             "title_overlay": title.model_copy(update={"offset": max(0, title.offset + dy)}),
+            "watermark": mark.model_copy(update={"y": min(1.0, max(0.0, mark.y + dy / height))}),
+            "images": [i.model_copy(update={"y": i.y + dy}) for i in preset.images],
         }
     )
 
