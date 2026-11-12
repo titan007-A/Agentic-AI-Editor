@@ -79,6 +79,8 @@ def _ytdlp_options(dest: Path) -> dict:
         "merge_output_format": "mkv",
         "outtmpl": str(dest / "source.%(ext)s"),
         "noplaylist": True,
+        # A post with a few videos (X) is a playlist: its first video is the source.
+        "playlist_items": "1",
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

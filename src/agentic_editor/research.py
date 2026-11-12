@@ -769,6 +769,10 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
             # An X post yt-dlp can't read has no video to edit ("No video could be found").
             reel.no_video = reel.on_x
             return
+        if reel.on_x and meta.get("entries"):
+            # A post with a few videos: the first is the one edited (see download.fetch).
+            first = next(iter(meta["entries"]), None) or {}
+            meta = {**meta, **{k: v for k, v in first.items() if v is not None}}
         if reel.short:
             # A Short is vertical and at most MAX_SHORT long; YouTube says which it is.
             kind, length = meta.get("media_type"), meta.get("duration") or 0

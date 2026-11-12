@@ -616,6 +616,21 @@ def test_a_research_can_search_x_for_posts_with_a_video():
     )
 
 
+def test_a_post_with_a_few_videos_gives_its_first():
+    reel = research.Reel("x:2116650098016825456", research.reel_url("x:2116650098016825456"), "q")
+
+    def info(url):
+        return {"_type": "playlist", "uploader": "matty", "uploader_id": "ffsmatty_",
+                "like_count": 4323, "entries": [
+                    {"duration": 90.4, "width": 946, "height": 720, "like_count": 4323},
+                    {"duration": 18.5, "width": 962, "height": 720},
+                ]}  # fmt: skip
+
+    research.look_up([reel], info)
+    assert (reel.duration, reel.width, reel.height) == (90.4, 946, 720)
+    assert reel.handle == "ffsmatty_" and not reel.no_video
+
+
 def test_a_daily_research_doesnt_search_x():
     assert "x" in research.SITES and "x" not in research.DAILY_SITES
 
