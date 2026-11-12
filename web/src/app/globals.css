@@ -819,3 +819,35 @@ body::before {
     animation: none;
   }
 }
+
+/* A Wrapped slide: the page's colours in a soft aurora. */
+.wrapped-slide {
+  border: 2px solid var(--ink);
+  border-radius: var(--wobble-lg);
+  background:
+    radial-gradient(
+      90% 70% at 15% 10%,
+      color-mix(in oklab, var(--teal) 35%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      80% 70% at 90% 95%,
+      color-mix(in oklab, var(--tangerine) 30%, transparent),
+      transparent 70%
+    ),
+    var(--paper-light);
+  animation: wrapped-in 280ms ease-out;
+}
+
+@keyframes wrapped-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) rotate(-1deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wrapped-slide {
+    animation: none;
+  }
+}
