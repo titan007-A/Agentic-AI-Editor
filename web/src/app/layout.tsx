@@ -22,7 +22,21 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${body.variable} ${hand.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={`${body.variable} ${hand.variable} h-full antialiased`}
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Before the first paint, so a night-look page doesn't flash cream; the toggle
+            takes it off again for anyone who isn't an admin. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('aiedit-theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}",
+          }}
+        />
+      </head>
       <body className="min-h-full bg-background text-foreground">
         <Shell>{children}</Shell>
         <Toaster position="top-center" />

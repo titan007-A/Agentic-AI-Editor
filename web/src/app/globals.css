@@ -63,6 +63,12 @@
   --mustard: #e9b949;
   --brick: #b23a2a;
   --olive: #56723a;
+  /* Hovered and picked tiles, and the preview's warning notes. */
+  --cream-hover: #fdf3dc;
+  --note-bg: #fde7d4;
+  --note-ink: #9a3412;
+  --field: #fffcf6;
+  --hard-shadow: rgb(43 36 32 / 0.88);
 
   --wobble: 255px 12px 225px 12px / 12px 225px 12px 255px;
   --wobble-sm: 7px 3px 8px 3px / 3px 8px 3px 7px;
@@ -193,7 +199,7 @@ body::before {
   background: var(--card);
   border: 2px solid var(--ink);
   border-radius: var(--wobble-lg);
-  box-shadow: 4px 5px 0 rgb(43 36 32 / 0.88);
+  box-shadow: 4px 5px 0 var(--hard-shadow);
 }
 
 [data-slot="card-title"] {
@@ -313,7 +319,7 @@ body::before {
 [data-slot="input"],
 [data-slot="textarea"],
 [data-slot="select-trigger"] {
-  background: #fffcf6;
+  background: var(--field);
   border: 1.5px solid var(--ink);
   border-radius: var(--wobble-sm);
   box-shadow: inset 1px 2px 0 rgb(43 36 32 / 0.06);
@@ -381,7 +387,7 @@ body::before {
 [data-slot="checkbox"] {
   border: 2px solid var(--ink);
   border-radius: 3px 6px 4px 7px;
-  background: #fffcf6;
+  background: var(--field);
 }
 
 [data-slot="checkbox"][data-state="checked"] {
@@ -399,7 +405,7 @@ body::before {
 }
 
 [data-slot="switch-thumb"] {
-  background: #fffcf6;
+  background: var(--field);
   border: 1.5px solid var(--ink);
   width: 16px !important;
   height: 16px !important;
@@ -424,7 +430,7 @@ body::before {
   background: var(--paper-light);
   border: 2px solid var(--ink);
   border-radius: var(--wobble-lg);
-  box-shadow: 5px 7px 0 rgb(43 36 32 / 0.88);
+  box-shadow: 5px 7px 0 var(--hard-shadow);
 }
 
 [data-slot="dialog-title"] {
@@ -512,4 +518,177 @@ body::before {
 
 .sketch-tile:has([data-state="checked"]) {
   background: #f6e3ae;
+}
+
+/*
+ * Aurora: the winter night version of the notebook, for admins who turn it on. Slate-black
+ * paper, frost-white ink, aurora teal and violet where the day look has teal and tangerine,
+ * ice blue where it has mustard. Same wobbly lines and hand lettering.
+ */
+.dark {
+  color-scheme: dark;
+  --paper: #0d1218;
+  --paper-deep: #19222d;
+  --paper-light: #131a22;
+  --ink: #d6e2ec;
+  --ink-soft: #95a6b6;
+  --teal: #3dd6c2;
+  --teal-light: #79ecdc;
+  --tangerine: #b48cff;
+  --mustard: #7cc8f5;
+  --brick: #ff6f86;
+  --olive: #8fd78a;
+  --cream-hover: #1b2633;
+  --note-bg: #2a1f3d;
+  --note-ink: #e2cfff;
+  --field: #0a0f14;
+  --hard-shadow: rgb(0 0 0 / 0.7);
+  --scribble: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6c14-4 22 2 36-1s24-4 38 0 26 2 42-2' fill='none' stroke='%23b48cff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
+  --rule: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 8' preserveAspectRatio='none'%3E%3Cpath d='M0 4c40-2 70 2 110 0s80-3 120 0 60 2 90-1 50 1 80 1' fill='none' stroke='%23d6e2ec' stroke-opacity='.55' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .8 0 0 0 0 .9 0 0 0 0 1 0 0 0 .18 -.08'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  --primary-foreground: #04201c;
+  --muted: #1a2430;
+  --accent: #241d3a;
+  --accent-foreground: var(--ink);
+  --border: color-mix(in oklab, var(--ink) 28%, transparent);
+  --input: color-mix(in oklab, var(--ink) 55%, transparent);
+  --sidebar-primary-foreground: #04201c;
+}
+
+/* The night sky behind the pages: aurora glows and a few far stars. */
+.dark body::before {
+  background-image:
+    var(--grain), radial-gradient(1px 1px at 12% 18%, rgb(214 226 236 / 0.7), transparent 60%),
+    radial-gradient(1px 1px at 68% 9%, rgb(214 226 236 / 0.55), transparent 60%),
+    radial-gradient(1.5px 1.5px at 84% 32%, rgb(214 226 236 / 0.5), transparent 60%),
+    radial-gradient(1px 1px at 37% 41%, rgb(214 226 236 / 0.35), transparent 60%),
+    radial-gradient(1px 1px at 22% 76%, rgb(214 226 236 / 0.3), transparent 60%),
+    radial-gradient(90% 45% at 20% -8%, rgb(61 214 194 / 0.16), transparent 70%),
+    radial-gradient(70% 40% at 85% -5%, rgb(180 140 255 / 0.14), transparent 70%),
+    radial-gradient(60% 50% at 105% 105%, rgb(124 200 245 / 0.08), transparent 70%);
+}
+
+.dark [data-slot="card"],
+.dark [data-slot="dialog-content"],
+.dark [data-slot="select-content"],
+.dark [data-slot="dropdown-menu-content"] {
+  border-color: color-mix(in oklab, var(--ink) 60%, transparent);
+  box-shadow:
+    4px 5px 0 var(--hard-shadow),
+    0 0 22px rgb(61 214 194 / 0.07);
+}
+
+.dark .marker {
+  background: linear-gradient(
+    100deg,
+    transparent 1%,
+    rgb(180 140 255 / 0.45) 3%,
+    rgb(61 214 194 / 0.35) 60%,
+    rgb(180 140 255 / 0.45) 96%,
+    transparent 99%
+  );
+}
+
+.dark .tape::before {
+  background: rgb(124 200 245 / 0.35);
+  border-inline-color: rgb(13 18 24 / 0.7);
+}
+
+.dark .tape-right::before {
+  background: rgb(180 140 255 / 0.35);
+}
+
+.dark
+  [data-variant]:is(
+    [data-slot="button"],
+    [data-slot="dialog-trigger"]
+  )[data-variant="outline"]:hover:not(:disabled) {
+  background: var(--cream-hover);
+}
+
+.dark
+  [data-variant]:is([data-slot="button"], [data-slot="dialog-trigger"])[data-variant="default"] {
+  box-shadow:
+    2px 3px 0 var(--ink),
+    0 0 14px rgb(61 214 194 / 0.25);
+}
+
+.dark
+  [data-variant]:is(
+    [data-slot="button"],
+    [data-slot="dialog-trigger"]
+  )[data-variant="ghost"]:hover:not(:disabled),
+.dark [data-slot="select-item"][data-highlighted] {
+  background: rgb(124 200 245 / 0.14);
+}
+
+.dark
+  [data-variant]:is(
+    [data-slot="button"],
+    [data-slot="dialog-trigger"]
+  )[data-variant="destructive"] {
+  color: #1c0509;
+}
+
+.dark [data-slot="badge"][data-variant="secondary"] {
+  background: #1d3346;
+  color: #cbe9ff;
+}
+
+.dark [data-slot="badge"][data-variant="outline"] {
+  background: #15302b;
+  color: #a8f0e3;
+}
+
+.dark [data-slot="badge"][data-variant="destructive"] {
+  background: #3d1720;
+  color: #ffc2cc;
+}
+
+.dark [data-slot="badge"][data-tone="ask"] {
+  background: #2b2045;
+  color: #e2cfff;
+}
+
+.dark [data-slot="checkbox"][data-state="checked"] {
+  color: #04201c;
+}
+
+.dark [data-slot="dialog-overlay"] {
+  background: rgb(3 6 10 / 0.6);
+  backdrop-filter: blur(2px);
+}
+
+.dark [data-slot="alert"] {
+  background: rgb(124 200 245 / 0.08);
+}
+
+.dark [data-sonner-toast] {
+  background: var(--paper-light) !important;
+  color: var(--ink) !important;
+}
+
+.dark [data-sonner-toast][data-type="error"] {
+  background: #2c141b !important;
+}
+
+.dark [data-sonner-toast][data-type="success"] {
+  background: #10261f !important;
+}
+
+.dark .filmstrip {
+  background: #05080b;
+  box-shadow:
+    3px 4px 0 rgb(0 0 0 / 0.5),
+    0 0 18px rgb(180 140 255 / 0.12);
+}
+
+.dark .sketch-tile:has([data-state="checked"]) {
+  background: #1c2e3c;
+}
+
+.dark ::selection {
+  background: rgb(180 140 255 / 0.5);
+  color: #fff;
 }
