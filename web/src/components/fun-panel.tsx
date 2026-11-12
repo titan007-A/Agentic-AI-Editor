@@ -17,6 +17,12 @@ type Span = "today" | "week" | "month";
 /** The team board (its own tab), for accounts trying the fun feature: the person's
  * streak and counts, who made most reels today, this week and this month, and badges.
  * A badge newly won gets confetti once. `tick` changes when jobs finish, to count again. */
+function hours(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const h = minutes / 60;
+  return `${h < 10 ? h.toFixed(1) : Math.round(h)} h`;
+}
+
 export function FunPanel({ tick }: { tick: number }) {
   const stats = useFunStats(tick);
   const [span, setSpan] = useState<Span>("week");
@@ -120,6 +126,14 @@ export function FunPanel({ tick }: { tick: number }) {
               </div>
             ))}
           </dl>
+          <p className="text-sm" data-testid="time-saved">
+            <span className="font-semibold">~{hours(me.minutes_saved)} saved</span> by the editor
+            <span className="text-muted-foreground">
+              {" "}
+              (team: ~{hours(stats.team_minutes_saved)}, at ~{stats.manual_minutes} min a reel by
+              hand)
+            </span>
+          </p>
           <div className="space-y-2">
             <Tabs value={span} onValueChange={(v) => setSpan(v as Span)}>
               <TabsList>

@@ -5,7 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { FestivalSkin } from "@/components/festival-skin";
+import { FortuneCookie } from "@/components/fortune-cookie";
+import { LofiButton } from "@/components/lofi-button";
 import { Penguin } from "@/components/penguin";
+import { WeatherMood } from "@/components/weather-mood";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UsageNotice } from "@/components/usage-notice";
 import { Button } from "@/components/ui/button";
@@ -109,6 +113,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {me.user}
             </span>
           )}
+          {me?.features?.includes("fun") && <LofiButton />}
           <ThemeToggle me={me} />
           <Button
             variant="ghost"
@@ -130,7 +135,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
         {children}
       </main>
       <UsageNotice open={!noticeAccepted} onAccept={() => setAcceptedNow(true)} />
-      {me?.features?.includes("fun") && <Penguin />}
+      {me?.features?.includes("fun") && (
+        <>
+          <Penguin />
+          <FestivalSkin />
+          <WeatherMood />
+          {noticeAccepted && <FortuneCookie />}
+        </>
+      )}
     </>
   );
 }
