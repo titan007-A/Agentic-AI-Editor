@@ -278,3 +278,29 @@ def test_the_preview_centres_the_stand_in():
     # The stand-in's floor is bright to its last row: a 16:9 picture centred ends at 1264.
     lit = [y for y in range(700, 1920) if shot.getpixel((540, y)) > 40]
     assert abs(lit[-1] - 1263) <= 4
+
+
+def test_a_centred_video_is_measured_as_band_framing_shows_it(make_analysis):
+    """Band framing cut the picture's edge text away: the shorter picture is what's centred."""
+    from agentic_editor import pipeline
+    from agentic_editor.edl import Shot
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    settings = get_settings()
+    face = compose.text_face(settings, None)
+    preset = compose.moved_layout(
+        _one_liner_only(picture_center=True, picture_rows=(422, 1500)), face
+    )
+    analysis = make_analysis([], 9).model_copy(update={"width": 1080, "height": 1920})
+    edl = EDL(clips=[Clip(start=0, end=9)], crop_mode="none", picture=(0, 400, 1080, 1092),
+              shots=[Shot(start=0, end=9, x=0, width=1080, y=500, height=902)])  # fmt: skip
+    target, noted = pipeline.centred(edl, preset, analysis, settings)
+    top, bottom = compose.shown_rows(target, (1080, 902), face)
+    assert bottom - top == 902 and abs((top + bottom) / 2 - 960) <= 2
+    assert "to the middle of the frame" in noted.decisions[-1]
+    # No windows (the whole picture shown): measured whole.
+    whole = edl.model_copy(update={"shots": [], "picture": None})
+    target, _ = pipeline.centred(whole, preset, analysis, settings)
+    top, bottom = compose.shown_rows(target, (1080, 1920), face)
+    assert abs((top + bottom) / 2 - 960) <= 2
