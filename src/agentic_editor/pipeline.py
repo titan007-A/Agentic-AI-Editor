@@ -560,6 +560,9 @@ def centred(edl: EDL, preset: Preset, analysis: Analysis, settings: Settings) ->
     window, else the whole picture), sits in the middle of the frame (framing
     picture_center), the text that follows it going along. The band keeps its size, so
     the windows still fit it."""
+    if not compose.text_sides(preset) and preset.framing.picture_rows is None:
+        # Nothing above or below it: shown whole, the picture is in the middle already.
+        return preset, edl
     _, _, width, height = edl.picture or (0, 0, analysis.width, analysis.height)
     tallest = max((s.height or height for s in edl.shots), default=height)
     face = compose.text_face(settings, compose.text_language(preset, analysis))

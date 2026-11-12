@@ -229,8 +229,10 @@ class Framing(Strict):
     text_follows_video: bool = True
     # A picture shown whole (mode none) goes in the middle of the frame, top to bottom,
     # each video as it comes (a tall one and a wide one land differently); picture_y
-    # doesn't apply then. The text that follows the video keeps its gap to it.
-    picture_center: bool = False
+    # doesn't apply then. The text that follows the video keeps its gap to it. On by
+    # default (owner, 2026-11-12); a preset that moves its picture (picture_y) and says
+    # nothing of this keeps its own place (see _own_place).
+    picture_center: bool = True
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     # Smart framing keeps where the picture moves too, not only faces and the vision
     # model's must-keep items: for footage whose point is an action (a fall, a trick).
@@ -248,6 +250,15 @@ class Framing(Strict):
     # when unset).
     corner_radius: int = Field(default=0, ge=0, le=200)
     corner_color: Color | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _own_place(cls, data):
+        """A preset saved before centring was the default, with its picture moved up or
+        down by hand, keeps that place rather than being centred over it."""
+        if isinstance(data, dict) and "picture_center" not in data and data.get("picture_y"):
+            data = {**data, "picture_center": False}
+        return data
 
 
 class Grade(Strict):

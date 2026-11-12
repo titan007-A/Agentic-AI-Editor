@@ -170,7 +170,8 @@ def test_the_preview_lays_out_moved_text_as_the_render_does():
 
     # (captions off: they keep off the picture and the text by their own rule)
     quiet = {"captions": CaptionStyle(enabled=False)}
-    still, _ = preview.render_checked(_between_text().model_copy(update=quiet), settings, "9:16")
+    still = _between_text(picture_center=False).model_copy(update=quiet)
+    still, _ = preview.render_checked(still, settings, "9:16")
     # 96 px: whole JPEG blocks, so the two stills compress alike
     moved, _ = preview.render_checked(
         _between_text(picture_y=96).model_copy(update=quiet), settings, "9:16"
@@ -252,7 +253,7 @@ def test_a_centred_video_sits_in_the_middle_whatever_its_shape():
             gap = compose.shown_rows(laid, size, face)[0] - compose.line_rows(laid, face)[1]
             assert top - line[1] == pytest.approx(gap)
     # Off: nothing moves.
-    plain = _one_liner_only()
+    plain = _one_liner_only(picture_center=False)
     assert compose.centered(plain, (1080, 1920), face) == (plain, 0)
 
 
@@ -304,3 +305,30 @@ def test_a_centred_video_is_measured_as_band_framing_shows_it(make_analysis):
     target, _ = pipeline.centred(whole, preset, analysis, settings)
     top, bottom = compose.shown_rows(target, (1080, 1920), face)
     assert abs((top + bottom) / 2 - 960) <= 2
+
+
+def test_centring_is_the_default_and_a_hand_moved_picture_keeps_its_place():
+    from agentic_editor.presets import Framing
+
+    assert Framing().picture_center is True
+    assert Framing(picture_y=-160).picture_center is False  # saved before the default
+    assert Framing(picture_y=-160, picture_center=True).picture_center is True  # said so
+    assert Framing.model_validate({"mode": "none", "picture_y": 0}).picture_center is True
+
+
+def test_the_pages_watermark_and_images_move_with_the_layout():
+    from agentic_editor.presets import ImageBlock, OwnWatermark
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    face = compose.text_face(get_settings(), None)
+    preset = _one_liner_only(picture_center=True).model_copy(
+        update={
+            "watermark": OwnWatermark(enabled=True, text="@page", y=0.8),
+            "images": [ImageBlock(file="logo.png", x=40, y=300, width=120)],
+        }
+    )
+    placed, dy = compose.centered(compose.moved_layout(preset, face), (1080, 1920), face)
+    assert dy
+    assert placed.watermark.y == pytest.approx(0.8 + dy / 1920)
+    assert placed.images[0].y == 300 + dy
