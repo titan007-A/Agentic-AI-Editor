@@ -303,6 +303,33 @@ export type Me = {
   features?: string[];
 };
 
+export type FunBadge = {
+  id: string;
+  name: string;
+  description: string;
+  goal: number;
+  progress: number;
+  /** When it was won, India time; null while still to win. */
+  won_at: string | null;
+};
+
+export type FunStats = {
+  me: {
+    user: string;
+    today: number;
+    week: number;
+    month: number;
+    total: number;
+    streak: number;
+    best_streak: number;
+    made_today: boolean;
+    captions: number;
+    posts: number;
+  };
+  leaderboard: Record<"today" | "week" | "month", { user: string; reels: number }[]>;
+  badges: FunBadge[];
+};
+
 export type Account = {
   id: string;
   username: string;
@@ -483,6 +510,7 @@ export const api = {
   login: (username: string, password: string) => request("POST", "/login", { username, password }),
   logout: () => request("POST", "/logout"),
   me: () => request<Me>("GET", "/me"),
+  fun: () => request<FunStats>("GET", "/fun"),
   acceptNotice: () => request("POST", "/notice"),
   system: () => request<SystemInfo>("GET", "/system"),
   updateYtdlp: () => request<{ yt_dlp: string; note: string }>("POST", "/system/update-ytdlp"),

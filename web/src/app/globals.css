@@ -513,3 +513,38 @@ body::before {
 .sketch-tile:has([data-state="checked"]) {
   background: #f6e3ae;
 }
+
+/* Confetti for a badge won (see lib/confetti.ts). */
+.confetti-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.confetti-bit {
+  position: absolute;
+  top: -16px;
+  width: 9px;
+  height: 14px;
+  border-radius: 2px 4px 1px 3px;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.6, 0.45, 1);
+  animation-fill-mode: forwards;
+}
+
+.confetti-snow {
+  width: auto;
+  height: auto;
+  font-size: 16px;
+  color: var(--mustard);
+  background: none;
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translate(var(--drift), 105vh) rotate(var(--spin));
+    opacity: 0.2;
+  }
+}

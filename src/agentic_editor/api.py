@@ -35,6 +35,7 @@ from agentic_editor import (
     buffer,
     cleanup,
     features,
+    fun,
     jobs,
     research,
     songlist,
@@ -793,6 +794,15 @@ def create_app(
             "notice_accepted": accepted,
             "features": features.of(account, session),
         }
+
+    @app.get("/api/fun")
+    def fun_stats(me: User, session: DB) -> dict:
+        """The leaderboard, streak and badges, for accounts trying the fun feature."""
+        if not features.enabled(me, "fun", session):
+            raise HTTPException(403, "not on for this account yet")
+        if fun.backfill(session):
+            session.commit()
+        return fun.stats(session, me)
 
     @app.post("/api/notice")
     def accept_notice(account: User, session: DB) -> dict:
@@ -1927,6 +1937,8 @@ def create_app(
                     row.error = str(exc)
                 results.append({"channel": channel.name, "ok": False, "error": str(exc)})
             spent(row, count)
+        if any(r["ok"] for r in results):
+            fun.mark(session, output.id, posted=1)
         # Only the preset's own person changes its links, not an admin posting for them.
         mine_now = who.id == me.id
         if body.remember and mine_now and presets(who).get(output.preset) is not None:
