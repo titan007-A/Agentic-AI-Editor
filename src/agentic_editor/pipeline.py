@@ -555,6 +555,24 @@ def recheck_framing(
     return framing.harmonize(updated, width, content, shared), [note]
 
 
+def centred(
+    edl: EDL, preset: Preset, analysis: Analysis, video: Path, settings: Settings
+) -> tuple[Preset, EDL]:
+    """The preset laid out so this video's picture, as it is shown, sits in the middle of
+    the frame (framing picture_center), the text that follows it going along."""
+    clip = edl.clips[0]
+    size = (analysis.width, analysis.height)
+    picture = size
+    if preset.framing.crop_black_bars or preset.framing.auto_background:
+        picture = compose.picture_area(video, clip.start, clip.end, size)[2:]
+    face = compose.text_face(settings, compose.text_language(preset, analysis))
+    target, dy = compose.centered(preset, picture, face)
+    if not dy:
+        return target, edl.noted("the video is already in the middle of the frame")
+    way = "up" if dy < 0 else "down"
+    return target, edl.noted(f"moved the video {abs(dy)} px {way} to the middle of the frame")
+
+
 def band_framing(
     edl: EDL,
     preset: Preset,
@@ -807,6 +825,8 @@ def produce(
     renders = 1
     remux = False
     edl = crop_or_whole(edl, preset, analysis, video, settings, work_dir, vision)
+    if edl.crop_mode == "none" and preset.framing.picture_center:
+        target, edl = centred(edl, target, analysis, video, settings)
     while True:
         if not remux:
             if edl.crop_mode == "smart":
@@ -1000,7 +1020,8 @@ def edit_presets(
     given_headline = given_headline or names.headline_from_texts(presets, texts)
     presets = [names.with_texts(p, texts) for p in presets]
     # Text that moves with the picture, where the preset moves it (framing.text_follows_video).
-    presets = [compose.moved_layout(p) for p in presets]
+    face = compose.text_face(settings, None)
+    presets = [compose.moved_layout(p, face) for p in presets]
     # "song:" and "artist:" lines are always taken, so the instruction reader never sees
     # them; a preset that doesn't name the song still gets them for its reel's song.
     wanted = set().union({"song", "artist"}, *(names.wanted(p) for p in presets))

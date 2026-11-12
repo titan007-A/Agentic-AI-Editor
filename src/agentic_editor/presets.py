@@ -227,6 +227,10 @@ class Framing(Strict):
     # The text above and below the picture (its blocks, a whole-reel one-liner) moves up
     # and down with it; off, the text stays and what of the picture runs into it is cut.
     text_follows_video: bool = True
+    # A picture shown whole (mode none) goes in the middle of the frame, top to bottom,
+    # each video as it comes (a tall one and a wide one land differently); picture_y
+    # doesn't apply then. The text that follows the video keeps its gap to it.
+    picture_center: bool = False
     smoothing: float = Field(default=0.8, ge=0, le=0.99)
     # Smart framing keeps where the picture moves too, not only faces and the vision
     # model's must-keep items: for footage whose point is an action (a fall, a trick).

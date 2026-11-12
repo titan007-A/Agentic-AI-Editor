@@ -284,17 +284,29 @@ def picture_band(preset: Preset, face: Callable[..., text.Face]) -> tuple[int, i
     return math.ceil(top / 2) * 2, bottom // 2 * 2
 
 
-def moved_layout(preset: Preset) -> Preset:
+def moved_layout(preset: Preset, face: Callable[..., text.Face] | None = None) -> Preset:
     """The preset as a render and the preview lay it out. With framing text_follows_video
     on, moving the picture shown whole up or down moves the text that holds it in place
     by as much: each text block, a whole-reel one-liner and the rows the preset gives,
     so the picture, which goes between them, moves with them and nothing is cut; it moves
     by itself only where no text holds it. The captions and the title move too. Off, or
-    nothing moved: the preset as it is."""
+    nothing moved: the preset as it is. A centred picture is placed later, per video
+    (centered), so it isn't moved here. `face` measures the text (see shifted)."""
     f = preset.framing
+    if f.mode == "none" and f.picture_center:
+        return preset.model_copy(update={"framing": f.model_copy(update={"picture_y": 0})})
     dy = f.picture_y
     if f.mode != "none" or not f.text_follows_video or not dy:
         return preset
+    return shifted(preset, dy, face)
+
+
+def shifted(preset: Preset, dy: int, face: Callable[..., text.Face] | None = None) -> Preset:
+    """The preset's picture shown whole and the text that follows it, dy px lower (up when
+    negative). Text on one side only leaves the band open to the frame's edge on the
+    other: that edge goes along too (as picture_rows, measured with `face`), so the
+    picture moves as it is instead of growing or shrinking toward the open edge."""
+    f = preset.framing
     gaps = text_gaps(preset)
     blocks = [
         b.model_copy(update={"offset": max(0, b.offset + (dy if b.anchor == "top" else -dy))})
@@ -307,6 +319,8 @@ def moved_layout(preset: Preset) -> Preset:
             update={"offset": max(0, line.offset + (dy if line.position == "top" else -dy))}
         )
     rows = f.picture_rows
+    if rows is None and face is not None and len(text_sides(preset)) == 1:
+        rows = picture_band(preset, face)
     if rows is not None:
         rows = (rows[0] + dy, rows[1] + dy)
         rows = (max(0, rows[0]), min(preset.size[1], rows[1]))
@@ -325,6 +339,53 @@ def moved_layout(preset: Preset) -> Preset:
             "title_overlay": title.model_copy(update={"offset": max(0, title.offset + dy)}),
         }
     )
+
+
+def centered(
+    preset: Preset, picture: tuple[int, int], face: Callable[..., text.Face]
+) -> tuple[Preset, int]:
+    """With framing picture_center, the preset laid out (from moved_layout) so a picture of
+    `picture` size, as it is shown, sits in the middle of the frame top to bottom, and how
+    far it was moved (px down). The text that follows the video goes with it; text that
+    doesn't stays and the picture moves by itself."""
+    f = preset.framing
+    if f.mode != "none" or not f.picture_center:
+        return preset, 0
+    top, bottom = shown_rows(preset, picture, face)
+    dy = round((preset.size[1] - top - bottom) / 4) * 2  # half the gap, in whole pairs of px
+    if not dy:
+        return preset, 0
+    if f.text_follows_video:
+        return shifted(preset, dy, face), dy
+    return preset.model_copy(update={"framing": f.model_copy(update={"picture_y": dy})}), dy
+
+
+def shown_rows(
+    preset: Preset, picture: tuple[int, int], face: Callable[..., text.Face]
+) -> tuple[int, int]:
+    """Rows of the frame a picture of `picture` size shown whole takes: at the frame's
+    width cut to the band between the text when it is taller (band framing), else fitted
+    in the band against its anchor."""
+    band = picture_band(preset, face)
+    shown = picture
+    if band is not None:
+        shown = (picture[0], min(picture[1], band_rows(preset, band, picture[0])))
+    _, y0, _, y1 = picture_rect(
+        shown, preset.size, preset.framing.picture_width, band, picture_anchor(preset)
+    )
+    return y0, y1
+
+
+def text_sides(preset: Preset) -> set[str]:
+    """The sides of the picture shown whole the preset's text holds: its blocks with a gap
+    to the picture and a whole-reel one-liner."""
+    sides = {
+        b.anchor for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
+        if gap is not None
+    }  # fmt: skip
+    if preset.one_liner.enabled and preset.one_liner.duration is None:
+        sides.add(preset.one_liner.position)  # it holds its rows like a text block
+    return sides
 
 
 def line_rows(preset: Preset, face: Callable[..., text.Face]) -> tuple[float, float] | None:
@@ -348,15 +409,11 @@ def line_rows(preset: Preset, face: Callable[..., text.Face]) -> tuple[float, fl
 def picture_anchor(preset: Preset) -> Anchor:
     """The edge of the band a picture shorter than it keeps to: the text's, when text
     limits it on one side only, so the gap set between them is the gap shown; else the
-    picture sits in the middle."""
-    if preset.framing.picture_rows is not None:
+    picture sits in the middle. Rows the preset gives keep it in the middle, unless text
+    on one side set them (a moved layout, see shifted)."""
+    sides = text_sides(preset)
+    if preset.framing.picture_rows is not None and len(sides) != 1:
         return "middle"
-    sides = {
-        b.anchor for b, gap in zip(preset.text_blocks, text_gaps(preset), strict=True)
-        if gap is not None
-    }  # fmt: skip
-    if preset.one_liner.enabled and preset.one_liner.duration is None:
-        sides.add(preset.one_liner.position)  # it holds its rows like a text block
     if sides == {"top"}:
         return "top"
     if sides == {"bottom"}:

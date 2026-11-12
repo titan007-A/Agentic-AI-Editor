@@ -185,3 +185,96 @@ def test_the_preview_lays_out_moved_text_as_the_render_does():
     diff = sum(abs(x - y) for x, y in zip(top.get_flattened_data(), low.get_flattened_data(),
                                            strict=True)) / (1080 * 1600)  # fmt: skip
     assert diff < 3
+
+
+def _one_liner_only(**framing) -> Preset:
+    """A one-liner on top and nothing else holding the picture (a talent-show page)."""
+    from agentic_editor.presets import OneLiner
+
+    return Preset(
+        name="p", label="p", min_duration=1, max_duration=60,
+        one_liner=OneLiner(enabled=True, position="top", offset=412),
+        framing=Framing(mode="none", **framing),
+    )  # fmt: skip
+
+
+def test_text_on_one_side_moves_the_picture_whole_not_taller():
+    """Moved up, the band used to open down to the frame's bottom: the picture grew."""
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    face = compose.text_face(get_settings(), None)
+    still = compose.moved_layout(_one_liner_only(), face)
+    before = compose.picture_band(still, face)
+    assert before[1] == 1920
+    for dy in (-160, -96):
+        moved = compose.moved_layout(_one_liner_only(picture_y=dy), face)
+        after = compose.picture_band(moved, face)
+        assert (after[0] - before[0], after[1] - before[1]) == (dy, dy)
+        assert moved.one_liner.offset == 412 + dy and moved.framing.picture_y == 0
+        # the picture keeps to the one-liner, as before the move
+        assert compose.picture_anchor(moved) == compose.picture_anchor(still) == "top"
+        tall, wide = (1080, 1920), (1920, 1080)
+        for size in (tall, wide):
+            a = compose.shown_rows(still, size, face)
+            b = compose.shown_rows(moved, size, face)
+            assert (b[0] - a[0], b[1] - a[1]) == (dy, dy)  # same size, dy higher
+    # Down, past the frame's bottom: what runs off it is cut, the top follows the text.
+    low = compose.moved_layout(_one_liner_only(picture_y=160), face)
+    assert compose.picture_band(low, face) == (before[0] + 160, 1920)
+    # Without a face to measure with, as before.
+    assert compose.moved_layout(_one_liner_only(picture_y=-160)).framing.picture_rows is None
+
+
+def test_rows_given_with_no_text_keep_the_picture_in_the_middle():
+    from agentic_editor.render import compose
+
+    assert compose.picture_anchor(_preset(picture_rows=(430, 1412))) == "middle"
+
+
+def test_a_centred_video_sits_in_the_middle_whatever_its_shape():
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    face = compose.text_face(get_settings(), None)
+    for preset in (_one_liner_only(picture_center=True, picture_y=-300),
+                   _between_text(picture_center=True)):  # fmt: skip
+        laid = compose.moved_layout(preset, face)
+        assert laid.framing.picture_y == 0  # picture_y doesn't apply when centred
+        for size in ((1080, 1920), (1920, 1080), (1080, 1350)):
+            placed, _ = compose.centered(laid, size, face)
+            top, bottom = compose.shown_rows(placed, size, face)
+            assert abs((top + bottom) / 2 - 960) <= 2, (size, top, bottom)
+            # the text that follows the video keeps its gap to it
+            if preset.text_blocks:
+                continue
+            line = compose.line_rows(placed, face)
+            gap = compose.shown_rows(laid, size, face)[0] - compose.line_rows(laid, face)[1]
+            assert top - line[1] == pytest.approx(gap)
+    # Off: nothing moves.
+    plain = _one_liner_only()
+    assert compose.centered(plain, (1080, 1920), face) == (plain, 0)
+
+
+def test_a_centred_video_with_text_that_stays_moves_by_itself():
+    from agentic_editor.render import compose
+    from agentic_editor.settings import get_settings
+
+    face = compose.text_face(get_settings(), None)
+    preset = _one_liner_only(picture_center=True, text_follows_video=False)
+    placed, dy = compose.centered(preset, (1920, 1080), face)
+    assert dy and placed.framing.picture_y == dy and placed.one_liner.offset == 412
+
+
+def test_the_preview_centres_the_stand_in():
+    import io
+
+    from agentic_editor.presets import CaptionStyle
+    from agentic_editor.settings import get_settings
+
+    quiet = {"captions": CaptionStyle(enabled=False)}
+    preset = _one_liner_only(picture_center=True).model_copy(update=quiet)
+    shot = Image.open(io.BytesIO(preview.render(preset, get_settings(), "16:9"))).convert("L")
+    # The stand-in's floor is bright to its last row: a 16:9 picture centred ends at 1264.
+    lit = [y for y in range(700, 1920) if shot.getpixel((540, y)) > 40]
+    assert abs(lit[-1] - 1263) <= 4
