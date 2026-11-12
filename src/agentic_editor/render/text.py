@@ -327,19 +327,40 @@ def caption_measure(chain: list[Path], size: float, upper: bool) -> Callable[[st
     return measure
 
 
+# How much smaller a one-liner may get to stay on one line (or on fewer lines).
+LINE_SHRINK = 0.9
+
+
 def balance(text: str, font: Face | Path, size: int, max_width: int) -> str:
-    """Split a line that is too wide into two of similar length, rather than shrinking it."""
+    """A one-liner broken into lines only when it doesn't fit `max_width`: on one line when
+    it fits at up to LINE_SHRINK smaller (fit_width makes it that much smaller when drawn),
+    else filled word by word, a word that doesn't fit going whole to the next line, never
+    cut. Made LINE_SHRINK smaller, it is broken that way when that takes fewer lines. The
+    last line isn't left with one word when the line above can give it one."""
     face = face_of(font)
-    words = text.split()
-    if face.length(text, size) <= max_width or len(words) < 4:
+    if not text.split() or face.length(text, size * LINE_SHRINK) <= max_width:
         return text
-    best = min(
-        range(1, len(words)),
-        key=lambda i: abs(
-            face.length(" ".join(words[:i]), size) - face.length(" ".join(words[i:]), size)
-        ),
-    )
-    return " ".join(words[:best]) + "\n" + " ".join(words[best:])
+    lines = _filled(text.split(), face, size, max_width)
+    smaller = _filled(text.split(), face, size * LINE_SHRINK, max_width)
+    if len(smaller) < len(lines):
+        lines = smaller
+    return "\n".join(" ".join(line) for line in lines)
+
+
+def _filled(words: list[str], face: Face, size: float, max_width: int) -> list[list[str]]:
+    """Words in lines no wider than `max_width` at `size`, each as full as it goes; a word
+    wider than that by itself takes a line of its own (fit_width shrinks it)."""
+    lines: list[list[str]] = [[]]
+    for word in words:
+        if lines[-1] and face.length(" ".join([*lines[-1], word]), size) > max_width:
+            lines.append([])
+        lines[-1].append(word)
+    if len(lines) > 1 and len(lines[-1]) == 1 and len(lines[-2]) > 2:
+        # One word alone at the end: the line above gives it its last word, if it fits.
+        moved = [lines[-2][-1], *lines[-1]]
+        if face.length(" ".join(moved), size) <= max_width:
+            lines[-2], lines[-1] = lines[-2][:-1], moved
+    return lines
 
 
 def banner_extent(
