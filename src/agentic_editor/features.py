@@ -9,19 +9,22 @@ from agentic_editor.db import Setting
 from agentic_editor.db import User as Account
 
 # trial_reel: "Send as trial reel" in the Buffer dialog. fun: the leaderboard, badges and
-# the rest of the playful extras.
-FEATURES = ("trial_reel", "fun")
+# the rest of the playful extras. niche_finder: the Accounts tab (niche.py).
+FEATURES = ("trial_reel", "fun", "niche_finder")
 DEFAULT_USERS = ("siddhant",)
+# Features first tried by more than DEFAULT_USERS.
+DEFAULTS = {"niche_finder": ("siddhant", "aman")}
 
 
 def users(name: str, session: Session) -> list[str]:
+    default = list(DEFAULTS.get(name, DEFAULT_USERS))
     row = session.get(Setting, f"feature:{name}")
     if row is None:
-        return list(DEFAULT_USERS)
+        return default
     try:
         listed = json.loads(row.value)
     except ValueError:
-        return list(DEFAULT_USERS)
+        return default
     return [u for u in listed if isinstance(u, str)]
 
 

@@ -40,7 +40,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // Accepted on the server, or just now in this page.
   const [acceptedNow, setAcceptedNow] = useState(false);
   const noticeAccepted = !me || me.notice_accepted || acceptedNow;
-  const extra = me?.features?.includes("fun") ? [{ href: "/team/", label: "Team" }] : [];
+  const extra = [
+    ...(me?.features?.includes("fun") ? [{ href: "/team/", label: "Team" }] : []),
+    ...(me?.features?.includes("niche_finder") ? [{ href: "/accounts/", label: "Accounts" }] : []),
+  ];
   const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])];
 
   if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
@@ -117,7 +120,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </Button>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl px-4 py-6">{children}</main>
+      <main
+        className={cn(
+          "mx-auto w-full max-w-5xl px-4 py-6",
+          // Room at the bottom so the penguin never sits on the last button.
+          me?.features?.includes("fun") && "pb-28",
+        )}
+      >
+        {children}
+      </main>
       <UsageNotice open={!noticeAccepted} onAccept={() => setAcceptedNow(true)} />
       {me?.features?.includes("fun") && <Penguin />}
     </>

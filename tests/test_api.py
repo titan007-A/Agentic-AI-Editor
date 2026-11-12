@@ -2039,3 +2039,54 @@ def test_a_running_job_says_roughly_how_long_it_has(env, monkeypatch):
     assert admin.get(f"/api/jobs/{job}").json()["eta_seconds"] == 95
     listed = {j["id"]: j for j in admin.get("/api/jobs").json()}
     assert listed[job]["eta_seconds"] == 95
+
+
+def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
+    import json as json_
+
+    from agentic_editor.db import NicheAccount, NicheSearch, Setting
+
+    ran = []
+    monkeypatch.setattr(jobs, "find_accounts", lambda search_id: ran.append(search_id))
+    admin = env.client
+    name = admin.get("/api/me").json()["user"]
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:niche_finder", value=json_.dumps([name])))
+        session.commit()
+    assert "niche_finder" in admin.get("/api/me").json()["features"]
+    body = {"niche": "vocal coaches in Spain", "min_followers": 10000, "language": "Spanish"}
+    started = admin.post("/api/niche", json=body).json()
+    assert ran == [started["id"]] and started["status"] == "queued"
+    assert (
+        started["filters"]["min_followers"] == 10000 and started["filters"]["language"] == "Spanish"
+    )
+    bad = admin.post(
+        "/api/niche", json={"niche": "x y z", "min_followers": 5000, "max_followers": 10}
+    )
+    assert bad.status_code == 422
+    me_id = admin.get("/api/me").json()["id"]
+    with env.sessions() as session:
+        session.add(NicheAccount(search_id=started["id"], owner_id=me_id, handle="vocalmaria",
+                                 followers=45100, fit=9, why="a vocal coach"))  # fmt: skip
+        session.get(NicheSearch, started["id"]).status = "done"
+        session.commit()
+    got = admin.get(f"/api/niche/{started['id']}").json()
+    (acc,) = got["accounts"]
+    assert acc["message_url"] == "https://ig.me/m/vocalmaria" and acc["followers"] == 45100
+    voted = admin.post(
+        f"/api/niche/accounts/{acc['id']}/vote", json={"vote": -1, "reason": "brand"}
+    )
+    assert voted.json()["vote"] == -1
+    assert [s["count"] for s in admin.get("/api/niche").json()] == [1]
+    # Deleting the search keeps the account known (never shown again).
+    assert admin.delete(f"/api/niche/{started['id']}").status_code == 200
+    with env.sessions() as session:
+        kept = session.query(NicheAccount).one()
+        assert kept.handle == "vocalmaria" and kept.search_id is None
+    # Someone else: not theirs, and not on for them.
+    _, riya = employee(env, presets=["square-1x1"])
+    assert riya.get("/api/niche").status_code == 403
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:niche_finder", value=json_.dumps([name, "riya"])))
+        session.commit()
+    assert riya.get("/api/niche").json() == []
