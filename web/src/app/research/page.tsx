@@ -434,8 +434,8 @@ function Researcher() {
                   type="button"
                   onClick={() => router.push(`/research/?id=${r.id}`)}
                   className={cn(
-                    "sketch-tile flex w-full items-center justify-between gap-2 p-2 text-left text-sm hover:bg-[#fdf3dc]",
-                    r.id === id && "bg-[#fdf3dc]",
+                    "sketch-tile flex w-full items-center justify-between gap-2 p-2 text-left text-sm hover:bg-[var(--cream-hover)]",
+                    r.id === id && "bg-[var(--cream-hover)]",
                   )}
                 >
                   <span className="min-w-0 truncate">
