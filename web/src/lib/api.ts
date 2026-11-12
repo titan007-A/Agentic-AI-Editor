@@ -327,7 +327,11 @@ export type FunStats = {
     made_today: boolean;
     captions: number;
     posts: number;
+    minutes_saved: number;
   };
+  team_minutes_saved: number;
+  /** The minutes a reel takes by hand that time saved is counted at. */
+  manual_minutes: number;
   leaderboard: Record<"today" | "week" | "month", { user: string; reels: number }[]>;
   badges: FunBadge[];
   quest: { kind: string; text: string; goal: number; progress: number; done: boolean; day: string };

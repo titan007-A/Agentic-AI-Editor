@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { api, type FunStats } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
+import { fireworks } from "@/lib/fireworks";
 import { cheer } from "@/lib/fun-events";
 import { sounds } from "@/lib/sounds";
 
@@ -13,6 +14,9 @@ const SEEN_KEY = "aiedit-badges-seen";
 const STREAK_KEY = "aiedit-streak-seen";
 // The day whose quest was last cheered as done.
 const QUEST_KEY = "aiedit-quest-done";
+// Round numbers of reels made that get fireworks, and the last one shown.
+export const MILESTONES = [50, 100, 250, 500, 1000, 2500, 5000, 10000];
+const MILESTONE_KEY = "aiedit-milestone-seen";
 
 function seen(): string[] {
   try {
@@ -96,6 +100,25 @@ export function useFunStats(tick: number): FunStats | null {
     sounds.badge();
     cheer("badge");
     toast.success("Daily quest done!", { description: stats.quest.text });
+  }, [stats]);
+
+  useEffect(() => {
+    if (!stats) return;
+    const reached = MILESTONES.filter((m) => stats.me.total >= m);
+    if (!reached.length) return;
+    let last = 0;
+    try {
+      last = Number(localStorage.getItem(MILESTONE_KEY) ?? "0");
+      localStorage.setItem(MILESTONE_KEY, String(reached[reached.length - 1]));
+    } catch {
+      return;
+    }
+    const top = reached[reached.length - 1];
+    if (top <= last) return;
+    // The highest one reached, once: a whole history of them at first is one show.
+    fireworks(`${top} reels!`);
+    sounds.badge();
+    cheer("badge");
   }, [stats]);
 
   return stats;
