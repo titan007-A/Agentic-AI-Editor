@@ -328,6 +328,27 @@ export type FunStats = {
   };
   leaderboard: Record<"today" | "week" | "month", { user: string; reels: number }[]>;
   badges: FunBadge[];
+  quest: { kind: string; text: string; goal: number; progress: number; done: boolean; day: string };
+};
+
+export type FunWrapped = {
+  month: string;
+  label: string;
+  months: string[];
+  reels: number;
+  active_days: number;
+  best_day: { date: string; reels: number } | null;
+  best_run: number;
+  top_preset: { name: string; reels: number } | null;
+  top_song: { name: string; reels: number } | null;
+  top_artist: { name: string; reels: number } | null;
+  busiest_hour: number | null;
+  night_reels: number;
+  captions: number;
+  posts: number;
+  team_place: number | null;
+  team_size: number;
+  team_reels: number;
 };
 
 export type Account = {
@@ -511,6 +532,8 @@ export const api = {
   logout: () => request("POST", "/logout"),
   me: () => request<Me>("GET", "/me"),
   fun: () => request<FunStats>("GET", "/fun"),
+  wrapped: (month?: string) =>
+    request<FunWrapped>("GET", `/fun/wrapped${month ? `?month=${month}` : ""}`),
   acceptNotice: () => request("POST", "/notice"),
   system: () => request<SystemInfo>("GET", "/system"),
   updateYtdlp: () => request<{ yt_dlp: string; note: string }>("POST", "/system/update-ytdlp"),

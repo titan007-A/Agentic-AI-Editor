@@ -9,6 +9,8 @@ import {
   Send,
   Shapes,
   Sunrise,
+  Sparkles,
+  Target,
   Trophy,
   Volume2,
   VolumeX,
@@ -20,14 +22,18 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Wrapped } from "@/components/wrapped";
 import { api, type FunBadge, type FunStats } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
+import { cheer } from "@/lib/fun-events";
 import { setSounds, sounds, soundsOn } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 
 const SEEN_KEY = "aiedit-badges-seen";
 // The streak last cheered, so a longer one gets a sparkle once.
 const STREAK_KEY = "aiedit-streak-seen";
+// The day whose quest was last cheered as done.
+const QUEST_KEY = "aiedit-quest-done";
 const ICONS: Record<string, typeof Award> = {
   first_reel: Clapperboard,
   reels_10: Clapperboard,
@@ -70,6 +76,7 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
   const [stats, setStats] = useState<FunStats | null>(null);
   const [span, setSpan] = useState<Span>("week");
   const [loud, setLoud] = useState(soundsOn);
+  const [wrapped, setWrapped] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -94,6 +101,7 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
     remember([...known, ...fresh.map((b) => b.id)]);
     confetti();
     sounds.badge();
+    cheer("badge");
     for (const badge of fresh.slice(0, 3)) {
       toast.success(`Badge won: ${badge.name}`, { description: badge.description });
       onBadge?.(badge);
@@ -120,8 +128,23 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
     }
   }, [stats]);
 
+  useEffect(() => {
+    if (!stats?.quest.done) return;
+    try {
+      if (localStorage.getItem(QUEST_KEY) === stats.quest.day) return;
+      localStorage.setItem(QUEST_KEY, stats.quest.day);
+    } catch {
+      return;
+    }
+    confetti(90);
+    sounds.badge();
+    cheer("badge");
+    toast.success("Daily quest done!", { description: stats.quest.text });
+  }, [stats]);
+
   if (!stats) return null;
-  const { me, leaderboard, badges } = stats;
+  const { me, leaderboard, badges, quest } = stats;
+  const share = Math.min(1, quest.progress / Math.max(1, quest.goal));
   const board = leaderboard[span];
   const top = Math.max(1, ...board.map((r) => r.reels));
   const won = badges.filter((b) => b.won_at).length;
@@ -149,10 +172,37 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
           >
             {loud ? <Volume2 /> : <VolumeX />}
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setWrapped(true)}>
+            <Sparkles /> Wrapped
+          </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className="space-y-4">
+          <div className="sketch-tile flex items-center gap-3 p-3" data-testid="quest">
+            <svg viewBox="0 0 40 40" className="size-14 shrink-0 -rotate-90" aria-hidden>
+              <circle cx="20" cy="20" r="16" fill="none" stroke="var(--muted)" strokeWidth="5" />
+              <circle
+                cx="20"
+                cy="20"
+                r="16"
+                fill="none"
+                stroke={quest.done ? "var(--olive)" : "var(--teal)"}
+                strokeWidth="5"
+                strokeLinecap="round"
+                strokeDasharray={`${share * 100.5} 100.5`}
+              />
+            </svg>
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase">
+                <Target className="size-3.5" /> Daily quest
+              </p>
+              <p className="font-semibold">{quest.text}</p>
+              <p className="text-sm text-muted-foreground" role="status">
+                {quest.done ? "Done! See you tomorrow." : `${quest.progress} of ${quest.goal}`}
+              </p>
+            </div>
+          </div>
           <div className="flex items-center gap-3">
             <span
               className={cn(
@@ -270,6 +320,7 @@ export function FunPanel({ tick, onBadge }: { tick: number; onBadge?: (b: FunBad
           })}
         </ul>
       </CardContent>
+      <Wrapped open={wrapped} onOpenChange={setWrapped} />
     </Card>
   );
 }

@@ -804,6 +804,17 @@ def create_app(
             session.commit()
         return fun.stats(session, me)
 
+    @app.get("/api/fun/wrapped")
+    def fun_wrapped(
+        me: User,
+        session: DB,
+        month: Annotated[str | None, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")] = None,
+    ) -> dict:
+        """The person's month in numbers, for the Wrapped slides (fun feature)."""
+        if not features.enabled(me, "fun", session):
+            raise HTTPException(403, "not on for this account yet")
+        return fun.wrapped(session, me, month)
+
     @app.post("/api/notice")
     def accept_notice(account: User, session: DB) -> dict:
         key = f"{NOTICE_KEY}:{account.id}"

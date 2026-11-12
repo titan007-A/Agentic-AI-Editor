@@ -2001,3 +2001,24 @@ def test_the_fun_board_counts_reels_kept_after_their_job_is_gone(env, monkeypatc
         session.commit()
     assert admin.get("/api/fun").json()["me"]["total"] == 1
     assert admin.get("/api/fun").json()["me"]["total"] == 1
+
+
+def test_wrapped_is_for_accounts_trying_the_fun_feature(env):
+    import json as json_
+
+    from agentic_editor.db import Setting
+
+    admin = env.client
+    name = admin.get("/api/me").json()["user"]
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:fun", value=json_.dumps([name])))
+        session.commit()
+    start(admin)
+    got = admin.get("/api/fun/wrapped").json()
+    assert got["reels"] == 1 and got["team_place"] == 1
+    assert admin.get("/api/fun").json()["quest"]["text"].startswith("Make")
+    assert admin.get("/api/fun/wrapped?month=2026-13").status_code == 422
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:fun", value=json_.dumps([])))
+        session.commit()
+    assert admin.get("/api/fun/wrapped").status_code == 403

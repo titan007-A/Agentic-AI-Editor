@@ -66,3 +66,49 @@ def test_stats_give_my_counts_and_the_teams_board(tmp_path):
         got["leaderboard"]["week"][0] == {"user": "siddhant", "reels": 2}
         or got["leaderboard"]["week"][0]["reels"] == 2
     )
+
+
+def test_the_daily_quest_stays_all_day_fits_the_person_and_counts_their_reels():
+    day = date(2026, 11, 12)
+    noon = datetime(2026, 11, 12, 6, 30)  # 12:00 IST
+    # Two weeks of 10 reels a day, with captions and Buffer posts.
+    history = [
+        _row(noon - timedelta(days=d, minutes=m), captioned=True, posted=1, preset=f"p{d % 3}")
+        for d in range(1, 15)
+        for m in range(10)
+    ]
+    quest = fun.quest_for(history, day, "u1")
+    assert quest == fun.quest_for(history, day, "u1")  # the same all day
+    kinds = {fun.quest_for(history, day + timedelta(days=i), "u1").kind for i in range(30)}
+    assert kinds >= {"reels", "captions", "posts", "morning"}  # it varies
+    reels = fun.Quest("reels", "Make 12 reels today", 12)
+    assert fun.quest_for([], day, "u1") == fun.Quest("reels", "Make 3 reels today", 3)
+    today = [_row(noon + timedelta(minutes=m)) for m in range(12)]
+    progress, at = fun.quest_progress(reels, history + today, day)
+    assert progress == 12 and at == today[11].made_at
+    morning = fun.Quest("morning", "", 3)
+    early = [_row(datetime(2026, 11, 12, 1, 0)), _row(datetime(2026, 11, 12, 2, 0))]
+    late = [_row(datetime(2026, 11, 12, 10, 0))]  # 15:30 IST: not the morning
+    assert fun.quest_progress(morning, early + late, day) == (2, None)
+
+
+def test_wrapped_sums_up_a_month(tmp_path):
+    sessions = make_sessionmaker(tmp_path / "app.db")
+    with sessions() as s:
+        s.add_all([User(id="u1", username="siddhant", role="admin", password_hash="x"),
+                   User(id="u2", username="rishab", role="member", password_hash="x")])  # fmt: skip
+        base = datetime(2026, 11, 3, 14, 0)  # 19:30 IST
+        rows = [_row(base + timedelta(days=d), "u1", preset="vocal") for d in range(3)]
+        rows[0].song, rows[0].artist = "Felicità", "Al Bano"
+        rows[1].song, rows[1].artist = "Felicità", "Al Bano"
+        rows += [_row(base, "u1", preset="shorts"), _row(base + timedelta(hours=1), "u2")]
+        rows.append(_row(datetime(2026, 10, 30, 10, 0), "u1"))  # last month
+        s.add_all(rows)
+        s.commit()
+        got = fun.wrapped(s, s.get(User, "u1"), "2026-11")
+    assert got["label"] == "November 2026" and got["reels"] == 4 and got["active_days"] == 3
+    assert got["best_day"] == {"date": "2026-11-03", "reels": 2} and got["best_run"] == 3
+    assert got["top_preset"] == {"name": "vocal", "reels": 3}
+    assert got["top_song"]["name"] == "Felicità" and got["top_artist"]["name"] == "Al Bano"
+    assert got["busiest_hour"] == 19 and got["team_place"] == 1 and got["team_size"] == 2
+    assert got["months"] == ["2026-11", "2026-10"]

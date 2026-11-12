@@ -2,6 +2,7 @@
 and badges, all counted from the reel log (db.ReelLog), which outlives cleaned-up jobs.
 Days are India's (the team's), so a reel at 00:30 counts for the new day."""
 
+import hashlib
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -45,6 +46,7 @@ BADGES = (
     Badge("captions_25", "Caption master", "Get 25 post captions written", 25, "captions"),
     Badge("posts_10", "Shipping it", "Send 10 reels to Buffer", 10, "posts"),
     Badge("variety_5", "All-rounder", "Make reels with 5 different presets", 5, "presets"),
+    Badge("quests_7", "Quest master", "Finish 7 daily quests", 7, "quests"),
 )
 
 
@@ -125,11 +127,16 @@ def streaks(days: set[date], today: date) -> tuple[int, int]:
     return current, best
 
 
-def badges(rows: list[ReelLog]) -> list[dict]:
+def badges(rows: list[ReelLog], quests: list[datetime] = ()) -> list[dict]:
     """Every badge, with how far along the person is and when it was won (None: not yet).
-    Won at the reel that first made it true."""
+    Won at the reel that first made it true; `quests` are when daily quests were done."""
     won: dict[str, datetime] = {}
     progress: Counter = Counter()
+    for n, at in enumerate(sorted(quests), 1):
+        for badge in BADGES:
+            if badge.measure == "quests" and badge.id not in won and n >= badge.goal:
+                won[badge.id] = at
+    progress["quests"] = len(quests)
     per_day: Counter = Counter()
     days: set[date] = set()
     presets: set[str] = set()
@@ -191,6 +198,8 @@ def stats(session: Session, me: Account, now: datetime | None = None) -> dict:
             board["month"][name] += 1
     days = {local(r.made_at).date() for r in mine}
     current, best = streaks(days, today)
+    quest = quest_for(mine, today, me.id)
+    progress, done_at = quest_progress(quest, mine, today)
     return {
         "me": {
             "user": me.username,
@@ -208,5 +217,139 @@ def stats(session: Session, me: Account, now: datetime | None = None) -> dict:
             span: [{"user": u, "reels": n} for u, n in counts.most_common(10)]
             for span, counts in board.items()
         },
-        "badges": badges(mine),
+        "badges": badges(mine, quests_done(mine, me.id, today)),
+        "quest": {
+            "kind": quest.kind,
+            "text": quest.text,
+            "goal": quest.goal,
+            "progress": progress,
+            "done": done_at is not None,
+            "day": today.isoformat(),
+        },
+    }
+
+
+# A daily quest: one small aim a day, picked for the person from what they do.
+@dataclass(frozen=True)
+class Quest:
+    kind: str
+    text: str
+    goal: int
+
+
+def quest_for(history: list[ReelLog], day: date, who: str) -> Quest:
+    """The day's quest for someone, from their reels before that day: the same all day,
+    a different kind most days. More reels than they usually make, a few captions or
+    Buffer posts if they use those, a morning run, or a preset left aside this week."""
+    before = [r for r in history if local(r.made_at).date() < day]
+    recent = [r for r in before if local(r.made_at).date() >= day - timedelta(days=14)]
+    usual = len(recent) / 14
+    options = [Quest("reels", "", max(3, min(20, round(usual * 1.2 + 0.5))))]
+    if any(r.captioned for r in before):
+        options.append(Quest("captions", "", 2))
+    if any(r.posted for r in before):
+        options.append(Quest("posts", "", 2))
+    if usual >= 2:
+        options.append(Quest("morning", "", 3))
+    week = {r.preset for r in before if local(r.made_at).date() >= day - timedelta(days=7)}
+    if len({r.preset for r in before} - week) >= 1:
+        options.append(Quest("new_preset", "", 1))
+    pick = int(hashlib.sha256(f"{who}:{day.isoformat()}".encode()).hexdigest(), 16)
+    q = options[pick % len(options)]
+    text = {
+        "reels": f"Make {q.goal} reels today",
+        "captions": f"Get {q.goal} post captions written today",
+        "posts": f"Send {q.goal} reels to Buffer today",
+        "morning": f"Make {q.goal} reels before noon",
+        "new_preset": "Make a reel with a preset you haven't used this week",
+    }[q.kind]
+    return Quest(q.kind, text, q.goal)
+
+
+def quest_progress(quest: Quest, history: list[ReelLog], day: date) -> tuple[int, datetime | None]:
+    """How far along the day's quest is, and when it was done (None: not yet)."""
+    todays = sorted((r for r in history if local(r.made_at).date() == day), key=lambda r: r.made_at)
+    week = {r.preset for r in history
+            if day - timedelta(days=7) <= local(r.made_at).date() < day}  # fmt: skip
+    count = 0
+    for row in todays:
+        if quest.kind == "reels":
+            count += 1
+        elif quest.kind == "captions":
+            count += row.captioned
+        elif quest.kind == "posts":
+            count += bool(row.posted)
+        elif quest.kind == "morning":
+            count += local(row.made_at).hour < 12
+        elif quest.kind == "new_preset":
+            count += row.preset not in week
+        if count >= quest.goal:
+            return quest.goal, row.made_at
+    return count, None
+
+
+def quests_done(history: list[ReelLog], who: str, today: date, days: int = 90) -> list[datetime]:
+    """When the daily quests of the last `days` days (today too) were done."""
+    done = []
+    for back in range(days, -1, -1):
+        day = today - timedelta(days=back)
+        _, at = quest_progress(quest_for(history, day, who), history, day)
+        if at is not None:
+            done.append(at)
+    return done
+
+
+def wrapped(session: Session, me: Account, month: str | None = None,
+            now: datetime | None = None) -> dict:  # fmt: skip
+    """The person's month in numbers, for the Wrapped slides: reels, active days, best day
+    and run, top preset, song and artist, busiest hour, captions and posts, and their place
+    on the team. `month` is YYYY-MM, this month when left out."""
+    now = local(now or datetime.now(UTC))
+    first = date.fromisoformat(f"{month}-01") if month else now.date().replace(day=1)
+    after = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    people = {a.id: a.username for a in session.scalars(select(Account))}
+    owner = next((i for i, name in people.items() if name == OWNER), None)
+    rows = list(session.scalars(select(ReelLog)))
+
+    def owner_of(r: ReelLog) -> str | None:
+        return r.owner_id or owner
+
+    in_month = [r for r in rows if first <= local(r.made_at).date() < after]
+    mine = sorted((r for r in in_month if owner_of(r) == me.id), key=lambda r: r.made_at)
+    months = sorted({local(r.made_at).strftime("%Y-%m") for r in rows if owner_of(r) == me.id},
+                    reverse=True)[:12]  # fmt: skip
+    team = Counter(people.get(owner_of(r)) for r in in_month if people.get(owner_of(r)))
+    per_day = Counter(local(r.made_at).date() for r in mine)
+    hours = Counter(local(r.made_at).hour for r in mine)
+    days = set(per_day)
+    best_run = 0
+    for day in sorted(days):
+        best_run = max(best_run, streaks(days, day)[0])
+
+    def top(counter: Counter) -> dict | None:
+        if not counter:
+            return None
+        name, n = counter.most_common(1)[0]
+        return {"name": name, "reels": n}
+
+    best_day = per_day.most_common(1)[0] if per_day else None
+    ranked = [u for u, _ in team.most_common()]
+    return {
+        "month": first.strftime("%Y-%m"),
+        "label": first.strftime("%B %Y"),
+        "months": months,
+        "reels": len(mine),
+        "active_days": len(days),
+        "best_day": {"date": best_day[0].isoformat(), "reels": best_day[1]} if best_day else None,
+        "best_run": best_run,
+        "top_preset": top(Counter(r.preset for r in mine)),
+        "top_song": top(Counter(r.song for r in mine if r.song)),
+        "top_artist": top(Counter(r.artist for r in mine if r.artist)),
+        "busiest_hour": hours.most_common(1)[0][0] if hours else None,
+        "night_reels": sum(1 for r in mine if local(r.made_at).hour < 5),
+        "captions": sum(r.captioned for r in mine),
+        "posts": sum(r.posted for r in mine),
+        "team_place": ranked.index(me.username) + 1 if me.username in ranked else None,
+        "team_size": len(ranked),
+        "team_reels": sum(team.values()),
     }

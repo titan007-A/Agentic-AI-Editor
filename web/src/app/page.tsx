@@ -20,6 +20,7 @@ import { useMe } from "@/hooks/use-me";
 import { usePolling } from "@/hooks/use-polling";
 import { api, errorText, type Job } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
+import { cheer } from "@/lib/fun-events";
 import { keepIfSame } from "@/lib/poller.mjs";
 import { sounds } from "@/lib/sounds";
 
@@ -40,14 +41,19 @@ export default function Dashboard() {
   const seenRunning = useRef<Set<string>>(new Set());
   useEffect(() => {
     let finishedNow = false;
+    let failedNow = false;
     for (const job of jobs) {
       if (job.status === "queued" || job.status === "running") seenRunning.current.add(job.id);
-      else if (seenRunning.current.delete(job.id) && job.status === "done") finishedNow = true;
+      else if (seenRunning.current.delete(job.id)) {
+        if (job.status === "done") finishedNow = true;
+        else if (job.status === "failed") failedNow = true;
+      }
     }
     if (fun && finishedNow) {
       confetti(60, true);
       sounds.ready();
-    }
+      cheer("done");
+    } else if (fun && failedNow) cheer("failed");
   }, [jobs, fun]);
 
   const refresh = usePolling(
