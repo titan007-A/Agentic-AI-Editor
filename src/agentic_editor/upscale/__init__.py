@@ -79,6 +79,7 @@ TILE = 256  # px of the model's input a tile covers
 TILE_PAD = 24  # px of picture around each tile it sees, so the seams don't show
 TILE_BATCH = 8  # tiles through the model together
 QUEUE = 8  # decoded frames kept ready
+FACE_BATCH = 2  # faces through GFPGAN together
 # HEVC 10-bit for the best picture: constant quality (CRF) rather than a bit rate, SAO off
 # and a stronger adaptive quantiser so fine texture and flat gradients both survive.
 HEVC_CRF = 15
@@ -309,12 +310,16 @@ class FaceFixer:
             warps.append(warp)
         if not crops:
             return frame
+        fixed = []
         with torch.inference_mode():
-            x = torch.from_numpy(np.stack(crops)).to(self.device).permute(0, 3, 1, 2).contiguous()
-            x = x.half() if self.half else x.float()
-            y, _ = self.net(x / 127.5 - 1.0, return_rgb=False, randomize_noise=False)
-            y = ((y.float().clamp(-1, 1) + 1) * 127.5).permute(0, 2, 3, 1)
-            fixed = y.cpu().numpy()
+            # A few faces at a time: a crowd all at once took gigabytes (5 GB for 7 faces).
+            for start in range(0, len(crops), FACE_BATCH):
+                group = np.stack(crops[start : start + FACE_BATCH])
+                x = torch.from_numpy(group).to(self.device).permute(0, 3, 1, 2).contiguous()
+                x = x.half() if self.half else x.float()
+                y, _ = self.net(x / 127.5 - 1.0, return_rgb=False, randomize_noise=False)
+                y = ((y.float().clamp(-1, 1) + 1) * 127.5).permute(0, 2, 3, 1)
+                fixed.extend(y.cpu().numpy())
         out = frame.astype(np.float32, copy=True)
         height, width = frame.shape[:2]
         for crop, face, warp in zip(crops, fixed, warps, strict=True):
