@@ -39,8 +39,8 @@ function PresetChoice({
             aria-pressed={on}
             onClick={() => onChange(on ? chosen.filter((n) => n !== p.name) : [...chosen, p.name])}
             className={cn(
-              "sketch-tile px-2 py-1 text-left text-sm hover:bg-[#fdf3dc]",
-              on && "bg-[#fdf3dc] font-medium ring-2 ring-primary",
+              "sketch-tile px-2 py-1 text-left text-sm hover:bg-[var(--cream-hover)]",
+              on && "bg-[var(--cream-hover)] font-medium ring-2 ring-primary",
             )}
           >
             {p.label}

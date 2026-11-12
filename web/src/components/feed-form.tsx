@@ -132,7 +132,7 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
           {presets.map((p) => (
             <label
               key={p.name}
-              className="sketch-tile flex cursor-pointer items-start gap-3 p-3 hover:bg-[#fdf3dc]"
+              className="sketch-tile flex cursor-pointer items-start gap-3 p-3 hover:bg-[var(--cream-hover)]"
             >
               <Checkbox
                 checked={fields.presets.includes(p.name)}
