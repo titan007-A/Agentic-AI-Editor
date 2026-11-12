@@ -14,7 +14,7 @@ from huey import SqliteHuey
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, caption, fun, pipeline, research, shazam, slots, style
+from agentic_editor import accounts, caption, fun, niche, pipeline, research, shazam, slots, style
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -22,6 +22,8 @@ from agentic_editor.db import (
     FeedItem,
     HiddenAccount,
     Job,
+    NicheAccount,
+    NicheSearch,
     Output,
     Research,
     ResearchAccount,
@@ -1155,6 +1157,8 @@ def recover(Session: sessionmaker) -> None:
             draft.status, draft.error = "failed", INTERRUPTED
         for found in db.scalars(select(Research).where(Research.status == "running")).all():
             found.status, found.error = "failed", INTERRUPTED
+        for found in db.scalars(select(NicheSearch).where(NicheSearch.status == "running")).all():
+            found.status, found.error = "failed", INTERRUPTED
         learning = select(ResearchAccount).where(ResearchAccount.learn_status == "running")
         for account in db.scalars(learning).all():
             account.learn_status, account.learn_error = "failed", INTERRUPTED
@@ -1224,3 +1228,94 @@ def recover(Session: sessionmaker) -> None:
     for research_id in lost_readings:
         log.info("queueing the reading of research %s's PDF again", research_id)
         read_pdf_list(research_id)
+
+
+NICHE_RETRY = 60  # s a niche search waits while another one runs
+NICHE_TASTE = 15  # liked and not-wanted accounts the finder is told of
+
+
+def run_niche(
+    search_id: str, Session: sessionmaker, settings: Settings, router=None, find=None,
+    pause: float | None = None,
+) -> None:  # fmt: skip
+    """Find accounts for a niche search (niche.py) and keep them as the person's: an account
+    shown once, to anyone's search of theirs, is never shown to them again. Like a job, it
+    never stays "running": whatever happens is stored."""
+
+    def progress(message: str, value: float) -> None:
+        with Session() as db:
+            found = db.get(NicheSearch, search_id)
+            found.message, found.progress = message, max(found.progress, value)
+            db.commit()
+
+    try:
+        with Session() as db:
+            found = db.get(NicheSearch, search_id)
+            found.status = "running"
+            db.commit()
+            owner, text, wanted = found.owner_id, found.niche, dict(found.filters or {})
+            mine = list(db.scalars(select(NicheAccount).where(NicheAccount.owner_id == owner)))
+            seen = {a.handle for a in mine}
+            voted = sorted((a for a in mine if a.vote), key=lambda a: a.created_at, reverse=True)
+            liked = [f"@{a.handle} ({a.why[:60]}) {a.reason}".strip() for a in voted if a.vote > 0]
+            disliked = [
+                f"@{a.handle} ({a.why[:60]}) {a.reason}".strip() for a in voted if a.vote < 0
+            ]
+        filters = niche.Filters(
+            min_followers=int(wanted.get("min_followers") or 0),
+            max_followers=int(wanted["max_followers"]) if wanted.get("max_followers") else None,
+            language=str(wanted.get("language") or ""),
+            country=str(wanted.get("country") or ""),
+        )
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        taste = niche.taste_line(liked[:NICHE_TASTE], disliked[:NICHE_TASTE])
+        options = {k: v for k, v in (("find", find), ("pause", pause)) if v is not None}
+        accounts_found, notes = niche.run(
+            text, filters, router.planner, seen, taste, progress, **options
+        )
+        with Session() as db:
+            found = db.get(NicheSearch, search_id)
+            known = set(
+                db.scalars(select(NicheAccount.handle).where(NicheAccount.owner_id == owner))
+            )
+            for a in accounts_found:
+                if a.handle in known:
+                    continue
+                known.add(a.handle)
+                db.add(
+                    NicheAccount(
+                        search_id=search_id, owner_id=owner, handle=a.handle, name=a.name,
+                        followers=a.followers, posts=a.posts, about=a.about, fit=a.fit, why=a.why,
+                    )
+                )  # fmt: skip
+            found.status, found.progress = "done", 1.0
+            found.message = f"found {len(accounts_found)} accounts"
+            found.notes = notes
+            db.commit()
+    except Exception as exc:
+        log.exception("niche search %s failed", search_id)
+        with Session() as db:
+            found = db.get(NicheSearch, search_id)
+            if found is not None:
+                found.status, found.error = "failed", f"{type(exc).__name__}: {exc}"
+                db.commit()
+
+
+@huey.task()
+def find_accounts(search_id: str) -> None:
+    """One niche search at a time (they share the search engines and the planning model):
+    while another runs, this one waits NICHE_RETRY seconds in the schedule."""
+    Session = sessions()
+    with Session() as db:
+        busy = db.scalar(
+            select(NicheSearch.id).where(
+                NicheSearch.status == "running", NicheSearch.id != search_id
+            )
+        )
+        found = db.get(NicheSearch, search_id)
+        if found is None or found.status != "queued":
+            return
+    if busy:
+        find_accounts.schedule((search_id,), delay=NICHE_RETRY)
+        return
+    run_niche(search_id, Session, get_settings())

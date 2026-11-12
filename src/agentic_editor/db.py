@@ -431,6 +431,49 @@ class PresetBuffer(Base):
     channels: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
+class NicheSearch(Base):
+    """One run of the niche account finder (niche.py) for one person."""
+
+    __tablename__ = "niche_searches"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    niche: Mapped[str] = mapped_column(Text)
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="")
+    progress: Mapped[float] = mapped_column(default=0.0)
+    notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    accounts: Mapped[list["NicheAccount"]] = relationship(back_populates="search")
+
+
+class NicheAccount(Base):
+    """An account the finder showed someone: never shown to them again, even when its
+    search is deleted (it stays, without a search)."""
+
+    __tablename__ = "niche_accounts"
+    __table_args__ = (UniqueConstraint("owner_id", "handle"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    search_id: Mapped[str | None] = mapped_column(
+        ForeignKey("niche_searches.id", ondelete="SET NULL"), index=True
+    )
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    handle: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(Text, default="")
+    followers: Mapped[int | None]
+    posts: Mapped[int | None]
+    about: Mapped[str] = mapped_column(Text, default="")
+    fit: Mapped[float | None]
+    why: Mapped[str] = mapped_column(Text, default="")
+    vote: Mapped[int] = mapped_column(default=0)  # 1 liked, -1 not wanted
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    search: Mapped[NicheSearch | None] = relationship(back_populates="accounts")
+
+
 class ReelLog(Base):
     """One line per reel made, kept when its job is cleaned up: what the leaderboard, the
     streaks and the badges count. No link to the output, which may be gone."""

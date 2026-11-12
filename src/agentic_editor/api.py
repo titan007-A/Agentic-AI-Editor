@@ -50,6 +50,8 @@ from agentic_editor.db import (
     FeedItem,
     HiddenAccount,
     Job,
+    NicheAccount,
+    NicheSearch,
     Output,
     PresetBuffer,
     Research,
@@ -221,6 +223,21 @@ class ResearchRequest(BaseModel):
     sites: list[Literal["instagram", "shorts"]] = Field(
         default=["instagram", "shorts"], min_length=1, max_length=2
     )
+
+
+class NicheRequest(BaseModel):
+    """A niche account search: who to find, and how big they must be."""
+
+    niche: str = Field(min_length=3, max_length=1000)
+    min_followers: int = Field(default=0, ge=0, le=1_000_000_000)
+    max_followers: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    language: str = Field(default="", max_length=60)
+    country: str = Field(default="", max_length=60)
+
+
+class NicheVote(BaseModel):
+    vote: Literal[-1, 0, 1]
+    reason: str = Field(default="", max_length=300)
 
 
 class Answer(BaseModel):
@@ -1605,6 +1622,90 @@ def create_app(
         session.delete(found)
         session.commit()
         return {"ok": True}
+
+    def niche_user(account: Account, session: Session) -> None:
+        if not features.enabled(account, "niche_finder", session):
+            raise HTTPException(403, "not on for this account yet")
+
+    def niche_account_view(a: NicheAccount) -> dict:
+        return {
+            "id": a.id, "handle": a.handle, "name": a.name, "followers": a.followers,
+            "posts": a.posts, "about": a.about, "fit": a.fit, "why": a.why, "vote": a.vote,
+            "reason": a.reason, "url": f"https://www.instagram.com/{a.handle}/",
+            "message_url": f"https://ig.me/m/{a.handle}",
+        }  # fmt: skip
+
+    def niche_view(found: NicheSearch, with_accounts: bool = False) -> dict:
+        view = {
+            "id": found.id, "niche": found.niche, "filters": found.filters,
+            "status": found.status, "message": found.message, "progress": found.progress,
+            "notes": found.notes or [], "error": found.error, "created_at": found.created_at,
+            "count": len(found.accounts),
+        }  # fmt: skip
+        if with_accounts:
+            ordered = sorted(found.accounts, key=lambda a: (-(a.fit or 0), -(a.followers or 0)))
+            view["accounts"] = [niche_account_view(a) for a in ordered]
+        return view
+
+    def find_niche(search_id: str, session: Session, account: Account) -> NicheSearch:
+        found = session.get(NicheSearch, search_id)
+        if found is None or found.owner_id != account.id:
+            raise HTTPException(404, "no such search")
+        return found
+
+    @app.get("/api/niche")
+    def list_niche(account: User, session: DB) -> list[dict]:
+        niche_user(account, session)
+        rows = session.scalars(
+            select(NicheSearch)
+            .where(NicheSearch.owner_id == account.id)
+            .options(selectinload(NicheSearch.accounts))
+            .order_by(NicheSearch.created_at.desc())
+            .limit(50)
+        )
+        return [niche_view(r) for r in rows]
+
+    @app.post("/api/niche")
+    def start_niche(body: NicheRequest, account: User, session: DB) -> dict:
+        niche_user(account, session)
+        if body.max_followers is not None and body.max_followers < body.min_followers:
+            raise HTTPException(422, "the most followers is below the fewest")
+        found = NicheSearch(
+            owner_id=account.id, niche=body.niche.strip(),
+            filters=body.model_dump(exclude={"niche"}),
+        )  # fmt: skip
+        session.add(found)
+        session.commit()
+        jobs.find_accounts(found.id)
+        return niche_view(found)
+
+    @app.get("/api/niche/{search_id}")
+    def get_niche(search_id: str, account: User, session: DB) -> dict:
+        niche_user(account, session)
+        return niche_view(find_niche(search_id, session, account), with_accounts=True)
+
+    @app.delete("/api/niche/{search_id}")
+    def delete_niche(search_id: str, account: User, session: DB) -> dict:
+        """The search goes; its accounts stay known, so they are never shown again."""
+        niche_user(account, session)
+        found = find_niche(search_id, session, account)
+        if found.status in ("queued", "running"):
+            raise HTTPException(409, "the search is still running")
+        for a in found.accounts:
+            a.search_id = None
+        session.delete(found)
+        session.commit()
+        return {"ok": True}
+
+    @app.post("/api/niche/accounts/{account_id}/vote")
+    def vote_niche(account_id: int, body: NicheVote, account: User, session: DB) -> dict:
+        niche_user(account, session)
+        found = session.get(NicheAccount, account_id)
+        if found is None or found.owner_id != account.id:
+            raise HTTPException(404, "no such account")
+        found.vote, found.reason = body.vote, body.reason.strip()
+        session.commit()
+        return niche_account_view(found)
 
     @app.get("/api/jobs")
     def list_jobs(account: User, session: DB) -> list[JobView]:
