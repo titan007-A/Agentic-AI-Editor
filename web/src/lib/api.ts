@@ -566,7 +566,21 @@ export type NicheSearch = {
   error: string | null;
   created_at: string;
   count: number;
+  /** The schedule that started it; null when started by hand. */
+  schedule_id?: string | null;
   accounts?: NicheAccount[];
+};
+
+export type NicheSchedule = {
+  id: string;
+  niche: string;
+  filters: NicheFilters;
+  hour: number;
+  /** Monday 0; empty for every day. */
+  days: number[];
+  active: boolean;
+  last_on: string | null;
+  created_at: string;
 };
 
 export const api = {
@@ -579,6 +593,14 @@ export const api = {
   startNiche: (body: { niche: string } & NicheFilters) =>
     request<NicheSearch>("POST", "/niche", body),
   deleteNiche: (id: string) => request<{ ok: boolean }>("DELETE", `/niche/${id}`),
+  nicheSchedules: () => request<NicheSchedule[]>("GET", "/niche/schedules"),
+  addNicheSchedule: (body: { niche: string; hour: number; days: number[] } & NicheFilters) =>
+    request<NicheSchedule>("POST", "/niche/schedules", body),
+  changeNicheSchedule: (
+    id: string,
+    body: Partial<Pick<NicheSchedule, "active" | "hour" | "days">>,
+  ) => request<NicheSchedule>("PATCH", `/niche/schedules/${id}`, body),
+  deleteNicheSchedule: (id: string) => request<{ ok: boolean }>("DELETE", `/niche/schedules/${id}`),
   voteNiche: (id: number, vote: -1 | 0 | 1, reason = "") =>
     request<NicheAccount>("POST", `/niche/accounts/${id}/vote`, { vote, reason }),
   wrapped: (month?: string) =>

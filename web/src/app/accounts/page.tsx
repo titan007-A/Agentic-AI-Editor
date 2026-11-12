@@ -1,7 +1,10 @@
 "use client";
 
 import {
+  CalendarClock,
   Copy,
+  Pause,
+  Play,
   ExternalLink,
   MessageCircle,
   Search,
@@ -20,7 +23,8 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/hooks/use-me";
-import { api, errorText, type NicheAccount, type NicheSearch } from "@/lib/api";
+import { Checkbox } from "@/components/ui/checkbox";
+import { api, errorText, type NicheAccount, type NicheSchedule, type NicheSearch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const MIN = [
@@ -32,6 +36,14 @@ const MIN = [
   ["500000", "500K+"],
   ["1000000", "1M+"],
 ] as const;
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function when(s: Pick<NicheSchedule, "hour" | "days">): string {
+  const at = `${String(s.hour).padStart(2, "0")}:00`;
+  if (!s.days.length || s.days.length === 7) return `every day at ${at}`;
+  return `${s.days.map((d) => DAYS[d]).join(", ")} at ${at}`;
+}
+
 const MAX = [
   ["", "No limit"],
   ["10000", "10K"],
@@ -161,6 +173,10 @@ export default function AccountsPage() {
   const [language, setLanguage] = useState("");
   const [country, setCountry] = useState("");
   const [busy, setBusy] = useState(false);
+  const [scheduled, setScheduled] = useState(false);
+  const [hour, setHour] = useState(7);
+  const [days, setDays] = useState<number[]>([]);
+  const [schedules, setSchedules] = useState<NicheSchedule[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -206,6 +222,57 @@ export default function AccountsPage() {
     }, 3000);
     return () => window.clearInterval(every);
   }, [active, load, show, open]);
+
+  useEffect(() => {
+    if (!allowed) return;
+    let live = true;
+    api
+      .nicheSchedules()
+      .then((list) => live && setSchedules(list))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [allowed]);
+
+  async function schedule() {
+    setBusy(true);
+    try {
+      const made = await api.addNicheSchedule({
+        niche,
+        min_followers: Number(min),
+        max_followers: max ? Number(max) : null,
+        language,
+        country,
+        hour,
+        days,
+      });
+      setSchedules((list) => [made, ...list]);
+      toast.success(`Scheduled: ${when(made)}`);
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeSchedule(id: string, change: { active?: boolean }) {
+    try {
+      const next = await api.changeNicheSchedule(id, change);
+      setSchedules((list) => list.map((x) => (x.id === id ? next : x)));
+    } catch (err) {
+      toast.error(errorText(err));
+    }
+  }
+
+  async function removeSchedule(id: string) {
+    try {
+      await api.deleteNicheSchedule(id);
+      setSchedules((list) => list.filter((x) => x.id !== id));
+    } catch (err) {
+      toast.error(errorText(err));
+    }
+  }
 
   async function start() {
     setBusy(true);
@@ -324,11 +391,114 @@ export default function AccountsPage() {
               />
             </div>
           </div>
-          <Button disabled={busy || niche.trim().length < 3} onClick={start}>
-            <Search /> {busy ? "Starting..." : "Find 100 accounts"}
-          </Button>
+          <label className="flex min-h-11 items-center gap-3 text-sm">
+            <Checkbox checked={scheduled} onCheckedChange={(v) => setScheduled(v === true)} />
+            Run it on a schedule
+          </label>
+          {scheduled && (
+            <div className="space-y-3 rounded-md border-[1.5px] border-dashed border-foreground/40 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Label htmlFor="niche-hour">At</Label>
+                <select
+                  id="niche-hour"
+                  className="min-h-11 rounded-md border-[1.5px] border-foreground bg-[var(--field)] px-2 text-sm"
+                  value={hour}
+                  onChange={(e) => setHour(Number(e.target.value))}
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, "0")}:00
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs text-muted-foreground">on</span>
+                {DAYS.map((d, i) => (
+                  <Button
+                    key={d}
+                    type="button"
+                    size="sm"
+                    variant={days.includes(i) ? "default" : "outline"}
+                    aria-pressed={days.includes(i)}
+                    onClick={() =>
+                      setDays((list) =>
+                        list.includes(i) ? list.filter((x) => x !== i) : [...list, i],
+                      )
+                    }
+                  >
+                    {d}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {when({ hour, days })}. No days picked is every day. Each run brings up to 100
+                accounts you haven&apos;t seen; a run the server missed starts once it is back.
+              </p>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={busy || niche.trim().length < 3} onClick={start}>
+              <Search /> {busy ? "Starting..." : "Find 100 accounts now"}
+            </Button>
+            {scheduled && (
+              <Button
+                variant="outline"
+                disabled={busy || niche.trim().length < 3}
+                onClick={schedule}
+              >
+                <CalendarClock /> Save the schedule
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
+
+      {schedules.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CalendarClock className="size-5" /> Scheduled searches
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2" aria-label="Scheduled searches">
+              {schedules.map((s) => (
+                <li
+                  key={s.id}
+                  className={cn(
+                    "sketch-tile flex flex-wrap items-center gap-2 p-3 text-sm",
+                    !s.active && "opacity-60",
+                  )}
+                  data-testid="niche-schedule"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium break-words">{s.niche}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {s.active ? when(s) : "paused"}
+                      {s.last_on ? ` · last run ${s.last_on}` : ""}
+                    </span>
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => changeSchedule(s.id, { active: !s.active })}
+                    aria-label={s.active ? "Pause" : "Resume"}
+                  >
+                    {s.active ? <Pause /> : <Play />}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => removeSchedule(s.id)}
+                    aria-label="Delete schedule"
+                  >
+                    <Trash2 />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <section className="space-y-2" aria-label="Searches">
@@ -345,6 +515,11 @@ export default function AccountsPage() {
               )}
             >
               <span className="line-clamp-2 font-medium">{s.niche}</span>
+              {s.schedule_id && (
+                <span className="block text-xs font-semibold text-[var(--teal)]">
+                  scheduled run
+                </span>
+              )}
               <span className="block text-xs text-muted-foreground">
                 {s.status === "done"
                   ? `${s.count} accounts`

@@ -2090,3 +2090,27 @@ def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
         session.merge(Setting(key="feature:niche_finder", value=json_.dumps([name, "riya"])))
         session.commit()
     assert riya.get("/api/niche").json() == []
+
+
+def test_niche_schedules_are_made_changed_and_removed(env):
+    import json as json_
+
+    from agentic_editor.db import Setting
+
+    admin = env.client
+    name = admin.get("/api/me").json()["user"]
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:niche_finder", value=json_.dumps([name])))
+        session.commit()
+    body = {"niche": "vocal coaches", "min_followers": 10000, "hour": 7, "days": [4, 0, 0]}
+    made = admin.post("/api/niche/schedules", json=body).json()
+    assert made["days"] == [0, 4] and made["hour"] == 7 and made["active"]
+    assert made["filters"]["min_followers"] == 10000
+    assert admin.post("/api/niche/schedules", json=body | {"days": [7]}).status_code == 422
+    assert admin.post("/api/niche/schedules", json=body | {"hour": 24}).status_code == 422
+    paused = admin.patch(f"/api/niche/schedules/{made['id']}", json={"active": False}).json()
+    assert paused["active"] is False
+    assert [s["id"] for s in admin.get("/api/niche/schedules").json()] == [made["id"]]
+    assert admin.delete(f"/api/niche/schedules/{made['id']}").status_code == 200
+    assert admin.get("/api/niche/schedules").json() == []
+    assert admin.get("/api/niche").json() == []  # the searches list isn't mistaken for it
