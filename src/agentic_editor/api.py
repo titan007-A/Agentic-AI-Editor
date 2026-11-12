@@ -220,9 +220,9 @@ class ResearchRequest(BaseModel):
     account_id: str | None = None
     # Search at once, without the questions the researcher asks first.
     skip_questions: bool = False
-    # Where to search: Instagram reels, YouTube Shorts, or both.
-    sites: list[Literal["instagram", "shorts"]] = Field(
-        default=["instagram", "shorts"], min_length=1, max_length=2
+    # Where to search: Instagram reels, YouTube Shorts, posts on X with a video; any of them.
+    sites: list[Literal["instagram", "shorts", "x"]] = Field(
+        default=["instagram", "shorts"], min_length=1, max_length=3
     )
 
 
@@ -1432,7 +1432,7 @@ def create_app(
         (POST .../choose, or .../choose-by-words first), and only then searches."""
         chosen = [s for s in dict.fromkeys(sites.split(",")) if s in research.SITES]
         if not chosen:
-            raise HTTPException(422, "search Instagram, YouTube Shorts or both")
+            raise HTTPException(422, "search Instagram, YouTube Shorts, X or more of them")
         text = await pdf_text(file)
         listing = [e.as_dict() for e in research.listed(text)]
         found = Research(

@@ -68,6 +68,7 @@ const answering = (r: Research | null) =>
 const SITES: { site: Site; label: string }[] = [
   { site: "instagram", label: "Instagram reels" },
   { site: "shorts", label: "YouTube Shorts" },
+  { site: "x", label: "X (posts with a video)" },
 ];
 
 /** A PDF song's words as the lines of a job's notes the edit reads (see names.py). */
@@ -299,10 +300,11 @@ function Researcher() {
       <div>
         <h1 className="font-hand text-4xl font-bold">Researcher</h1>
         <p className="text-sm text-muted-foreground">
-          It searches Instagram and YouTube Shorts through web search engines for reels like your
-          account&apos;s best ones, or for what you describe, and gives the 15 that fit best and are
-          most viral (of up to 50 it rates), never one it showed you before. With source pages, 4 in
-          10 come from them and 6 from the search. Choose up to 10 of them to edit.
+          It searches Instagram, YouTube Shorts and X (posts with a video, when you tick it) through
+          web search engines for reels like your account&apos;s best ones, or for what you describe,
+          and gives the 15 that fit best and are most viral (of up to 50 it rates), never one it
+          showed you before. With source pages, 4 in 10 come from them and 6 from the search. Choose
+          up to 10 of them to edit.
         </p>
       </div>
 

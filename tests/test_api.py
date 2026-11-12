@@ -1248,6 +1248,9 @@ def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypa
     body = {"description": "Queen", "skip_questions": True, "sites": ["shorts", "shorts"]}
     shorts = env.client.post("/api/research", json=body).json()
     assert shorts["sites"] == ["shorts"] and asked[-1] == ("shorts",)
+    body = {"description": "Queen", "skip_questions": True, "sites": ["instagram", "x"]}
+    with_x = env.client.post("/api/research", json=body).json()
+    assert with_x["sites"] == ["instagram", "x"] and asked[-1] == ("instagram", "x")
     for sites in ([], ["tiktok"]):
         body = {"description": "Queen", "sites": sites}
         assert env.client.post("/api/research", json=body).status_code == 422

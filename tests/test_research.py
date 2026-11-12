@@ -571,6 +571,70 @@ def test_a_research_finds_youtube_shorts_too_but_never_videos():
     assert "Instagram reel | account: attic" in rate_prompt
 
 
+def test_a_research_can_search_x_for_posts_with_a_video():
+    llm = Planner()
+    asked = []
+
+    def find(query, count):
+        asked.append(query)
+        if query.startswith("site:x.com"):
+            return [
+                {"href": "https://x.com/apriloverdosed/status/2118429544122307015"},
+                {"href": "https://twitter.com/aqueenofmagic/status/2120637694032167172"},
+                {"href": "https://x.com/someone"},  # a profile, not a post
+            ]
+        return [hit("ADAMS1")]
+
+    def info(url):
+        if "2118429544122307015" in url:
+            return {"uploader": "zee", "uploader_id": "apriloverdosed", "duration": 25.7,
+                    "description": "Bryan Adams live at Wembley", "view_count": 3831,
+                    "like_count": 157, "width": 720, "height": 1280}  # fmt: skip
+        if "2120637694032167172" in url:
+            raise RuntimeError("No video could be found in this tweet")
+        return {"channel": "attic", "description": "Bryan Adams live", "like_count": 900}
+
+    result = research.run(
+        "Bryan Adams live", lambda: nullcontext(llm), set(), set(), lambda *a: None, find, info,
+        0, sites=("instagram", "x"),
+    )  # fmt: skip
+    assert sorted(r.code for r in result.reels) == ["ADAMS1", "x:2118429544122307015"]
+    assert result.left_out == {"no video": 1}
+    assert any(q.startswith("site:x.com video ") for q in asked)
+    post = next(r for r in result.reels if r.on_x)
+    assert (post.account, post.handle, post.views, post.likes, post.duration) == (
+        "zee", "apriloverdosed", 3831, 157, 25.7,
+    )  # fmt: skip
+    assert post.url == "https://x.com/i/status/2118429544122307015"
+    assert "X post | account: zee" in llm.asked[-1]
+    # Its link, edited, counts as used by its code, whichever way it was written.
+    assert research.code_of("https://twitter.com/apriloverdosed/status/2118429544122307015") == (
+        "x:2118429544122307015"
+    )
+    assert research.code_of("https://x.com/i/status/2118429544122307015?s=20") == (
+        "x:2118429544122307015"
+    )
+
+
+def test_a_post_with_a_few_videos_gives_its_first():
+    reel = research.Reel("x:2116650098016825456", research.reel_url("x:2116650098016825456"), "q")
+
+    def info(url):
+        return {"_type": "playlist", "uploader": "matty", "uploader_id": "ffsmatty_",
+                "like_count": 4323, "entries": [
+                    {"duration": 90.4, "width": 946, "height": 720, "like_count": 4323},
+                    {"duration": 18.5, "width": 962, "height": 720},
+                ]}  # fmt: skip
+
+    research.look_up([reel], info)
+    assert (reel.duration, reel.width, reel.height) == (90.4, 946, 720)
+    assert reel.handle == "ffsmatty_" and not reel.no_video
+
+
+def test_a_daily_research_doesnt_search_x():
+    assert "x" in research.SITES and "x" not in research.DAILY_SITES
+
+
 def test_low_quality_reels_stay_out_and_sd_ranks_below_hd():
     llm = Planner()
 
