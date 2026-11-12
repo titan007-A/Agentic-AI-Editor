@@ -235,3 +235,19 @@ def test_a_one_liner_alone_holds_the_picture_at_full_width(monkeypatch, tmp_path
                           tmp_path, {(0, 9): []}, None)  # fmt: skip
     top, bottom = compose.picture_band(preset, None)
     assert seen["rows"] == compose.band_rows(preset, (top, bottom), 1080) < 1920
+
+
+def test_the_text_on_the_video_is_read_top_to_bottom_once_per_text(monkeypatch, tmp_path):
+    def line(text, y):
+        return subjects.Subject(kind="text", label=text, x0=0, y0=y, x1=100, y1=y + 20, keep=True)
+
+    found = {
+        1.0: [line("really that windy?", 540), line("Is Iceland", 500)],
+        2.0: [line("Is Iceland", 500), line("really that windy?", 540)],
+        3.0: [],
+    }
+    monkeypatch.setattr(pipeline, "text_lines", lambda video, times, *a: found)
+    texts = pipeline.shown_text(tmp_path / "v.mp4", [1.0, 2.0, 3.0], None, None, tmp_path)
+    assert texts == ["Is Iceland really that windy?"]
+    monkeypatch.setattr(pipeline, "text_lines", lambda *a: None)  # no OCR here
+    assert pipeline.shown_text(tmp_path / "v.mp4", [1.0], None, None, tmp_path) == []

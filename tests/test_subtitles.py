@@ -243,3 +243,35 @@ def test_a_one_liner_the_model_wrote_in_english_is_given_in_the_preset_s_languag
     assert one_line(Broken(), ["a.jpg"], 12, "", "", None, "Spanish") == (
         "Driving away at sunset, two souls find peace together."
     )  # kept as written when the second call fails
+
+
+def test_a_one_liner_that_copies_the_videos_own_text_is_asked_again():
+    """The source page's caption is on the frames; read there, it came back as the line."""
+
+    class Copier:
+        def __init__(self):
+            self.prompts = []
+
+        def chat_json(self, messages, schema, **kwargs):
+            self.prompts.append(messages[-1]["content"])
+            first = len(self.prompts) == 1
+            return {"line": "Is Iceland really that windy" if first else "A waterfall blows uphill"}
+
+    model = Copier()
+    shown = ["“Is Iceland really that windy?” @findultimatesongs", "@findultimatesongs"]
+    line = one_line(model, ["a.jpg"], 11, "", "", None, shown=shown)
+    assert line == "A waterfall blows uphill"
+    # Told up front, with the text it reads there; the one-word handle is left out.
+    assert "Is Iceland really that windy?" in model.prompts[0]
+    assert " / @findultimatesongs" not in model.prompts[0]
+    assert "Your line was Is Iceland really that windy" in model.prompts[1]
+
+
+def test_a_one_liner_of_its_own_words_is_kept_even_naming_what_the_video_shows():
+    model = Model({"line": "Tom Jones stuns the judges with one note"})
+    line = one_line(model, ["a.jpg"], 11, "", "", None, shown=["TOM JONES", "Sex Bomb live"])
+    assert line == "Tom Jones stuns the judges with one note" and len(model.prompts) == 1
+    # Nothing on the video: no word about it in the prompt.
+    model = Model({"line": "A waterfall blows uphill"})
+    one_line(model, ["a.jpg"], 11, "", "", None)
+    assert "already written" not in model.prompts[0]

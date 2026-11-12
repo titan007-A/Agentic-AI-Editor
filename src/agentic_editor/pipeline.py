@@ -323,11 +323,13 @@ def written_text(
     frames_dir = work_dir / "written"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
+    def times(count: int) -> list[float]:
+        return [clip.start + clip.duration * (i + 0.5) / count for i in range(count)]
+
     def frames(count: int, name: str) -> list[Path]:
-        times = [clip.start + clip.duration * (i + 0.5) / count for i in range(count)]
         return [
             subjects.grab(video, t, frames_dir / f"{name}-{i}.jpg", settings.ffmpeg_bin)
-            for i, t in enumerate(times)
+            for i, t in enumerate(times(count))
         ]
 
     # What is said gives the model the subject; frames alone only show a person talking.
@@ -350,13 +352,29 @@ def written_text(
         try:
             language = line_language(preset)
             update["one_liner"] = subtitles.one_line(
-                vision, frames(4, "line"), line.max_words, line.hint, context, notes, language
-            )
+                vision, frames(4, "line"), line.max_words, line.hint, context, notes, language,
+                shown=shown_text(video, times(4), analysis, settings, work_dir),
+            )  # fmt: skip
             decisions.append(f'one-liner: "{update["one_liner"]}"')
         except LLMError as exc:
             doubts.append(f"one-liner failed ({exc})")
             decisions.append(doubts[-1])
     return edl.model_copy(update={**update, "decisions": decisions, "doubts": doubts})
+
+
+def shown_text(
+    video: Path, times: list[float], analysis: Analysis, settings: Settings, work_dir: Path
+) -> list[str]:
+    """The text written on the video at these times, as OCR reads it: each look's lines top
+    to bottom, as one text, once each. Empty where OCR can't run."""
+    found = text_lines(video, times, analysis, settings, work_dir) or {}
+    texts: list[str] = []
+    for t in times:
+        lines = sorted(found.get(t, []), key=lambda s: (s.y0, s.x0))
+        text = " ".join(s.label for s in lines).strip()
+        if text and text not in texts:
+            texts.append(text)
+    return texts
 
 
 def without_text(items: list[subjects.Subject]) -> list[subjects.Subject]:
