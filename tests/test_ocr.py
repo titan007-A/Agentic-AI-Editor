@@ -207,3 +207,31 @@ def test_a_frame_without_text_reads_nothing_and_logs_nothing(tmp_path, capfd, ca
     out, err = capfd.readouterr()
     said = out + err + caplog.text
     assert "detection result is empty" not in said
+
+
+def test_a_one_liner_alone_holds_the_picture_at_full_width(monkeypatch, tmp_path, make_analysis):
+    """No text blocks, only a whole-reel one-liner on top: a tall picture is cut top and
+    bottom to the band under it, not shrunk with background at the sides (as the preview
+    shows it)."""
+    from agentic_editor import framing
+    from agentic_editor.edl import EDL, Clip
+    from agentic_editor.presets import OneLiner, Preset
+    from agentic_editor.render import compose
+
+    preset = Preset(
+        name="p", label="p", min_duration=1, max_duration=60,
+        one_liner=OneLiner(enabled=True, position="top", offset=412),
+    )  # fmt: skip
+    analysis = make_analysis([], 9).model_copy(update={"width": 1080, "height": 1920})
+    seen = {}
+    monkeypatch.setattr(pipeline, "text_lines", lambda *a: None)
+    monkeypatch.setattr(pipeline, "subject_samples", lambda *a: [])
+    monkeypatch.setattr(compose, "line_rows", lambda preset, face: (412.0, 520.0))
+    monkeypatch.setattr(compose, "moving_part", lambda *a: None)
+    monkeypatch.setattr(compose, "text_face", lambda *a: None)
+    monkeypatch.setattr(framing, "band_shots", lambda *a: seen.setdefault("rows", a[5]) and [])
+    edl = EDL(clips=[Clip(start=0, end=9)], crop_mode="none")
+    pipeline.band_framing(edl, preset, analysis, tmp_path / "v.mp4", _settings(tmp_path),
+                          tmp_path, {(0, 9): []}, None)  # fmt: skip
+    top, bottom = compose.picture_band(preset, None)
+    assert seen["rows"] == compose.band_rows(preset, (top, bottom), 1080) < 1920
