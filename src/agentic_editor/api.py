@@ -51,6 +51,7 @@ from agentic_editor.db import (
     HiddenAccount,
     Job,
     NicheAccount,
+    NicheSchedule,
     NicheSearch,
     Output,
     PresetBuffer,
@@ -233,6 +234,24 @@ class NicheRequest(BaseModel):
     max_followers: int | None = Field(default=None, ge=0, le=1_000_000_000)
     language: str = Field(default="", max_length=60)
     country: str = Field(default="", max_length=60)
+
+
+class NicheScheduleRequest(NicheRequest):
+    hour: int = Field(ge=0, le=23)
+    days: list[int] = Field(default=[], max_length=7)  # Monday 0; none: every day
+
+    @model_validator(mode="after")
+    def _days(self):
+        if any(d < 0 or d > 6 for d in self.days):
+            raise ValueError("days are 0 (Monday) to 6 (Sunday)")
+        self.days = sorted(set(self.days))
+        return self
+
+
+class NicheScheduleChange(BaseModel):
+    active: bool | None = None
+    hour: int | None = Field(default=None, ge=0, le=23)
+    days: list[int] | None = Field(default=None, max_length=7)
 
 
 class NicheVote(BaseModel):
@@ -614,6 +633,10 @@ def create_app(
                 await asyncio.to_thread(jobs.start_daily, make_session)
             except Exception:
                 log.exception("starting the morning researches failed")
+            try:
+                await asyncio.to_thread(jobs.start_niche_schedules, make_session)
+            except Exception:
+                log.exception("starting the scheduled niche searches failed")
             try:
                 await asyncio.to_thread(cleanup.sweep, make_session, settings)
             except Exception:
@@ -1640,7 +1663,7 @@ def create_app(
             "id": found.id, "niche": found.niche, "filters": found.filters,
             "status": found.status, "message": found.message, "progress": found.progress,
             "notes": found.notes or [], "error": found.error, "created_at": found.created_at,
-            "count": len(found.accounts),
+            "count": len(found.accounts), "schedule_id": found.schedule_id,
         }  # fmt: skip
         if with_accounts:
             ordered = sorted(found.accounts, key=lambda a: (-(a.fit or 0), -(a.followers or 0)))
@@ -1678,6 +1701,66 @@ def create_app(
         session.commit()
         jobs.find_accounts(found.id)
         return niche_view(found)
+
+    def schedule_view(found: NicheSchedule) -> dict:
+        return {
+            "id": found.id, "niche": found.niche, "filters": found.filters, "hour": found.hour,
+            "days": found.days or [], "active": found.active, "last_on": found.last_on,
+            "created_at": found.created_at,
+        }  # fmt: skip
+
+    def find_schedule(schedule_id: str, session: Session, account: Account) -> NicheSchedule:
+        found = session.get(NicheSchedule, schedule_id)
+        if found is None or found.owner_id != account.id:
+            raise HTTPException(404, "no such schedule")
+        return found
+
+    @app.get("/api/niche/schedules")
+    def list_schedules(account: User, session: DB) -> list[dict]:
+        niche_user(account, session)
+        rows = session.scalars(
+            select(NicheSchedule)
+            .where(NicheSchedule.owner_id == account.id)
+            .order_by(NicheSchedule.created_at.desc())
+        )
+        return [schedule_view(r) for r in rows]
+
+    @app.post("/api/niche/schedules")
+    def add_schedule(body: NicheScheduleRequest, account: User, session: DB) -> dict:
+        niche_user(account, session)
+        if body.max_followers is not None and body.max_followers < body.min_followers:
+            raise HTTPException(422, "the most followers is below the fewest")
+        found = NicheSchedule(
+            owner_id=account.id, niche=body.niche.strip(), hour=body.hour, days=body.days,
+            filters=body.model_dump(exclude={"niche", "hour", "days"}),
+        )  # fmt: skip
+        session.add(found)
+        session.commit()
+        return schedule_view(found)
+
+    @app.patch("/api/niche/schedules/{schedule_id}")
+    def change_schedule(
+        schedule_id: str, body: NicheScheduleChange, account: User, session: DB
+    ) -> dict:
+        niche_user(account, session)
+        found = find_schedule(schedule_id, session, account)
+        if body.active is not None:
+            found.active = body.active
+        if body.hour is not None:
+            found.hour = body.hour
+        if body.days is not None:
+            if any(d < 0 or d > 6 for d in body.days):
+                raise HTTPException(422, "days are 0 (Monday) to 6 (Sunday)")
+            found.days = sorted(set(body.days))
+        session.commit()
+        return schedule_view(found)
+
+    @app.delete("/api/niche/schedules/{schedule_id}")
+    def delete_schedule(schedule_id: str, account: User, session: DB) -> dict:
+        niche_user(account, session)
+        session.delete(find_schedule(schedule_id, session, account))
+        session.commit()
+        return {"ok": True}
 
     @app.get("/api/niche/{search_id}")
     def get_niche(search_id: str, account: User, session: DB) -> dict:

@@ -446,7 +446,26 @@ class NicheSearch(Base):
     notes: Mapped[list[str]] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+    # The schedule that started it; None when started by hand.
+    schedule_id: Mapped[str | None] = mapped_column(String(12))
     accounts: Mapped[list["NicheAccount"]] = relationship(back_populates="search")
+
+
+class NicheSchedule(Base):
+    """A niche search that runs by itself at an hour (the server's local time) on chosen
+    weekdays (Monday 0; none: every day), each run bringing accounts not shown before."""
+
+    __tablename__ = "niche_schedules"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    niche: Mapped[str] = mapped_column(Text)
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    hour: Mapped[int] = mapped_column(default=7)
+    days: Mapped[list[int]] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(default=True)
+    last_on: Mapped[date | None]  # the day its last run started
+    created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
 class NicheAccount(Base):

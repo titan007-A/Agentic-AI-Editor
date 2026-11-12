@@ -14,7 +14,18 @@ from huey import SqliteHuey
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor import accounts, caption, fun, niche, pipeline, research, shazam, slots, style
+from agentic_editor import (
+    accounts,
+    caption,
+    features,
+    fun,
+    niche,
+    pipeline,
+    research,
+    shazam,
+    slots,
+    style,
+)
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -23,6 +34,7 @@ from agentic_editor.db import (
     HiddenAccount,
     Job,
     NicheAccount,
+    NicheSchedule,
     NicheSearch,
     Output,
     Research,
@@ -1319,3 +1331,38 @@ def find_accounts(search_id: str) -> None:
         find_accounts.schedule((search_id,), delay=NICHE_RETRY)
         return
     run_niche(search_id, Session, get_settings())
+
+
+def schedule_due(schedule: NicheSchedule, now: datetime) -> bool:
+    """Whether a schedule's run for `now`'s day has come and not started yet."""
+    if not schedule.active or schedule.last_on == now.date() or now.hour < schedule.hour:
+        return False
+    return not schedule.days or now.weekday() in schedule.days
+
+
+def start_niche_schedules(Session: sessionmaker, now: datetime | None = None) -> list[str]:
+    """Start the niche searches whose time has come today (a server that was off at that
+    hour starts them once it is back), for accounts that still have the feature. `now` is
+    local time, which the hours are in. Returns the searches started."""
+    now = now or datetime.now()
+    started = []
+    with Session() as db:
+        for schedule in db.scalars(select(NicheSchedule).where(NicheSchedule.active)):
+            if not schedule_due(schedule, now):
+                continue
+            owner = db.get(User, schedule.owner_id) if schedule.owner_id else None
+            if owner is None or not features.enabled(owner, "niche_finder", db):
+                continue
+            found = NicheSearch(
+                owner_id=schedule.owner_id, niche=schedule.niche,
+                filters=dict(schedule.filters or {}), schedule_id=schedule.id,
+            )  # fmt: skip
+            db.add(found)
+            db.flush()
+            schedule.last_on = now.date()
+            started.append(found.id)
+        db.commit()
+    for search_id in started:
+        log.info("starting the scheduled niche search %s", search_id)
+        find_accounts(search_id)
+    return started

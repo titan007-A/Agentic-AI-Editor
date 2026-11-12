@@ -230,3 +230,38 @@ def test_posts_and_reels_name_their_account_too():
 
     found, _ = niche.gather(["vocal tips"], find, pause=0)
     assert "vocalmaria" in found and "post" in found["vocalmaria"].sources
+
+
+def test_a_schedule_runs_once_on_its_days_from_its_hour(tmp_path, monkeypatch):
+    from datetime import date, datetime
+
+    from agentic_editor import jobs
+    from agentic_editor.db import NicheSchedule, NicheSearch, User, make_sessionmaker
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    started = []
+    monkeypatch.setattr(jobs, "find_accounts", lambda search_id: started.append(search_id))
+    with Session() as db:
+        db.add(User(id="u1", username="siddhant", role="admin", password_hash="x"))
+        db.add(User(id="u2", username="riya", role="member", password_hash="x"))
+        db.add_all([
+            NicheSchedule(id="daily", owner_id="u1", niche="vocal coaches", hour=7,
+                          filters={"min_followers": 10000}),
+            NicheSchedule(id="mondays", owner_id="u1", niche="choirs", hour=7, days=[0]),
+            NicheSchedule(id="paused", owner_id="u1", niche="x niche", hour=0, active=False),
+            NicheSchedule(id="noaccess", owner_id="u2", niche="y niche", hour=0),
+        ])  # fmt: skip
+        db.commit()
+    thursday_6 = datetime(2026, 11, 12, 6, 30)
+    assert jobs.start_niche_schedules(Session, thursday_6) == []  # before the hour
+    thursday_9 = datetime(2026, 11, 12, 9, 0)
+    first = jobs.start_niche_schedules(Session, thursday_9)
+    assert len(first) == 1 and started == first
+    assert jobs.start_niche_schedules(Session, datetime(2026, 11, 12, 22, 0)) == []  # once a day
+    with Session() as db:
+        made = db.get(NicheSearch, first[0])
+        assert made.schedule_id == "daily" and made.filters == {"min_followers": 10000}
+        assert db.get(NicheSchedule, "daily").last_on == date(2026, 11, 12)
+    monday = jobs.start_niche_schedules(Session, datetime(2026, 11, 16, 8, 0))
+    with Session() as db:
+        assert sorted(db.get(NicheSearch, s).schedule_id for s in monday) == ["daily", "mondays"]
