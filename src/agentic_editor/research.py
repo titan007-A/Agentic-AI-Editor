@@ -49,9 +49,21 @@ VIDEO = re.compile(
     r"https?://(?:www\.|m\.)?(?:youtube\.com/(?:shorts/|watch\?v=)|youtu\.be/)([\w-]{11})"
 )
 YOUTUBE = "yt:"  # a Short's code is this and its video id: Instagram codes have no colon
-# Where a research searches, as the engines are asked.
-SITES = {"instagram": "site:instagram.com/reel", "shorts": "site:youtube.com/shorts"}
+# A post on X (Twitter): its link, and its code ("x:" and the post's id).
+POST = re.compile(
+    r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/(?:\w{1,15}|i(?:/web)?)/status/(\d{5,25})"
+)
+X = "x:"
+# Where a research searches, as the engines are asked. On X only posts with a video are
+# kept (see look_up): "video" in the search brings more of them.
+SITES = {
+    "instagram": "site:instagram.com/reel",
+    "shorts": "site:youtube.com/shorts",
+    "x": "site:x.com video",
+}
 SITE = SITES["instagram"]
+# What a daily research searches: X only when the person asks for it.
+DAILY_SITES = ("instagram", "shorts")
 MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
 # Picture quality, by the short side of the best version the site offers: below SD is left
 # out (it looks soft once edited at 1080 wide), SD ranks a little lower than HD.
@@ -121,6 +133,7 @@ class Reel:
     looked_up: bool = False
     views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
     long: bool = False  # a YouTube video, not a Short: left out
+    no_video: bool = False  # a post on X without a video (or one yt-dlp can't read): left out
     page: str = ""  # the Instagram source page it was searched for: kept only when its own
     source: str = ""  # the source page it came from ("instagram:name"), "" when a search's
     width: int | None = None  # of the best version the site offers
@@ -142,6 +155,14 @@ class Reel:
     @property
     def short(self) -> bool:
         return self.code.startswith(YOUTUBE)
+
+    @property
+    def on_x(self) -> bool:
+        return self.code.startswith(X)
+
+    @property
+    def kind(self) -> str:
+        return "YouTube Short" if self.short else "X post" if self.on_x else "Instagram reel"
 
     @property
     def quality(self) -> str:
@@ -366,17 +387,25 @@ LEARN = (
 
 
 def code_of(link: str) -> str | None:
-    """An Instagram reel's code, or "yt:" and a YouTube video's id."""
+    """An Instagram reel's code, "yt:" and a YouTube video's id, or "x:" and an X post's."""
     if match := REEL.match(link.strip()):
         return match.group(1)
     if match := VIDEO.match(link.strip()):
         return YOUTUBE + match.group(1)
+    if match := POST.match(link.strip()):
+        return X + match.group(1)
     return None
+
+
+def kind_of(code: str) -> str:
+    return Reel(code=code, url="", query="").kind
 
 
 def reel_url(code: str) -> str:
     if code.startswith(YOUTUBE):
         return f"https://www.youtube.com/shorts/{code.removeprefix(YOUTUBE)}"
+    if code.startswith(X):
+        return f"https://x.com/i/status/{code.removeprefix(X)}"
     return f"https://www.instagram.com/reel/{code}/"
 
 
@@ -634,7 +663,7 @@ def describe(found) -> str:
         who = f"@{item.handle}" if item.handle else item.account or "?"
         fit = "?" if item.relevance is None else f"{round(item.relevance * 10)}/10"
         lines.append(
-            f"#{item.rank + 1} {'YouTube Short' if item.code.startswith(YOUTUBE) else 'reel'}"
+            f"#{item.rank + 1} {kind_of(item.code).removeprefix('Instagram ')}"
             f" by {who}: song {item.song or '?'}; fit {fit} ({item.why}); "
             f"matches {item.matches or '?'}; preset {item.preset or '-'} ({item.preset_why}); "
             f"{item.likes if item.likes is not None else '?'} likes, "
@@ -683,7 +712,7 @@ def search(
     answers = websearch.each(asked, lambda ask: find(f"{SITES[ask[1]]} {ask[0]}", PER_QUERY), pause)
     for n, ((query, site), hits) in enumerate(answers):
         if progress:
-            where = " (YouTube Shorts)" if site == "shorts" else ""
+            where = {"shorts": " (YouTube Shorts)", "x": " (X)"}.get(site, "")
             progress(f"searching: {query}{where}", 0.05 + 0.35 * (n + 1) / len(asked))
         if isinstance(hits, Exception):  # the engines are third parties: one failing is one less
             log.warning("search %r on %s failed: %s", query, site, hits)
@@ -737,6 +766,8 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
             meta = info(reel.url)
         except Exception as exc:
             log.info("couldn't look up %s: %s", reel.url, str(exc)[:200])
+            # An X post yt-dlp can't read has no video to edit ("No video could be found").
+            reel.no_video = reel.on_x
             return
         if reel.short:
             # A Short is vertical and at most MAX_SHORT long; YouTube says which it is.
@@ -746,6 +777,11 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
             reel.handle = (meta.get("uploader_id") or "").removeprefix("@").lower()
             title, about = meta.get("title") or "", meta.get("description") or ""
             reel.caption = "\n".join(t for t in (title, about) if t)[:1000]
+            reel.views = _count(meta.get("view_count"))
+        elif reel.on_x:
+            reel.account = meta.get("uploader") or ""
+            reel.handle = (meta.get("uploader_id") or "").removeprefix("@").lower()
+            reel.caption = (meta.get("description") or meta.get("title") or "")[:1000]
             reel.views = _count(meta.get("view_count"))
         else:
             reel.account = meta.get("uploader") or meta.get("channel") or ""
@@ -853,7 +889,7 @@ def rate(
     for start in range(0, len(reels), batch):
         group = reels[start : start + batch]
         lines = "\n".join(
-            f"{n}. {'YouTube Short' if r.short else 'Instagram reel'}"
+            f"{n}. {r.kind}"
             f" | account: {r.account or '?'} | caption: {_short(r.caption or r.title, 300)}"
             f" | search: {_short(r.snippet, 200)}"
             for n, r in enumerate(group, 1)
@@ -1162,7 +1198,8 @@ def run(
     left_out["hidden account"] = sum(r.handle in context.hidden for r in reels)
     reels = [r for r in reels if r.handle not in context.hidden]
     left_out["not a Short"] = sum(r.long for r in reels)
-    reels = [r for r in reels if not r.long]
+    left_out["no video"] = sum(r.no_video for r in reels)
+    reels = [r for r in reels if not r.long and not r.no_video]
     left_out["low quality"] = sum(r.quality == "low" for r in reels)
     reels = [r for r in reels if r.quality != "low"]
     progress(f"rating {len(reels)} reels", 0.7)
@@ -1244,6 +1281,7 @@ def run_pdf(
                 r
                 for r in reels
                 if not r.long
+                and not r.no_video
                 and r.quality != "low"
                 and r.handle not in context.hidden
                 and not (context.handle and r.handle == context.handle)

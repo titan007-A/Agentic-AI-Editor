@@ -102,7 +102,7 @@ export type ResearchItem = {
   caption: string;
   likes: number | null;
   comments: number | null;
-  /** A YouTube Short's; Instagram doesn't show them. */
+  /** YouTube and X show them; Instagram doesn't without signing in. */
   views: number | null;
   /** The best version the site offers: its picture, kbit/s and (YouTube's) seconds. */
   width: number | null;
@@ -211,7 +211,7 @@ export type PdfChoice = {
 };
 
 /** Where a research searches: Instagram reels, YouTube Shorts. */
-export type Site = "instagram" | "shorts";
+export type Site = "instagram" | "shorts" | "x";
 
 /** A question the researcher asks before searching, with suggested answers. */
 export type ResearchQuestion = { question: string; choices: string[] };

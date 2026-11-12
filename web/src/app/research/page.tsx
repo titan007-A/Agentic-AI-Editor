@@ -68,6 +68,7 @@ const answering = (r: Research | null) =>
 const SITES: { site: Site; label: string }[] = [
   { site: "instagram", label: "Instagram reels" },
   { site: "shorts", label: "YouTube Shorts" },
+  { site: "x", label: "X (posts with a video)" },
 ];
 
 /** A PDF song's words as the lines of a job's notes the edit reads (see names.py). */

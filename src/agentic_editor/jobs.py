@@ -758,7 +758,7 @@ def start_daily(Session: sessionmaker, now: datetime | None = None) -> list[str]
                 owner_id=account.owner_id,
                 account_id=account.id,
                 handle=account.handle,
-                sites=list(research.SITES),
+                sites=list(research.DAILY_SITES),
                 daily=True,
             )
             db.add(found)

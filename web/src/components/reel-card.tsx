@@ -27,6 +27,15 @@ function ago(when: string): string {
 
 /** A YouTube Short rather than an Instagram reel (see research.YOUTUBE). */
 export const isShort = (item: ResearchItem) => item.code.startsWith("yt:");
+/** A post on X with a video (see research.X). */
+export const onX = (item: ResearchItem) => item.code.startsWith("x:");
+
+/** Where the reel is: the site's name, what it calls the video, and both together. */
+export function siteOf(item: ResearchItem): { site: string; what: string; label: string } {
+  if (isShort(item)) return { site: "YouTube", what: "Short", label: "YouTube Short" };
+  if (onX(item)) return { site: "X", what: "post", label: "X post" };
+  return { site: "Instagram", what: "reel", label: "Instagram reel" };
+}
 
 /** "HD" or "SD" by the picture's short side (see research.Reel.quality); "" when not known. */
 export function quality(item: ResearchItem): string {
@@ -99,7 +108,7 @@ export function reasons(item: ResearchItem, research: Research, presets: Preset[
   );
   if (item.likes === null) {
     lines.push(
-      `${isShort(item) ? "YouTube" : "Instagram"} didn't show its likes without signing in, so it counted as not viral.`,
+      `${siteOf(item).site} didn't show its likes without signing in, so it counted as not viral.`,
     );
   } else {
     const reactions = `${compact.format(item.likes)} likes${
@@ -174,7 +183,7 @@ export function ReelCard({
         target="_blank"
         rel="noreferrer"
         className="relative block aspect-[4/5] bg-muted"
-        aria-label={`Open the ${isShort(item) ? "Short" : "reel"} by ${item.account || "this account"} on ${isShort(item) ? "YouTube" : "Instagram"}`}
+        aria-label={`Open the ${siteOf(item).what} by ${item.account || "this account"} on ${siteOf(item).site}`}
       >
         {broken ? (
           <span className="flex h-full items-center justify-center text-muted-foreground">
@@ -197,7 +206,7 @@ export function ReelCard({
       <div className="space-y-2 p-3">
         <div className="flex items-baseline justify-between gap-2">
           <p className="min-w-0 truncate font-medium">
-            {item.account || (isShort(item) ? "YouTube Short" : "Instagram reel")}
+            {item.account || siteOf(item).label}
             {item.handle && (
               <span className="ml-1 text-xs font-normal text-muted-foreground">@{item.handle}</span>
             )}
@@ -224,7 +233,9 @@ export function ReelCard({
           <Badge variant={(item.relevance ?? 0.5) >= 0.6 ? "default" : "outline"}>
             Fit {item.relevance === null ? "?" : percent(item.relevance)}
           </Badge>
-          {isShort(item) && <Badge variant="outline">YouTube Short</Badge>}
+          {!siteOf(item).label.startsWith("Instagram") && (
+            <Badge variant="outline">{siteOf(item).label}</Badge>
+          )}
           {quality(item) && (
             <Badge variant={quality(item) === "HD" ? "outline" : "secondary"}>
               {Math.min(item.width ?? 0, item.height ?? 0)}p {quality(item)}
