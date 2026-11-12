@@ -209,3 +209,51 @@ def test_a_caption_behind_stops_giving_way_once_its_budget_is_spent(monkeypatch)
     with slot.turn():
         pass
     assert time.monotonic() - started < 0.05
+
+
+def test_a_wait_in_another_process_is_seen_and_a_dead_ones_mark_is_not(tmp_path):
+    import os
+    import threading as threading_
+
+    from agentic_editor.slots import Slot
+
+    slot = Slot("GPU", lambda: tmp_path / "gpu.lock")
+    assert not slot.others_waiting()
+    mine = tmp_path / f"GPU.wait.{os.getpid()}.{threading_.get_ident()}"
+    mine.touch()
+    assert not slot.others_waiting()  # the asking thread's own wait isn't another's
+    mine.unlink()
+    dead = tmp_path / "GPU.wait.999999999.1"
+    dead.touch()
+    assert not slot.others_waiting() and not dead.exists()  # cleaned away
+    alive = tmp_path / f"GPU.wait.{os.getppid()}.1"
+    alive.touch()
+    assert slot.others_waiting()
+    alive.unlink()
+    assert not Slot("encoder", lambda: tmp_path / "encoder.lock").others_waiting()
+
+
+def test_a_thread_waiting_for_the_slot_leaves_a_mark_while_it_waits(tmp_path):
+    import threading as threading_
+    import time as time_
+
+    from agentic_editor.slots import Slot
+
+    slot = Slot("GPU", lambda: tmp_path / "gpu.lock")
+    slot.acquire()
+    got = threading_.Event()
+
+    def other():
+        slot.acquire()
+        got.set()
+        slot.release()
+
+    threading_.Thread(target=other, daemon=True).start()
+    for _ in range(100):
+        if list(tmp_path.glob("GPU.wait.*")):
+            break
+        time_.sleep(0.01)
+    assert slot.others_waiting() and list(tmp_path.glob("GPU.wait.*"))
+    slot.release()
+    assert got.wait(2)
+    assert not list(tmp_path.glob("GPU.wait.*"))
