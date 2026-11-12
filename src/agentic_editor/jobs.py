@@ -1264,8 +1264,8 @@ def run_niche(
         filters = niche.Filters(
             min_followers=int(wanted.get("min_followers") or 0),
             max_followers=int(wanted["max_followers"]) if wanted.get("max_followers") else None,
-            language=str(wanted.get("language") or ""),
-            country=str(wanted.get("country") or ""),
+            language=niche.plain(str(wanted.get("language") or "")),
+            country=niche.plain(str(wanted.get("country") or "")),
         )
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         taste = niche.taste_line(liked[:NICHE_TASTE], disliked[:NICHE_TASTE])

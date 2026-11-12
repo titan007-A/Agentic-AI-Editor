@@ -21,7 +21,13 @@ from agentic_editor.llm import LLMError, parse
 log = logging.getLogger(__name__)
 
 Progress = Callable[[str, float], None]
-Find = Callable[[str, int], list[dict]]
+# (query, how many, page) -> results with href, title and body
+Find = Callable[..., list[dict]]
+# Pages asked of the engines for a profile search: page 2 of DuckDuckGo's html results
+# mostly comes back empty, page 3 holds new ones.
+PAGES = (1, 3)
+# What people type in a filter for "no filter".
+ANY = {"", "any", "all", "none", "-", "anywhere", "no", "n/a"}
 
 RUN_SIZE = 100  # accounts kept by one run
 PER_QUERY = 30  # results asked of the engines for each search
@@ -102,6 +108,24 @@ class Filters:
         return True
 
 
+def engines(query: str, count: int, page: int = 1) -> list[dict]:
+    """Web results for a query (DuckDuckGo's engines through ddgs); none when it found none."""
+    from ddgs import DDGS
+    from ddgs.exceptions import DDGSException
+
+    try:
+        return DDGS(timeout=10).text(query, max_results=count, page=page)
+    except DDGSException as exc:
+        if str(exc).startswith("No results"):
+            return []
+        raise
+
+
+def plain(text: str) -> str:
+    """A filter's text, empty when it says "any"."""
+    return "" if text.strip().lower() in ANY else text.strip()
+
+
 def number(digits: str, unit: str) -> int | None:
     """'12.3', 'K' -> 12300; '1,234', '' -> 1234; '1.234' (a thousands dot) -> 1234."""
     unit = unit.upper()
@@ -171,16 +195,20 @@ def gather(
     @handles named in lists of accounts; and the searches that failed."""
     found: dict[str, Account] = {}
     failed = []
-    asks = [(q, f"site:instagram.com {q}") for q in queries] + [
-        (q, f"best {q} instagram accounts to follow") for q in queries[: len(queries) // 3]
+    # Profile pages carry "N Followers, N Following, N Posts": asking for those words brings
+    # profiles (with their numbers) rather than single posts.
+    asks = [
+        (q, f'site:instagram.com {q} "followers" posts', page) for q in queries for page in PAGES
     ]
-    for n, (query, asked) in enumerate(asks):
+    asks += [(q, f"site:instagram.com {q}", 1) for q in queries]
+    asks += [(q, f"best {q} instagram accounts to follow", 1) for q in queries[: len(queries) // 3]]
+    for n, (query, asked, page) in enumerate(asks):
         if n and pause:
             time.sleep(pause)
         if progress:
             progress(f"searching: {query}", at[0] + (at[1] - at[0]) * n / len(asks))
         try:
-            hits = find(asked, PER_QUERY)
+            hits = find(asked, PER_QUERY, page)
         except Exception as exc:  # the engines are third parties: one failing is one less
             log.warning("search %r failed: %s", asked, exc)
             failed.append(query)
@@ -230,7 +258,7 @@ def look_up(
             time.sleep(pause)
         asked += 1
         try:
-            hits = find(f"site:instagram.com/{account.handle}", 5)
+            hits = find(f'site:instagram.com/{account.handle} "followers"', 5, 1)
         except Exception as exc:
             log.warning("looking up @%s failed: %s", account.handle, exc)
             continue
@@ -376,7 +404,7 @@ def run(
     hidden), all passing `filters`; and notes on what went wrong on the way. `planner` is
     opened only to plan and to judge, so the GPU is free while the web is searched."""
     if find is None:
-        from agentic_editor.research import _engines as find
+        find = engines
     say = progress or (lambda message, value: None)
     kept: dict[str, Account] = {}
     judged: set[str] = set()
