@@ -1914,3 +1914,56 @@ def test_a_numbered_pdf_list_is_chosen_from_by_hand_or_in_words(env, monkeypatch
     assert sixties["kind"] == "songs" and sixties["entries"][0]["kind"] == "songs"
     assert {i["preset"] for i in sixties["items"]} <= {"square-1x1"}
     assert json.dumps(sixties["entries"])  # plain data for the page
+
+
+def test_a_trial_reel_goes_to_buffer_as_a_tagged_draft_for_accounts_trying_it(env, monkeypatch):
+    import json as json_
+
+    from agentic_editor import buffer
+    from agentic_editor.db import Setting
+
+    _, sent = fake_buffer(monkeypatch)
+    tagged = []
+
+    def trial_tag(key, channel, client=None, count=None):
+        tagged.append((key, channel.id))
+        return "tag-trial"
+
+    monkeypatch.setattr(buffer, "trial_tag", trial_tag)
+    env.settings.public_url = "https://editor.example.com"
+    admin = env.client
+    me = admin.get("/api/me").json()
+    admin.post("/api/buffer/keys", json={"key": "key-one-1234"})
+    output = output_of(admin)
+    body = {"channels": ["c1"], "text": "Caption", "mode": "addToQueue", "trial": True}
+    # Only for the accounts trying it (siddhant, until the setting names others).
+    assert ("trial_reel" in me["features"]) == (me["user"] == "siddhant")
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:trial_reel", value=json_.dumps(["someone-else"])))
+        session.commit()
+    assert "trial_reel" not in admin.get("/api/me").json()["features"]
+    assert admin.post(f"/api/outputs/{output}/buffer", json=body).status_code == 403
+    assert sent == []
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:trial_reel", value=json_.dumps([me["user"]])))
+        session.commit()
+    assert "trial_reel" in admin.get("/api/me").json()["features"]
+    (result,) = admin.post(f"/api/outputs/{output}/buffer", json=body).json()["results"]
+    assert result["ok"] and result["draft"] and result["tagged"]
+    (_, data), = sent  # fmt: skip
+    assert data["saveToDraft"] is True and data["tagIds"] == ["tag-trial"]
+    assert data["metadata"]["instagram"]["type"] == "reel"
+    assert tagged == [("key-one-1234", "c1")]
+    # Not ticked: a plain post, as before.
+    plain = body | {"trial": False}
+    assert admin.post(f"/api/outputs/{output}/buffer", json=plain).json()["results"][0]["ok"]
+    assert "saveToDraft" not in sent[-1][1] and "tagIds" not in sent[-1][1]
+
+    # The tag can't be made: still a draft, said so.
+    def no_tag(key, channel, client=None, count=None):
+        raise buffer.BufferError("tag limit reached")
+
+    monkeypatch.setattr(buffer, "trial_tag", no_tag)
+    (result,) = admin.post(f"/api/outputs/{output}/buffer", json=body).json()["results"]
+    assert result["ok"] and result["draft"] and not result["tagged"]
+    assert "tag limit reached" in result["note"] and sent[-1][1]["saveToDraft"] is True

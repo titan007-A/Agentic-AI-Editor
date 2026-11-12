@@ -85,3 +85,36 @@ def test_buffer_refusals_come_back_as_readable_errors():
         buffer.create_post("k", {}, client=says(200, {"errors": [{"message": "bad field"}]}))
     ok = {"data": {"createPost": {"post": {"id": "p1"}}}}
     assert buffer.create_post("k", {}, client=says(200, ok)) == "p1"
+
+
+def test_a_trial_reel_is_a_draft_under_the_trial_tag_made_once():
+    channel = buffer.Channel("c1", "My page", "instagram", None, False, organization="o1")
+    data = buffer.post_input(channel, "https://x.test/v.mp4", "", "addToQueue", draft=True,
+                             tags=["t1"])  # fmt: skip
+    assert data["saveToDraft"] is True and data["tagIds"] == ["t1"]
+    assert "saveToDraft" not in buffer.post_input(channel, "https://x.test/v.mp4", "", "addToQueue")
+    tags: list[dict] = []
+    asked = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        asked.append(body["query"].split()[1].split("(")[0] + "(")
+        if "tagsV2" in body["query"]:
+            assert body["variables"] == {"organizationId": "o1"}
+            return httpx.Response(200, json={"data": {"tagsV2": {"edges": [
+                {"node": t} for t in tags]}}})  # fmt: skip
+        if "createTag" in body["query"]:
+            made = body["variables"]["input"]
+            assert made["organizationId"] == "o1" and made["tag"]["name"] == buffer.TRIAL_TAG
+            tags.append({"id": "t9", "name": "Trial Reel"})
+            return httpx.Response(200, json={"data": {"createTag": {"tag": {"id": "t9"}}}})
+        assert "ChannelOrganization" in body["query"]
+        return httpx.Response(200, json={"data": {"channel": {"organizationId": "o1"}}})
+
+    assert buffer.trial_tag("k", channel, client=fake(handler)) == "t9"
+    assert buffer.trial_tag("k", channel, client=fake(handler)) == "t9"  # found, not made again
+    assert asked == ["Tags(", "CreateTag(", "Tags("]
+    # A channel kept from before organizations were asked for: asked first.
+    old = buffer.Channel("c1", "My page", "instagram", None, False)
+    assert buffer.trial_tag("k", old, client=fake(handler)) == "t9"
+    assert asked[-2:] == ["ChannelOrganization(", "Tags("]
