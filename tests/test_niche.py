@@ -46,7 +46,7 @@ def hits(*rows):
 
 
 def test_profiles_and_handles_named_in_lists_are_gathered_once():
-    def find(query, count):
+    def find(query, count, page=1):
         if query.startswith("site:instagram.com"):
             return hits(
                 ("https://www.instagram.com/vocalmaria/", "Maria (@vocalmaria) • Instagram",
@@ -66,14 +66,16 @@ def test_profiles_and_handles_named_in_lists_are_gathered_once():
 def test_handles_without_a_count_are_looked_up_by_their_own_page():
     asked = []
 
-    def find(query, count):
+    def find(query, count, page=1):
         asked.append(query)
         return hits(("https://www.instagram.com/belt.it.out/", "Belt It Out (@belt.it.out)",
                      "230K Followers, 5 Following, 900 Posts - belting tips"))  # fmt: skip
 
     accounts = [Account("belt.it.out"), Account("known", followers=10)]
     niche.look_up(accounts, find, pause=0)
-    assert accounts[0].followers == 230_000 and asked == ["site:instagram.com/belt.it.out"]
+    assert accounts[0].followers == 230_000 and asked == [
+        'site:instagram.com/belt.it.out "followers"'
+    ]
 
 
 class Model:
@@ -98,7 +100,7 @@ class Model:
 
 
 def test_a_run_keeps_fitting_new_accounts_best_first_up_to_its_size():
-    def find(query, count):
+    def find(query, count, page=1):
         n = abs(hash(query)) % 1000
         return hits(*[
             (f"https://www.instagram.com/coach{n}{i}/", f"Coach (@coach{n}{i})",
@@ -129,7 +131,7 @@ def test_a_run_keeps_fitting_new_accounts_best_first_up_to_its_size():
 
 
 def test_accounts_the_model_doesnt_think_fit_are_left_out_and_said_so():
-    def find(query, count):
+    def find(query, count, page=1):
         return hits(
             ("https://www.instagram.com/brandshop/", "Shop", "5K Followers - buy stuff"),
             ("https://www.instagram.com/realcoach/", "Coach", "8K Followers - lessons"),
@@ -153,7 +155,7 @@ def test_a_niche_search_keeps_its_accounts_and_never_shows_them_again(tmp_path):
     Session = make_sessionmaker(tmp_path / "app.db")
     counter = iter(range(10_000))
 
-    def find(query, count):
+    def find(query, count, page=1):
         n = next(counter)
         return hits(
             *[(f"https://www.instagram.com/coach{n}x{i}/", f"Coach (@coach{n}x{i})",
@@ -209,7 +211,7 @@ def test_a_failed_search_says_why(tmp_path):
             raise RuntimeError("Ollama is down")
 
     jobs.run_niche("s1", Session, None, router=SimpleNamespace(planner=Broken()),
-                   find=lambda q, n: [], pause=0)  # fmt: skip
+                   find=lambda q, n, page=1: [], pause=0)  # fmt: skip
     with Session() as db:
         found = db.get(NicheSearch, "s1")
         assert found.status == "failed" and "Ollama is down" in found.error
@@ -222,7 +224,7 @@ def test_posts_and_reels_name_their_account_too():
     ) == ("vocalmaria")
     assert niche.poster_of("https://www.instagram.com/p/Cx1/", "Maria on Instagram") is None
 
-    def find(query, count):
+    def find(query, count, page=1):
         return hits(
             ("https://www.instagram.com/vocalmaria/reel/Cx12/", "Maria on Instagram: tips",
              "Breathing exercise for belting"),
@@ -230,3 +232,17 @@ def test_posts_and_reels_name_their_account_too():
 
     found, _ = niche.gather(["vocal tips"], find, pause=0)
     assert "vocalmaria" in found and "post" in found["vocalmaria"].sources
+
+
+def test_profile_searches_ask_for_the_numbers_profiles_show_and_a_later_page():
+    asked = []
+
+    def find(query, count, page=1):
+        asked.append((query, page))
+        return []
+
+    niche.gather(["gym memes", "gym fails", "fitness humor"], find, pause=0)
+    assert ('site:instagram.com gym memes "followers" posts', 1) in asked
+    assert ('site:instagram.com gym memes "followers" posts', 3) in asked
+    assert ("site:instagram.com gym memes", 1) in asked
+    assert niche.plain(" Any ") == "" and niche.plain("Spain") == "Spain"
