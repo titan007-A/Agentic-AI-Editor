@@ -269,7 +269,7 @@ def test_a_schedule_runs_once_on_its_days_from_its_hour(tmp_path, monkeypatch):
         assert sorted(db.get(NicheSearch, s).schedule_id for s in monday) == ["daily", "mondays"]
 
 
-def test_profile_searches_ask_for_the_numbers_profiles_show_and_a_later_page():
+def test_profile_searches_ask_for_the_numbers_profiles_show():
     asked = []
 
     def find(query, count, page=1):
@@ -278,6 +278,60 @@ def test_profile_searches_ask_for_the_numbers_profiles_show_and_a_later_page():
 
     niche.gather(["gym memes", "gym fails", "fitness humor"], find, pause=0)
     assert ('site:instagram.com gym memes "followers" posts', 1) in asked
-    assert ('site:instagram.com gym memes "followers" posts', 3) in asked
+    assert {page for _, page in asked} == {1}  # a page is PER_QUERY results: one is plenty
     assert ("site:instagram.com gym memes", 1) in asked
     assert niche.plain(" Any ") == "" and niche.plain("Spain") == "Spain"
+
+
+def test_a_posts_snippet_names_its_account():
+    body = '7,335 likes, 34 comments - elpatron7787 on September 14, 2026: "Ya no vayas al gym"'
+    link = "https://www.instagram.com/reel/DdSAPOIveYK/"
+    assert niche.poster_of(link, "El Patron | Ya no vayas", body) == "elpatron7787"
+    later = "Aug 18, 2026 · victorfitnesscoach on August 18, 2026: Cosas que pasan"
+    assert niche.poster_of(link, "Victor", later) == "victorfitnesscoach"
+    assert niche.poster_of(link, "x", "posted on May 3, 2026 by someone") is None
+    # A profile's tab is the profile.
+    assert niche.handle_of("https://www.instagram.com/gym.fail.video/reels/") == "gym.fail.video"
+
+
+def test_pages_listing_accounts_are_read_for_their_handles():
+    page = """<html><head><style>@media (max-width: 9px) {}</style>
+    <script type="application/ld+json">{"@context": "x"}</script></head><body>
+    <a href="https://www.instagram.com/vocalmaria/">Maria</a>
+    <a href='https://instagram.com/belt.it.out?hl=en'>Belt</a>
+    <a href="https://www.instagram.com/p/Cx1/">a post</a>
+    <a href="https://www.instagram.com/vocalmaria/">again</a>
+    <p>Also follow @singwithsam</p></body></html>"""
+    assert niche.listed(page) == ["vocalmaria", "belt.it.out", "singwithsam"]
+    found = niche.read_lists({"https://blog.test/top": "Top 10 vocal coaches"}, lambda u: page)
+    assert set(found) == {"vocalmaria", "belt.it.out", "singwithsam"}
+    assert found["vocalmaria"].about == "named in: Top 10 vocal coaches"
+
+
+class Naming(Model):
+    """A planning model that also names accounts it knows, one of them made up."""
+
+    def chat_json(self, messages, schema, **kw):
+        reply = super().chat_json(messages, schema, **kw)
+        if "queries" in reply:
+            reply["accounts"] = ["@realcoach", "https://www.instagram.com/madeupcoach/"]
+        return reply
+
+
+def test_accounts_the_model_names_are_kept_only_once_a_profile_page_shows_them():
+    looked = []
+
+    def find(query, count, page=1):
+        if query.startswith("site:instagram.com/"):
+            handle = query.split("/", 1)[1].split()[0]
+            looked.append(handle)
+            if handle == "realcoach":
+                return hits((f"https://www.instagram.com/{handle}/", "Real Coach (@realcoach)",
+                             "52K Followers, 10 Following, 300 Posts - vocal coach"))  # fmt: skip
+        return []
+
+    accounts, _ = niche.run("vocal coaches", Filters(), Naming({"realcoach": 9}), set(),
+                            pause=0, find=find, size=5, read=lambda u: "")  # fmt: skip
+    assert [a.handle for a in accounts] == ["realcoach"]
+    assert accounts[0].followers == 52_000
+    assert "madeupcoach" in looked and looked.count("realcoach") == 1  # asked about once
