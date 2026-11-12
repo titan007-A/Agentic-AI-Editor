@@ -432,19 +432,14 @@ def test_a_research_the_engines_turned_away_says_so():
 
 
 def test_an_empty_search_is_no_reels_but_a_failing_engine_is_a_failure(monkeypatch):
-    import ddgs
-    from ddgs.exceptions import DDGSException, RatelimitException
+    from agentic_editor import websearch
 
-    answers = {"empty": DDGSException("No results found."), "busy": RatelimitException("202")}
+    def engine(query, count, page=1):
+        if query.endswith("busy"):
+            raise TimeoutError("timed out")
+        return []
 
-    class Engines:
-        def __init__(self, **kwargs):
-            pass
-
-        def text(self, query, max_results):
-            raise answers[query.split()[-1]]
-
-    monkeypatch.setattr(ddgs, "DDGS", Engines)
+    monkeypatch.setattr(websearch, "_engines", lambda: [("yahoo", engine)])
     reels, failed = research.search(["empty", "busy"], pause=0)
     assert reels == [] and failed == ["busy"]
 

@@ -27,6 +27,22 @@ def shazam_hears_nothing(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_web_search(monkeypatch):
+    """Web search is third parties' servers: in a test every engine fails (a test that wants
+    results gives its own engines or `find`), and nothing is kept in the cache folder."""
+    from agentic_editor import websearch
+
+    def offline(query, count, page=1):
+        raise ConnectionError("no web search in tests")
+
+    websearch.reset()
+    monkeypatch.setattr(websearch, "_engines", lambda: [("offline", offline)])
+    monkeypatch.setattr(websearch, "_cache_dir", lambda: None)
+    yield
+    websearch.reset()
+
+
+@pytest.fixture(autouse=True)
 def no_ocr(request, monkeypatch):
     """OCR runs models on real frames: in a test it isn't there, so the vision model's text
     boxes are used, unless the test turns it on itself."""

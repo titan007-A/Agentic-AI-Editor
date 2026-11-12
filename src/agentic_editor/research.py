@@ -2,10 +2,10 @@
 how well they fit it and how far they have spread.
 
 Instagram has no open search, so it is searched the way a chat assistant does: web search
-engines with "site:instagram.com/reel ..." (the `ddgs` library, free, no key, over several
-engines). The planning model turns the description into searches, each reel found is
-looked up with yt-dlp without signing in (account, caption, likes, comments, date; views
-and length aren't given then), and the planning model rates how well each fits.
+engines with "site:instagram.com/reel ..." (free, no key: see websearch). The planning
+model turns the description into searches, each reel found is looked up with yt-dlp
+without signing in (account, caption, likes, comments, date; views and length aren't
+given then), and the planning model rates how well each fits.
 
 Engines index only part of Instagram, mostly popular reels a few days old or more, so a
 research finds plenty, never everything. YouTube is searched the same way
@@ -658,16 +658,11 @@ def chat(llm, about: str, history: list[tuple[str, str]], message: str) -> Reply
 
 
 def _engines(query: str, count: int) -> list[dict]:
-    from ddgs import DDGS
-    from ddgs.exceptions import DDGSException
+    """Web results for a query (see websearch): empty when nothing was found, raises when
+    the engines failed."""
+    from agentic_editor import websearch
 
-    try:
-        return DDGS(timeout=10).text(query, max_results=count)
-    except DDGSException as exc:
-        # ddgs says an empty answer the way it says a failure: that one is no reels.
-        if str(exc).startswith("No results"):
-            return []
-        raise
+    return websearch.search(query, count)
 
 
 def search(
