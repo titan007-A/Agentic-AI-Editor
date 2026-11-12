@@ -22,9 +22,11 @@ light), or 8-bit H.264 for players that need it.
 It never holds a live job up: between frames it gives the GPU and the encoder to any job
 waiting for them and carries on after (slots.others_waiting)."""
 
+import contextlib
 import logging
 import math
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -79,6 +81,7 @@ TILE = 256  # px of the model's input a tile covers
 TILE_PAD = 24  # px of picture around each tile it sees, so the seams don't show
 TILE_BATCH = 8  # tiles through the model together
 QUEUE = 8  # decoded frames kept ready
+WRITE_QUEUE = 3  # upscaled frames waiting for the encoder; past that the GPU is given back
 FACE_BATCH = 2  # faces through GFPGAN together
 # HEVC 10-bit for the best picture: constant quality (CRF) rather than a bit rate, SAO off
 # and a stronger adaptive quantiser so fine texture and flat gradients both survive.
@@ -454,8 +457,10 @@ def upscale(
     ]  # fmt: skip
     # 16-bit RGB in, BT.709 limited range out, dithered to the encoder's depth.
     depth = "yuv420p10le" if codec == "hevc10" else "yuv420p"
+    # Under nice, behind the editor's own encodes (nice 10): an upscale is never in a hurry.
+    polite = ["nice", "-n", "15"] if shutil.which("nice") else []
     encode = [
-        bin_, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+        *polite, bin_, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{sizes.out[0]}x{sizes.out[1]}",
         "-framerate", rate, "-i", "-", "-i", str(video), "-map", "0:v:0", *sound,
         "-vf", "zscale=matrix=709:transfer=709:primaries=709:range=limited"
@@ -487,29 +492,68 @@ def upscale(
         threading.Thread(target=_reader, args=(reader, sizes.model_in, frames),
                          daemon=True).start()  # fmt: skip
         working, said = 0.0, 0.0
+        out: queue.Queue = queue.Queue(maxsize=WRITE_QUEUE)
+        broken: list[BaseException] = []
+
+        def feed() -> None:
+            """Upscaled frames into the encoder, so a slow encoder never stalls the loop
+            while it holds the GPU."""
+            while (data := out.get()) is not None:
+                if broken:
+                    continue
+                try:
+                    writer.stdin.write(data)
+                except (BrokenPipeError, OSError) as exc:
+                    broken.append(exc)
+            with contextlib.suppress(BrokenPipeError, OSError):
+                writer.stdin.close()
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+
+        def give_way() -> None:
+            nonlocal held
+            slots.encoder.release()
+            slots.gpu.release()
+            held = False
+            _free(dev)
+
+        def take_back() -> None:
+            nonlocal held
+            with slots.behind(24 * 3600):
+                slots.gpu.acquire("upscale the video", progress=progress)
+                try:
+                    slots.encoder.acquire("encode", progress=progress)
+                except BaseException:
+                    slots.gpu.release()
+                    raise
+            held = True
+
         try:
-            while (frame := frames.get()) is not None:
+            while (frame := frames.get()) is not None and not broken:
                 if slots.gpu.others_waiting() or slots.encoder.others_waiting():
                     # A live job wants the GPU or the encoder: it goes first.
-                    slots.encoder.release()
-                    slots.gpu.release()
-                    held = False
-                    _free(dev)
+                    give_way()
                     progress("wait", "letting a waiting job go first")
-                    with slots.behind(24 * 3600):
-                        slots.gpu.acquire("upscale the video", progress=progress)
-                        try:
-                            slots.encoder.acquire("encode", progress=progress)
-                        except BaseException:
-                            slots.gpu.release()
-                            raise
-                    held = True
+                    take_back()
                 started = time.monotonic()
                 drawn = upscaler(frame, sizes.out)
                 if fixer is not None:
                     drawn = fixer(drawn)
-                writer.stdin.write((drawn * 257.0).round().clip(0, 65535).astype("<u2").tobytes())
+                data = (drawn * 257.0).round().clip(0, 65535).astype("<u2").tobytes()
                 working += time.monotonic() - started
+                try:
+                    out.put_nowait(data)
+                except queue.Full:
+                    # The encoder is behind: wait for it without the GPU.
+                    give_way()
+                    while feeder.is_alive():
+                        try:
+                            out.put(data, timeout=1)
+                            break
+                        except queue.Full:
+                            continue
+                    take_back()
                 done += 1
                 if time.monotonic() - said > 20 or done == total:
                     said = time.monotonic()
@@ -517,9 +561,18 @@ def upscale(
                     progress(
                         "upscale", f"upscaled {min(done, total)} of {total} frames, {eta(left)}"
                     )
-            writer.stdin.close()
-        except BrokenPipeError:
-            pass
+        except BaseException:
+            writer.kill()  # so a feeder stuck writing to it lets go
+            raise
+        finally:
+            while True:
+                try:
+                    out.put(None, timeout=1)
+                    break
+                except queue.Full:
+                    if not feeder.is_alive():
+                        break
+            feeder.join(timeout=60)
     except BaseException:
         if writer is not None:
             writer.kill()  # it would wait for frames that never come

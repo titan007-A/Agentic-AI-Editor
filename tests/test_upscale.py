@@ -357,3 +357,50 @@ def test_time_left_reads_like_a_person_would_say_it():
     assert upscale.eta(30) == "about a minute left"
     assert upscale.eta(600) == "about 10 min left"
     assert upscale.eta(5400) == "about 1.5 h left"
+
+
+@needs_ml
+@needs_ffmpeg
+def test_a_slow_encoder_never_keeps_the_gpu_held(no_models, monkeypatch, tmp_path):
+    """The encoder falls behind (other encodes have the CPU): the upscale waits for it
+    with the GPU given back, instead of blocking on the pipe while holding it."""
+    import time as time_
+
+    from agentic_editor import slots
+
+    monkeypatch.setattr(upscale, "WRITE_QUEUE", 1)
+    real = subprocess.Popen
+
+    class Slow:
+        def __init__(self, pipe):
+            self.pipe = pipe
+
+        def write(self, data):
+            time_.sleep(0.15)
+            return self.pipe.write(data)
+
+        def close(self):
+            self.pipe.close()
+
+    def popen(cmd, *args, **kwargs):
+        proc = real(cmd, *args, **kwargs)
+        if "rawvideo" in cmd and "-i" in cmd and cmd[cmd.index("-i") + 1] == "-":
+            proc.stdin = Slow(proc.stdin)
+        return proc
+
+    monkeypatch.setattr(upscale.subprocess, "Popen", popen)
+    held_while_waiting = []
+    put = upscale.queue.Queue.put
+
+    def watched_put(self, item, *args, **kwargs):
+        waiting = kwargs.get("timeout") == 1 or (args and args[-1] == 1)
+        if waiting and item is not None:  # a frame, not the end mark
+            held_while_waiting.append(slots.gpu.held())
+        return put(self, item, *args, **kwargs)
+
+    monkeypatch.setattr(upscale.queue.Queue, "put", watched_put)
+    source = make_video(tmp_path / "in.mp4", seconds=1.0)
+    upscale.upscale(source, tmp_path / "up.mp4", tmp_path, BACKENDS, "1080p", faces=0)
+    assert held_while_waiting and not any(held_while_waiting)
+    assert ffmpeg.probe(tmp_path / "up.mp4").duration == pytest.approx(1.0, abs=0.15)
+    assert not slots.gpu.held() and not slots.encoder.held()
