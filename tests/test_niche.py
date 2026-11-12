@@ -213,3 +213,20 @@ def test_a_failed_search_says_why(tmp_path):
     with Session() as db:
         found = db.get(NicheSearch, "s1")
         assert found.status == "failed" and "Ollama is down" in found.error
+
+
+def test_posts_and_reels_name_their_account_too():
+    assert niche.poster_of("https://www.instagram.com/vocalmaria/reel/Cx12/") == "vocalmaria"
+    assert niche.poster_of(
+        "https://www.instagram.com/p/Cx1/", "Maria (@vocalmaria) on Instagram"
+    ) == ("vocalmaria")
+    assert niche.poster_of("https://www.instagram.com/p/Cx1/", "Maria on Instagram") is None
+
+    def find(query, count):
+        return hits(
+            ("https://www.instagram.com/vocalmaria/reel/Cx12/", "Maria on Instagram: tips",
+             "Breathing exercise for belting"),
+        )  # fmt: skip
+
+    found, _ = niche.gather(["vocal tips"], find, pause=0)
+    assert "vocalmaria" in found and "post" in found["vocalmaria"].sources

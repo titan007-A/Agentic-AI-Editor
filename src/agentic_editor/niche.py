@@ -25,8 +25,8 @@ Find = Callable[[str, int], list[dict]]
 
 RUN_SIZE = 100  # accounts kept by one run
 PER_QUERY = 30  # results asked of the engines for each search
-ROUNDS = 3  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
-QUERIES = 18  # searches the model writes a round
+ROUNDS = 5  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
+QUERIES = 24  # searches the model writes a round
 LOOKUPS = 60  # handles without a follower count looked up by name, a round
 PAUSE = 1.0  # s between searches, so the engines don't turn it away
 MIN_FIT = 6  # of 10
@@ -39,6 +39,9 @@ NOT_ACCOUNTS = {
     "session", "tags", "locations", "popular", "topics", "ar", "lite", "press",
 }  # fmt: skip
 PROFILE = re.compile(r"instagram\.com/([A-Za-z0-9._]{2,30})/?(?:[?#]|$)", re.I)
+# Newer post and reel links carry the account: instagram.com/<handle>/reel/<code>/
+POSTED = re.compile(r"instagram\.com/([A-Za-z0-9._]{2,30})/(?:p|reel|reels|tv)/", re.I)
+# "Maria (@vocalmaria) • Instagram ..." in a result's title
 MENTION = re.compile(r"(?<![\w.])@([A-Za-z0-9._]{2,30})(?![\w])")
 # "12.3K Followers", "1,234 followers", "1.2M seguidores", "3 M abonnés"
 FOLLOWERS = re.compile(
@@ -142,6 +145,18 @@ def handle_of(link: str) -> str | None:
     return handle
 
 
+def poster_of(link: str, title: str = "") -> str | None:
+    """The account a post or reel result is from: in its link, or as @handle in its title."""
+    found = POSTED.search(link or "")
+    if found and found.group(1).lower() not in NOT_ACCOUNTS:
+        return found.group(1).lower().rstrip(".")
+    if "instagram.com" in (link or ""):
+        named = re.search(r"\(@([A-Za-z0-9._]{2,30})\)", title or "")
+        if named and named.group(1).lower() not in NOT_ACCOUNTS:
+            return named.group(1).lower().rstrip(".")
+    return None
+
+
 def name_of(title: str, handle: str) -> str:
     """'Nat Geo (@natgeo) • Instagram photos and videos' -> 'Nat Geo'."""
     name = re.split(r"\s*[\(•|·-]\s*@?", title or "", maxsplit=1)[0].strip()
@@ -181,6 +196,12 @@ def gather(
                 if body and len(body) > len(account.about):
                     account.about = body[:400]
                 account.sources.add("profile")
+            elif poster := poster_of(link, title):
+                # A post or reel: its account, looked up later for its numbers.
+                account = found.setdefault(poster, Account(poster, query=query))
+                account.sources.add("post")
+                if not account.about:
+                    account.about = f"posted: {' '.join(f'{title} {body}'.split())[:200]}"
             elif "instagram.com" not in link:
                 # A list of accounts on some site: the handles it names.
                 for mention in MENTION.findall(f"{title} {body}"):
