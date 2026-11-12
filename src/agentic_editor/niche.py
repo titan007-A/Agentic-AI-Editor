@@ -11,6 +11,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
@@ -331,10 +332,18 @@ def rate(llm, niche: str, filters: Filters, taste: str, accounts: list[Account])
                 group[fit.n - 1].why = fit.why.strip()[:200]
 
 
+def _opened(planner):
+    """The planning model to use in a `with`: a factory (the router's planner, which holds
+    the GPU while open) is opened for just that step; a model object is used as it is."""
+    if hasattr(planner, "chat_json"):
+        return nullcontext(planner)
+    return planner()
+
+
 def run(
     niche: str,
     filters: Filters,
-    llm,
+    planner,
     seen: set[str],
     taste: str = "",
     progress: Progress | None = None,
@@ -343,7 +352,8 @@ def run(
     size: int = RUN_SIZE,
 ) -> tuple[list[Account], list[str]]:
     """Up to `size` accounts of the niche, best fit first, none of `seen` (shown before or
-    hidden), all passing `filters`; and notes on what went wrong on the way."""
+    hidden), all passing `filters`; and notes on what went wrong on the way. `planner` is
+    opened only to plan and to judge, so the GPU is free while the web is searched."""
     if find is None:
         from agentic_editor.research import _engines as find
     say = progress or (lambda message, value: None)
@@ -354,7 +364,8 @@ def run(
     for round_ in range(ROUNDS):
         lo, hi = round_ / ROUNDS, (round_ + 1) / ROUNDS
         say("planning searches", lo)
-        queries = plan(llm, niche, filters, taste, used)
+        with _opened(planner) as llm:
+            queries = plan(llm, niche, filters, taste, used)
         if not queries:
             break
         used += queries
@@ -367,7 +378,9 @@ def run(
         look_up(fresh, find, pause)
         able = [a for a in fresh if filters.keeps(a)]
         say(f"judging {len(able)} accounts", lo + (hi - lo) * 0.75)
-        rate(llm, niche, filters, taste, able)
+        if able:
+            with _opened(planner) as llm:
+                rate(llm, niche, filters, taste, able)
         for account in able:
             judged.add(account.handle)
             if account.fit is not None and account.fit >= MIN_FIT:

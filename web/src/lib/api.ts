@@ -529,11 +529,54 @@ export type UploadOptions = { onProgress?: (fraction: number) => void; signal?: 
 /** The query naming whose presets, for the admin managing an employee's; empty for one's own. */
 const whose = (owner?: string | null) => (owner ? `?owner=${encodeURIComponent(owner)}` : "");
 
+export type NicheAccount = {
+  id: number;
+  handle: string;
+  name: string;
+  followers: number | null;
+  posts: number | null;
+  about: string;
+  fit: number | null;
+  why: string;
+  vote: -1 | 0 | 1;
+  reason: string;
+  url: string;
+  message_url: string;
+};
+
+export type NicheFilters = {
+  min_followers: number;
+  max_followers: number | null;
+  language: string;
+  country: string;
+};
+
+export type NicheSearch = {
+  id: string;
+  niche: string;
+  filters: NicheFilters;
+  status: "queued" | "running" | "done" | "failed";
+  message: string;
+  progress: number;
+  notes: string[];
+  error: string | null;
+  created_at: string;
+  count: number;
+  accounts?: NicheAccount[];
+};
+
 export const api = {
   login: (username: string, password: string) => request("POST", "/login", { username, password }),
   logout: () => request("POST", "/logout"),
   me: () => request<Me>("GET", "/me"),
   fun: () => request<FunStats>("GET", "/fun"),
+  nicheSearches: () => request<NicheSearch[]>("GET", "/niche"),
+  nicheSearch: (id: string) => request<NicheSearch>("GET", `/niche/${id}`),
+  startNiche: (body: { niche: string } & NicheFilters) =>
+    request<NicheSearch>("POST", "/niche", body),
+  deleteNiche: (id: string) => request<{ ok: boolean }>("DELETE", `/niche/${id}`),
+  voteNiche: (id: number, vote: -1 | 0 | 1, reason = "") =>
+    request<NicheAccount>("POST", `/niche/accounts/${id}/vote`, { vote, reason }),
   wrapped: (month?: string) =>
     request<FunWrapped>("GET", `/fun/wrapped${month ? `?month=${month}` : ""}`),
   acceptNotice: () => request("POST", "/notice"),

@@ -140,3 +140,76 @@ def test_accounts_the_model_doesnt_think_fit_are_left_out_and_said_so():
     assert [a.handle for a in accounts] == ["realcoach"]
     assert accounts[0].message_url == "https://ig.me/m/realcoach"
     assert any("ran out" in n for n in notes)
+
+
+def test_a_niche_search_keeps_its_accounts_and_never_shows_them_again(tmp_path):
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from agentic_editor import jobs
+    from agentic_editor.db import NicheAccount, NicheSearch, make_sessionmaker
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    counter = iter(range(10_000))
+
+    def find(query, count):
+        n = next(counter)
+        return hits(
+            *[(f"https://www.instagram.com/coach{n}x{i}/", f"Coach (@coach{n}x{i})",
+               f"{(i + 2) * 30}K Followers - vocal coach") for i in range(3)]
+        )  # fmt: skip
+
+    class Fits(dict):
+        def get(self, key, default=None):
+            return 8
+
+    model = Model(Fits())
+    router = SimpleNamespace(planner=model)
+    with Session() as db:
+        db.add(NicheSearch(id="s1", owner_id="u1", niche="vocal coaches",
+                           filters={"min_followers": 100_000}))  # fmt: skip
+        db.commit()
+    jobs.run_niche("s1", Session, None, router=router, find=find, pause=0)
+    with Session() as db:
+        s1 = db.get(NicheSearch, "s1")
+        assert s1.status == "done" and s1.message.startswith("found")
+        first = {a.handle for a in s1.accounts}
+        assert first and all(a.followers >= 100_000 for a in s1.accounts)
+        # Liked one, didn't want another: the next search is told.
+        liked, nope = s1.accounts[0], s1.accounts[1]
+        liked.vote, nope.vote, nope.reason = 1, -1, "a brand, not a coach"
+        db.add(NicheSearch(id="s2", owner_id="u1", niche="vocal coaches", filters={}))
+        db.commit()
+        liked_handle, nope_handle = liked.handle, nope.handle
+    jobs.run_niche("s2", Session, None, router=router, find=find, pause=0)
+    with Session() as db:
+        second = {a.handle for a in db.get(NicheSearch, "s2").accounts}
+        assert second and not second & first  # never shown twice
+        handles = list(db.scalars(select(NicheAccount.handle).where(NicheAccount.owner_id == "u1")))
+        assert len(handles) == len(set(handles))
+    told = [p for p in model.prompts if "liked" in p]
+    assert told and liked_handle in told[0] and "a brand, not a coach" in told[0]
+    assert nope_handle in told[0]
+
+
+def test_a_failed_search_says_why(tmp_path):
+    from types import SimpleNamespace
+
+    from agentic_editor import jobs
+    from agentic_editor.db import NicheSearch, make_sessionmaker
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(NicheSearch(id="s1", owner_id="u1", niche="x niche", filters={}))
+        db.commit()
+
+    class Broken:
+        def chat_json(self, *a, **k):
+            raise RuntimeError("Ollama is down")
+
+    jobs.run_niche("s1", Session, None, router=SimpleNamespace(planner=Broken()),
+                   find=lambda q, n: [], pause=0)  # fmt: skip
+    with Session() as db:
+        found = db.get(NicheSearch, "s1")
+        assert found.status == "failed" and "Ollama is down" in found.error

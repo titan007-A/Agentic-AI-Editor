@@ -436,7 +436,7 @@ class NicheSearch(Base):
 
     __tablename__ = "niche_searches"
 
-    id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
     owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
     niche: Mapped[str] = mapped_column(Text)
     filters: Mapped[dict] = mapped_column(JSON, default=dict)

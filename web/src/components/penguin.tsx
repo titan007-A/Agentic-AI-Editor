@@ -175,7 +175,7 @@ export function Penguin() {
         data-testid="penguin"
         data-mood={mood}
         className={cn(
-          "pointer-events-auto size-16 cursor-pointer select-none sm:size-20",
+          "pointer-events-auto size-14 cursor-pointer select-none sm:size-20",
           happy && "penguin-dance",
           mood === "failed" && "penguin-sad",
           mood === "idle" && "penguin-idle",
