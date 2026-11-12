@@ -1216,6 +1216,7 @@ export function VideoPosition({
   const y = Number(framing.picture_y ?? 0) || 0;
   const whole = framing.mode === "none";
   const follows = framing.text_follows_video !== false;
+  const centred = framing.picture_center === true;
   const set = (next: Obj) => onChange({ ...preset, framing: { ...framing, ...next } });
   const move = (dx: number, dy: number) => set({ picture_x: x + dx, picture_y: y + dy });
   const arrow = (label: string, icon: React.ReactNode, dx: number, dy: number) => (
@@ -1225,6 +1226,7 @@ export function VideoPosition({
       size="icon"
       className="size-11"
       aria-label={label}
+      disabled={centred && dy !== 0}
       onClick={() => move(dx, dy)}
     >
       {icon}
@@ -1254,6 +1256,23 @@ export function VideoPosition({
         />
         Text moves with the video
       </label>
+      <label className="flex min-h-11 items-center gap-3 text-sm">
+        <Checkbox
+          checked={centred}
+          onCheckedChange={(v) => set({ picture_center: v === true, picture_y: 0 })}
+        />
+        Video in the middle of the frame
+      </label>
+      {centred && (
+        <p className="text-xs text-muted-foreground">
+          Every video goes in the middle, top to bottom, whatever its shape: a tall one and a wide
+          one each land in the middle.{" "}
+          {follows
+            ? "The text that moves with the video keeps its gap to it."
+            : "The text stays where it is."}{" "}
+          Up and down are set by this; sideways still moves.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-4">
         <div className="grid w-fit grid-cols-3 gap-1">
           <span />
@@ -1266,7 +1285,7 @@ export function VideoPosition({
             size="icon"
             className="size-11"
             aria-label="Put the video back where it goes"
-            onClick={() => set({ picture_x: 0, picture_y: 0 })}
+            onClick={() => set({ picture_x: 0, picture_y: 0, picture_center: false })}
           >
             <RotateCcw />
           </Button>
@@ -1297,6 +1316,7 @@ export function VideoPosition({
               inputMode="numeric"
               step={10}
               value={value}
+              disabled={centred && key === "picture_y"}
               onChange={(e) => set({ [key]: Math.round(Number(e.target.value) || 0) })}
             />
           </div>

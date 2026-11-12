@@ -193,11 +193,12 @@ def render_checked(
     preset: Preset, settings: Settings, shape: Shape = "16:9"
 ) -> tuple[bytes, list[str]]:
     """The preview as a JPEG, and what looks wrong in it, in words a person can act on."""
-    preset = compose.moved_layout(preset)  # as a render lays it out
+    face = compose.text_face(settings, None)
+    source = SHAPES[shape]
+    preset = compose.moved_layout(preset, face)  # as a render lays it out
+    preset, _ = compose.centered(preset, source, face)  # the stand-in, as a video would be
     notes: list[str] = []
     frame = preset.size
-    source = SHAPES[shape]
-    face = compose.text_face(settings, None)
     shown = preset.model_copy(
         update={
             "text_blocks": [
