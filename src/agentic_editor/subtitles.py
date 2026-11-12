@@ -575,9 +575,14 @@ def one_line(
     notes: str | None,
     language: str | None = None,
     retried: bool = False,
+    shown: list[str] = (),
 ) -> str:
-    """One line about the whole video, written by the vision model."""
+    """One line about the whole video, written by the vision model. `shown` is the text
+    already written on the frames (the source page's own caption, lyrics): the model
+    reads it there and would put it on screen a second time, so it is told not to, and
+    asked once more when it does."""
     guide = " ".join(x for x in (hint, notes or "") if x)
+    shown = [t for t in shown if len(_words(t)) >= 2]
     reply = vision.chat_json(
         [
             {
@@ -587,6 +592,14 @@ def one_line(
                     f"{max_words} words to show on screen for the whole video, that makes people "
                     "want to watch: specific to what it is about, natural, no hashtags, no "
                     "quotation marks, never a generic description of a person."
+                    + (
+                        " Text is already written on the video: "
+                        + " / ".join(shown)
+                        + ". Your line is not that text: don't repeat or quote it, write "
+                        "your own line about what happens."
+                        if shown
+                        else ""
+                    )
                     + (f" What is said in it: {context}" if context else "")
                     + (f" Guidance: {guide}" if guide else "")
                     + (f" Write it in {language}." if language else "")
@@ -603,12 +616,18 @@ def one_line(
         # It wrote out the guidance's example instead of this video's line: once more.
         return one_line(vision, frames, max_words, hint + " Describe this video in your own "
                         "words; don't copy any example.", context, notes, language,
-                        retried=True)  # fmt: skip
+                        retried=True, shown=shown)  # fmt: skip
+    if any(_echoes(line, t) for t in shown) and not retried:
+        # It copied the video's own text: once more, in its own words.
+        return one_line(vision, frames, max_words, hint + f" Your line was {line}, which is "
+                        "the text already on the video: write a different line, in your own "
+                        "words, about what happens.", context, notes, language,
+                        retried=True, shown=shown)  # fmt: skip
     if len(line.split()) > max_words and not retried:
         # Cut, it would stop mid-sentence ("... ¿Quién? Un"): asked once more, shorter.
         return one_line(vision, frames, max_words, hint + f" Your line had {len(line.split())} "
                         f"words: write a complete one of at most {max_words}.", context, notes,
-                        language, retried=True)  # fmt: skip
+                        language, retried=True, shown=shown)  # fmt: skip
     line = shortened(line, max_words)
     if language and language.strip().lower() not in ("english", "en"):
         line = in_language(vision, line, language, max_words)
@@ -656,11 +675,18 @@ def shortened(line: str, max_words: int) -> str:
 
 
 def _echoes(line: str, quoted: str) -> bool:
-    """Whether a line is mostly words taken from `quoted`, in order."""
-    a, b = line.casefold().split(), quoted.casefold().split()
-    if not a:
+    """Whether a line is mostly words taken from `quoted`, in order (punctuation aside):
+    four in a row, or half the line, or all of a shorter `quoted` of three words or more (a
+    name the line rightly says is no copy)."""
+    a, b = _words(line), _words(quoted)
+    if not a or not b:
         return False
-    return difflib.SequenceMatcher(None, a, b).find_longest_match().size >= max(4, len(a) // 2)
+    run = difflib.SequenceMatcher(None, a, b, autojunk=False).find_longest_match().size
+    return run >= max(3, min(max(4, len(a) // 2), len(b)))
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+(?:'\w+)?", text.casefold())
 
 
 def fit_lines(cues: list[Cue], measure, max_width: float, max_lines: int = 2) -> list[Cue]:

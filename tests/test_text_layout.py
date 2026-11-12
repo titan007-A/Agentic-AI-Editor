@@ -53,15 +53,30 @@ def test_long_lines_shrink_to_fit_width():
     assert placed.size < 60
 
 
-def test_a_long_one_liner_is_split_into_two_even_lines():
-    from agentic_editor.render.text import balance
+def test_a_one_liner_breaks_only_where_it_must_and_never_inside_a_word():
+    from agentic_editor.render.text import LINE_SHRINK, balance, face_of
     from agentic_editor.settings import get_settings
 
-    font = get_settings().fonts_dir / "OpenSans-ExtraBold.ttf"
-    text = "The voice that made a whole stadium go completely silent"
-    first, second = balance(text, font, 64, 900).split("\n")
-    assert abs(len(first) - len(second)) < 15
-    assert balance("Short line", font, 64, 900) == "Short line"
+    font = face_of(get_settings().fonts_dir / "Inter-ExtraBold.ttf")
+    room = 920  # the frame's width less 80 px each side
+    assert balance("Short line", font, 64, room) == "Short line"
+    # Fits at a little smaller: one line, drawn that little smaller.
+    line = "A car drives past a waterfall on the road"
+    assert font.length(line, 50) > room >= font.length(line, 50 * LINE_SHRINK)
+    assert balance(line, font, 50, room) == line
+    # Too long for that: lines filled as far as they go, whole words only.
+    line = "A car drives past a stunning waterfall on Iceland's road."
+    lines = balance(line, font, 50, room).split("\n")
+    assert " ".join(lines) == line and len(lines) == 2
+    assert all(font.length(x, 50) <= room for x in lines)
+    first, rest = lines[0], lines[1].split()
+    assert font.length(f"{first} {rest[0]}", 50) > room  # the next word didn't fit
+    # A last word alone gets company from the line above.
+    lines = balance("one two three four five six seven eight nine ten eleven twelve", font, 70, 600)
+    assert len(lines.split("\n")[-1].split()) >= 2
+    # A word wider than the room by itself is never cut: it takes its own line.
+    lines = balance("Supercalifragilisticexpialidocious is long", font, 90, 500).split("\n")
+    assert "Supercalifragilisticexpialidocious" in lines
 
 
 def test_captions_ask_libass_for_the_weight_by_its_own_family_name():
