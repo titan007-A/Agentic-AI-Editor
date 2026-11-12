@@ -34,6 +34,7 @@ from agentic_editor import (
     autopilot,
     buffer,
     cleanup,
+    eta,
     features,
     fun,
     jobs,
@@ -491,6 +492,9 @@ class JobView(BaseModel):
     unnamed: list[str] = []
     # The employee who started it, shown to the admin; None on a member's own list.
     owner: str | None = None
+    # Roughly how long a queued or running job still has, in seconds (eta.py); None when
+    # it can't be told or the job is over.
+    eta_seconds: int | None = None
 
 
 def job_view(
@@ -498,6 +502,7 @@ def job_view(
     only: int | None = None,
     owner: str | None = None,
     labels: dict[str, str] | None = None,
+    eta_seconds: int | None = None,
 ) -> JobView:
     outputs = [
         OutputView(
@@ -542,6 +547,7 @@ def job_view(
         outputs=outputs,
         owner=owner,
         unnamed=UNNAMED.findall(job.error or ""),
+        eta_seconds=eta_seconds,
     )
 
 
@@ -683,14 +689,20 @@ def create_app(
         only: int | None = None,
         names: dict[str | None, str] | None = None,
         labels: dict | None = None,
+        etas: dict[str, int] | None = None,
     ) -> JobView:
         """The job as its viewer sees it: the admin with who started it. A list passes
-        `names` and `labels` (a cache) read once, so a long one doesn't look each owner
-        up again."""
+        `names`, `labels` (a cache) and `etas` worked out once, so a long one doesn't look
+        each owner up again."""
         shown = preset_labels(job.owner_id, session, labels)
+        left = None
+        if job.status in ("queued", "running"):
+            if etas is None:
+                etas = eta.estimates(session, settings.max_concurrent_jobs)
+            left = etas.get(job.id)
         if account.role != accounts.ADMIN:
-            return job_view(job, only, labels=shown)
-        return job_view(job, only, (names or owners(session)).get(job.owner_id), shown)
+            return job_view(job, only, labels=shown, eta_seconds=left)
+        return job_view(job, only, (names or owners(session)).get(job.owner_id), shown, left)
 
     def find_job(job_id: str, session: Session, account: Account) -> Job:
         job = session.get(Job, job_id)
@@ -1602,7 +1614,8 @@ def create_app(
         rows = session.scalars(query.order_by(Job.created_at.desc()).limit(200))
         names = owners(session) if account.role == accounts.ADMIN else None
         labels: dict = {}
-        return [view(j, account, session, names=names, labels=labels) for j in rows]
+        etas = eta.estimates(session, settings.max_concurrent_jobs)
+        return [view(j, account, session, names=names, labels=labels, etas=etas) for j in rows]
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, account: User, session: DB) -> JobView:

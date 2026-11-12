@@ -2022,3 +2022,20 @@ def test_wrapped_is_for_accounts_trying_the_fun_feature(env):
         session.merge(Setting(key="feature:fun", value=json_.dumps([])))
         session.commit()
     assert admin.get("/api/fun/wrapped").status_code == 403
+
+
+def test_a_running_job_says_roughly_how_long_it_has(env, monkeypatch):
+    from agentic_editor import eta
+
+    admin = env.client
+    job = start(admin)[0]["id"]
+    assert admin.get(f"/api/jobs/{job}").json()["eta_seconds"] is None  # done: nothing
+    monkeypatch.setattr(eta, "estimates", lambda session, workers, now=None: {job: 95})
+    with env.sessions() as session:
+        from agentic_editor.db import Job
+
+        session.get(Job, job).status = "running"
+        session.commit()
+    assert admin.get(f"/api/jobs/{job}").json()["eta_seconds"] == 95
+    listed = {j["id"]: j for j in admin.get("/api/jobs").json()}
+    assert listed[job]["eta_seconds"] == 95

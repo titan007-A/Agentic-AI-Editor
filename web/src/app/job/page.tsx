@@ -26,6 +26,7 @@ import { useJobEvents } from "@/hooks/use-job-events";
 import { api, ApiError, errorText, type Job } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
 import { cheer } from "@/lib/fun-events";
+import { timeLeft } from "@/lib/eta";
 import { sounds } from "@/lib/sounds";
 
 function JobDetail() {
@@ -81,6 +82,13 @@ function JobDetail() {
     was.current = status;
   }, [job?.status, fun]);
   const events = useJobEvents(id, active, follow);
+  // The time left is worked out on the server: asked again now and then while it runs.
+  useEffect(() => {
+    if (!active) return;
+    const every = window.setInterval(() => void load(true), 15000);
+    return () => window.clearInterval(every);
+  }, [active, load]);
+  const left = active ? timeLeft(job?.eta_seconds, job?.status === "queued") : null;
   const latest = events.at(-1);
   const progress = latest?.progress ?? job?.progress ?? 0;
 
@@ -137,12 +145,22 @@ function JobDetail() {
               <div className="min-w-0 flex-1 space-y-2">
                 <Progress value={progress * 100} />
                 <p className="text-sm">{latest?.message ?? "Waiting for a free slot..."}</p>
+                {left && (
+                  <p className="text-sm font-semibold" data-testid="eta">
+                    {left}
+                  </p>
+                )}
               </div>
             </div>
           ) : (
             <>
               <Progress value={progress * 100} />
               <p className="text-sm">{latest?.message ?? "Waiting for a free slot..."}</p>
+              {left && (
+                <p className="text-sm font-semibold" data-testid="eta">
+                  {left}
+                </p>
+              )}
             </>
           )}
           <ul className="max-h-48 space-y-1 overflow-y-auto font-mono text-xs text-muted-foreground">

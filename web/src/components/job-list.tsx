@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useFun } from "@/hooks/use-fun";
 import type { Job } from "@/lib/api";
+import { timeLeft } from "@/lib/eta";
 
 export function JobList({ jobs }: { jobs: Job[] }) {
   const fun = useFun();
@@ -32,6 +33,11 @@ export function JobList({ jobs }: { jobs: Job[] }) {
               <div className="flex items-center gap-2">
                 {fun && <Snowman value={job.progress} size={30} falling={false} />}
                 <Progress value={job.progress * 100} className="h-1.5 flex-1" />
+                {timeLeft(job.eta_seconds, job.status === "queued") && (
+                  <span className="shrink-0 text-xs text-muted-foreground" data-testid="eta">
+                    {timeLeft(job.eta_seconds, job.status === "queued")}
+                  </span>
+                )}
               </div>
             )}
           </Card>

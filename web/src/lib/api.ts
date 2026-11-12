@@ -84,6 +84,8 @@ export type Job = {
   owner: string | null;
   /** Presets that couldn't tell which song it is: the job page asks for it. */
   unnamed: string[];
+  /** Roughly how long a queued or running job still has, in seconds; null if unknown. */
+  eta_seconds?: number | null;
 };
 
 export type ResearchItem = {
