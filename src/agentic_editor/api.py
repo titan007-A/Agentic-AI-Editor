@@ -2218,9 +2218,7 @@ def create_app(
         # Find the user by state token (no logged-in session at callback time)
         from sqlalchemy import select as sa_select
 
-        rows = session.exec(  # type: ignore[call-overload]
-            sa_select(Setting).where(Setting.key.like("ig_oauth_state:%"))  # type: ignore[union-attr]
-        ).all()
+        rows = list(session.scalars(sa_select(Setting).where(Setting.key.like("ig_oauth_state:%"))))
         matched = next((r for r in rows if r.value == state), None)
         if not matched:
             return RedirectResponse("/settings?ig_error=invalid_state")
@@ -2253,9 +2251,11 @@ def create_app(
     def list_ig_channels(account: User, session: DB) -> list[dict]:
         from sqlalchemy import select as sa_select
 
-        rows = session.exec(  # type: ignore[call-overload]
-            sa_select(InstagramChannel).where(InstagramChannel.owner_id == account.id)
-        ).all()
+        rows = list(
+            session.scalars(
+                sa_select(InstagramChannel).where(InstagramChannel.owner_id == account.id)
+            )
+        )
         return [_ig_channel_view(ch) for ch in rows]
 
     @app.delete("/api/instagram/channels/{channel_id}")
