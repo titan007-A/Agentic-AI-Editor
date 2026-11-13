@@ -398,6 +398,24 @@ class ResearchItem(Base):
     research: Mapped[Research] = relationship(back_populates="items")
 
 
+class InstagramChannel(Base):
+    """An Instagram Business/Creator account connected via OAuth (Instagram Platform API).
+    The long-lived token lasts 60 days and is refreshed automatically before it expires."""
+
+    __tablename__ = "instagram_channels"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # IG user ID
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    username: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128), default="")
+    avatar: Mapped[str | None] = mapped_column(Text)
+    access_token: Mapped[str] = mapped_column(Text)
+    token_expires_at: Mapped[datetime | None]
+    connected_at: Mapped[datetime] = mapped_column(default=_now)
+    # Last post sent via our app.
+    last_post_at: Mapped[datetime | None]
+
+
 class BufferKey(Base):
     """A Buffer API key someone added, named by them, and the channels Buffer showed through
     it when last asked: kept so posting doesn't ask Buffer again each time."""

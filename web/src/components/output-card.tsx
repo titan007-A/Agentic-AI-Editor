@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { BufferButton } from "@/components/buffer-button";
+import { InstagramButton } from "@/components/instagram-button";
 import { jobLabel } from "@/components/job-status";
 import { OutputVideo } from "@/components/output-video";
 import { PostCaption } from "@/components/post-caption";
@@ -153,6 +154,7 @@ export function OutputCard({
           </Button>
           <ShareButton output={output} name={`${jobLabel(job)}-${output.preset}`} />
           <BufferButton output={output} title={output.title || jobLabel(job)} />
+          <InstagramButton output={output} title={output.title || jobLabel(job)} />
           {output.has_subtitles && (
             <Button variant="outline" asChild>
               <a href={subtitlesUrl(output)} download>
