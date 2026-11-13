@@ -23,6 +23,8 @@ log = logging.getLogger(__name__)
 
 GRAPH = "https://graph.instagram.com"
 AUTH = "https://api.instagram.com/oauth"
+# Business Login for Instagram OAuth (used when app has Facebook Login for Business product).
+FB_OAUTH = "https://www.facebook.com/dialog/oauth"
 VERSION = "v21.0"
 TIMEOUT = 20.0
 # Poll container status every N seconds, up to MAX_WAIT.
@@ -59,10 +61,26 @@ SCOPES = ",".join(
 )
 
 
-def auth_url(app_id: str, redirect_uri: str, state: str) -> str:
-    """The URL the user visits to authorize the app on their IG account."""
+def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") -> str:
+    """The URL the user visits to authorize the app on their IG account.
+
+    Pass config_id (Facebook Login for Business configuration ID) to use Business Login
+    for Instagram instead of the Instagram Platform API direct flow.
+    """
     import urllib.parse
 
+    if config_id:
+        # Business Login for Instagram: config_id replaces scope.
+        params = urllib.parse.urlencode(
+            {
+                "client_id": app_id,
+                "redirect_uri": redirect_uri,
+                "config_id": config_id,
+                "response_type": "code",
+                "state": state,
+            }
+        )
+        return f"{FB_OAUTH}?{params}"
     params = urllib.parse.urlencode(
         {
             "client_id": app_id,

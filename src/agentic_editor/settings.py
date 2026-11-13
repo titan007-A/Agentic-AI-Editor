@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # then copy App ID and App Secret from App Settings → Basic.
     meta_app_id: str = ""
     meta_app_secret: str = ""
+    # Facebook Login for Business configuration ID (from Meta App → Facebook Login for
+    # Business → Settings). When set, Business Login OAuth is used instead of Instagram
+    # Platform API direct flow.
+    meta_config_id: str = ""
     database: Path = Path("media/app.db")
     queue_database: Path = Path("media/queue.db")
     web_dir: Path = Path("web/out")

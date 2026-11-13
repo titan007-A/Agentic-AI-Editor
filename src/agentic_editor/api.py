@@ -2200,7 +2200,9 @@ def create_app(
         else:
             session.add(Setting(key=key, value=state))
         session.commit()
-        url = instagram.auth_url(settings.meta_app_id, _ig_redirect_uri(request), state)
+        url = instagram.auth_url(
+            settings.meta_app_id, _ig_redirect_uri(request), state, settings.meta_config_id
+        )
         return RedirectResponse(url)
 
     @app.get("/auth/instagram/callback")
