@@ -25,6 +25,7 @@ GRAPH = "https://graph.instagram.com"
 AUTH = "https://api.instagram.com/oauth"
 # Business Login for Instagram OAuth (used when app has Facebook Login for Business product).
 FB_OAUTH = "https://www.facebook.com/dialog/oauth"
+FB_GRAPH = "https://graph.facebook.com"
 VERSION = "v21.0"
 TIMEOUT = 20.0
 # Poll container status every N seconds, up to MAX_WAIT.
@@ -94,9 +95,9 @@ def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") ->
 
 
 def exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) -> str:
-    """Exchange the OAuth code for a short-lived token."""
+    """Exchange the OAuth code for a short-lived user access token (Business Login flow)."""
     resp = httpx.post(
-        f"{AUTH}/access_token",
+        f"{FB_GRAPH}/{VERSION}/oauth/access_token",
         data={
             "client_id": app_id,
             "client_secret": app_secret,
@@ -110,27 +111,55 @@ def exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) ->
     return resp.json()["access_token"]
 
 
-def long_lived_token(app_secret: str, short_token: str) -> tuple[str, datetime]:
-    """Exchange a short-lived token for a long-lived one (60 days). Returns (token, expires_at)."""
+def long_lived_token(app_id: str, app_secret: str, short_token: str) -> tuple[str, datetime]:
+    """Exchange a short-lived user token for a long-lived one (60 days)."""
+    from datetime import timedelta
+
     resp = httpx.get(
-        f"{GRAPH}/access_token",
+        f"{FB_GRAPH}/oauth/access_token",
         params={
-            "grant_type": "ig_exchange_token",
+            "grant_type": "fb_exchange_token",
+            "client_id": app_id,
             "client_secret": app_secret,
-            "access_token": short_token,
+            "fb_exchange_token": short_token,
         },
         timeout=TIMEOUT,
     )
     _raise(resp)
     data = resp.json()
-    token = data["access_token"]
-    expires_in = data.get("expires_in", 5183944)  # ~60 days
-    expires_at = datetime.now(UTC).replace(tzinfo=None)
-    expires_at = expires_at.replace(second=expires_at.second + min(expires_in, 5183944))
-    from datetime import timedelta
-
+    expires_in = data.get("expires_in", 5183944)
     expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=expires_in)
-    return token, expires_at
+    return data["access_token"], expires_at
+
+
+def get_ig_channels(long_user_token: str) -> list["Channel"]:
+    """Get all Instagram Business/Creator accounts linked to the user's Facebook pages."""
+    resp = httpx.get(
+        f"{FB_GRAPH}/{VERSION}/me/accounts",
+        params={
+            "fields": (
+                "id,name,access_token,"
+                "instagram_business_account{id,username,name,profile_picture_url}"
+            ),
+            "access_token": long_user_token,
+        },
+        timeout=TIMEOUT,
+    )
+    _raise(resp)
+    channels = []
+    for page in resp.json().get("data", []):
+        ig = page.get("instagram_business_account")
+        if ig:
+            channels.append(
+                Channel(
+                    id=ig["id"],
+                    username=ig.get("username", ig["id"]),
+                    name=ig.get("name", page.get("name", "")),
+                    avatar=ig.get("profile_picture_url"),
+                    access_token=page["access_token"],
+                )
+            )
+    return channels
 
 
 def refresh_token(token: str) -> tuple[str, datetime]:

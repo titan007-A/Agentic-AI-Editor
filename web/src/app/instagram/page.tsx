@@ -13,6 +13,12 @@ export default function InstagramPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("ig_connected")) toast.success("Instagram account connected!");
+    if (params.get("ig_error")) toast.error("Instagram error: " + params.get("ig_error"));
+    if (params.get("ig_connected") || params.get("ig_error")) {
+      window.history.replaceState({}, "", "/instagram/");
+    }
     api
       .igChannels()
       .then(setChannels)

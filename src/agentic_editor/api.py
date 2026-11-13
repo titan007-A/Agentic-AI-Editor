@@ -2214,14 +2214,14 @@ def create_app(
         error: str = "",
     ) -> RedirectResponse:
         if error:
-            return RedirectResponse("/settings?ig_error=" + error)
+            return RedirectResponse("/instagram?ig_error=" + error)
         # Find the user by state token (no logged-in session at callback time)
         from sqlalchemy import select as sa_select
 
         rows = list(session.scalars(sa_select(Setting).where(Setting.key.like("ig_oauth_state:%"))))
         matched = next((r for r in rows if r.value == state), None)
         if not matched:
-            return RedirectResponse("/settings?ig_error=invalid_state")
+            return RedirectResponse("/instagram?ig_error=invalid_state")
         owner_id = matched.key.split(":", 1)[1]
         session.delete(matched)
         try:
@@ -2229,23 +2229,28 @@ def create_app(
             short = instagram.exchange_code(
                 settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
             )
-            token, expires_at = instagram.long_lived_token(settings.meta_app_secret, short)
-            channel = instagram.get_account(token)
+            long_token, _expires = instagram.long_lived_token(
+                settings.meta_app_id, settings.meta_app_secret, short
+            )
+            channels = instagram.get_ig_channels(long_token)
         except instagram.InstagramError as exc:
             log.warning("instagram oauth failed: %s", exc)
-            return RedirectResponse(f"/settings?ig_error={str(exc)[:80]}")
-        row = session.get(InstagramChannel, channel.id)
-        if row is None:
-            row = InstagramChannel(id=channel.id, owner_id=owner_id)
-            session.add(row)
-        row.username = channel.username
-        row.name = channel.name
-        row.avatar = channel.avatar
-        row.access_token = token
-        row.token_expires_at = expires_at
+            return RedirectResponse(f"/instagram?ig_error={str(exc)[:80]}")
+        if not channels:
+            return RedirectResponse("/instagram?ig_error=no_instagram_account_linked")
+        for channel in channels:
+            row = session.get(InstagramChannel, channel.id)
+            if row is None:
+                row = InstagramChannel(id=channel.id, owner_id=owner_id)
+                session.add(row)
+            row.username = channel.username
+            row.name = channel.name
+            row.avatar = channel.avatar
+            row.access_token = channel.access_token
+            row.token_expires_at = None  # Page access tokens don't expire
         session.commit()
-        log.info("instagram: connected @%s for user %s", channel.username, owner_id)
-        return RedirectResponse("/settings?ig_connected=1")
+        log.info("instagram: connected %d account(s) for user %s", len(channels), owner_id)
+        return RedirectResponse("/instagram?ig_connected=1")
 
     @app.get("/api/instagram/channels")
     def list_ig_channels(account: User, session: DB) -> list[dict]:
