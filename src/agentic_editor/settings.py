@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     # Business → Settings). When set, Business Login OAuth is used instead of Instagram
     # Platform API direct flow.
     meta_config_id: str = ""
+    # A SearXNG server asked before the other search engines (websearch.py); empty: none.
+    searxng_url: str = ""
     database: Path = Path("media/app.db")
     queue_database: Path = Path("media/queue.db")
     web_dir: Path = Path("web/out")
