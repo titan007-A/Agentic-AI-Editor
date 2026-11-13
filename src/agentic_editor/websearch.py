@@ -6,6 +6,10 @@
   Startpage refused. Both layouts are read here, and a search asks as many Yahoo pages as
   it takes to give the results asked for (Yahoo shows about 7 a page).
 - When Yahoo fails, ddgs's engines; SEARXNG_URL, when set, is asked before both.
+- A "site:" search answered with pages from other sites is a failure, not an answer: Yahoo,
+  after many searches from one address, sends unrelated pages (a WhatsApp login, office
+  furniture) and ignores "site:". Such an answer is neither used nor kept, and the next
+  engine is asked; the pages from other sites in a mixed answer are left out.
 - Answers are kept on disk for CACHE_DAYS: a schedule or a research run again asks many
   of the same searches, and those come back at once without asking the engines.
 - An engine that fails FAILS_TO_REST times running is left alone for REST seconds, and a
@@ -51,6 +55,28 @@ REDIRECT = re.compile(r"/RU=([^/]+)/R[KS]=")
 # What Yahoo says when nothing matches: a fine answer, not a failure.
 NOTHING = re.compile(r"We did not find results for|did not match any documents", re.I)
 TAG = re.compile(r"</?[a-z]+[^>]*>", re.I)
+
+
+# The site a search is limited to ("site:instagram.com/reel ..." -> instagram.com).
+SITE = re.compile(r"(?:^|\s)site:([^\s/]+)", re.I)
+SAME_SITE = {"x.com": ("x.com", "twitter.com"), "twitter.com": ("x.com", "twitter.com")}
+
+
+def on_site(query: str, hits: list[dict]) -> list[dict] | None:
+    """The hits that are on the site a "site:" query asks for (all hits for another
+    query); None when there were hits and none of them is: the engine ignored "site:"."""
+    found = SITE.search(query)
+    if not found or not hits:
+        return hits
+    site = found.group(1).lower().removeprefix("www.")
+    sites = SAME_SITE.get(site, (site,))
+
+    def ours(href: str) -> bool:
+        host = (urllib.parse.urlsplit(href).hostname or "").lower()
+        return any(host == s or host.endswith(f".{s}") for s in sites)
+
+    kept = [h for h in hits if ours(h.get("href", ""))]
+    return kept or None
 
 
 def _link(href: str) -> str:
@@ -161,7 +187,12 @@ def yahoo(query: str, count: int, page: int = 1) -> list[dict]:
         if n:
             time.sleep(YAHOO_PAUSE)
         got = _yahoo_page(query, first)
-        new = [h for h in got if h["href"] not in seen]
+        mine = on_site(query, got)
+        if mine is None:  # Yahoo turned to unrelated pages: what came before them stands
+            if hits:
+                break
+            raise SearchError(f"yahoo answered pages from other sites ({got[0]['href'][:60]})")
+        new = [h for h in mine if h["href"] not in seen]
         for hit in new:
             seen.add(hit["href"])
         hits += new
@@ -174,8 +205,20 @@ def yahoo(query: str, count: int, page: int = 1) -> list[dict]:
 # --- the others ----------------------------------------------------------------------
 
 
+def _searxng_url() -> str:
+    """SEARXNG_URL from the environment or the .env file (the server reads only the file)."""
+    if url := os.environ.get("SEARXNG_URL", "").strip():
+        return url
+    try:
+        from agentic_editor.settings import get_settings
+
+        return get_settings().searxng_url.strip()
+    except Exception:
+        return ""
+
+
 def searxng(query: str, count: int, page: int = 1) -> list[dict]:
-    base = os.environ.get("SEARXNG_URL", "").strip()
+    base = _searxng_url()
     url = f"{base.rstrip('/')}/search?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "pageno": page}
     )
@@ -213,7 +256,7 @@ Engine = Callable[[str, int, int], list[dict]]
 
 def _engines() -> list[tuple[str, Engine]]:
     order: list[tuple[str, Engine]] = []
-    if os.environ.get("SEARXNG_URL", "").strip():
+    if _searxng_url():
         order.append(("searxng", searxng))
     order += [("yahoo", yahoo), ("ddgs", ddgs)]
     return order
@@ -293,8 +336,9 @@ def search(query: str, count: int = 30, page: int = 1) -> list[dict]:
     """Results (href, title, body) for a query: from the cache when asked lately, else from
     the first engine that answers. An empty list is an answer (nothing found); raises
     SearchError when every engine failed or is resting after failing."""
-    if (hit := _cached(query, count, page)) is not None:
-        return hit
+    hit = _cached(query, count, page)
+    if hit is not None and (hit := on_site(query, hit)) is not None:
+        return hit  # an answer kept before this check may be all other sites: asked again
     problems = []
     for name, engine in _engines():
         if _resting(name):
@@ -302,6 +346,10 @@ def search(query: str, count: int = 30, page: int = 1) -> list[dict]:
             continue
         try:
             hits = engine(query, count, page)
+            if (mine := on_site(query, hits)) is None:
+                other = hits[0].get("href", "")[:60]
+                raise SearchError(f"answered pages from other sites ({other})")
+            hits = mine
         except Exception as exc:
             _failed(name, exc)
             problems.append(f"{name}: {exc}"[:200])

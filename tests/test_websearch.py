@@ -161,3 +161,70 @@ def test_a_search_every_engine_fails_says_so_and_a_cached_answer_needs_no_engine
     websearch.search("empty", 5)
     websearch.search("empty", 5)
     assert calls == ["yahoo", "yahoo"]
+
+
+def hit_at(href):
+    return {"href": href, "title": "t", "body": "b"}
+
+
+def test_a_site_search_answered_from_other_sites_asks_the_next_engine_and_isnt_kept(engines):
+    # What Yahoo sent the Mac for "site:instagram.com/reel young beatboxer ..." after a day
+    # of searches: unrelated pages, "site:" ignored.
+    junk = [hit_at("https://web.whatsapp.com/"), hit_at("https://www.bossescabin.com/shop")]
+    reel = hit_at("https://www.instagram.com/reel/C1bkIhXN5sB/")
+    calls = engines(("yahoo", junk), ("ddgs", [reel]))
+    q = "site:instagram.com/reel young beatboxer"
+    assert websearch.search(q, 5) == [reel]
+    assert calls == ["yahoo", "ddgs"]
+    # A mixed answer keeps the site's pages only; another query's answer is left as it is.
+    calls = engines(("yahoo", [*junk, reel]))
+    assert websearch.search("site:www.instagram.com other", 5) == [reel]
+    assert websearch.search("best beatboxers", 5) == [*junk, reel]
+    # X posts come from twitter.com addresses too.
+    tweet = hit_at("https://twitter.com/a/status/123")
+    calls = engines(("yahoo", [tweet]))
+    assert websearch.search("site:x.com video beatbox", 5) == [tweet]
+
+
+def test_a_junk_answer_already_in_the_cache_is_asked_again(engines, tmp_path):
+    q = "site:instagram.com/reel kept junk"
+    reel = hit_at("https://www.instagram.com/reel/C1bkIhXN5sB/")
+    websearch._keep(q, 5, 1, [hit_at("https://web.whatsapp.com/")])
+    calls = engines(("yahoo", [reel]))
+    assert websearch.search(q, 5) == [reel]
+    assert calls == ["yahoo"]
+
+
+def test_yahoo_stops_paging_at_a_page_from_other_sites(monkeypatch):
+    def page(*hrefs):
+        rows = "".join(
+            f'<section class="dd algo"><h3><a class="s-title" href="{ru(h)}" aria-label="r">r</a>'
+            f'</h3><p class="s-desc">d</p></section>'
+            for h in hrefs
+        )
+        return Page(f"<html><body>{rows}</body></html>")
+
+    reels = [f"https://www.instagram.com/reel/C{i}x/" for i in range(7)]
+    client = Client([page(*reels), page("https://web.whatsapp.com/")])
+    monkeypatch.setattr(websearch, "_client", lambda fresh=False: client)
+    monkeypatch.setattr(websearch, "YAHOO_PAUSE", 0)
+    assert [h["href"] for h in websearch.yahoo("site:instagram.com/reel q", 15)] == reels
+    # Only unrelated pages: a failure, so the next engine is asked.
+    client = Client([page("https://web.whatsapp.com/")])
+    monkeypatch.setattr(websearch, "_client", lambda fresh=False: client)
+    with pytest.raises(SearchError, match="other sites"):
+        websearch.yahoo("site:instagram.com/reel q", 15)
+
+
+def test_searxng_url_is_read_from_the_env_file_too(monkeypatch):
+    from types import SimpleNamespace
+
+    from agentic_editor import settings
+
+    monkeypatch.delenv("SEARXNG_URL", raising=False)
+    monkeypatch.setattr(
+        settings, "get_settings", lambda: SimpleNamespace(searxng_url="http://127.0.0.1:8787")
+    )
+    assert websearch._searxng_url() == "http://127.0.0.1:8787"
+    monkeypatch.setenv("SEARXNG_URL", "http://other:1")
+    assert websearch._searxng_url() == "http://other:1"
