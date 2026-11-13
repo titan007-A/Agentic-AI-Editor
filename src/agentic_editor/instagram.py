@@ -65,21 +65,23 @@ SCOPES = ",".join(
 def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") -> str:
     """The URL the user visits to authorize the app on their IG account.
 
-    Pass config_id (Unified Login configuration ID) to use config_id instead of scope.
-    Both flows use api.instagram.com/oauth/authorize.
+    With config_id: Unified Login via www.facebook.com/dialog/oauth (Meta's official flow).
+    Without config_id: Instagram-native via api.instagram.com/oauth/authorize.
     """
     import urllib.parse
 
     if config_id:
+        # Unified Login API — Meta requires Facebook dialog URL for config_id-based OAuth
         params = urllib.parse.urlencode(
             {
                 "client_id": app_id,
-                "redirect_uri": redirect_uri,
                 "config_id": config_id,
                 "response_type": "code",
+                "redirect_uri": redirect_uri,
                 "state": state,
             }
         )
+        return f"{FB_OAUTH}?{params}"
     else:
         params = urllib.parse.urlencode(
             {
@@ -90,7 +92,7 @@ def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") ->
                 "state": state,
             }
         )
-    return f"{AUTH}/authorize?{params}"
+        return f"{AUTH}/authorize?{params}"
 
 
 def exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) -> str:
@@ -147,8 +149,10 @@ def fb_exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str)
     return resp.json()["access_token"]
 
 
-def fb_long_lived_token(app_id: str, app_secret: str, short_token: str) -> str:
-    """Exchange a short-lived Facebook user token for a long-lived one."""
+def fb_long_lived_token(app_id: str, app_secret: str, short_token: str) -> tuple[str, datetime]:
+    """Exchange a short-lived Facebook user token for a long-lived one (60 days)."""
+    from datetime import timedelta
+
     resp = httpx.get(
         f"{FB_GRAPH}/oauth/access_token",
         params={
@@ -160,7 +164,10 @@ def fb_long_lived_token(app_id: str, app_secret: str, short_token: str) -> str:
         timeout=TIMEOUT,
     )
     _raise(resp)
-    return resp.json()["access_token"]
+    data = resp.json()
+    expires_in = data.get("expires_in", 5183944)
+    expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=expires_in)
+    return data["access_token"], expires_at
 
 
 def get_ig_channels(long_user_token: str) -> list["Channel"]:

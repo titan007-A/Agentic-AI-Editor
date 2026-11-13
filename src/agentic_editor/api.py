@@ -2226,10 +2226,20 @@ def create_app(
         session.delete(matched)
         try:
             redirect_uri = _ig_redirect_uri(request)
-            short = instagram.exchange_code(
-                settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
-            )
-            token, expires_at = instagram.long_lived_token(settings.meta_app_secret, short)
+            if settings.meta_config_id:
+                # Unified Login (Facebook dialog with config_id) → FB token exchange
+                short = instagram.fb_exchange_code(
+                    settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
+                )
+                token, expires_at = instagram.fb_long_lived_token(
+                    settings.meta_app_id, settings.meta_app_secret, short
+                )
+            else:
+                # Instagram-native flow (no config_id)
+                short = instagram.exchange_code(
+                    settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
+                )
+                token, expires_at = instagram.long_lived_token(settings.meta_app_secret, short)
             channel = instagram.get_account(token)
         except instagram.InstagramError as exc:
             log.warning("instagram oauth failed: %s", exc)
