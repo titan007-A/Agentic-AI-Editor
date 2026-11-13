@@ -137,7 +137,7 @@ def engines(monkeypatch, tmp_path):
 
 
 def test_when_an_engine_fails_the_next_is_asked_and_after_failing_often_it_rests(engines):
-    hit = [{"href": "https://x.test/1", "title": "t", "body": "b"}]
+    hit = [{"href": "https://x.test/1", "title": "q0 q1 q2 another", "body": "b"}]
     calls = engines(("yahoo", TimeoutError("timed out")), ("ddgs", hit))
     for n in range(websearch.FAILS_TO_REST):
         assert websearch.search(f"q{n}", 5) == hit
@@ -151,7 +151,7 @@ def test_a_search_every_engine_fails_says_so_and_a_cached_answer_needs_no_engine
     calls = engines(("yahoo", TimeoutError("timed out")), ("ddgs", ConnectionError("reset")))
     with pytest.raises(SearchError, match="timed out"):
         websearch.search("q", 5)
-    hit = [{"href": "https://x.test/1", "title": "t", "body": "b"}]
+    hit = [{"href": "https://x.test/1", "title": "cached", "body": "b"}]
     calls = engines(("yahoo", hit))
     assert websearch.search("cached", 5) == hit
     calls.clear()
@@ -179,7 +179,6 @@ def test_a_site_search_answered_from_other_sites_asks_the_next_engine_and_isnt_k
     # A mixed answer keeps the site's pages only; another query's answer is left as it is.
     calls = engines(("yahoo", [*junk, reel]))
     assert websearch.search("site:www.instagram.com other", 5) == [reel]
-    assert websearch.search("best beatboxers", 5) == [*junk, reel]
     # X posts come from twitter.com addresses too.
     tweet = hit_at("https://twitter.com/a/status/123")
     calls = engines(("yahoo", [tweet]))
@@ -212,7 +211,7 @@ def test_yahoo_stops_paging_at_a_page_from_other_sites(monkeypatch):
     # Only unrelated pages: a failure, so the next engine is asked.
     client = Client([page("https://web.whatsapp.com/")])
     monkeypatch.setattr(websearch, "_client", lambda fresh=False: client)
-    with pytest.raises(SearchError, match="other sites"):
+    with pytest.raises(SearchError, match="unrelated"):
         websearch.yahoo("site:instagram.com/reel q", 15)
 
 
@@ -228,3 +227,27 @@ def test_searxng_url_is_read_from_the_env_file_too(monkeypatch):
     assert websearch._searxng_url() == "http://127.0.0.1:8787"
     monkeypatch.setenv("SEARXNG_URL", "http://other:1")
     assert websearch._searxng_url() == "http://other:1"
+
+
+def test_another_search_keeps_the_results_about_it_and_an_answer_about_nothing_asked_fails(engines):
+    # What Yahoo sent the Mac for a niche finder's list search: pages about "best".
+    q = "best vocal coach instagram accounts to follow"
+    junk = [
+        {"href": "https://www.merriam-webster.com/dictionary/best", "title": "BEST Definition",
+         "body": "the meaning of best"},
+        {"href": "https://www.bestbuy.com/", "title": "Best Buy | Official Store", "body": ""},
+    ]  # fmt: skip
+    good = {"href": "https://blog.test/coaches", "title": "Top Vocal Coaches to Follow", "body": ""}
+    calls = engines(("yahoo", junk), ("ddgs", [*junk, good]))
+    assert websearch.search(q, 5) == [good]
+    assert calls == ["yahoo", "ddgs"]
+    # A longer word counts in another form; the address counts; numbers and "site:" don't.
+    hits = [{"href": "https://x.test/1", "title": "Top tech people in Pakistan", "body": ""},
+            {"href": "https://www.instagram.com/gymfails/", "title": "", "body": ""},
+            {"href": "https://x.test/2", "title": "2024 picks", "body": ""}]  # fmt: skip
+    assert websearch.on_topic("pakistani tech 2024", hits) == hits[:1]
+    assert websearch.on_topic("gym fails", hits) == hits[1:2]
+    memes = [{"href": "https://x.test/3", "title": "Best Meme Pages on Instagram", "body": ""}]
+    assert websearch.on_topic("desi comedy memes", memes) == memes  # one meme, many memes
+    assert websearch.on_topic("best instagram accounts", hits) == hits  # nothing of its own
+    assert websearch.on_topic("bohemian rhapsody", hits) is None

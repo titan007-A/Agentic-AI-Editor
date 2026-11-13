@@ -61,26 +61,25 @@ search:
     - rss
 
 engines:
-  - name: google
-    engine: google
-    shortcut: g
-    weight: 2
-  - name: bing
-    engine: bing
-    shortcut: b
-    weight: 2
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: d
-    weight: 1
+  # Measured from the Mac (2026-11-13). Yahoo and Yandex answer well and keep to "site:";
+  # Bing answers unrelated pages and ignores "site:"; Google says "access denied";
+  # DuckDuckGo asks for a CAPTCHA or times out (10 s lost a search). SearXNG ships Yahoo,
+  # Yandex, Bing and Google switched off: naming them without "disabled: false" leaves
+  # them off. websearch.py drops what is still unrelated.
   - name: yahoo
-    engine: yahoo
-    shortcut: y
+    disabled: false
+    weight: 2
+  - name: yandex
+    disabled: false
     weight: 1
   - name: brave
-    engine: brave
-    shortcut: br
     weight: 2
+  - name: duckduckgo
+    disabled: true
+  - name: bing
+    disabled: true
+  - name: google
+    disabled: true
 
 outgoing:
   request_timeout: 10.0
