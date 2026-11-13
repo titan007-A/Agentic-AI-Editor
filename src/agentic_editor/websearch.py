@@ -10,6 +10,10 @@
   after many searches from one address, sends unrelated pages (a WhatsApp login, office
   furniture) and ignores "site:". Such an answer is neither used nor kept, and the next
   engine is asked; the pages from other sites in a mixed answer are left out.
+- Likewise for another search: a result with none of the search's own words (those left
+  when "best", "instagram", "accounts" and the like are taken out) is about something else
+  (Yahoo answered "best vocal coach instagram accounts to follow" with dictionary pages for
+  "best"); it is left out, and an answer of only such results is a failure.
 - Answers are kept on disk for CACHE_DAYS: a schedule or a research run again asks many
   of the same searches, and those come back at once without asking the engines.
 - An engine that fails FAILS_TO_REST times running is left alone for REST seconds, and a
@@ -77,6 +81,58 @@ def on_site(query: str, hits: list[dict]) -> list[dict] | None:
 
     kept = [h for h in hits if ours(h.get("href", ""))]
     return kept or None
+
+
+# Words a search has that don't say what it is about: a result needn't have them.
+_COMMON = """a an and at best by for from in is of on or the to with top instagram insta ig
+account accounts follow followers following post posts page pages profile song songs video
+videos reel reels official viral channel creator creators influencer influencers list famous
+popular"""
+COMMON = frozenset(_COMMON.split())
+WORD = re.compile(r"\w+")
+OPERATOR = re.compile(r"(?:^|\s)-?(?:site|intitle|inurl|intext):\S*", re.I)
+STEM = 5  # letters a longer word and a result's word share to count as one ("pakistani")
+
+
+def _words(text: str) -> set[str]:
+    return set(WORD.findall(text.casefold()))
+
+
+def _one(word: str) -> str:
+    """A word without a plural "s" ("memes" and "meme" are one)."""
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+
+
+def on_topic(query: str, hits: list[dict]) -> list[dict] | None:
+    """The hits with at least one of the query's own words (in the title, the text or the
+    address); None when there were hits and none has one: the engine answered something
+    else. A query with no words of its own keeps every hit."""
+    asked = {
+        _one(w)
+        for w in _words(OPERATOR.sub(" ", query))
+        if len(w) > 1 and w not in COMMON and not w.isdigit()
+    }
+    if not asked or not hits:
+        return hits
+
+    def about(hit: dict) -> bool:
+        address = hit.get("href", "").casefold()
+        said = {_one(w) for w in _words(f"{hit.get('title', '')} {hit.get('body', '')} {address}")}
+        stems = {w[:STEM] for w in said if len(w) >= STEM}
+        return any(
+            (w[:STEM] in stems if len(w) >= STEM else w in said)
+            # Addresses run words together (instagram.com/gymfails).
+            or (len(w) > 2 and w[:STEM] in address)
+            for w in asked
+        )
+
+    kept = [h for h in hits if about(h)]
+    return kept or None
+
+
+def answers(query: str, hits: list[dict]) -> list[dict] | None:
+    """The hits that answer the query (see on_site, on_topic); None when none does."""
+    return on_site(query, hits) if SITE.search(query) else on_topic(query, hits)
 
 
 def _link(href: str) -> str:
@@ -187,11 +243,11 @@ def yahoo(query: str, count: int, page: int = 1) -> list[dict]:
         if n:
             time.sleep(YAHOO_PAUSE)
         got = _yahoo_page(query, first)
-        mine = on_site(query, got)
+        mine = answers(query, got)
         if mine is None:  # Yahoo turned to unrelated pages: what came before them stands
             if hits:
                 break
-            raise SearchError(f"yahoo answered pages from other sites ({got[0]['href'][:60]})")
+            raise SearchError(f"yahoo answered unrelated pages ({got[0]['href'][:60]})")
         new = [h for h in mine if h["href"] not in seen]
         for hit in new:
             seen.add(hit["href"])
@@ -337,8 +393,8 @@ def search(query: str, count: int = 30, page: int = 1) -> list[dict]:
     the first engine that answers. An empty list is an answer (nothing found); raises
     SearchError when every engine failed or is resting after failing."""
     hit = _cached(query, count, page)
-    if hit is not None and (hit := on_site(query, hit)) is not None:
-        return hit  # an answer kept before this check may be all other sites: asked again
+    if hit is not None and (hit := answers(query, hit)) is not None:
+        return hit  # an answer kept before these checks may be all unrelated: asked again
     problems = []
     for name, engine in _engines():
         if _resting(name):
@@ -346,9 +402,9 @@ def search(query: str, count: int = 30, page: int = 1) -> list[dict]:
             continue
         try:
             hits = engine(query, count, page)
-            if (mine := on_site(query, hits)) is None:
+            if (mine := answers(query, hits)) is None:
                 other = hits[0].get("href", "")[:60]
-                raise SearchError(f"answered pages from other sites ({other})")
+                raise SearchError(f"answered unrelated pages ({other})")
             hits = mine
         except Exception as exc:
             _failed(name, exc)
