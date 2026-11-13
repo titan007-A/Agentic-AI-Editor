@@ -2222,7 +2222,7 @@ def create_app(
         matched = next((r for r in rows if r.value == state), None)
         if not matched:
             return RedirectResponse("/settings?ig_error=invalid_state")
-        owner_id = matched.key.split(":", 2)[2]
+        owner_id = matched.key.split(":", 1)[1]
         session.delete(matched)
         try:
             redirect_uri = _ig_redirect_uri(request)
