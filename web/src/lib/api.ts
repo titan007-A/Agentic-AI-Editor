@@ -479,6 +479,16 @@ export type BufferResult = {
   note?: string;
 };
 
+/** A connected Instagram account (direct Meta API, not Buffer). */
+export type IgChannel = {
+  id: string;
+  username: string;
+  name: string;
+  avatar: string | null;
+  connected_at: string;
+  token_expires_at: string | null;
+};
+
 export type AssetKind = "image" | "video" | "audio" | "lut";
 
 export type PreviewShape = "16:9" | "4:3" | "1:1" | "4:5" | "9:16";
@@ -639,6 +649,13 @@ export const api = {
     },
   ) =>
     request<{ results: BufferResult[]; link: string }>("POST", `/outputs/${outputId}/buffer`, body),
+  igChannels: () => request<IgChannel[]>("GET", "/instagram/channels"),
+  removeIgChannel: (id: string) => request<{ ok: boolean }>("DELETE", `/instagram/channels/${id}`),
+  postToInstagram: (
+    outputId: number,
+    body: { channel_id: string; caption: string; share_to_feed: boolean },
+  ) =>
+    request<{ post_id: string; channel: string }>("POST", `/outputs/${outputId}/instagram`, body),
   uploadAsset: (file: File, kind: AssetKind) => {
     const form = new FormData();
     form.append("file", file);
