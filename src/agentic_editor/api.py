@@ -20,7 +20,7 @@ from typing import Annotated, Literal
 import httpx
 import yaml
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -37,6 +37,7 @@ from agentic_editor import (
     eta,
     features,
     fun,
+    instagram,
     jobs,
     research,
     songlist,
@@ -49,6 +50,7 @@ from agentic_editor.db import (
     Feed,
     FeedItem,
     HiddenAccount,
+    InstagramChannel,
     Job,
     NicheAccount,
     NicheSchedule,
@@ -2159,6 +2161,149 @@ def create_app(
             [r | {"key": keys[c].label} for r, c in zip(results, wanted, strict=True)],
         )
         return {"results": results, "link": link}
+
+    # ------------------------------------------------------------------ Instagram direct
+    # OAuth: redirect to Instagram, handle callback, manage channels, post reels.
+    # App must be configured: META_APP_ID + META_APP_SECRET in .env, and
+    # https://<host>/auth/instagram/callback in the Meta App's Instagram product
+    # "Valid OAuth redirect URIs".
+
+    def _ig_redirect_uri(request: Request) -> str:
+        base = (
+            settings.public_url.rstrip("/")
+            if settings.public_url
+            else str(request.base_url).rstrip("/")
+        )
+        return f"{base}/auth/instagram/callback"
+
+    def _ig_channel_view(ch: InstagramChannel) -> dict:
+        return {
+            "id": ch.id,
+            "username": ch.username,
+            "name": ch.name,
+            "avatar": ch.avatar,
+            "connected_at": ch.connected_at.isoformat() if ch.connected_at else None,
+            "token_expires_at": ch.token_expires_at.isoformat() if ch.token_expires_at else None,
+        }
+
+    @app.get("/auth/instagram")
+    def instagram_auth(request: Request, account: User, session: DB) -> RedirectResponse:
+        if not settings.meta_app_id:
+            raise HTTPException(503, "Meta App not configured (META_APP_ID missing in .env)")
+        from secrets import token_urlsafe
+
+        state = token_urlsafe(16)
+        key = f"ig_oauth_state:{account.id}"
+        existing = session.get(Setting, key)
+        if existing:
+            existing.value = state
+        else:
+            session.add(Setting(key=key, value=state))
+        session.commit()
+        url = instagram.auth_url(settings.meta_app_id, _ig_redirect_uri(request), state)
+        return RedirectResponse(url)
+
+    @app.get("/auth/instagram/callback")
+    async def instagram_callback(
+        request: Request,
+        session: DB,
+        code: str = "",
+        state: str = "",
+        error: str = "",
+    ) -> RedirectResponse:
+        if error:
+            return RedirectResponse("/settings?ig_error=" + error)
+        # Find the user by state token (no logged-in session at callback time)
+        from sqlalchemy import select as sa_select
+
+        rows = session.exec(  # type: ignore[call-overload]
+            sa_select(Setting).where(Setting.key.like("ig_oauth_state:%"))  # type: ignore[union-attr]
+        ).all()
+        matched = next((r for r in rows if r.value == state), None)
+        if not matched:
+            return RedirectResponse("/settings?ig_error=invalid_state")
+        owner_id = matched.key.split(":", 2)[2]
+        session.delete(matched)
+        try:
+            redirect_uri = _ig_redirect_uri(request)
+            short = instagram.exchange_code(
+                settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
+            )
+            token, expires_at = instagram.long_lived_token(settings.meta_app_secret, short)
+            channel = instagram.get_account(token)
+        except instagram.InstagramError as exc:
+            log.warning("instagram oauth failed: %s", exc)
+            return RedirectResponse(f"/settings?ig_error={str(exc)[:80]}")
+        row = session.get(InstagramChannel, channel.id)
+        if row is None:
+            row = InstagramChannel(id=channel.id, owner_id=owner_id)
+            session.add(row)
+        row.username = channel.username
+        row.name = channel.name
+        row.avatar = channel.avatar
+        row.access_token = token
+        row.token_expires_at = expires_at
+        session.commit()
+        log.info("instagram: connected @%s for user %s", channel.username, owner_id)
+        return RedirectResponse("/settings?ig_connected=1")
+
+    @app.get("/api/instagram/channels")
+    def list_ig_channels(account: User, session: DB) -> list[dict]:
+        from sqlalchemy import select as sa_select
+
+        rows = session.exec(  # type: ignore[call-overload]
+            sa_select(InstagramChannel).where(InstagramChannel.owner_id == account.id)
+        ).all()
+        return [_ig_channel_view(ch) for ch in rows]
+
+    @app.delete("/api/instagram/channels/{channel_id}")
+    def remove_ig_channel(channel_id: str, account: User, session: DB) -> dict:
+        ch = session.get(InstagramChannel, channel_id)
+        if ch is None or ch.owner_id != account.id:
+            raise HTTPException(404)
+        session.delete(ch)
+        session.commit()
+        return {"ok": True}
+
+    class IgPostRequest(BaseModel):
+        channel_id: str
+        caption: str = ""
+        share_to_feed: bool = True
+
+    @app.post("/api/outputs/{output_id}/instagram")
+    async def post_to_instagram(
+        output_id: int, body: IgPostRequest, account: User, session: DB, request: Request
+    ) -> dict:
+        output = find_output(output_id, session, account)
+        ch = session.get(InstagramChannel, body.channel_id)
+        if ch is None or ch.owner_id != account.id:
+            raise HTTPException(404, "Instagram channel not found")
+        # Build public video URL
+        base = (
+            settings.public_url.rstrip("/")
+            if settings.public_url
+            else str(request.base_url).rstrip("/")
+        )
+        vid_path = Path(output.path)
+        vid_rel = vid_path.relative_to(settings.media_dir)
+        video_url = f"{base}/media/{vid_rel.as_posix()}"
+        chan = instagram.Channel(
+            id=ch.id,
+            username=ch.username,
+            access_token=ch.access_token,
+        )
+        try:
+            loop = asyncio.get_event_loop()
+            post_id = await loop.run_in_executor(
+                None,
+                lambda: instagram.post_reel(chan, video_url, body.caption, body.share_to_feed),
+            )
+        except instagram.InstagramError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        ch.last_post_at = datetime.now(UTC).replace(tzinfo=None)
+        session.commit()
+        log.info("instagram: posted output %s to @%s -> %s", output_id, ch.username, post_id)
+        return {"post_id": post_id, "channel": ch.username}
 
     @app.get("/api/outputs/{output_id}/subtitles")
     def subtitles(output_id: int, account: User, session: DB) -> FileResponse:
