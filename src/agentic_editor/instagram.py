@@ -65,13 +65,12 @@ SCOPES = ",".join(
 def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") -> str:
     """The URL the user visits to authorize the app on their IG account.
 
-    Pass config_id (Facebook Login for Business configuration ID) to use Business Login
-    for Instagram instead of the Instagram Platform API direct flow.
+    Pass config_id (Unified Login configuration ID) to use config_id instead of scope.
+    Both flows use api.instagram.com/oauth/authorize.
     """
     import urllib.parse
 
     if config_id:
-        # Business Login for Instagram: config_id replaces scope.
         params = urllib.parse.urlencode(
             {
                 "client_id": app_id,
@@ -81,16 +80,16 @@ def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") ->
                 "state": state,
             }
         )
-        return f"{FB_OAUTH}?{params}"
-    params = urllib.parse.urlencode(
-        {
-            "client_id": app_id,
-            "redirect_uri": redirect_uri,
-            "scope": SCOPES,
-            "response_type": "code",
-            "state": state,
-        }
-    )
+    else:
+        params = urllib.parse.urlencode(
+            {
+                "client_id": app_id,
+                "redirect_uri": redirect_uri,
+                "scope": SCOPES,
+                "response_type": "code",
+                "state": state,
+            }
+        )
     return f"{AUTH}/authorize?{params}"
 
 
