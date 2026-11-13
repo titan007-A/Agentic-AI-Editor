@@ -24,7 +24,14 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/hooks/use-me";
 import { Checkbox } from "@/components/ui/checkbox";
-import { api, errorText, type NicheAccount, type NicheSchedule, type NicheSearch } from "@/lib/api";
+import {
+  api,
+  errorText,
+  type NicheAccount,
+  type NicheKind,
+  type NicheSchedule,
+  type NicheSearch,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const MIN = [
@@ -37,6 +44,13 @@ const MIN = [
   ["1000000", "1M+"],
 ] as const;
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const KINDS = [
+  ["pages", "Pages (theme, fan, meme, news)"],
+  ["people", "People (creators, artists, coaches)"],
+  ["any", "Any account"],
+] as const;
+// How an account's kind reads on its card.
+const KIND_SAYS: Record<string, string> = { page: "page", person: "person", business: "business" };
 
 function when(s: Pick<NicheSchedule, "hour" | "days">): string {
   const at = `${String(s.hour).padStart(2, "0")}:00`;
@@ -104,6 +118,11 @@ function AccountCard({
       {account.why && (
         <p className="text-sm text-muted-foreground">
           {account.fit !== null && <span className="font-semibold">{account.fit}/10 · </span>}
+          {KIND_SAYS[account.kind] && (
+            <span className="font-semibold" data-testid="niche-kind">
+              {KIND_SAYS[account.kind]} ·{" "}
+            </span>
+          )}
           {account.why}
         </p>
       )}
@@ -168,6 +187,7 @@ export default function AccountsPage() {
   const [searches, setSearches] = useState<NicheSearch[]>([]);
   const [open, setOpen] = useState<NicheSearch | null>(null);
   const [niche, setNiche] = useState("");
+  const [kind, setKind] = useState<NicheKind>("pages");
   const [min, setMin] = useState("10000");
   const [max, setMax] = useState("");
   const [language, setLanguage] = useState("");
@@ -240,6 +260,7 @@ export default function AccountsPage() {
     try {
       const made = await api.addNicheSchedule({
         niche,
+        kind,
         min_followers: Number(min),
         max_followers: max ? Number(max) : null,
         language,
@@ -279,6 +300,7 @@ export default function AccountsPage() {
     try {
       const made = await api.startNiche({
         niche,
+        kind,
         min_followers: Number(min),
         max_followers: max ? Number(max) : null,
         language,
@@ -340,6 +362,21 @@ export default function AccountsPage() {
               value={niche}
               onChange={(e) => setNiche(e.target.value)}
             />
+          </div>
+          <div className="space-y-1 sm:max-w-xs">
+            <Label htmlFor="niche-kind">Looking for</Label>
+            <select
+              id="niche-kind"
+              className="min-h-11 w-full rounded-md border-[1.5px] border-foreground bg-[var(--field)] px-2 text-sm"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as NicheKind)}
+            >
+              {KINDS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="space-y-1">

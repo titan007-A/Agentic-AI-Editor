@@ -8,6 +8,11 @@ out: the model may have made it up). The model then judges how well each fits, w
 the person liked and disliked before, and up to RUN_SIZE that pass the filters and were
 never shown to that person before are kept.
 
+Pages, people or both: most want pages (theme, fan, meme, clip, news pages, a series),
+not a person's own account. The model says which kind each account is while it judges
+it, the searches are written in the words such pages use, and an account of another
+kind than the one asked for is left out.
+
 Follower counts are what the search engine last saw, so they can be a little old."""
 
 import logging
@@ -15,6 +20,7 @@ import re
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field
@@ -71,6 +77,13 @@ FOLLOWERS = re.compile(
     r"follower|Abonnenten|follower\b|seguaci)"
 )
 POSTS = re.compile(r"(\d[\d.,]*)\s*([KkMm]?)\s*(?:Posts|posts|publicaciones|publications|post\b)")
+# "2 Following", "984 following", "1,203 seguidos": a page follows few, a person many.
+FOLLOWING = re.compile(
+    r"(\d[\d.,]*)\s*([KkMm]?)\s*(?:Following|following|seguidos|abonnements|Gefolgt|seguiti)\b"
+)
+
+# What kind of account a search wants (Filters.kind) -> the one kind of account it keeps.
+KINDS = {"pages": "page", "people": "person", "any": None}
 
 
 @dataclass
@@ -79,10 +92,12 @@ class Account:
     name: str = ""
     followers: int | None = None
     posts: int | None = None
+    following: int | None = None
     about: str = ""  # what the search engine says: bio, title
     query: str = ""
     fit: float | None = None  # 0-10, from the model
     why: str = ""
+    kind: str = ""  # "page", "person" or "business", from the model
     sources: set[str] = field(default_factory=set)
 
     @property
@@ -100,9 +115,14 @@ class Filters:
     max_followers: int | None = None
     language: str = ""
     country: str = ""
+    kind: str = "any"  # "pages", "people" or "any" (KINDS)
 
     def says(self) -> str:
         parts = []
+        if self.kind == "pages":
+            parts.append("pages, not a person's own account and not a company")
+        elif self.kind == "people":
+            parts.append("people's own accounts, not pages and not companies")
         if self.min_followers:
             parts.append(f"at least {self.min_followers:,} followers")
         if self.max_followers:
@@ -122,6 +142,18 @@ class Filters:
             if self.max_followers and account.followers > self.max_followers:
                 return False
         return True
+
+    def takes(self, kind: str) -> bool:
+        """Whether an account of this kind (as the model judged it) is one asked for."""
+        wanted = KINDS.get(self.kind)
+        return wanted is None or kind == wanted
+
+
+def kind_of(text: str | None) -> str:
+    """A kind as typed or stored ("Pages", "", None, "people") -> one of KINDS; pages when
+    it says nothing, since that is what most searches are for."""
+    text = (text or "").strip().lower()
+    return text if text in KINDS else "pages"
 
 
 def engines(query: str, count: int, page: int = 1) -> list[dict]:
@@ -147,6 +179,16 @@ def number(digits: str, unit: str) -> int | None:
 
 def followers_in(text: str) -> int | None:
     found = FOLLOWERS.search(text or "")
+    if not found:
+        return None
+    try:
+        return number(found.group(1), found.group(2))
+    except ValueError:
+        return None
+
+
+def following_in(text: str) -> int | None:
+    found = FOLLOWING.search(text or "")
     if not found:
         return None
     try:
@@ -202,10 +244,12 @@ def name_of(title: str, handle: str) -> str:
 def gather(
     queries: list[str], find: Find, pause: float = PAUSE, progress: Progress | None = None,
     at: tuple[float, float] = (0.0, 1.0), lists: dict[str, str] | None = None,
+    kind: str = "any",
 ) -> tuple[dict[str, Account], list[str]]:  # fmt: skip
     """Accounts the searches find: profile results (with their snippet's numbers), the
     accounts of posts and reels, and @handles named in lists of accounts; and the searches
-    that failed. Pages that list accounts are added to `lists` (link: title), to be read."""
+    that failed. Pages that list accounts are added to `lists` (link: title), to be read.
+    `kind` "pages" asks for lists of pages rather than of accounts."""
     found: dict[str, Account] = {}
     failed = []
     # Profile pages carry "N Followers, N Following, N Posts": asking for those words brings
@@ -214,7 +258,9 @@ def gather(
         (q, f'site:instagram.com {q} "followers" posts', page) for q in queries for page in PAGES
     ]
     asks += [(q, f"site:instagram.com {q}", 1) for q in queries]
-    asks += [(q, f"best {q} instagram accounts to follow", 1) for q in queries[: len(queries) // 3]]
+    listing = "pages" if kind == "pages" else "accounts"
+    some = queries[: len(queries) // 3]
+    asks += [(q, f"best {q} instagram {listing} to follow", 1) for q in some]
     done = 0
     answers = websearch.each(asks, lambda ask: find(ask[1], PER_QUERY, ask[2]), pause)
     for (query, asked, _), hits in answers:
@@ -233,6 +279,7 @@ def gather(
                 account.name = account.name or name_of(title, handle)
                 account.followers = account.followers or followers_in(body) or followers_in(title)
                 account.posts = account.posts or posts_in(body)
+                account.following = account.following or following_in(body)
                 if body and len(body) > len(account.about):
                     account.about = body[:400]
                 account.sources.add("profile")
@@ -333,6 +380,7 @@ def look_up(
             body, title = hit.get("body", ""), hit.get("title", "")
             account.followers = followers_in(body) or followers_in(title)
             account.posts = account.posts or posts_in(body)
+            account.following = account.following or following_in(body)
             account.name = account.name or name_of(title, account.handle)
             if body:
                 account.about = body[:400]
@@ -350,6 +398,10 @@ class _Queries(BaseModel):
 
 class _Fit(BaseModel):
     n: int
+    kind: Literal["page", "person", "business"] = Field(
+        description="page: run as a channel about a topic; person: one person's own account; "
+        "business: a company, shop, studio, gym, league or product"
+    )
     fit: int = Field(ge=0, le=10, description="how well this account is in the niche asked for")
     why: str = Field(description="one short line: what the account is, why it fits or not")
 
@@ -362,23 +414,56 @@ PLAN = """Someone wants to find Instagram accounts in this niche, to reach out t
 {niche}
 {filters}
 {taste}
+{kind}
 Write {count} different web searches that would find such accounts' Instagram profile pages:
 the kinds of account, the topics, the words such accounts put in their name and bio, in
 the niche's own language(s), and related sub-niches. Short searches, no "site:", no quotes,
 none like these already used: {used}
-Also name up to {known} real Instagram accounts in this niche that you know, by their exact
-handle (without @), best known first. Only ones you are sure exist: none rather than a
-guess. Not these, already found: {named}"""
+Also name up to {known} real Instagram accounts of that kind in this niche that you know, by
+their exact handle (without @), best known first. Only ones you are sure exist: none rather
+than a guess. Not these, already found: {named}"""
+
+# What the planning model is told of the kind of account wanted (Filters.kind).
+PLAN_KIND = {
+    "pages": """They want PAGES: accounts run as a channel about the topic, not about whoever
+runs them: theme pages, fan pages, meme pages, clip and compilation pages, news and update
+pages, edit pages, quote pages, an animated or web series. NOT a person's own account (an
+artist's or animator's portfolio, an athlete, a coach or trainer, an influencer about their
+own life) and NOT a company, shop, studio or gym. So write searches the way such pages
+describe themselves, with words like: page, daily, memes, clips, edits, fan page, updates,
+news, compilation, highlights, "follow for more", "DM for promo".""",
+    "people": """They want PEOPLE: one person's own account (a creator, artist, coach, expert,
+athlete posting their own work or life), NOT theme or fan pages that post about a topic and
+NOT companies or shops.""",
+    "any": "",
+}
 
 RATE = """Someone wants Instagram accounts in this niche, to reach out to them:
 {niche}
 {filters}
 {taste}
-For each account below (what a web search says about it), rate 0-10 how well it is an
-account in that niche (10: exactly that; 5: related; 0: not at all, a brand page when
-creators were asked for, a fan page of something else, a dead or spam account). Say in one
-line what it is and why.
+For each account below (what a web search says about it), first say what kind it is:
+- "page": run as a channel about a topic, not about whoever runs it: a theme, fan, meme,
+  clip, compilation, news, update, edit or quote page; a series or show; a media outlet.
+- "person": one person's own account: their art, work, sport or life; an artist, animator,
+  illustrator, creator, coach, trainer, athlete, model or influencer, however big.
+- "business": a company, shop, studio, gym, agency, league, promotion or product's own account.
+A person shows: a person's name as the name; pronouns, age, "I"/"my"; a job title; "open
+for commissions", "freelance", "available for work"; following hundreds or thousands. A
+page shows: the topic as the name; "daily", "page", "fan page", "memes", "clips", "edits",
+"updates", "follow for more", "DM for promo", "credits to the owners"; following few; many
+posts.
+Then rate 0-10 how well it is an account in that niche (10: exactly that; 5: related; 0: not
+at all, a brand page when creators were asked for, a fan page of something else, a dead or
+spam account){kind_rule}. Say in one line what it is and why.
 {accounts}"""
+
+# The rating rule for an account of another kind than the one wanted (Filters.kind).
+RATE_KIND = {
+    "pages": "; they want pages: a person's own account or a business is 2 at most",
+    "people": "; they want people: a page or a business is 2 at most",
+    "any": "",
+}
 
 
 def taste_line(liked: list[str], disliked: list[str]) -> str:
@@ -403,6 +488,7 @@ def plan(
         niche=niche.strip(),
         filters=f"Wanted: {filters.says()}." if filters.says() else "",
         taste=taste,
+        kind=PLAN_KIND.get(filters.kind, ""),
         count=count,
         used="; ".join(used[-40:]) or "(none yet)",
         known=known,
@@ -438,20 +524,26 @@ def _one_line(text: str, limit: int = 300) -> str:
     return " ".join(text.split())[:limit]
 
 
+def _count(n: int | None) -> str:
+    return "?" if n is None else str(n)
+
+
 def rate(llm, niche: str, filters: Filters, taste: str, accounts: list[Account]) -> None:
     """Each account's fit (0-10) and why, from the planning model; a batch it can't rate
     keeps None (left out)."""
     for start in range(0, len(accounts), RATE_BATCH):
         group = accounts[start : start + RATE_BATCH]
         lines = "\n".join(
-            f"{n}. @{a.handle} | name: {a.name or '?'} | followers: "
-            f"{a.followers if a.followers is not None else '?'} | says: {_one_line(a.about)}"
+            f"{n}. @{a.handle} | name: {a.name or '?'} | followers: {_count(a.followers)} | "
+            f"following: {_count(a.following)} | posts: {_count(a.posts)} | says: "
+            f"{_one_line(a.about)}"
             for n, a in enumerate(group, 1)
         )
         prompt = RATE.format(
             niche=niche.strip(),
             filters=f"Wanted: {filters.says()}." if filters.says() else "",
             taste=taste,
+            kind_rule=RATE_KIND.get(filters.kind, ""),
             accounts=lines,
         )
         try:
@@ -464,6 +556,7 @@ def rate(llm, niche: str, filters: Filters, taste: str, accounts: list[Account])
             if 1 <= fit.n <= len(group):
                 group[fit.n - 1].fit = fit.fit
                 group[fit.n - 1].why = fit.why.strip()[:200]
+                group[fit.n - 1].kind = fit.kind
 
 
 def _opened(planner):
@@ -473,6 +566,12 @@ def _opened(planner):
         return nullcontext(planner)
     return planner()
 
+
+# What a run says of the fitting accounts it left out for being of another kind.
+OTHER_KIND = {
+    "pages": "left out {n} accounts in the niche that are a person's own or a company's, not pages",
+    "people": "left out {n} accounts in the niche that are pages or companies, not people",
+}
 
 # Who is looked up first: accounts the model named (they must be checked: it may make one
 # up), then those from posts and reels, then those named in lists.
@@ -492,7 +591,8 @@ def run(
     read: Callable[[str], str] | None = None,
 ) -> tuple[list[Account], list[str]]:
     """Up to `size` accounts of the niche, best fit first, none of `seen` (shown before or
-    hidden), all passing `filters`; and notes on what went wrong on the way. `planner` is
+    hidden), all passing `filters` (of the kind it asks for); and notes on what went wrong
+    on the way. `planner` is
     opened only to plan and to judge, so the GPU is free while the web is searched."""
     if find is None:
         find = engines
@@ -506,6 +606,7 @@ def run(
     lists_read: set[str] = set()
     notes: list[str] = []
     failures = 0
+    other_kind = 0  # fitting accounts of another kind than the one asked for
     for round_ in range(ROUNDS):
         lo, hi = round_ / ROUNDS, (round_ + 1) / ROUNDS
         span = hi - lo
@@ -518,7 +619,9 @@ def run(
         used += queries
         named += known
         lists: dict[str, str] = {}
-        found, failed = gather(queries, find, pause, say, (lo, lo + span * 0.4), lists)
+        found, failed = gather(
+            queries, find, pause, say, (lo, lo + span * 0.4), lists, kind=filters.kind
+        )
         failures += len(failed)
         for handle in known:
             found.setdefault(handle, Account(handle, query="named by the model"))
@@ -547,12 +650,18 @@ def run(
             with _opened(planner) as llm:
                 rate(llm, niche, filters, taste, able)
         for account in able:
-            if account.fit is not None and account.fit >= MIN_FIT:
+            if account.fit is None or account.fit < MIN_FIT:
+                continue
+            if filters.takes(account.kind):
                 kept[account.handle] = account
+            else:
+                other_kind += 1
         if len(kept) >= size:
             break
     if failures:
         notes.append(f"{failures} searches got no answer from the search engines")
+    if other_kind:
+        notes.append(OTHER_KIND[filters.kind].format(n=other_kind))
     ranked = sorted(kept.values(), key=lambda a: (-(a.fit or 0), -(a.followers or 0)))[:size]
     if len(ranked) < size:
         notes.append(f"found {len(ranked)} new accounts that fit; the searches ran out")
