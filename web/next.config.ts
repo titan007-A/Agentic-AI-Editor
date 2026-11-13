@@ -15,6 +15,6 @@ const nextConfig: NextConfig = dev
         return [{ source: "/api/:path*", destination: "http://127.0.0.1:8000/api/:path*" }];
       },
     }
-  : { turbopack, output: "export", trailingSlash: true, images: { unoptimized: true } };
+  : { output: "export", trailingSlash: true, images: { unoptimized: true } };
 
 export default nextConfig;
