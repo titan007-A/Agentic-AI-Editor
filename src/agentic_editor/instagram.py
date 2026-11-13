@@ -95,7 +95,44 @@ def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") ->
 
 
 def exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) -> str:
-    """Exchange the OAuth code for a short-lived user access token (Business Login flow)."""
+    """Exchange the OAuth code for a short-lived Instagram token (Instagram Platform flow)."""
+    resp = httpx.post(
+        f"{AUTH}/access_token",
+        data={
+            "client_id": app_id,
+            "client_secret": app_secret,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
+            "code": code,
+        },
+        timeout=TIMEOUT,
+    )
+    _raise(resp)
+    return resp.json()["access_token"]
+
+
+def long_lived_token(app_secret: str, short_token: str) -> tuple[str, datetime]:
+    """Exchange a short-lived Instagram token for a long-lived one (60 days)."""
+    from datetime import timedelta
+
+    resp = httpx.get(
+        f"{GRAPH}/access_token",
+        params={
+            "grant_type": "ig_exchange_token",
+            "client_secret": app_secret,
+            "access_token": short_token,
+        },
+        timeout=TIMEOUT,
+    )
+    _raise(resp)
+    data = resp.json()
+    expires_in = data.get("expires_in", 5183944)
+    expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=expires_in)
+    return data["access_token"], expires_at
+
+
+def fb_exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) -> str:
+    """Exchange the OAuth code for a short-lived user token (Facebook Login for Business flow)."""
     resp = httpx.post(
         f"{FB_GRAPH}/{VERSION}/oauth/access_token",
         data={
@@ -111,10 +148,8 @@ def exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) ->
     return resp.json()["access_token"]
 
 
-def long_lived_token(app_id: str, app_secret: str, short_token: str) -> tuple[str, datetime]:
-    """Exchange a short-lived user token for a long-lived one (60 days)."""
-    from datetime import timedelta
-
+def fb_long_lived_token(app_id: str, app_secret: str, short_token: str) -> str:
+    """Exchange a short-lived Facebook user token for a long-lived one."""
     resp = httpx.get(
         f"{FB_GRAPH}/oauth/access_token",
         params={
@@ -126,10 +161,7 @@ def long_lived_token(app_id: str, app_secret: str, short_token: str) -> tuple[st
         timeout=TIMEOUT,
     )
     _raise(resp)
-    data = resp.json()
-    expires_in = data.get("expires_in", 5183944)
-    expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=expires_in)
-    return data["access_token"], expires_at
+    return resp.json()["access_token"]
 
 
 def get_ig_channels(long_user_token: str) -> list["Channel"]:

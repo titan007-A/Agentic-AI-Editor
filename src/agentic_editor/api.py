@@ -2226,30 +2226,48 @@ def create_app(
         session.delete(matched)
         try:
             redirect_uri = _ig_redirect_uri(request)
-            short = instagram.exchange_code(
-                settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
-            )
-            long_token, _expires = instagram.long_lived_token(
-                settings.meta_app_id, settings.meta_app_secret, short
-            )
-            channels = instagram.get_ig_channels(long_token)
+            if settings.meta_config_id:
+                # Facebook Login for Business flow — get all linked IG accounts via pages
+                short = instagram.fb_exchange_code(
+                    settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
+                )
+                long_token = instagram.fb_long_lived_token(
+                    settings.meta_app_id, settings.meta_app_secret, short
+                )
+                channels = instagram.get_ig_channels(long_token)
+                if not channels:
+                    return RedirectResponse("/instagram?ig_error=no_instagram_account_linked")
+                for ch in channels:
+                    row = session.get(InstagramChannel, ch.id)
+                    if row is None:
+                        row = InstagramChannel(id=ch.id, owner_id=owner_id)
+                        session.add(row)
+                    row.username = ch.username
+                    row.name = ch.name
+                    row.avatar = ch.avatar
+                    row.access_token = ch.access_token
+                    row.token_expires_at = None
+            else:
+                # Instagram Platform API (Unified Login) flow
+                short = instagram.exchange_code(
+                    settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
+                )
+                token, expires_at = instagram.long_lived_token(settings.meta_app_secret, short)
+                channel = instagram.get_account(token)
+                row = session.get(InstagramChannel, channel.id)
+                if row is None:
+                    row = InstagramChannel(id=channel.id, owner_id=owner_id)
+                    session.add(row)
+                row.username = channel.username
+                row.name = channel.name
+                row.avatar = channel.avatar
+                row.access_token = token
+                row.token_expires_at = expires_at
         except instagram.InstagramError as exc:
             log.warning("instagram oauth failed: %s", exc)
             return RedirectResponse(f"/instagram?ig_error={str(exc)[:80]}")
-        if not channels:
-            return RedirectResponse("/instagram?ig_error=no_instagram_account_linked")
-        for channel in channels:
-            row = session.get(InstagramChannel, channel.id)
-            if row is None:
-                row = InstagramChannel(id=channel.id, owner_id=owner_id)
-                session.add(row)
-            row.username = channel.username
-            row.name = channel.name
-            row.avatar = channel.avatar
-            row.access_token = channel.access_token
-            row.token_expires_at = None  # Page access tokens don't expire
         session.commit()
-        log.info("instagram: connected %d account(s) for user %s", len(channels), owner_id)
+        log.info("instagram: connected account(s) for user %s", owner_id)
         return RedirectResponse("/instagram?ig_connected=1")
 
     @app.get("/api/instagram/channels")
