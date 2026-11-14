@@ -491,13 +491,44 @@ export type BufferResult = {
 };
 
 /** A connected Instagram account (direct Meta API, not Buffer). */
+/** How an account's comments are answered: not at all, drafted for a person, or by itself. */
+export type ReplyMode = "off" | "review" | "auto";
+
 export type IgChannel = {
   id: string;
   username: string;
   name: string;
   avatar: string | null;
   connected_at: string;
+  /** null: the token doesn't expire. */
   token_expires_at: string | null;
+  reply_mode: ReplyMode;
+  reply_style: string;
+  /** Replies sent by themselves in an hour, at most. */
+  reply_limit: number;
+  checked_at: string | null;
+  check_note: string;
+  /** Comments waiting for something to be done. */
+  waiting: number;
+};
+
+export type IgComment = {
+  id: string;
+  channel_id: string;
+  channel: string;
+  post_id: string;
+  post_caption: string;
+  post_url: string;
+  username: string;
+  text: string;
+  /** new, drafted, look (a person should answer), sending, sent, skipped, failed */
+  status: string;
+  draft: string;
+  why: string;
+  error: string;
+  sent_by: string;
+  commented_at: string | null;
+  sent_at: string | null;
 };
 
 export type AssetKind = "image" | "video" | "audio" | "lut";
@@ -669,6 +700,18 @@ export const api = {
     request<{ results: BufferResult[]; link: string }>("POST", `/outputs/${outputId}/buffer`, body),
   igChannels: () => request<IgChannel[]>("GET", "/instagram/channels"),
   removeIgChannel: (id: string) => request<{ ok: boolean }>("DELETE", `/instagram/channels/${id}`),
+  changeIgChannel: (
+    id: string,
+    body: Partial<Pick<IgChannel, "reply_mode" | "reply_style" | "reply_limit">>,
+  ) => request<IgChannel>("PATCH", `/instagram/channels/${id}`, body),
+  checkIgComments: (id: string) =>
+    request<{ ok: boolean }>("POST", `/instagram/channels/${id}/check`),
+  igComments: (show: "open" | "sent" | "skipped" = "open") =>
+    request<IgComment[]>("GET", `/instagram/comments?show=${show}`),
+  sendIgReply: (id: string, text: string) =>
+    request<IgComment>("POST", `/instagram/comments/${encodeURIComponent(id)}/send`, { text }),
+  skipIgComment: (id: string) =>
+    request<IgComment>("POST", `/instagram/comments/${encodeURIComponent(id)}/skip`),
   postToInstagram: (
     outputId: number,
     body: { channel_id: string; caption: string; share_to_feed: boolean },

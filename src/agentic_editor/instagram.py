@@ -1,36 +1,49 @@
-"""Direct Instagram posting via the Instagram Platform API (graph.instagram.com).
+"""Instagram through Meta's "Instagram API with Unified Login" (graph.facebook.com).
 
-OAuth flow:
-  1. /auth/instagram  -> redirect to api.instagram.com/oauth/authorize
-  2. callback code    -> short-lived token (api.instagram.com/oauth/access_token)
-  3. short-lived      -> long-lived token, 60 days (graph.instagram.com/access_token)
-  4. long-lived       -> refresh before 60 days (graph.instagram.com/refresh_access_token)
+The person connecting logs in with Instagram or with Facebook, picks the business portfolio
+that owns their Instagram professional account and the accounts to share, and approves the
+permissions of the app's login configuration (META_CONFIG_ID, made in the App Dashboard
+under Use cases > Manage messaging & content on Instagram > API setup with Unified login;
+it must be one marked "Instagram Login Compatible"):
 
-Posting a reel:
-  1. POST  /{ig_user_id}/media          -> container id
-  2. GET   /{container_id}?status_code  -> poll until FINISHED (up to ~5 min)
-  3. POST  /{ig_user_id}/media_publish  -> live post id
-"""
+  1. /auth/instagram  -> www.facebook.com/dialog/oauth?client_id&config_id&prompt=login...
+     (prompt=login always offers the Instagram login: without it someone already signed in
+     to Facebook goes straight on as that Facebook account)
+  2. callback code    -> GET graph.facebook.com/<v>/oauth/access_token with the META app ID
+     and secret: a Business Integration System User access token, which belongs to the
+     client's portfolio and covers every Instagram account they shared
+  3. /me/assigned_instagram_accounts -> the accounts; /me?fields=client_business_id
+  4. /debug_token     -> when the token expires (never, for some configurations)
+
+Every call then goes to graph.facebook.com with that token and the Instagram account's ID:
+posting a reel (/<ig>/media, /<container>?fields=status_code, /<ig>/media_publish), the
+account's posts (/<ig>/media), their comments (/<media>/comments) and replies
+(/<comment>/replies). Without App Review (Standard Access) only people with a role on the
+app (admins, developers, Instagram Testers) can connect; others need Advanced Access.
+
+The Instagram-Login-only flow (api.instagram.com, graph.instagram.com) is not used: it
+needs its own Instagram app ID, which an app that already exists can't get any more, and
+its tokens don't work on graph.facebook.com (mixing the two was why connecting failed)."""
 
 import logging
 import time
-from dataclasses import dataclass
+import urllib.parse
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
 
 log = logging.getLogger(__name__)
 
-GRAPH = "https://graph.instagram.com"
-AUTH = "https://api.instagram.com/oauth"
-# Business Login for Instagram OAuth (used when app has Facebook Login for Business product).
-FB_OAUTH = "https://www.facebook.com/dialog/oauth"
-FB_GRAPH = "https://graph.facebook.com"
-VERSION = "v21.0"
+GRAPH = "https://graph.facebook.com"
+DIALOG = "https://www.facebook.com/dialog/oauth"
+VERSION = "v27.0"
 TIMEOUT = 20.0
-# Poll container status every N seconds, up to MAX_WAIT.
+# Poll a reel's container every N seconds, up to MAX_WAIT.
 POLL_INTERVAL = 10
 MAX_WAIT = 360
+# Set by tests to answer requests without the network.
+TRANSPORT: httpx.BaseTransport | None = None
 
 
 class InstagramError(RuntimeError):
@@ -39,203 +52,95 @@ class InstagramError(RuntimeError):
 
 @dataclass
 class Channel:
-    id: str  # IG user ID
+    id: str  # Instagram professional account ID
     username: str
     name: str = ""
     avatar: str | None = None
-    # Long-lived access token (60 days).
+    # The Business Integration System User access token that covers it.
     access_token: str = ""
-    expires_at: datetime | None = None
+    expires_at: datetime | None = None  # None: doesn't expire
+
+
+@dataclass
+class Connection:
+    """What one login gave: the token, the client's portfolio, the accounts it covers."""
+
+    token: str
+    expires_at: datetime | None
+    business_id: str
+    channels: list[Channel] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# OAuth helpers
+# Login
 # ---------------------------------------------------------------------------
 
-SCOPES = ",".join(
-    [
-        "instagram_business_basic",
-        "instagram_business_content_publish",
-        "instagram_business_manage_comments",
-        "instagram_business_manage_messages",
-    ]
-)
 
-
-def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str = "") -> str:
-    """The URL the user visits to authorize the app on their IG account.
-
-    With config_id: Unified Login via www.facebook.com/dialog/oauth (Meta's official flow).
-    Without config_id: Instagram-native via api.instagram.com/oauth/authorize.
-    """
-    import urllib.parse
-
-    if config_id:
-        # Unified Login API — Meta requires Facebook dialog URL for config_id-based OAuth
-        params = urllib.parse.urlencode(
-            {
-                "client_id": app_id,
-                "config_id": config_id,
-                "response_type": "code",
-                "redirect_uri": redirect_uri,
-                "state": state,
-            }
+def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str) -> str:
+    """The Unified Login page: Instagram or Facebook login, then the portfolio and the
+    accounts to share."""
+    if not config_id:
+        raise InstagramError(
+            "META_CONFIG_ID is missing: set it to the Unified Login configuration's ID"
         )
-        return f"{FB_OAUTH}?{params}"
-    else:
-        params = urllib.parse.urlencode(
-            {
-                "client_id": app_id,
-                "redirect_uri": redirect_uri,
-                "scope": SCOPES,
-                "response_type": "code",
-                "state": state,
-            }
-        )
-        return f"{AUTH}/authorize?{params}"
+    params = urllib.parse.urlencode(
+        {
+            "client_id": app_id,
+            "config_id": config_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "state": state,
+            "prompt": "login",
+        }
+    )
+    return f"{DIALOG}?{params}"
 
 
 def exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) -> str:
-    """Exchange the OAuth code for a short-lived Instagram token (Instagram Platform flow)."""
-    resp = httpx.post(
-        f"{AUTH}/access_token",
-        data={
-            "client_id": app_id,
-            "client_secret": app_secret,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-            "code": code,
-        },
-        timeout=TIMEOUT,
+    """The login's code -> a Business Integration System User access token."""
+    data = _get(
+        "oauth/access_token",
+        client_id=app_id,
+        client_secret=app_secret,
+        redirect_uri=redirect_uri,
+        code=code,
     )
-    _raise(resp)
-    return resp.json()["access_token"]
+    return data["access_token"]
 
 
-def long_lived_token(app_secret: str, short_token: str) -> tuple[str, datetime]:
-    """Exchange a short-lived Instagram token for a long-lived one (60 days)."""
-    from datetime import timedelta
+def token_expiry(app_id: str, app_secret: str, token: str) -> datetime | None:
+    """When a token stops working; None when it doesn't expire (or Meta won't say)."""
+    try:
+        data = _get("debug_token", input_token=token, access_token=f"{app_id}|{app_secret}")
+    except InstagramError as exc:
+        log.warning("couldn't ask when the Instagram token expires: %s", exc)
+        return None
+    expires = int(data.get("data", {}).get("expires_at") or 0)
+    return datetime.fromtimestamp(expires, UTC).replace(tzinfo=None) if expires else None
 
-    resp = httpx.get(
-        f"{GRAPH}/access_token",
-        params={
-            "grant_type": "ig_exchange_token",
-            "client_secret": app_secret,
-            "access_token": short_token,
-        },
-        timeout=TIMEOUT,
+
+def connect(app_id: str, app_secret: str, redirect_uri: str, code: str) -> Connection:
+    """Everything a finished login gives: token, expiry, portfolio and shared accounts."""
+    token = exchange_code(app_id, app_secret, redirect_uri, code)
+    business = _get("me", fields="client_business_id", access_token=token)
+    found = Connection(
+        token=token,
+        expires_at=token_expiry(app_id, app_secret, token),
+        business_id=str(business.get("client_business_id") or ""),
     )
-    _raise(resp)
-    data = resp.json()
-    expires_in = data.get("expires_in", 5183944)
-    expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=expires_in)
-    return data["access_token"], expires_at
-
-
-def fb_exchange_code(app_id: str, app_secret: str, redirect_uri: str, code: str) -> str:
-    """Exchange the OAuth code for a short-lived user token (Facebook Login for Business flow)."""
-    resp = httpx.post(
-        f"{FB_GRAPH}/{VERSION}/oauth/access_token",
-        data={
-            "client_id": app_id,
-            "client_secret": app_secret,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-            "code": code,
-        },
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    return resp.json()["access_token"]
-
-
-def fb_long_lived_token(app_id: str, app_secret: str, short_token: str) -> tuple[str, datetime]:
-    """Exchange a short-lived Facebook user token for a long-lived one (60 days)."""
-    from datetime import timedelta
-
-    resp = httpx.get(
-        f"{FB_GRAPH}/oauth/access_token",
-        params={
-            "grant_type": "fb_exchange_token",
-            "client_id": app_id,
-            "client_secret": app_secret,
-            "fb_exchange_token": short_token,
-        },
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    data = resp.json()
-    expires_in = data.get("expires_in", 5183944)
-    expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=expires_in)
-    return data["access_token"], expires_at
-
-
-def get_ig_channels(long_user_token: str) -> list["Channel"]:
-    """Get all Instagram Business/Creator accounts linked to the user's Facebook pages."""
-    resp = httpx.get(
-        f"{FB_GRAPH}/{VERSION}/me/accounts",
-        params={
-            "fields": (
-                "id,name,access_token,"
-                "instagram_business_account{id,username,name,profile_picture_url}"
-            ),
-            "access_token": long_user_token,
-        },
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    channels = []
-    for page in resp.json().get("data", []):
-        ig = page.get("instagram_business_account")
-        if ig:
-            channels.append(
-                Channel(
-                    id=ig["id"],
-                    username=ig.get("username", ig["id"]),
-                    name=ig.get("name", page.get("name", "")),
-                    avatar=ig.get("profile_picture_url"),
-                    access_token=page["access_token"],
-                )
+    for account in _pages("me/assigned_instagram_accounts", token, fields="id,username"):
+        about = _get(account["id"], fields="username,name,profile_picture_url", access_token=token)
+        found.channels.append(
+            Channel(
+                id=str(account["id"]),
+                username=about.get("username") or account.get("username") or account["id"],
+                name=about.get("name", ""),
+                avatar=about.get("profile_picture_url"),
+                access_token=token,
+                expires_at=found.expires_at,
             )
-    return channels
-
-
-def refresh_token(token: str) -> tuple[str, datetime]:
-    """Refresh a long-lived token (call before it expires)."""
-    resp = httpx.get(
-        f"{GRAPH}/refresh_access_token",
-        params={"grant_type": "ig_refresh_token", "access_token": token},
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    data = resp.json()
-    from datetime import timedelta
-
-    expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(
-        seconds=data.get("expires_in", 5183944)
-    )
-    return data["access_token"], expires_at
-
-
-def get_account(token: str) -> Channel:
-    """The IG account the token belongs to."""
-    resp = httpx.get(
-        f"{GRAPH}/me",
-        params={
-            "fields": "id,username,name,profile_picture_url",
-            "access_token": token,
-        },
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    d = resp.json()
-    return Channel(
-        id=d["id"],
-        username=d.get("username", d["id"]),
-        name=d.get("name", ""),
-        avatar=d.get("profile_picture_url"),
-        access_token=token,
-    )
+        )
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -250,59 +155,32 @@ def post_reel(
     share_to_feed: bool = True,
 ) -> str:
     """Post a reel and return its Instagram post ID."""
-    container_id = _create_container(channel, video_url, caption, share_to_feed)
+    container_id = _post(
+        f"{channel.id}/media",
+        media_type="REELS",
+        video_url=video_url,
+        caption=caption,
+        share_to_feed="true" if share_to_feed else "false",
+        access_token=channel.access_token,
+    )["id"]
     _wait_for_container(channel, container_id)
-    return _publish(channel, container_id)
-
-
-def _create_container(channel: Channel, video_url: str, caption: str, share_to_feed: bool) -> str:
-    resp = httpx.post(
-        f"{GRAPH}/{VERSION}/{channel.id}/media",
-        data={
-            "media_type": "REELS",
-            "video_url": video_url,
-            "caption": caption,
-            "share_to_feed": "true" if share_to_feed else "false",
-            "access_token": channel.access_token,
-        },
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    return resp.json()["id"]
+    return _post(
+        f"{channel.id}/media_publish", creation_id=container_id, access_token=channel.access_token
+    )["id"]
 
 
 def _wait_for_container(channel: Channel, container_id: str) -> None:
     deadline = time.monotonic() + MAX_WAIT
     while time.monotonic() < deadline:
-        resp = httpx.get(
-            f"{GRAPH}/{VERSION}/{container_id}",
-            params={"fields": "status_code,status", "access_token": channel.access_token},
-            timeout=TIMEOUT,
-        )
-        _raise(resp)
-        data = resp.json()
+        data = _get(container_id, fields="status_code,status", access_token=channel.access_token)
         status = data.get("status_code", "")
         log.debug("container %s status: %s", container_id, status)
         if status == "FINISHED":
             return
         if status == "ERROR":
-            detail = data.get("status", "unknown error")
-            raise InstagramError(f"Instagram rejected the video: {detail}")
+            raise InstagramError(f"Instagram rejected the video: {data.get('status', '?')}")
         time.sleep(POLL_INTERVAL)
     raise InstagramError(f"video processing timed out after {MAX_WAIT} s")
-
-
-def _publish(channel: Channel, container_id: str) -> str:
-    resp = httpx.post(
-        f"{GRAPH}/{VERSION}/{channel.id}/media_publish",
-        data={
-            "creation_id": container_id,
-            "access_token": channel.access_token,
-        },
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    return resp.json()["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -317,56 +195,46 @@ class Comment:
     username: str = ""
     timestamp: str = ""
     post_id: str = ""
+    # Who already replied to it (usernames), as Instagram lists the replies.
+    replied_by: list[str] = field(default_factory=list)
 
 
 def get_recent_posts(channel: Channel, limit: int = 10) -> list[dict]:
-    """Recent posts for the channel."""
-    resp = httpx.get(
-        f"{GRAPH}/{VERSION}/{channel.id}/media",
-        params={
-            "fields": "id,caption,media_type,timestamp,thumbnail_url,permalink",
-            "limit": limit,
-            "access_token": channel.access_token,
-        },
-        timeout=TIMEOUT,
+    """The account's newest posts: id, caption, permalink, timestamp, comments_count."""
+    data = _get(
+        f"{channel.id}/media",
+        fields="id,caption,media_type,timestamp,permalink,comments_count",
+        limit=limit,
+        access_token=channel.access_token,
     )
-    _raise(resp)
-    return resp.json().get("data", [])
+    return data.get("data", [])
 
 
 def get_comments(channel: Channel, post_id: str, limit: int = 50) -> list[Comment]:
-    """Comments on a post."""
-    resp = httpx.get(
-        f"{GRAPH}/{VERSION}/{post_id}/comments",
-        params={
-            "fields": "id,text,username,timestamp",
-            "limit": limit,
-            "access_token": channel.access_token,
-        },
-        timeout=TIMEOUT,
+    """A post's top-level comments, newest first, each with who replied to it."""
+    data = _get(
+        f"{post_id}/comments",
+        fields="id,text,username,timestamp,replies{username}",
+        limit=limit,
+        access_token=channel.access_token,
     )
-    _raise(resp)
     return [
         Comment(
-            id=c["id"],
+            id=str(c["id"]),
             text=c.get("text", ""),
             username=c.get("username", ""),
             timestamp=c.get("timestamp", ""),
             post_id=post_id,
+            replied_by=[r.get("username", "") for r in c.get("replies", {}).get("data", [])],
         )
-        for c in resp.json().get("data", [])
+        for c in data.get("data", [])
     ]
 
 
 def reply_to_comment(channel: Channel, comment_id: str, message: str) -> str:
-    """Reply to a comment. Returns the new reply's ID."""
-    resp = httpx.post(
-        f"{GRAPH}/{VERSION}/{comment_id}/replies",
-        data={"message": message, "access_token": channel.access_token},
-        timeout=TIMEOUT,
-    )
-    _raise(resp)
-    return resp.json()["id"]
+    """Reply to a comment, as the account. Returns the reply's ID."""
+    reply = _post(f"{comment_id}/replies", message=message, access_token=channel.access_token)
+    return reply["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -374,12 +242,52 @@ def reply_to_comment(channel: Channel, comment_id: str, message: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _client() -> httpx.Client:
+    return httpx.Client(timeout=TIMEOUT, transport=TRANSPORT)
+
+
+def _url(path: str) -> str:
+    return f"{GRAPH}/{VERSION}/{path.lstrip('/')}"
+
+
+def _get(path: str, **params) -> dict:
+    with _client() as client:
+        resp = client.get(_url(path), params=params)
+    _raise(resp)
+    return resp.json()
+
+
+def _post(path: str, **data) -> dict:
+    with _client() as client:
+        resp = client.post(_url(path), data=data)
+    _raise(resp)
+    return resp.json()
+
+
+def _pages(path: str, token: str, **params) -> list[dict]:
+    """Every item of a listing, following its "next" links (up to 20 pages)."""
+    items: list[dict] = []
+    data = _get(path, access_token=token, **params)
+    for _ in range(20):
+        items += data.get("data", [])
+        following = data.get("paging", {}).get("next")
+        if not following:
+            break
+        with _client() as client:
+            resp = client.get(following)
+        _raise(resp)
+        data = resp.json()
+    return items
+
+
 def _raise(resp: httpx.Response) -> None:
     if resp.status_code < 400:
         return
     try:
         err = resp.json().get("error", {})
-        msg = err.get("message") or err.get("error_user_msg") or resp.text[:200]
+        msg = err.get("error_user_msg") or err.get("message") or resp.text[:200]
+        code = err.get("code")
     except Exception:
-        msg = resp.text[:200]
-    raise InstagramError(f"Instagram API {resp.status_code}: {msg}")
+        msg, code = resp.text[:200], None
+    where = f" (#{code})" if code else ""
+    raise InstagramError(f"Instagram API {resp.status_code}{where}: {msg}")
