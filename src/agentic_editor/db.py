@@ -418,8 +418,9 @@ class ResearchItem(Base):
 
 
 class InstagramChannel(Base):
-    """An Instagram Business/Creator account connected via OAuth (Instagram Platform API).
-    The long-lived token lasts 60 days and is refreshed automatically before it expires."""
+    """An Instagram professional account connected through Meta's Unified Login
+    (instagram.py), with the token that covers it, and how its comments are answered
+    (comments.py)."""
 
     __tablename__ = "instagram_channels"
 
@@ -428,11 +429,53 @@ class InstagramChannel(Base):
     username: Mapped[str] = mapped_column(String(64))
     name: Mapped[str] = mapped_column(String(128), default="")
     avatar: Mapped[str | None] = mapped_column(Text)
+    # A Business Integration System User token: one per login, shared by the accounts it
+    # covers; None expiry: it doesn't expire.
     access_token: Mapped[str] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None]
+    # The client's business portfolio the token belongs to.
+    business_id: Mapped[str] = mapped_column(String(32), default="")
     connected_at: Mapped[datetime] = mapped_column(default=_now)
     # Last post sent via our app.
     last_post_at: Mapped[datetime | None]
+    # Answering comments: "off", "review" (replies are drafted for a person to send) or
+    # "auto" (sent by themselves, up to reply_limit an hour; doubtful ones wait for a
+    # person); in the words of reply_style; only comments made after reply_since.
+    reply_mode: Mapped[str] = mapped_column(String(8), default="off")
+    reply_style: Mapped[str] = mapped_column(Text, default="")
+    reply_limit: Mapped[int] = mapped_column(default=15)
+    reply_since: Mapped[datetime | None]
+    # The last look at its comments: when, and what came of it (or what went wrong).
+    checked_at: Mapped[datetime | None]
+    check_note: Mapped[str] = mapped_column(Text, default="")
+
+
+class InstagramComment(Base):
+    """A comment on one of a connected account's posts, and its reply: drafted by the model,
+    then sent (by a person or by itself) or skipped."""
+
+    __tablename__ = "instagram_comments"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # Instagram's comment ID
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("instagram_channels.id", ondelete="CASCADE"), index=True
+    )
+    post_id: Mapped[str] = mapped_column(String(40))
+    post_caption: Mapped[str] = mapped_column(Text, default="")
+    post_url: Mapped[str] = mapped_column(Text, default="")
+    username: Mapped[str] = mapped_column(String(64), default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    commented_at: Mapped[datetime | None]
+    # new (not drafted yet), drafted (a reply waits to be sent), look (a person should
+    # answer it), sending, sent, skipped, failed
+    status: Mapped[str] = mapped_column(String(12), default="new", index=True)
+    draft: Mapped[str] = mapped_column(Text, default="")
+    why: Mapped[str] = mapped_column(Text, default="")  # the model's note on it
+    reply_id: Mapped[str | None] = mapped_column(String(40))
+    error: Mapped[str] = mapped_column(Text, default="")
+    sent_by: Mapped[str] = mapped_column(String(8), default="")  # "auto" or "person"
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    sent_at: Mapped[datetime | None]
 
 
 class BufferKey(Base):

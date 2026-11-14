@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from agentic_editor import (
     accounts,
     caption,
+    comments,
     features,
     fun,
     niche,
@@ -32,6 +33,7 @@ from agentic_editor.db import (
     Event,
     FeedItem,
     HiddenAccount,
+    InstagramChannel,
     Job,
     NicheAccount,
     NicheSchedule,
@@ -1368,3 +1370,41 @@ def start_niche_schedules(Session: sessionmaker, now: datetime | None = None) ->
         log.info("starting the scheduled niche search %s", search_id)
         find_accounts(search_id)
     return started
+
+
+# One turn of answering comments at a time (they share the planning model and Instagram).
+COMMENT_TURN_LOCK = threading.Lock()
+
+
+def answer_comments_now(channel_id: str, Session: sessionmaker, settings: Settings,
+                        router=None, api=None) -> str:  # fmt: skip
+    """One turn of answering an account's comments (comments.turn); what came of it."""
+    with COMMENT_TURN_LOCK, Session() as db:
+        row = db.get(InstagramChannel, channel_id)
+        if row is None or row.reply_mode not in ("review", "auto"):
+            return "answering is off"
+        router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+        options = {"api": api} if api is not None else {}
+        try:
+            return comments.turn(db, row, router.planner, **options)
+        except Exception as exc:
+            log.exception("answering @%s's comments failed", row.username)
+            row.checked_at = datetime.now(UTC).replace(tzinfo=None)
+            row.check_note = f"failed: {type(exc).__name__}: {exc}"[:300]
+            db.commit()
+            return row.check_note
+
+
+@huey.task()
+def answer_comments(channel_id: str) -> None:
+    answer_comments_now(channel_id, sessions(), get_settings())
+
+
+def start_comment_turns(Session: sessionmaker) -> list[str]:
+    """Queue a turn for every account whose comments are answered (the server's scan)."""
+    with Session() as db:
+        on = InstagramChannel.reply_mode.in_(("review", "auto"))
+        ids = list(db.scalars(select(InstagramChannel.id).where(on)))
+    for channel_id in ids:
+        answer_comments(channel_id)
+    return ids

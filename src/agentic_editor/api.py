@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -34,6 +35,7 @@ from agentic_editor import (
     autopilot,
     buffer,
     cleanup,
+    comments,
     eta,
     features,
     fun,
@@ -51,6 +53,7 @@ from agentic_editor.db import (
     FeedItem,
     HiddenAccount,
     InstagramChannel,
+    InstagramComment,
     Job,
     NicheAccount,
     NicheSchedule,
@@ -98,6 +101,9 @@ PDF_BYTES = 10 * 1024 * 1024  # the largest PDF of songs a research takes
 # How long a shutdown waits for running jobs; any still running are failed at the next start.
 SHUTDOWN_SECONDS = 30
 PILE_LIMIT = 100
+# Comments that still want something done: a reply to send, a person's answer, a draft.
+OPEN_COMMENTS = ("new", "drafted", "look", "failed")
+COMMENTS_SHOWN = 200
 FAILED_LOGIN_DELAY = 1.0
 
 
@@ -669,6 +675,10 @@ def create_app(
                 await asyncio.to_thread(jobs.start_niche_schedules, make_session)
             except Exception:
                 log.exception("starting the scheduled niche searches failed")
+            try:
+                await asyncio.to_thread(jobs.start_comment_turns, make_session)
+            except Exception:
+                log.exception("starting the comment answering failed")
             try:
                 await asyncio.to_thread(cleanup.sweep, make_session, settings)
             except Exception:
@@ -2207,7 +2217,13 @@ def create_app(
         )
         return f"{base}/auth/instagram/callback"
 
-    def _ig_channel_view(ch: InstagramChannel) -> dict:
+    def _ig_channel_view(ch: InstagramChannel, session: Session) -> dict:
+        waiting = session.scalar(
+            select(func.count()).where(
+                InstagramComment.channel_id == ch.id,
+                InstagramComment.status.in_(OPEN_COMMENTS),
+            )
+        )
         return {
             "id": ch.id,
             "username": ch.username,
@@ -2215,12 +2231,38 @@ def create_app(
             "avatar": ch.avatar,
             "connected_at": ch.connected_at.isoformat() if ch.connected_at else None,
             "token_expires_at": ch.token_expires_at.isoformat() if ch.token_expires_at else None,
+            "reply_mode": ch.reply_mode,
+            "reply_style": ch.reply_style,
+            "reply_limit": ch.reply_limit,
+            "checked_at": ch.checked_at.isoformat() if ch.checked_at else None,
+            "check_note": ch.check_note,
+            "waiting": waiting,
         }
+
+    def _ig_comment_view(c: InstagramComment, username: str) -> dict:
+        return {
+            "id": c.id, "channel_id": c.channel_id, "channel": username, "post_id": c.post_id,
+            "post_caption": c.post_caption, "post_url": c.post_url, "username": c.username,
+            "text": c.text, "status": c.status, "draft": c.draft, "why": c.why,
+            "error": c.error, "sent_by": c.sent_by,
+            "commented_at": c.commented_at.isoformat() if c.commented_at else None,
+            "sent_at": c.sent_at.isoformat() if c.sent_at else None,
+        }  # fmt: skip
+
+    def my_ig_channel(channel_id: str, session: Session, account: Account) -> InstagramChannel:
+        ch = session.get(InstagramChannel, channel_id)
+        if ch is None or ch.owner_id != account.id:
+            raise HTTPException(404, "Instagram account not found")
+        return ch
 
     @app.get("/auth/instagram")
     def instagram_auth(request: Request, account: User, session: DB) -> RedirectResponse:
         if not settings.meta_app_id:
             raise HTTPException(503, "Meta App not configured (META_APP_ID missing in .env)")
+        if not settings.meta_config_id:
+            raise HTTPException(
+                503, "META_CONFIG_ID missing in .env: the Unified Login configuration's ID"
+            )
         from secrets import token_urlsafe
 
         state = token_urlsafe(16)
@@ -2245,68 +2287,151 @@ def create_app(
         error: str = "",
     ) -> RedirectResponse:
         if error:
-            return RedirectResponse("/instagram?ig_error=" + error)
-        # Find the user by state token (no logged-in session at callback time)
-        from sqlalchemy import select as sa_select
-
-        rows = list(session.scalars(sa_select(Setting).where(Setting.key.like("ig_oauth_state:%"))))
-        matched = next((r for r in rows if r.value == state), None)
+            return RedirectResponse("/instagram?ig_error=" + quote(error))
+        rows = list(session.scalars(select(Setting).where(Setting.key.like("ig_oauth_state:%"))))
+        matched = next((r for r in rows if state and r.value == state), None)
         if not matched:
             return RedirectResponse("/instagram?ig_error=invalid_state")
         owner_id = matched.key.split(":", 1)[1]
         session.delete(matched)
+        session.commit()
         try:
-            redirect_uri = _ig_redirect_uri(request)
-            if settings.meta_config_id:
-                # Unified Login (Facebook dialog with config_id) → FB token exchange
-                short = instagram.fb_exchange_code(
-                    settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
-                )
-                token, expires_at = instagram.fb_long_lived_token(
-                    settings.meta_app_id, settings.meta_app_secret, short
-                )
-            else:
-                # Instagram-native flow (no config_id)
-                short = instagram.exchange_code(
-                    settings.meta_app_id, settings.meta_app_secret, redirect_uri, code
-                )
-                token, expires_at = instagram.long_lived_token(settings.meta_app_secret, short)
-            channel = instagram.get_account(token)
+            found = await asyncio.to_thread(
+                instagram.connect,
+                settings.meta_app_id,
+                settings.meta_app_secret,
+                _ig_redirect_uri(request),
+                code,
+            )
         except instagram.InstagramError as exc:
             log.warning("instagram oauth failed: %s", exc)
-            return RedirectResponse(f"/instagram?ig_error={str(exc)[:80]}")
-        row = session.get(InstagramChannel, channel.id)
-        if row is None:
-            row = InstagramChannel(id=channel.id, owner_id=owner_id)
-            session.add(row)
-        row.username = channel.username
-        row.name = channel.name
-        row.avatar = channel.avatar
-        row.access_token = token
-        row.token_expires_at = expires_at
+            return RedirectResponse("/instagram?ig_error=" + quote(str(exc)[:160]))
+        if not found.channels:
+            return RedirectResponse("/instagram?ig_error=no_accounts_shared")
+        for channel in found.channels:
+            row = session.get(InstagramChannel, channel.id)
+            if row is None:
+                row = InstagramChannel(id=channel.id, owner_id=owner_id)
+                session.add(row)
+            row.owner_id = owner_id  # the latest person to connect it
+            row.username, row.name, row.avatar = channel.username, channel.name, channel.avatar
+            row.access_token, row.token_expires_at = found.token, found.expires_at
+            row.business_id = found.business_id
+            row.connected_at = datetime.now(UTC).replace(tzinfo=None)
         session.commit()
-        log.info("instagram: connected @%s for user %s", channel.username, owner_id)
-        return RedirectResponse("/instagram?ig_connected=1")
+        names = ",".join(c.username for c in found.channels)
+        log.info("instagram: connected %s for user %s", names, owner_id)
+        return RedirectResponse("/instagram?ig_connected=" + quote(names))
 
     @app.get("/api/instagram/channels")
     def list_ig_channels(account: User, session: DB) -> list[dict]:
-        from sqlalchemy import select as sa_select
-
-        rows = list(
-            session.scalars(
-                sa_select(InstagramChannel).where(InstagramChannel.owner_id == account.id)
-            )
+        rows = session.scalars(
+            select(InstagramChannel)
+            .where(InstagramChannel.owner_id == account.id)
+            .order_by(InstagramChannel.username)
         )
-        return [_ig_channel_view(ch) for ch in rows]
+        return [_ig_channel_view(ch, session) for ch in rows]
 
     @app.delete("/api/instagram/channels/{channel_id}")
     def remove_ig_channel(channel_id: str, account: User, session: DB) -> dict:
-        ch = session.get(InstagramChannel, channel_id)
-        if ch is None or ch.owner_id != account.id:
-            raise HTTPException(404)
-        session.delete(ch)
+        session.delete(my_ig_channel(channel_id, session, account))
         session.commit()
         return {"ok": True}
+
+    class IgReplySettings(BaseModel):
+        reply_mode: Literal["off", "review", "auto"] | None = None
+        reply_style: str | None = Field(default=None, max_length=1000)
+        reply_limit: int | None = Field(default=None, ge=1, le=60)
+
+    @app.patch("/api/instagram/channels/{channel_id}")
+    def change_ig_channel(
+        channel_id: str, body: IgReplySettings, account: User, session: DB
+    ) -> dict:
+        """How the account's comments are answered. Turning answering on answers only
+        comments made from then on."""
+        ch = my_ig_channel(channel_id, session, account)
+        if body.reply_mode is not None:
+            if ch.reply_mode == "off" and body.reply_mode != "off":
+                ch.reply_since = datetime.now(UTC).replace(tzinfo=None)
+            ch.reply_mode = body.reply_mode
+        if body.reply_style is not None:
+            ch.reply_style = body.reply_style.strip()
+        if body.reply_limit is not None:
+            ch.reply_limit = body.reply_limit
+        session.commit()
+        return _ig_channel_view(ch, session)
+
+    @app.post("/api/instagram/channels/{channel_id}/check")
+    def check_ig_comments(channel_id: str, account: User, session: DB) -> dict:
+        """Look at the account's comments now rather than at the next scan."""
+        ch = my_ig_channel(channel_id, session, account)
+        if ch.reply_mode == "off":
+            raise HTTPException(409, "turn answering on first")
+        jobs.answer_comments(ch.id)
+        return {"ok": True}
+
+    @app.get("/api/instagram/comments")
+    def list_ig_comments(
+        account: User, session: DB, show: Literal["open", "sent", "skipped"] = "open"
+    ) -> list[dict]:
+        """The person's accounts' comments: open ones (drafted, for a person, not drafted
+        yet, failed) oldest first; sent or skipped ones newest first."""
+        names = dict(
+            session.execute(
+                select(InstagramChannel.id, InstagramChannel.username).where(
+                    InstagramChannel.owner_id == account.id
+                )
+            ).all()
+        )
+        statuses = {"open": OPEN_COMMENTS, "sent": ("sent",), "skipped": ("skipped",)}[show]
+        order = (
+            InstagramComment.commented_at
+            if show == "open"
+            else InstagramComment.commented_at.desc()
+        )
+        rows = session.scalars(
+            select(InstagramComment)
+            .where(
+                InstagramComment.channel_id.in_(list(names)),
+                InstagramComment.status.in_(statuses),
+            )
+            .order_by(order)
+            .limit(COMMENTS_SHOWN)
+        )
+        return [_ig_comment_view(c, names[c.channel_id]) for c in rows]
+
+    def my_ig_comment(
+        comment_id: str, session: Session, account: Account
+    ) -> tuple[InstagramComment, InstagramChannel]:
+        comment = session.get(InstagramComment, comment_id)
+        ch = session.get(InstagramChannel, comment.channel_id) if comment else None
+        if comment is None or ch is None or ch.owner_id != account.id:
+            raise HTTPException(404, "comment not found")
+        return comment, ch
+
+    class IgSendRequest(BaseModel):
+        text: str = Field(min_length=1, max_length=comments.REPLY_CHARS)
+
+    @app.post("/api/instagram/comments/{comment_id}/send")
+    def send_ig_reply(comment_id: str, body: IgSendRequest, account: User, session: DB) -> dict:
+        """Send a reply (the draft, as the person changed it) now."""
+        comment, ch = my_ig_comment(comment_id, session, account)
+        if comment.status in ("sent", "sending"):
+            raise HTTPException(409, "already answered")
+        try:
+            comments.send(session, ch, comment, body.text, "person")
+        except instagram.InstagramError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return _ig_comment_view(comment, ch.username)
+
+    @app.post("/api/instagram/comments/{comment_id}/skip")
+    def skip_ig_comment(comment_id: str, account: User, session: DB) -> dict:
+        comment, ch = my_ig_comment(comment_id, session, account)
+        if comment.status in ("sent", "sending"):
+            raise HTTPException(409, "already answered")
+        comment.status = "skipped"
+        session.commit()
+        return _ig_comment_view(comment, ch.username)
 
     class IgPostRequest(BaseModel):
         channel_id: str
