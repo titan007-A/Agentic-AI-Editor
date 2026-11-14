@@ -34,6 +34,7 @@ class Meta:
             ]
         }  # fmt: skip
         self.fail_replies = False
+        self.blocked = False  # Meta refusing the app: "API access blocked"
 
     @staticmethod
     def stamp(minutes: int) -> str:
@@ -49,6 +50,8 @@ class Meta:
         if request.method == "POST":
             params |= {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         self.calls.append((request.method, path, params))
+        if self.blocked:
+            return self.error(400, "API access blocked.", 200)
         if path == "oauth/access_token":
             if params.get("client_secret") != "app-secret" or params.get("code") != "good":
                 return self.error(400, "Invalid verification code format.", 100)
@@ -146,12 +149,15 @@ class Drafter:
         return {"replies": out}
 
 
-def channel(db, mode="review", since_minutes=-30, limit=15):
+def channel(db, mode="review", since_minutes=-30, limit=15, wait=(0, 0)):
+    """The account, answering comments; replies wait `wait` minutes (none, unless a test
+    is about the wait)."""
     db.add(User(id="u1", username="owner", password_hash="x", role="admin"))
     db.flush()
     row = InstagramChannel(
         id="ig1", owner_id="u1", username="mypage", access_token="SUAT", reply_mode=mode,
-        reply_style="short and sunny", reply_limit=limit,
+        reply_style="short and sunny", reply_limit=limit, reply_wait_min=wait[0],
+        reply_wait_max=wait[1],
         reply_since=datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=since_minutes),
     )  # fmt: skip
     db.add(row)
@@ -221,6 +227,42 @@ def test_instagram_saying_no_stops_the_turn_and_keeps_the_reply(tmp_path, meta):
         failed = db.get(InstagramComment, "c1")
         assert failed.status == "failed" and "Action is blocked" in failed.error
         assert failed.draft == "Thank you 1! 💛"
+        # A temporary block (#368): the account pauses rather than keep asking.
+        assert row.paused_until is not None and "paused for an hour" in row.check_note
+
+
+def test_replies_wait_a_random_time_before_going_out(tmp_path, meta, monkeypatch):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        row = channel(db, "auto", wait=(10, 20))
+        note = comments.turn(db, row, Drafter())
+        drafted = db.get(InstagramComment, "c1")
+        assert drafted.status == "drafted" and meta.replies == []  # not at once
+        now = datetime.now(UTC).replace(tzinfo=None)
+        assert now + timedelta(minutes=9) < drafted.send_after < now + timedelta(minutes=21)
+        assert note.endswith("0 sent, 1 waiting for their time")
+        # Its time comes: the next turn sends it.
+        drafted.send_after = now - timedelta(seconds=1)
+        db.commit()
+        comments.turn(db, row, Drafter())
+        assert [c for c, _ in meta.replies] == ["c1"]
+    waits = {
+        comments.wait(InstagramChannel(reply_wait_min=5, reply_wait_max=30)) for _ in range(20)
+    }
+    assert all(timedelta(minutes=5) <= w <= timedelta(minutes=30) for w in waits) and len(waits) > 1
+
+
+def test_meta_refusing_the_app_pauses_the_account_for_an_hour(tmp_path, meta):
+    Session = make_sessionmaker(tmp_path / "app.db")
+    meta.blocked = True
+    with Session() as db:
+        row = channel(db, "auto")
+        note = comments.turn(db, row, Drafter())
+        assert "API access blocked" in note and "Check now" in note
+        assert row.paused_until > datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=59)
+        asked = len(meta.calls)
+        assert comments.turn(db, row, Drafter()) == note  # paused: Meta isn't asked again
+        assert len(meta.calls) == asked
 
 
 def test_comments_from_before_answering_was_on_are_left_alone(tmp_path, meta):
@@ -302,6 +344,23 @@ def test_the_web_connects_answers_and_sends(tmp_path, meta, monkeypatch):
             "c2"
         ]
         assert client.post("/api/instagram/comments/nope/skip").status_code == 404
+        waits = client.patch(
+            "/api/instagram/channels/ig1", json={"reply_wait_min": 3, "reply_wait_max": 12}
+        ).json()
+        assert (waits["reply_wait_min"], waits["reply_wait_max"]) == (3, 12)  # fmt: skip
+        bad = client.patch("/api/instagram/channels/ig1", json={"reply_wait_max": 2})
+        assert bad.status_code == 422
+        # Check now tries Meta again at once, even while paused.
+        with Session() as db:
+            db.get(InstagramChannel, "ig1").paused_until = datetime(2099, 1, 1)
+            db.commit()
+        client.post("/api/instagram/channels/ig1/check")
+        with Session() as db:
+            assert db.get(InstagramChannel, "ig1").paused_until is None
+        # Disconnecting deletes the account with every comment kept for it.
+        assert client.delete("/api/instagram/channels/ig1").json() == {"ok": True}
+        with Session() as db:
+            assert not db.query(InstagramComment).filter_by(channel_id="ig1").count()
         assert (
             client.patch("/api/instagram/channels/ig1", json={"reply_limit": 0}).status_code == 422
         )

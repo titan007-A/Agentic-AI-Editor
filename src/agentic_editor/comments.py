@@ -7,14 +7,19 @@ Each turn for an account whose answering is on (InstagramChannel.reply_mode):
   2. draft: the planning model writes a short reply to each in the account's words
      (reply_style), or says to skip it (spam, abuse, nothing to answer) or that a person
      should answer it (a complaint, a question needing facts it doesn't have: "look");
-  3. send: in "auto" mode drafted replies go out by themselves, oldest first, at most
-     reply_limit an hour and PER_TURN a turn; in "review" mode they wait for a person,
-     who can change the words, send or skip.
+  3. send: in "auto" mode each drafted reply goes out by itself at a random time
+     reply_wait_min..reply_wait_max minutes after it was drafted (never the moment the
+     comment came), at most reply_limit an hour and PER_TURN a turn; in "review" mode they
+     wait for a person, who can change the words, send or skip.
+
+When Meta refuses the app (access blocked, token gone, too many calls), the account's
+turns stop for PAUSE and say why; Check now tries again at once.
 
 Instagram is looked at only every few minutes (the server's scan), never more than
 MAX_POSTS posts and MAX_COMMENTS comments a post a turn."""
 
 import logging
+import random
 from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
@@ -35,6 +40,7 @@ MAX_COMMENTS = 50  # comments read from each
 PER_TURN = 5  # replies sent by themselves a turn, at most
 DRAFT_BATCH = 10  # comments the model answers at once
 REPLY_CHARS = 300
+PAUSE = timedelta(hours=1)  # no turns this long after Meta refuses the app
 
 
 def _now() -> datetime:
@@ -157,12 +163,21 @@ def draft(db: Session, row: InstagramChannel, planner) -> int:
                 comment.status = "skipped"
             elif item.action == "reply" and reply:
                 comment.status, comment.draft = "drafted", reply
+                comment.send_after = _now() + wait(row)
                 done += 1
             else:
                 comment.status = "look"
                 comment.draft = reply
         db.commit()
     return done
+
+
+def wait(row: InstagramChannel) -> timedelta:
+    """How long a drafted reply waits before going out by itself: a random time between the
+    account's least and most minutes, so replies don't come the moment a comment does."""
+    low = max(0, row.reply_wait_min)
+    high = max(low, row.reply_wait_max)
+    return timedelta(minutes=random.uniform(low, high))
 
 
 def sent_lately(db: Session, row: InstagramChannel) -> int:
@@ -198,10 +213,12 @@ def send_drafted(db: Session, row: InstagramChannel, api=instagram) -> int:
     room = min(PER_TURN, max(0, row.reply_limit - sent_lately(db, row)))
     if row.reply_mode != "auto" or room == 0:
         return 0
+    now = _now()
+    due = (InstagramComment.send_after.is_(None)) | (InstagramComment.send_after <= now)
     ready = db.scalars(
         select(InstagramComment)
-        .where(InstagramComment.channel_id == row.id, InstagramComment.status == "drafted")
-        .order_by(InstagramComment.commented_at)
+        .where(InstagramComment.channel_id == row.id, InstagramComment.status == "drafted", due)
+        .order_by(InstagramComment.send_after, InstagramComment.commented_at)
         .limit(room)
     )
     sent = 0
@@ -211,26 +228,60 @@ def send_drafted(db: Session, row: InstagramChannel, api=instagram) -> int:
             sent += 1
         except instagram.InstagramError as exc:
             log.warning("couldn't reply to %s on @%s: %s", comment.id, row.username, exc)
+            if exc.refused:
+                pause(row, exc)
             break  # Instagram said no: try again next turn rather than push on
     return sent
 
 
+def pause(row: InstagramChannel, exc: instagram.InstagramError) -> None:
+    """Stop asking Meta for a while after it refused the app."""
+    row.paused_until = _now() + PAUSE
+    row.check_note = (
+        f"Meta refused the app ({exc}); paused for an hour. Check the Meta app dashboard, then "
+        "press Check now"
+    )[:300]
+
+
 def turn(db: Session, row: InstagramChannel, planner: Callable | object, api=instagram) -> str:
-    """One look, draft and (in auto mode) send for an account; what came of it."""
+    """One look, draft and (in auto mode) send for an account; what came of it. Nothing while
+    paused after Meta refused the app."""
+    if row.paused_until is not None and row.paused_until > _now():
+        return row.check_note
     try:
         new = look(db, row, api)
     except instagram.InstagramError as exc:
-        row.checked_at, row.check_note = _now(), f"couldn't read the comments: {exc}"[:300]
+        row.checked_at = _now()
+        if exc.refused:
+            pause(row, exc)
+        else:
+            row.check_note = f"couldn't read the comments: {exc}"[:300]
         db.commit()
         return row.check_note
     drafted = draft(db, row, planner) if new or _waiting(db, row) else 0
     sent = send_drafted(db, row, api)
+    row.checked_at = _now()
+    if row.paused_until is not None and row.paused_until > row.checked_at:
+        db.commit()
+        return row.check_note  # sending was refused: the pause says so
     note = f"{new} new comments, {drafted} replies drafted"
     if row.reply_mode == "auto":
-        note += f", {sent} sent"
-    row.checked_at, row.check_note = _now(), note
+        waiting = _due_later(db, row)
+        note += f", {sent} sent" + (f", {waiting} waiting for their time" if waiting else "")
+    row.check_note = note
     db.commit()
     return note
+
+
+def _due_later(db: Session, row: InstagramChannel) -> int:
+    """Drafted replies whose random wait isn't over yet."""
+    return db.scalar(
+        select(func.count()).where(
+            InstagramComment.channel_id == row.id,
+            InstagramComment.status == "drafted",
+            InstagramComment.send_after > _now(),
+        )
+    )
 
 
 def _waiting(db: Session, row: InstagramChannel) -> bool:

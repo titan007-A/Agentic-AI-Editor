@@ -43,11 +43,16 @@ const ADMIN_LINKS = [
   { href: "/people/", label: "People" },
 ];
 
+// Pages anyone can read without logging in (Meta's reviewers read the policies): no
+// header, and no asking who is signed in, which would send them to the login page.
+const PUBLIC = ["/privacy", "/terms", "/data-deletion"];
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const onLogin = pathname.startsWith("/login");
-  const me = useMe(!onLogin);
+  const onPublic = PUBLIC.some((path) => pathname.startsWith(path));
+  const me = useMe(!onLogin && !onPublic);
   // Accepted on the server, or just now in this page.
   const [acceptedNow, setAcceptedNow] = useState(false);
   const noticeAccepted = !me || me.notice_accepted || acceptedNow;
@@ -58,6 +63,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])];
 
   if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
+  if (onPublic) return <>{children}</>;
 
   async function logout() {
     if (!mayLeave()) return;

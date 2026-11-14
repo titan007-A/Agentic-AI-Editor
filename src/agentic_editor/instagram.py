@@ -47,7 +47,20 @@ TRANSPORT: httpx.BaseTransport | None = None
 
 
 class InstagramError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: int | None = None, subcode: int | None = None):
+        super().__init__(message)
+        self.code, self.subcode = code, subcode
+
+    @property
+    def refused(self) -> bool:
+        """Meta refusing the app itself rather than this one call: access blocked, the token
+        gone, a permission missing, too many calls, or a temporary block for spam."""
+        return self.code in REFUSED
+
+
+# Graph API error codes that mean "stop for a while": 4/17/32/613 too many calls,
+# 10/200 permission or access blocked, 190 token no longer valid, 368 temporarily blocked.
+REFUSED = {4, 10, 17, 32, 190, 200, 368, 613}
 
 
 @dataclass
@@ -289,8 +302,8 @@ def _raise(resp: httpx.Response) -> None:
     try:
         err = resp.json().get("error", {})
         msg = err.get("error_user_msg") or err.get("message") or resp.text[:200]
-        code = err.get("code")
+        code, subcode = err.get("code"), err.get("error_subcode")
     except Exception:
-        msg, code = resp.text[:200], None
+        msg, code, subcode = resp.text[:200], None, None
     where = f" (#{code})" if code else ""
-    raise InstagramError(f"Instagram API {resp.status_code}{where}: {msg}")
+    raise InstagramError(f"Instagram API {resp.status_code}{where}: {msg}", code, subcode)
