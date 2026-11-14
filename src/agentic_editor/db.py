@@ -448,6 +448,11 @@ class InstagramChannel(Base):
     reply_style: Mapped[str] = mapped_column(Text, default="")
     reply_limit: Mapped[int] = mapped_column(default=15)
     reply_since: Mapped[datetime | None]
+    # A reply goes out at a random time this many minutes after it was drafted, not at once.
+    reply_wait_min: Mapped[int] = mapped_column(default=5)
+    reply_wait_max: Mapped[int] = mapped_column(default=30)
+    # While Meta refuses the app (blocked, token gone, too many calls), no turns until then.
+    paused_until: Mapped[datetime | None]
     # The last look at its comments: when, and what came of it (or what went wrong).
     checked_at: Mapped[datetime | None]
     check_note: Mapped[str] = mapped_column(Text, default="")
@@ -473,6 +478,8 @@ class InstagramComment(Base):
     # answer it), sending, sent, skipped, failed
     status: Mapped[str] = mapped_column(String(12), default="new", index=True)
     draft: Mapped[str] = mapped_column(Text, default="")
+    # When a drafted reply may go out by itself (a random wait after drafting).
+    send_after: Mapped[datetime | None]
     why: Mapped[str] = mapped_column(Text, default="")  # the model's note on it
     reply_id: Mapped[str | None] = mapped_column(String(40))
     error: Mapped[str] = mapped_column(Text, default="")

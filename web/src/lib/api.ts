@@ -509,6 +509,13 @@ export type IgChannel = {
   reply_style: string;
   /** Replies sent by themselves in an hour, at most. */
   reply_limit: number;
+  /** A reply goes out at a random time this many minutes after it was drafted. */
+  reply_wait_min: number;
+  reply_wait_max: number;
+  /** While Meta refuses the app, no looking until then; null: not paused. */
+  paused_until: string | null;
+  /** Whether that pause is still on. */
+  paused: boolean;
   checked_at: string | null;
   check_note: string;
   /** Comments waiting for something to be done. */
@@ -705,7 +712,12 @@ export const api = {
   removeIgChannel: (id: string) => request<{ ok: boolean }>("DELETE", `/instagram/channels/${id}`),
   changeIgChannel: (
     id: string,
-    body: Partial<Pick<IgChannel, "reply_mode" | "reply_style" | "reply_limit">>,
+    body: Partial<
+      Pick<
+        IgChannel,
+        "reply_mode" | "reply_style" | "reply_limit" | "reply_wait_min" | "reply_wait_max"
+      >
+    >,
   ) => request<IgChannel>("PATCH", `/instagram/channels/${id}`, body),
   checkIgComments: (id: string) =>
     request<{ ok: boolean }>("POST", `/instagram/channels/${id}/check`),

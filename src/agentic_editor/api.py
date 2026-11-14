@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response, Streamin
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -2258,6 +2258,11 @@ def create_app(
             "reply_mode": ch.reply_mode,
             "reply_style": ch.reply_style,
             "reply_limit": ch.reply_limit,
+            "reply_wait_min": ch.reply_wait_min,
+            "reply_wait_max": ch.reply_wait_max,
+            "paused_until": ch.paused_until.isoformat() if ch.paused_until else None,
+            "paused": ch.paused_until is not None
+            and ch.paused_until > datetime.now(UTC).replace(tzinfo=None),
             "checked_at": ch.checked_at.isoformat() if ch.checked_at else None,
             "check_note": ch.check_note,
             "waiting": waiting,
@@ -2358,7 +2363,10 @@ def create_app(
 
     @app.delete("/api/instagram/channels/{channel_id}")
     def remove_ig_channel(channel_id: str, account: User, session: DB) -> dict:
-        session.delete(my_ig_channel(channel_id, session, account))
+        """The account goes, with its token and every comment and reply kept for it."""
+        ch = my_ig_channel(channel_id, session, account)
+        session.execute(delete(InstagramComment).where(InstagramComment.channel_id == ch.id))
+        session.delete(ch)
         session.commit()
         return {"ok": True}
 
@@ -2366,6 +2374,8 @@ def create_app(
         reply_mode: Literal["off", "review", "auto"] | None = None
         reply_style: str | None = Field(default=None, max_length=1000)
         reply_limit: int | None = Field(default=None, ge=1, le=60)
+        reply_wait_min: int | None = Field(default=None, ge=0, le=720)
+        reply_wait_max: int | None = Field(default=None, ge=0, le=720)
 
     @app.patch("/api/instagram/channels/{channel_id}")
     def change_ig_channel(
@@ -2382,6 +2392,12 @@ def create_app(
             ch.reply_style = body.reply_style.strip()
         if body.reply_limit is not None:
             ch.reply_limit = body.reply_limit
+        if body.reply_wait_min is not None:
+            ch.reply_wait_min = body.reply_wait_min
+        if body.reply_wait_max is not None:
+            ch.reply_wait_max = body.reply_wait_max
+        if ch.reply_wait_max < ch.reply_wait_min:
+            raise HTTPException(422, "the most minutes to wait can't be fewer than the least")
         session.commit()
         return _ig_channel_view(ch, session)
 
@@ -2391,6 +2407,8 @@ def create_app(
         ch = my_ig_channel(channel_id, session, account)
         if ch.reply_mode == "off":
             raise HTTPException(409, "turn answering on first")
+        ch.paused_until = None  # a person asks: try Meta again now
+        session.commit()
         jobs.answer_comments(ch.id)
         return {"ok": True}
 

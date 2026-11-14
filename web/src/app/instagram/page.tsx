@@ -40,9 +40,14 @@ const STATUS: Record<string, string> = {
   skipped: "skipped",
 };
 
+// The server's times are UTC without saying so: read them as UTC, shown in local time.
+function utc(iso: string): Date {
+  return new Date(/[Zz+]/.test(iso.slice(10)) ? iso : iso + "Z");
+}
+
 function when(iso: string | null): string {
   if (!iso) return "";
-  return new Date(iso).toLocaleString("en-IN", {
+  return utc(iso).toLocaleString("en-IN", {
     day: "numeric",
     month: "short",
     hour: "2-digit",
@@ -237,12 +242,18 @@ function ChannelCard({
   const [mode, setMode] = useState<ReplyMode>(channel.reply_mode);
   const [style, setStyle] = useState(channel.reply_style);
   const [limit, setLimit] = useState(String(channel.reply_limit));
+  const [waitMin, setWaitMin] = useState(String(channel.reply_wait_min));
+  const [waitMax, setWaitMax] = useState(String(channel.reply_wait_max));
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
   const changed =
     mode !== channel.reply_mode ||
     style.trim() !== channel.reply_style ||
-    Number(limit) !== channel.reply_limit;
+    Number(limit) !== channel.reply_limit ||
+    Number(waitMin) !== channel.reply_wait_min ||
+    Number(waitMax) !== channel.reply_wait_max;
+  const waitWrong = Number(waitMax) < Number(waitMin);
+  const paused = channel.paused;
 
   async function save() {
     setSaving(true);
@@ -251,6 +262,8 @@ function ChannelCard({
         reply_mode: mode,
         reply_style: style,
         reply_limit: Number(limit),
+        reply_wait_min: Number(waitMin),
+        reply_wait_max: Number(waitMax),
       });
       onChange(next);
       toast.success(
@@ -335,6 +348,36 @@ function ChannelCard({
             />
           </div>
         </div>
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium">Wait before replying (minutes)</legend>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Input
+              aria-label="Wait at least (minutes)"
+              type="number"
+              min={0}
+              max={720}
+              value={waitMin}
+              onChange={(e) => setWaitMin(e.target.value)}
+              className="w-24"
+            />
+            <span>to</span>
+            <Input
+              aria-label="Wait at most (minutes)"
+              type="number"
+              min={0}
+              max={720}
+              value={waitMax}
+              onChange={(e) => setWaitMax(e.target.value)}
+              className="w-24"
+            />
+            <span className="text-xs text-muted-foreground">
+              each reply goes out at a random time in between
+            </span>
+          </div>
+          {waitWrong && (
+            <p className="text-xs text-destructive">The most can&apos;t be less than the least.</p>
+          )}
+        </fieldset>
         <div className="space-y-1">
           <Label htmlFor={`style-${channel.id}`}>How replies should sound</Label>
           <Textarea
@@ -353,7 +396,7 @@ function ChannelCard({
           </p>
         )}
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={save} disabled={saving || !changed}>
+          <Button onClick={save} disabled={saving || !changed || waitWrong}>
             {saving ? "Saving..." : "Save"}
           </Button>
           {channel.reply_mode !== "off" && (
@@ -365,6 +408,12 @@ function ChannelCard({
             <span className="text-sm font-semibold">{channel.waiting} to answer</span>
           )}
         </div>
+        {paused && (
+          <p className="rounded-md border-2 border-destructive/50 p-2 text-sm text-destructive">
+            Paused until {when(channel.paused_until)}: Meta refused the app. Fix it in the Meta app
+            dashboard, then press Check now.
+          </p>
+        )}
         {channel.checked_at && (
           <p className="text-xs text-muted-foreground">
             Last looked {when(channel.checked_at)}: {channel.check_note}
