@@ -359,14 +359,16 @@ def test_a_kind_says_pages_unless_it_says_otherwise():
     assert niche.kind_of(" People ") == "people" and niche.kind_of("any") == "any"
     assert niche.kind_of("brands") == "pages"
     pages, people, both = Filters(kind="pages"), Filters(kind="people"), Filters(kind="any")
-    assert pages.takes("page") and not pages.takes("person") and not pages.takes("business")
+    # A business stays (its fit decides): the model calls a series' own page one as often.
+    assert pages.takes("page") and pages.takes("business") and not pages.takes("person")
     assert people.takes("person") and not people.takes("page")
     assert both.takes("person") and both.takes("business") and both.takes("")
     assert "not a person's own account" in pages.says()
 
 
 def test_pages_wanted_leaves_out_peoples_own_accounts_and_companies():
-    """A 2D animation niche: the series pages are wanted, not the animators' portfolios."""
+    """A 2D animation niche: the series pages are wanted, not the animators' portfolios; a
+    studio's account stays or goes by its fit."""
 
     def find(query, count, page=1):
         return hits(
@@ -384,13 +386,15 @@ def test_pages_wanted_leaves_out_peoples_own_accounts_and_companies():
     )
     accounts, notes = niche.run("2d animation romance", Filters(kind="pages"), model, set(),
                                 pause=0, find=find, size=5, read=lambda u: "")  # fmt: skip
-    assert [a.handle for a in accounts] == ["betweenlockers"]
-    assert accounts[0].kind == "page"
-    assert any("left out 2" in n and "not pages" in n for n in notes)
+    assert [(a.handle, a.kind) for a in accounts] == [
+        ("betweenlockers", "page"),
+        ("lofistudio", "business"),
+    ]
+    assert any("left out 1" in n and "not pages" in n for n in notes)
     planned = next(p for p in model.prompts if "Write" in p)
     assert "They want PAGES" in planned
     rated = next(p for p in model.prompts if "@neal_illustrator" in p)
-    assert "following: 1871" in rated and "person's own account or a business is 2" in rated
+    assert "following: 1871" in rated and "person's own account is 2 at most" in rated
     # Asked for people: the animator, not the series.
     people, _ = niche.run("2d animation romance", Filters(kind="people"), model, set(),
                           pause=0, find=find, size=5, read=lambda u: "")  # fmt: skip

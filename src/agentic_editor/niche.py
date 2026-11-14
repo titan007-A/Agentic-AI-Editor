@@ -10,8 +10,11 @@ never shown to that person before are kept.
 
 Pages, people or both: most want pages (theme, fan, meme, clip, news pages, a series),
 not a person's own account. The model says which kind each account is while it judges
-it, the searches are written in the words such pages use, and an account of another
-kind than the one asked for is left out.
+it (page, person or business), the searches are written in the words such pages use, and
+a person's own account is left out when pages are asked for (pages and businesses when
+people are). The model tells people from the rest reliably; a series' or magazine's own
+account it calls a business as often as a page, so businesses aren't left out by kind:
+their fit decides (one there to sell something is rated low when pages are wanted).
 
 Follower counts are what the search engine last saw, so they can be a little old."""
 
@@ -82,8 +85,12 @@ FOLLOWING = re.compile(
     r"(\d[\d.,]*)\s*([KkMm]?)\s*(?:Following|following|seguidos|abonnements|Gefolgt|seguiti)\b"
 )
 
-# What kind of account a search wants (Filters.kind) -> the one kind of account it keeps.
-KINDS = {"pages": "page", "people": "person", "any": None}
+# What kind of account a search wants (Filters.kind) -> the kinds of account it keeps.
+KINDS: dict[str, set[str] | None] = {
+    "pages": {"page", "business"},
+    "people": {"person"},
+    "any": None,
+}
 
 
 @dataclass
@@ -120,7 +127,7 @@ class Filters:
     def says(self) -> str:
         parts = []
         if self.kind == "pages":
-            parts.append("pages, not a person's own account and not a company")
+            parts.append("pages, not a person's own account")
         elif self.kind == "people":
             parts.append("people's own accounts, not pages and not companies")
         if self.min_followers:
@@ -146,7 +153,7 @@ class Filters:
     def takes(self, kind: str) -> bool:
         """Whether an account of this kind (as the model judged it) is one asked for."""
         wanted = KINDS.get(self.kind)
-        return wanted is None or kind == wanted
+        return wanted is None or kind in wanted
 
 
 def kind_of(text: str | None) -> str:
@@ -429,8 +436,8 @@ PLAN_KIND = {
 runs them: theme pages, fan pages, meme pages, clip and compilation pages, news and update
 pages, edit pages, quote pages, an animated or web series. NOT a person's own account (an
 artist's or animator's portfolio, an athlete, a coach or trainer, an influencer about their
-own life) and NOT a company, shop, studio or gym. So write searches the way such pages
-describe themselves, with words like: page, daily, memes, clips, edits, fan page, updates,
+own life) and NOT a shop, gym or agency selling something. So write searches the way such
+pages describe themselves, with words like: page, daily, memes, clips, edits, fan page, updates,
 news, compilation, highlights, "follow for more", "DM for promo".""",
     "people": """They want PEOPLE: one person's own account (a creator, artist, coach, expert,
 athlete posting their own work or life), NOT theme or fan pages that post about a topic and
@@ -462,7 +469,8 @@ spam account){kind_rule}. Say in one line what it is and why.
 
 # The rating rule for an account of another kind than the one wanted (Filters.kind).
 RATE_KIND = {
-    "pages": "; they want pages: a person's own account or a business is 2 at most",
+    "pages": "; they want pages: a person's own account is 2 at most, and so is a shop, gym, "
+    "class or agency that is there to sell something",
     "people": "; they want people: a page or a business is 2 at most",
     "any": "",
 }
@@ -571,7 +579,7 @@ def _opened(planner):
 
 # What a run says of the fitting accounts it left out for being of another kind.
 OTHER_KIND = {
-    "pages": "left out {n} accounts in the niche that are a person's own or a company's, not pages",
+    "pages": "left out {n} accounts in the niche that are a person's own, not pages",
     "people": "left out {n} accounts in the niche that are pages or companies, not people",
 }
 
