@@ -512,6 +512,16 @@ class PileFolderView(BaseModel):
     name: str
 
 
+class PasteRequest(BaseModel):
+    """Videos and folders cut inside one preset's folder, pasted into another of its
+    folders (to; None: straight into the preset's folder)."""
+
+    preset: str = Field(min_length=1, max_length=64)
+    output_ids: list[int] = Field(default=[], max_length=500)
+    folder_ids: list[int] = Field(default=[], max_length=200)
+    to: int | None = None
+
+
 class MoveRequest(BaseModel):
     folder_id: int | None  # None: back straight into the preset's folder
 
@@ -2689,6 +2699,53 @@ def create_app(
         session.delete(folder)
         session.commit()
         return {"ok": True}
+
+    @app.post("/api/pile-folders/paste")
+    def paste_into_folder(body: PasteRequest, account: User, session: DB) -> dict:
+        """Move cut videos and folders into a folder, all or none: a folder can't go
+        inside itself, and two folders side by side can't share a name."""
+        if not body.output_ids and not body.folder_ids:
+            raise HTTPException(422, "nothing to paste")
+        other = "that is in another preset's folder"
+        target = find_folder(body.to, session, account) if body.to is not None else None
+        if target is not None and target.preset != body.preset:
+            raise HTTPException(422, f"the folder to paste into {other}")
+        outputs = [find_output(i, session, account) for i in dict.fromkeys(body.output_ids)]
+        if any(o.preset != body.preset for o in outputs):
+            raise HTTPException(422, f"a video {other}")
+        moving = [find_folder(i, session, account) for i in dict.fromkeys(body.folder_ids)]
+        if any(f.preset != body.preset for f in moving):
+            raise HTTPException(422, f"a folder {other}")
+        # The folders the target sits in, itself included: none of them can move into it.
+        above, at = set(), target
+        while at is not None and at.id not in above:
+            above.add(at.id)
+            at = session.get(PileFolder, at.parent_id) if at.parent_id is not None else None
+        for folder in moving:
+            if folder.id in above:
+                raise HTTPException(422, f"{folder.name} can't go inside itself")
+        ids = {f.id for f in moving}
+        place = PileFolder.parent_id
+        beside = place.is_(None) if body.to is None else place == body.to
+        there = {
+            f.name.casefold(): f.name
+            for f in session.scalars(
+                select(PileFolder).where(PileFolder.preset == body.preset, beside)
+            )
+            if f.id not in ids and mine(account, f.owner_id)
+        }
+        seen: set[str] = set()
+        for folder in moving:
+            key = folder.name.casefold()
+            if key in there or key in seen:
+                raise HTTPException(409, f"there is already a folder called {folder.name} there")
+            seen.add(key)
+        for output in outputs:
+            output.folder_id = body.to
+        for folder in moving:
+            folder.parent_id = body.to
+        session.commit()
+        return {"videos": len(outputs), "folders": len(moving)}
 
     @app.post("/api/outputs/{output_id}/folder")
     def move_output(output_id: int, body: MoveRequest, account: User, session: DB) -> JobView:

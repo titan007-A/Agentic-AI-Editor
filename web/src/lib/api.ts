@@ -757,6 +757,13 @@ export const api = {
   renamePileFolder: (id: number, name: string) =>
     request<PileFolder>("PATCH", `/pile-folders/${id}`, { name }),
   deletePileFolder: (id: number) => request<{ ok: boolean }>("DELETE", `/pile-folders/${id}`),
+  pastePile: (preset: string, outputIds: number[], folderIds: number[], to: number | null) =>
+    request<{ videos: number; folders: number }>("POST", "/pile-folders/paste", {
+      preset,
+      output_ids: outputIds,
+      folder_ids: folderIds,
+      to,
+    }),
   moveOutput: (outputId: number, folderId: number | null) =>
     request<Job>("POST", `/outputs/${outputId}/folder`, { folder_id: folderId }),
   verdict: (outputId: number, verdict: Verdict | null) =>
