@@ -461,6 +461,85 @@ def test_the_piles_sort_outputs_as_each_output_says(env):
     assert counts == {pile: len(ids) for pile, ids in expected.items()}
 
 
+def test_folders_inside_a_presets_folder_sort_its_videos(env):
+    add_outputs(env, 3)  # square-1x1: two ready, one needs a look
+    client = env.client
+    ready = [j["outputs"][0] for j in client.get("/api/piles/ready").json()]
+    (look,) = [j["outputs"][0] for j in client.get("/api/piles/look").json()]
+    assert all(o["folder_id"] is None for o in [*ready, look])
+
+    made = client.post("/api/pile-folders", json={"preset": "square-1x1", "name": "  Monday  "})
+    monday = made.json()
+    assert made.status_code == 200 and monday["name"] == "Monday" and monday["parent_id"] is None
+    inner = client.post(
+        "/api/pile-folders",
+        json={"preset": "square-1x1", "parent_id": monday["id"], "name": "Funny"},
+    )
+    funny = inner.json()
+    assert funny["parent_id"] == monday["id"]
+    # Two folders side by side can't share a name; the same name elsewhere is fine.
+    again = {"preset": "square-1x1", "name": "monday"}
+    assert client.post("/api/pile-folders", json=again).status_code == 409
+    other = client.post("/api/pile-folders", json={"preset": "vocal-music-9x16", "name": "Monday"})
+    assert other.status_code == 200
+    # A folder holds only its own preset's videos and folders.
+    wrong = {"preset": "vocal-music-9x16", "parent_id": monday["id"], "name": "x"}
+    assert client.post("/api/pile-folders", json=wrong).status_code == 422
+    moved = client.post(f"/api/outputs/{ready[0]['id']}/folder",
+                        json={"folder_id": other.json()["id"]})  # fmt: skip
+    assert moved.status_code == 422
+    blank = client.post("/api/pile-folders", json={"preset": "square-1x1", "name": " "})
+    assert blank.status_code == 422
+    assert client.post("/api/outputs/1/folder", json={"folder_id": 9999}).status_code == 404
+
+    # Videos go in; one keeps its folder when it moves from "needs a look" to ready.
+    put = client.post(f"/api/outputs/{ready[0]['id']}/folder", json={"folder_id": funny["id"]})
+    assert put.json()["outputs"][0]["folder_id"] == funny["id"]
+    client.post(f"/api/outputs/{look['id']}/folder", json={"folder_id": monday["id"]})
+    client.post(f"/api/outputs/{look['id']}/verdict", json={"verdict": "approved"})
+    placed = {j["outputs"][0]["id"]: j["outputs"][0]["folder_id"]
+              for j in client.get("/api/piles/ready").json()}  # fmt: skip
+    assert placed == {ready[0]["id"]: funny["id"], ready[1]["id"]: None, look["id"]: monday["id"]}
+
+    renamed = client.patch(f"/api/pile-folders/{funny['id']}", json={"name": "Funny ones"})
+    assert renamed.json()["name"] == "Funny ones"
+    names = {f["name"] for f in client.get("/api/pile-folders").json()}
+    assert names == {"Monday", "Funny ones"}  # and vocal's Monday
+    assert len(client.get("/api/pile-folders").json()) == 3
+
+    # Deleting a folder moves what it holds up into the folder it was in.
+    assert client.delete(f"/api/pile-folders/{monday['id']}").status_code == 200
+    placed = {j["outputs"][0]["id"]: j["outputs"][0]["folder_id"]
+              for j in client.get("/api/piles/ready").json()}  # fmt: skip
+    assert placed[look["id"]] is None and placed[ready[0]["id"]] == funny["id"]
+    left = {f["id"]: f for f in client.get("/api/pile-folders").json()}
+    assert monday["id"] not in left and left[funny["id"]]["parent_id"] is None
+    # Out of a folder again.
+    out = client.post(f"/api/outputs/{ready[0]['id']}/folder", json={"folder_id": None})
+    assert out.json()["outputs"][0]["folder_id"] is None
+
+
+def test_an_employee_sees_and_uses_only_their_own_pile_folders(env):
+    _, riya = employee(env, presets=["square-1x1"])
+    mine = env.client.post("/api/pile-folders", json={"preset": "square-1x1", "name": "Boss"})
+    theirs = riya.post("/api/pile-folders", json={"preset": "square-1x1", "name": "Riya's"})
+    assert theirs.status_code == 200
+    assert [f["name"] for f in riya.get("/api/pile-folders").json()] == ["Riya's"]
+    # The admin sees everyone's.
+    assert {f["name"] for f in env.client.get("/api/pile-folders").json()} == {"Boss", "Riya's"}
+    boss = mine.json()["id"]
+    assert riya.patch(f"/api/pile-folders/{boss}", json={"name": "x"}).status_code == 404
+    assert riya.delete(f"/api/pile-folders/{boss}").status_code == 404
+    inside = {"preset": "square-1x1", "parent_id": boss, "name": "x"}
+    assert riya.post("/api/pile-folders", json=inside).status_code == 404
+    # The admin's own video can't be moved by the employee.
+    add_outputs(env, 1)
+    (job,) = env.client.get("/api/piles/ready").json()
+    moved = riya.post(f"/api/outputs/{job['outputs'][0]['id']}/folder",
+                      json={"folder_id": theirs.json()["id"]})  # fmt: skip
+    assert moved.status_code == 404
+
+
 def test_feeds_are_checked_before_they_are_saved(env, tmp_path):
     assert add_folder_feed(env, tmp_path / "missing").status_code == 422
     link = {"name": "x", "kind": "link", "location": "not a link", "presets": ["square-1x1"]}

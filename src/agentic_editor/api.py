@@ -56,6 +56,7 @@ from agentic_editor.db import (
     NicheSchedule,
     NicheSearch,
     Output,
+    PileFolder,
     PresetBuffer,
     Research,
     ResearchAccount,
@@ -483,6 +484,30 @@ class VerdictRequest(BaseModel):
     verdict: Literal["approved", "posted", "dismissed"] | None
 
 
+class PileFolderRequest(BaseModel):
+    """A new folder inside a preset's folder on the Autopilot piles, or inside one of its
+    folders (parent_id)."""
+
+    preset: str = Field(min_length=1, max_length=64)
+    parent_id: int | None = None
+    name: str = Field(min_length=1, max_length=60)
+
+
+class PileFolderRename(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+class PileFolderView(BaseModel):
+    id: int
+    preset: str
+    parent_id: int | None
+    name: str
+
+
+class MoveRequest(BaseModel):
+    folder_id: int | None  # None: back straight into the preset's folder
+
+
 class OutputView(BaseModel):
     id: int
     preset: str
@@ -499,6 +524,8 @@ class OutputView(BaseModel):
     doubts: list[str]
     verdict: str | None = None
     pile: str | None = None
+    # The folder it was put in inside its preset's folder on the piles; None: none.
+    folder_id: int | None = None
     edl: dict
     caption: str = ""
     caption_status: str | None = None
@@ -558,6 +585,7 @@ def job_view(
             doubts=o.doubts,
             verdict=o.verdict,
             pile=o.pile,
+            folder_id=o.folder_id,
             edl=o.edl,
             caption=o.caption or "",
             caption_status=o.caption_status,
@@ -2460,6 +2488,91 @@ def create_app(
         return [
             view(o.job, account, session, only=o.id, names=names, labels=labels) for o in outputs
         ]
+
+    def folder_view(folder: PileFolder) -> PileFolderView:
+        return PileFolderView(
+            id=folder.id, preset=folder.preset, parent_id=folder.parent_id, name=folder.name
+        )
+
+    def find_folder(folder_id: int, session: Session, account: Account) -> PileFolder:
+        folder = session.get(PileFolder, folder_id)
+        if folder is None or not mine(account, folder.owner_id):
+            raise HTTPException(404, "no such folder")
+        return folder
+
+    def folder_name(name: str, preset: str, parent_id: int | None, session: Session,
+                    account: Account, renaming: int | None = None) -> str:  # fmt: skip
+        """A folder's name, tidied; two folders side by side can't share one."""
+        name = " ".join(name.split())
+        if not name:
+            raise HTTPException(422, "name the folder")
+        place = PileFolder.parent_id
+        beside = place.is_(None) if parent_id is None else place == parent_id
+        query = select(PileFolder).where(PileFolder.preset == preset, beside)
+        for other in session.scalars(query):
+            same = other.name.casefold() == name.casefold()
+            if same and other.id != renaming and mine(account, other.owner_id):
+                raise HTTPException(409, f"there is already a folder called {other.name} here")
+        return name
+
+    @app.get("/api/pile-folders")
+    def pile_folders(account: User, session: DB) -> list[PileFolderView]:
+        """The folders made inside presets' folders on the piles: the admin sees everyone's,
+        an employee their own."""
+        query = select(PileFolder).order_by(PileFolder.name)
+        if account.role != accounts.ADMIN:
+            query = query.where(PileFolder.owner_id == account.id)
+        return [folder_view(f) for f in session.scalars(query)]
+
+    @app.post("/api/pile-folders")
+    def make_pile_folder(body: PileFolderRequest, account: User, session: DB) -> PileFolderView:
+        if body.parent_id is not None:
+            parent = find_folder(body.parent_id, session, account)
+            if parent.preset != body.preset:
+                raise HTTPException(422, "that folder is in another preset's folder")
+        name = folder_name(body.name, body.preset, body.parent_id, session, account)
+        folder = PileFolder(
+            owner_id=account.id, preset=body.preset, parent_id=body.parent_id, name=name
+        )
+        session.add(folder)
+        session.commit()
+        return folder_view(folder)
+
+    @app.patch("/api/pile-folders/{folder_id}")
+    def rename_pile_folder(
+        folder_id: int, body: PileFolderRename, account: User, session: DB
+    ) -> PileFolderView:
+        folder = find_folder(folder_id, session, account)
+        folder.name = folder_name(
+            body.name, folder.preset, folder.parent_id, session, account, renaming=folder.id
+        )
+        session.commit()
+        return folder_view(folder)
+
+    @app.delete("/api/pile-folders/{folder_id}")
+    def delete_pile_folder(folder_id: int, account: User, session: DB) -> dict:
+        """The folder goes; its videos and folders move up into the folder it was in."""
+        folder = find_folder(folder_id, session, account)
+        for output in session.scalars(select(Output).where(Output.folder_id == folder.id)):
+            output.folder_id = folder.parent_id
+        for child in session.scalars(select(PileFolder).where(PileFolder.parent_id == folder.id)):
+            child.parent_id = folder.parent_id
+        session.flush()
+        session.delete(folder)
+        session.commit()
+        return {"ok": True}
+
+    @app.post("/api/outputs/{output_id}/folder")
+    def move_output(output_id: int, body: MoveRequest, account: User, session: DB) -> JobView:
+        """Put a finished video in a folder inside its preset's folder, or back out of it."""
+        output = find_output(output_id, session, account)
+        if body.folder_id is not None:
+            folder = find_folder(body.folder_id, session, account)
+            if folder.preset != output.preset:
+                raise HTTPException(422, "that folder is in another preset's folder")
+        output.folder_id = body.folder_id
+        session.commit()
+        return view(output.job, account, session, only=output.id)
 
     @app.get("/api/outputs/{output_id}")
     def output_detail(output_id: int, account: User, session: DB) -> JobView:
