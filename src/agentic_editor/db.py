@@ -118,6 +118,9 @@ class Output(Base):
     caption_artist: Mapped[str] = mapped_column(Text, default="")
     # Or, for a post that isn't about a song, the topic a person named instead.
     caption_topic: Mapped[str] = mapped_column(Text, default="")
+    # The folder it was put in inside its preset's folder on the Autopilot piles
+    # (PileFolder); None: straight in the preset's folder.
+    folder_id: Mapped[int | None]
 
     job: Mapped[Job] = relationship(back_populates="outputs")
 
@@ -142,6 +145,22 @@ class Output(Base):
             (or_(verdict == "approved", clean), "ready"),
             else_="look",
         )
+
+
+class PileFolder(Base):
+    """A folder someone made inside a preset's folder on the Autopilot piles (or inside
+    another such folder) to sort its finished videos (Output.folder_id). It holds videos
+    in both piles: a video keeps its folder when it moves from "needs a look" to ready."""
+
+    __tablename__ = "pile_folders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # who made it
+    preset: Mapped[str] = mapped_column(String(64))
+    # The folder it is in; None: straight in the preset's folder.
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("pile_folders.id"))
+    name: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
 class Feed(Base):

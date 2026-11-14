@@ -26,6 +26,8 @@ export type Output = {
   doubts: string[];
   verdict: Verdict | null;
   pile: "ready" | "look" | null;
+  /** The folder it was put in inside its preset's folder on the piles; null: none. */
+  folder_id?: number | null;
   edl: Edl;
   caption: string;
   caption_status: "queued" | "writing" | "done" | "failed" | null;
@@ -37,6 +39,15 @@ export type Output = {
 };
 
 export type Verdict = "approved" | "posted" | "dismissed";
+
+/** A folder made inside a preset's folder on the Autopilot piles (or inside another one). */
+export type PileFolder = {
+  id: number;
+  preset: string;
+  /** The folder it is in; null: straight in the preset's folder. */
+  parent_id: number | null;
+  name: string;
+};
 
 export type FeedFields = {
   name: string;
@@ -690,6 +701,14 @@ export const api = {
   checkFeed: (id: number) => request<Feed>("POST", `/feeds/${id}/check`),
   pileCounts: () => request<{ ready: number; look: number }>("GET", "/piles"),
   pile: (name: "ready" | "look") => request<Job[]>("GET", `/piles/${name}`),
+  pileFolders: () => request<PileFolder[]>("GET", "/pile-folders"),
+  makePileFolder: (preset: string, parentId: number | null, name: string) =>
+    request<PileFolder>("POST", "/pile-folders", { preset, parent_id: parentId, name }),
+  renamePileFolder: (id: number, name: string) =>
+    request<PileFolder>("PATCH", `/pile-folders/${id}`, { name }),
+  deletePileFolder: (id: number) => request<{ ok: boolean }>("DELETE", `/pile-folders/${id}`),
+  moveOutput: (outputId: number, folderId: number | null) =>
+    request<Job>("POST", `/outputs/${outputId}/folder`, { folder_id: folderId }),
   verdict: (outputId: number, verdict: Verdict | null) =>
     request<Job>("POST", `/outputs/${outputId}/verdict`, { verdict }),
   output: (outputId: number) => request<Job>("GET", `/outputs/${outputId}`),
