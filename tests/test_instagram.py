@@ -102,6 +102,7 @@ def test_the_login_page_offers_instagram_login_with_the_unified_configuration():
     assert asked == {
         "client_id": "123", "config_id": "777", "response_type": "code", "state": "st",
         "redirect_uri": "https://x.test/auth/instagram/callback", "prompt": "login",
+        "override_default_response_type": "true",
     }  # fmt: skip
     with pytest.raises(instagram.InstagramError, match="META_CONFIG_ID"):
         instagram.auth_url("123", "https://x.test/cb", "st", "")

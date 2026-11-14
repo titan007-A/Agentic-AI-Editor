@@ -89,6 +89,9 @@ def auth_url(app_id: str, redirect_uri: str, state: str, config_id: str) -> str:
             "config_id": config_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
+            # As in the Login URL the App Dashboard gives for the configuration: the code
+            # comes back in the query, whatever the configuration's default response.
+            "override_default_response_type": "true",
             "state": state,
             "prompt": "login",
         }
