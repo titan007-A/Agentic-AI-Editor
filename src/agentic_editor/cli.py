@@ -191,7 +191,8 @@ def _user(args: argparse.Namespace) -> int:
                 for a in session.scalars(select(User).order_by(User.created_at)):
                     jobs = session.query(Job).filter(Job.owner_id == a.id).count()
                     seen = a.last_seen_at.strftime("%Y-%m-%d %H:%M") if a.last_seen_at else "never"
-                    print(f"{a.username:24s} {a.role:7s} {jobs:4d} jobs  last seen {seen}")
+                    mark = " (primary)" if accounts.is_primary(session, a) else ""
+                    print(f"{a.username:24s} {a.role:7s} {jobs:4d} jobs  last seen {seen}{mark}")
                 return 0
             if not args.name:
                 print("give the account's username")
@@ -223,6 +224,9 @@ def _user(args: argparse.Namespace) -> int:
             elif args.action == "role":
                 accounts.set_role(session, user, args.role, settings.presets_dir)
                 print(f"{user.username} is now {user.role}")
+            elif args.action == "primary":
+                accounts.set_primary(session, user)
+                print(f"{user.username} is now the primary account")
             elif args.action == "remove":
                 keeper = next((a for a in accounts.admins(session) if a.id != user.id), None)
                 accounts.remove(session, user, settings.presets_dir, keep_work_for=keeper)
@@ -286,8 +290,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
         handler=_hash_password
     )
-    user = commands.add_parser("user", help="accounts: add, list, passwd, role, remove")
-    user.add_argument("action", choices=["add", "list", "passwd", "role", "remove"])
+    user = commands.add_parser("user", help="accounts: add, list, passwd, role, primary, remove")
+    user.add_argument("action", choices=["add", "list", "passwd", "role", "primary", "remove"])
     user.add_argument("name", nargs="?", help="the account's username")
     user.add_argument("role", nargs="?", choices=["admin", "member"], help="for role")
     user.add_argument("--admin", action="store_true", help="add: make an admin, not an employee")

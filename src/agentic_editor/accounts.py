@@ -50,6 +50,29 @@ def admins(session: Session) -> list[User]:
     return list(session.scalars(select(User).where(User.role == ADMIN)))
 
 
+def primary(session: Session) -> User | None:
+    """The primary account: the admin marked so, or, until one is, the first admin made."""
+    marked = session.scalar(select(User).where(User.is_primary, User.role == ADMIN))
+    if marked is not None:
+        return marked
+    return session.scalar(select(User).where(User.role == ADMIN).order_by(User.created_at))
+
+
+def is_primary(session: Session, user: User | None) -> bool:
+    found = primary(session)
+    return user is not None and found is not None and found.id == user.id
+
+
+def set_primary(session: Session, user: User) -> None:
+    """Make an admin the primary account (the one before stops being it)."""
+    if user.role != ADMIN:
+        raise AccountError("only an admin can be the primary account")
+    for other in session.scalars(select(User).where(User.is_primary)):
+        other.is_primary = False
+    user.is_primary = True
+    session.commit()
+
+
 def presets_dir(user: User | None, root: Path) -> Path:
     """Where this account's presets live. None, a job from before accounts, is the
     admin's. Folders are named by id, which is always safe in a path."""
@@ -105,6 +128,8 @@ def set_password(session: Session, user: User, password: str) -> None:
 def set_role(session: Session, user: User, role: str, presets_root: Path) -> None:
     if role not in (ADMIN, MEMBER):
         raise AccountError(f"the role is {ADMIN} or {MEMBER}")
+    if role == MEMBER and is_primary(session, user):
+        raise AccountError("this is the primary account; make another admin primary first")
     if user.role == ADMIN and role == MEMBER and len(admins(session)) <= 1:
         raise AccountError("this is the only admin; make another one first")
     if role == MEMBER and user.role == ADMIN:
@@ -119,6 +144,8 @@ def remove(
 ) -> None:
     """Remove an account and its presets. Its jobs, feeds, drafts and researches go to
     `keep_work_for` when given (the admin removing it), or are deleted with it."""
+    if is_primary(session, user):
+        raise AccountError("this is the primary account; make another admin primary first")
     if user.role == ADMIN and len(admins(session)) <= 1:
         raise AccountError("this is the only admin; make another one first")
     for kind in (Job, Feed, StyleDraft, Research):
