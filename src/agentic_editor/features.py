@@ -1,5 +1,6 @@
 """Features some accounts try first: each is on for the usernames listed in the setting
-"feature:<name>" (a JSON list), or, until that is set, for DEFAULT_USERS."""
+"feature:<name>" (a JSON list), or, until that is set, for DEFAULT_USERS. "*" in the list
+turns it on for every account, those made later included."""
 
 import json
 
@@ -14,6 +15,8 @@ FEATURES = ("trial_reel", "fun", "niche_finder")
 DEFAULT_USERS = ("siddhant",)
 # Features first tried by more than DEFAULT_USERS.
 DEFAULTS = {"niche_finder": ("siddhant", "aman")}
+# In a feature's list: every account, now and later (new admins and employees too).
+EVERYONE = "*"
 
 
 def users(name: str, session: Session) -> list[str]:
@@ -29,7 +32,8 @@ def users(name: str, session: Session) -> list[str]:
 
 
 def enabled(account: Account, name: str, session: Session) -> bool:
-    return account.username in users(name, session)
+    listed = users(name, session)
+    return EVERYONE in listed or account.username in listed
 
 
 def of(account: Account, session: Session) -> list[str]:
