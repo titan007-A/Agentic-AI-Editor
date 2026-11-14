@@ -399,8 +399,8 @@ class _Queries(BaseModel):
 class _Fit(BaseModel):
     n: int
     kind: Literal["page", "person", "business"] = Field(
-        description="page: run as a channel about a topic; person: one person's own account; "
-        "business: a company, shop, studio, gym, league or product"
+        description="page: run as a channel about a topic (a series' page too); person: one "
+        "person's own account; business: a shop, brand, gym, agency, league or product"
     )
     fit: int = Field(ge=0, le=10, description="how well this account is in the niche asked for")
     why: str = Field(description="one short line: what the account is, why it fits or not")
@@ -444,10 +444,12 @@ RATE = """Someone wants Instagram accounts in this niche, to reach out to them:
 {taste}
 For each account below (what a web search says about it), first say what kind it is:
 - "page": run as a channel about a topic, not about whoever runs it: a theme, fan, meme,
-  clip, compilation, news, update, edit or quote page; a series or show; a media outlet.
+  clip, compilation, news, update, edit or quote page; an animated or web series', a show's
+  or a character's own page, even when a studio makes it; a magazine or media outlet.
 - "person": one person's own account: their art, work, sport or life; an artist, animator,
   illustrator, creator, coach, trainer, athlete, model or influencer, however big.
-- "business": a company, shop, studio, gym, agency, league, promotion or product's own account.
+- "business": sells something or runs events: a shop, brand, gym, school or course, agency,
+  studio's own portfolio, league, promotion or governing body, a product's official account.
 A person shows: a person's name as the name; pronouns, age, "I"/"my"; a job title; "open
 for commissions", "freelance", "available for work"; following hundreds or thousands. A
 page shows: the topic as the name; "daily", "page", "fan page", "memes", "clips", "edits",
