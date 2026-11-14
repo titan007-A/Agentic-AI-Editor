@@ -524,6 +524,8 @@ class NicheAccount(Base):
     about: Mapped[str] = mapped_column(Text, default="")
     fit: Mapped[float | None]
     why: Mapped[str] = mapped_column(Text, default="")
+    # "page", "person" or "business", as the model judged it; empty for older finds.
+    kind: Mapped[str] = mapped_column(String(16), default="")
     vote: Mapped[int] = mapped_column(default=0)  # 1 liked, -1 not wanted
     reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(default=_now)

@@ -1278,6 +1278,7 @@ def run_niche(
             max_followers=int(wanted["max_followers"]) if wanted.get("max_followers") else None,
             language=niche.plain(str(wanted.get("language") or "")),
             country=niche.plain(str(wanted.get("country") or "")),
+            kind=niche.kind_of(wanted.get("kind")),
         )
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         taste = niche.taste_line(liked[:NICHE_TASTE], disliked[:NICHE_TASTE])
@@ -1298,6 +1299,7 @@ def run_niche(
                     NicheAccount(
                         search_id=search_id, owner_id=owner, handle=a.handle, name=a.name,
                         followers=a.followers, posts=a.posts, about=a.about, fit=a.fit, why=a.why,
+                        kind=a.kind,
                     )
                 )  # fmt: skip
             found.status, found.progress = "done", 1.0

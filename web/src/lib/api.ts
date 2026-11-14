@@ -563,13 +563,20 @@ export type NicheAccount = {
   about: string;
   fit: number | null;
   why: string;
+  /** "page", "person" or "business", as the model judged it; empty for older finds. */
+  kind: string;
   vote: -1 | 0 | 1;
   reason: string;
   url: string;
   message_url: string;
 };
 
+/** Pages (theme, fan, meme, news pages), people's own accounts, or any account. */
+export type NicheKind = "pages" | "people" | "any";
+
 export type NicheFilters = {
+  /** Missing on searches made before there was a choice: they looked for pages. */
+  kind?: NicheKind;
   min_followers: number;
   max_followers: number | null;
   language: string;

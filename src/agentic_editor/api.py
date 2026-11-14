@@ -230,9 +230,11 @@ class ResearchRequest(BaseModel):
 
 
 class NicheRequest(BaseModel):
-    """A niche account search: who to find, and how big they must be."""
+    """A niche account search: who to find, what kind of account, and how big they must be."""
 
     niche: str = Field(min_length=3, max_length=1000)
+    # Pages (theme, fan, meme, news pages), people's own accounts, or any account.
+    kind: Literal["pages", "people", "any"] = "pages"
     min_followers: int = Field(default=0, ge=0, le=1_000_000_000)
     max_followers: int | None = Field(default=None, ge=0, le=1_000_000_000)
     language: str = Field(default="", max_length=60)
@@ -1683,7 +1685,8 @@ def create_app(
     def niche_account_view(a: NicheAccount) -> dict:
         return {
             "id": a.id, "handle": a.handle, "name": a.name, "followers": a.followers,
-            "posts": a.posts, "about": a.about, "fit": a.fit, "why": a.why, "vote": a.vote,
+            "posts": a.posts, "about": a.about, "fit": a.fit, "why": a.why, "kind": a.kind,
+            "vote": a.vote,
             "reason": a.reason, "url": f"https://www.instagram.com/{a.handle}/",
             "message_url": f"https://ig.me/m/{a.handle}",
         }  # fmt: skip

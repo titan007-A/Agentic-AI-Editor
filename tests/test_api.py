@@ -2142,6 +2142,10 @@ def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
     assert (
         started["filters"]["min_followers"] == 10000 and started["filters"]["language"] == "Spanish"
     )
+    assert started["filters"]["kind"] == "pages"  # what most want, unless asked otherwise
+    people = admin.post("/api/niche", json=body | {"kind": "people"}).json()
+    assert people["filters"]["kind"] == "people"
+    assert admin.post("/api/niche", json=body | {"kind": "brands"}).status_code == 422
     bad = admin.post(
         "/api/niche", json={"niche": "x y z", "min_followers": 5000, "max_followers": 10}
     )
@@ -2149,12 +2153,15 @@ def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
     me_id = admin.get("/api/me").json()["id"]
     with env.sessions() as session:
         session.add(NicheAccount(search_id=started["id"], owner_id=me_id, handle="vocalmaria",
-                                 followers=45100, fit=9, why="a vocal coach"))  # fmt: skip
+                                 followers=45100, fit=9, why="a vocal coach",
+                                 kind="person"))  # fmt: skip
         session.get(NicheSearch, started["id"]).status = "done"
+        session.delete(session.get(NicheSearch, people["id"]))
         session.commit()
     got = admin.get(f"/api/niche/{started['id']}").json()
     (acc,) = got["accounts"]
     assert acc["message_url"] == "https://ig.me/m/vocalmaria" and acc["followers"] == 45100
+    assert acc["kind"] == "person"
     voted = admin.post(
         f"/api/niche/accounts/{acc['id']}/vote", json={"vote": -1, "reason": "brand"}
     )
@@ -2187,7 +2194,7 @@ def test_niche_schedules_are_made_changed_and_removed(env):
     body = {"niche": "vocal coaches", "min_followers": 10000, "hour": 7, "days": [4, 0, 0]}
     made = admin.post("/api/niche/schedules", json=body).json()
     assert made["days"] == [0, 4] and made["hour"] == 7 and made["active"]
-    assert made["filters"]["min_followers"] == 10000
+    assert made["filters"]["min_followers"] == 10000 and made["filters"]["kind"] == "pages"
     assert admin.post("/api/niche/schedules", json=body | {"days": [7]}).status_code == 422
     assert admin.post("/api/niche/schedules", json=body | {"hour": 24}).status_code == 422
     paused = admin.patch(f"/api/niche/schedules/{made['id']}", json={"active": False}).json()

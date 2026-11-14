@@ -1,3 +1,5 @@
+import re
+
 from agentic_editor import niche
 from agentic_editor.niche import Account, Filters
 
@@ -79,10 +81,10 @@ def test_handles_without_a_count_are_looked_up_by_their_own_page():
 
 
 class Model:
-    """The planning model: searches, then fits by handle."""
+    """The planning model: searches, then fits (and kinds: a page unless told) by handle."""
 
-    def __init__(self, fits):
-        self.fits, self.prompts = fits, []
+    def __init__(self, fits, kinds=None):
+        self.fits, self.kinds, self.prompts = fits, kinds or {}, []
 
     def chat_json(self, messages, schema, **kw):
         prompt = messages[-1]["content"]
@@ -90,12 +92,13 @@ class Model:
         if "Write" in prompt:
             n = len(self.prompts)
             return {"queries": [f"vocal coach {n}", f"singing teacher {n}"]}
-        lines = [line for line in prompt.splitlines() if line[:1].isdigit()]
+        lines = [line for line in prompt.splitlines() if re.match(r"\d+\. @", line)]
         out = []
         for line in lines:
             n = int(line.split(".")[0])
             handle = line.split("@", 1)[1].split()[0]
-            out.append({"n": n, "fit": self.fits.get(handle, 2), "why": f"{handle} line"})
+            out.append({"n": n, "kind": self.kinds.get(handle, "page"),
+                        "fit": self.fits.get(handle, 2), "why": f"{handle} line"})  # fmt: skip
         return {"fits": out}
 
 
@@ -335,3 +338,110 @@ def test_accounts_the_model_names_are_kept_only_once_a_profile_page_shows_them()
     assert [a.handle for a in accounts] == ["realcoach"]
     assert accounts[0].followers == 52_000
     assert "madeupcoach" in looked and looked.count("realcoach") == 1  # asked about once
+
+
+def test_what_a_profile_follows_is_read_too():
+    assert niche.following_in("477K Followers, 2 Following, 57 Posts - 404 DOLLS") == 2
+    assert niche.following_in("24.1K followers 984 following") == 984
+    assert niche.following_in("1,203 seguidos, 88 publicaciones") == 1203
+    assert niche.following_in("12.3K Followers - no count of whom it follows") is None
+
+    def find(query, count, page=1):
+        return hits(("https://www.instagram.com/neal_illustrator/", "LeAnn (@neal_illustrator)",
+                     "326K Followers, 1,871 Following, 724 Posts - 27 y/o animator"))  # fmt: skip
+
+    found, _ = niche.gather(["2d animation"], find, pause=0)
+    assert found["neal_illustrator"].following == 1871
+
+
+def test_a_kind_says_pages_unless_it_says_otherwise():
+    assert niche.kind_of(None) == "pages" and niche.kind_of("") == "pages"
+    assert niche.kind_of(" People ") == "people" and niche.kind_of("any") == "any"
+    assert niche.kind_of("brands") == "pages"
+    pages, people, both = Filters(kind="pages"), Filters(kind="people"), Filters(kind="any")
+    # A business stays (its fit decides): the model calls a series' own page one as often.
+    assert pages.takes("page") and pages.takes("business") and not pages.takes("person")
+    assert people.takes("person") and not people.takes("page")
+    assert both.takes("person") and both.takes("business") and both.takes("")
+    assert "not a person's own account" in pages.says()
+
+
+def test_pages_wanted_leaves_out_peoples_own_accounts_and_companies():
+    """A 2D animation niche: the series pages are wanted, not the animators' portfolios; a
+    studio's account stays or goes by its fit."""
+
+    def find(query, count, page=1):
+        return hits(
+            ("https://www.instagram.com/betweenlockers/", "Between Lockers (@betweenlockers)",
+             "227K Followers, 1 Following, 72 Posts - Animated series about school"),
+            ("https://www.instagram.com/neal_illustrator/", "LeAnn (@neal_illustrator)",
+             "326K Followers, 1,871 Following, 724 Posts - 27 y/o 2D Animator"),
+            ("https://www.instagram.com/lofistudio/", "Lofi Studio (@lofistudio)",
+             "11K Followers, 154 Following, 106 Posts - animation studio"),
+        )  # fmt: skip
+
+    model = Model(
+        {"betweenlockers": 10, "neal_illustrator": 9, "lofistudio": 8},
+        {"neal_illustrator": "person", "lofistudio": "business"},
+    )
+    accounts, notes = niche.run("2d animation romance", Filters(kind="pages"), model, set(),
+                                pause=0, find=find, size=5, read=lambda u: "")  # fmt: skip
+    assert [(a.handle, a.kind) for a in accounts] == [
+        ("betweenlockers", "page"),
+        ("lofistudio", "business"),
+    ]
+    assert any("left out 1" in n and "not pages" in n for n in notes)
+    planned = next(p for p in model.prompts if "Write" in p)
+    assert "They want PAGES" in planned
+    rated = next(p for p in model.prompts if "@neal_illustrator" in p)
+    assert "following: 1871" in rated and "person's own account is 2 at most" in rated
+    # Asked for people: the animator, not the series.
+    people, _ = niche.run("2d animation romance", Filters(kind="people"), model, set(),
+                          pause=0, find=find, size=5, read=lambda u: "")  # fmt: skip
+    assert [a.handle for a in people] == ["neal_illustrator"]
+    # Any: all three.
+    every, _ = niche.run("2d animation romance", Filters(kind="any"), model, set(),
+                         pause=0, find=find, size=5, read=lambda u: "")  # fmt: skip
+    assert {a.handle for a in every} == {"betweenlockers", "neal_illustrator", "lofistudio"}
+
+
+def test_lists_of_pages_are_asked_for_when_pages_are_wanted():
+    asked = []
+
+    def find(query, count, page=1):
+        asked.append(query)
+        return []
+
+    niche.gather(["boxing memes", "mma clips", "wwe edits"], find, pause=0, kind="pages")
+    assert "best boxing memes instagram pages to follow" in asked
+    asked.clear()
+    niche.gather(["vocal coaches", "singing", "belting"], find, pause=0, kind="people")
+    assert "best vocal coaches instagram accounts to follow" in asked
+
+
+def test_a_search_made_before_the_choice_looks_for_pages_and_keeps_the_kind(tmp_path):
+    from types import SimpleNamespace
+
+    from agentic_editor import jobs
+    from agentic_editor.db import NicheSearch, make_sessionmaker
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+
+    def find(query, count, page=1):
+        return hits(
+            ("https://www.instagram.com/boxingclips/", "Boxing Clips (@boxingclips)",
+             "500K Followers, 3 Following, 2,000 Posts - daily boxing clips"),
+            ("https://www.instagram.com/coachemmet/", "Emmet (@coachemmet)",
+             "22K Followers, 1,991 Following, 1,259 Posts - boxing trainer"),
+        )  # fmt: skip
+
+    model = Model({"boxingclips": 10, "coachemmet": 10}, {"coachemmet": "person"})
+    with Session() as db:
+        db.add(NicheSearch(id="s1", owner_id="u1", niche="boxing theme pages",
+                           filters={"min_followers": 10_000}))  # no kind: made before  # fmt: skip
+        db.commit()
+    jobs.run_niche("s1", Session, None, router=SimpleNamespace(planner=model), find=find, pause=0)
+    with Session() as db:
+        found = db.get(NicheSearch, "s1")
+        assert [(a.handle, a.kind) for a in found.accounts] == [("boxingclips", "page")]
+        assert any("not pages" in n for n in found.notes)
