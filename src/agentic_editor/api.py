@@ -175,10 +175,23 @@ class PasswordRequest(BaseModel):
     my_password: str = ""
 
 
+class RoleRequest(BaseModel):
+    role: Literal["member", "admin"]
+    # The primary account's own password, typed again.
+    my_password: str = ""
+
+
+class RemoveRequest(BaseModel):
+    # The primary account's own password, typed again to remove an admin.
+    my_password: str = ""
+
+
 class AccountView(BaseModel):
     id: str
     username: str
     role: str
+    # The one admin who makes, changes and removes the other admins.
+    primary: bool = False
     created_at: datetime
     last_seen_at: datetime | None
     jobs: int
@@ -895,6 +908,7 @@ def create_app(
             "user": account.username,
             "id": account.id,
             "role": account.role,
+            "primary": accounts.is_primary(session, account),
             "notice_accepted": accepted,
             "features": features.of(account, session),
         }
@@ -2798,12 +2812,14 @@ def create_app(
             session.execute(select(Job.owner_id, func.count()).group_by(Job.owner_id)).all()
         )
         first = next(iter(accounts.admins(session)), None)
+        boss = accounts.primary(session)
         rows = session.scalars(select(Account).order_by(Account.created_at))
         return [
             AccountView(
                 id=a.id,
                 username=a.username,
                 role=a.role,
+                primary=boss is not None and a.id == boss.id,
                 created_at=a.created_at,
                 last_seen_at=a.last_seen_at,
                 jobs=counts.get(a.id, 0) + (counts.get(None, 0) if a is first else 0),
@@ -2831,11 +2847,19 @@ def create_app(
             raise HTTPException(403, "that isn't your password; type your own to do this")
         logins.succeeded(client)
 
+    def primary_only(me: Account, session: Session) -> None:
+        """Other admins are made, changed and removed only by the primary account."""
+        if not accounts.is_primary(session, me):
+            boss = accounts.primary(session)
+            who = f" ({boss.username})" if boss else ""
+            raise HTTPException(403, f"only the primary account{who} manages the admins")
+
     @app.post("/api/admin/users")
     def create_account(
         body: AccountRequest, me: Admin, session: DB, request: Request
     ) -> AccountView:
         if body.role == accounts.ADMIN:
+            primary_only(me, session)
             confirm(me, body.my_password, request)
         try:
             account = accounts.create(
@@ -2900,6 +2924,8 @@ def create_app(
     ) -> dict:
         target = find_account(account_id, session)
         if target.role == accounts.ADMIN:
+            if target.id != me.id:
+                primary_only(me, session)
             confirm(me, body.my_password, request)
         try:
             accounts.set_password(session, target, body.password)
@@ -2907,13 +2933,43 @@ def create_app(
             raise HTTPException(422, str(exc)) from exc
         return {"ok": True}
 
+    @app.post("/api/admin/users/{account_id}/role")
+    def change_role(
+        account_id: str, body: RoleRequest, me: Admin, session: DB, request: Request
+    ) -> AccountView:
+        """Make an employee an admin or an admin an employee: the primary account only, with
+        its own password typed again."""
+        target = find_account(account_id, session)
+        if target.id == me.id:
+            raise HTTPException(422, "you can't change your own role")
+        primary_only(me, session)
+        confirm(me, body.my_password, request)
+        try:
+            accounts.set_role(session, target, body.role, settings.presets_dir)
+        except accounts.AccountError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return AccountView(
+            id=target.id, username=target.username, role=target.role,
+            created_at=target.created_at, last_seen_at=target.last_seen_at,
+            jobs=session.scalar(select(func.count()).where(Job.owner_id == target.id)) or 0,
+            presets=len(list(presets_dir(target).glob("*.yaml"))),
+        )  # fmt: skip
+
     @app.delete("/api/admin/users/{account_id}")
-    def remove_account(account_id: str, me: Admin, session: DB, delete_work: bool = False) -> dict:
+    def remove_account(
+        account_id: str,
+        me: Admin,
+        session: DB,
+        request: Request,
+        delete_work: bool = False,
+        body: RemoveRequest | None = None,
+    ) -> dict:
         target = find_account(account_id, session)
         if target.id == me.id:
             raise HTTPException(422, "you can't remove your own account")
         if target.role == accounts.ADMIN:
-            raise HTTPException(422, "an admin is removed from the Mac: aiedit user remove")
+            primary_only(me, session)
+            confirm(me, body.my_password if body else "", request)
         busy = session.scalar(
             select(func.count())
             .select_from(Job)

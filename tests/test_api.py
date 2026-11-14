@@ -833,6 +833,90 @@ def test_another_admins_password_changes_only_with_the_admins_own(env, monkeypat
     assert signed_in.status_code == 200
 
 
+def test_only_the_primary_account_makes_changes_and_removes_admins(env, monkeypatch):
+    from agentic_editor import accounts
+    from agentic_editor.db import User
+
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    boss = env.client
+    me = boss.get("/api/me").json()
+    assert me["primary"] is True  # the first admin, until one is marked
+    mine = {"my_password": PASSWORD}
+    ask = {"username": "arham", "password": "arham-pass-1", "role": "admin"}
+    arham_id = boss.post("/api/admin/users", json=ask | mine).json()["id"]
+    listed = {a["username"]: a for a in boss.get("/api/admin/users").json()}
+    assert listed[me["user"]]["primary"] and not listed["arham"]["primary"]
+
+    # Another admin: runs employees as before, but no admin's account.
+    arham = TestClient(boss.app)
+    arham.post("/api/login", json={"username": "arham", "password": "arham-pass-1"})
+    theirs = {"my_password": "arham-pass-1"}
+    assert arham.get("/api/me").json()["primary"] is False
+    no = arham.post("/api/admin/users", json=ask | {"username": "prajjwal"} | theirs)
+    assert no.status_code == 403 and "primary account" in no.json()["detail"]
+    url = f"/api/admin/users/{me['id']}"
+    assert (
+        arham.post(f"{url}/password", json={"password": "taken-over-1"} | theirs).status_code == 403
+    )
+    assert arham.post(f"{url}/role", json={"role": "member"} | theirs).status_code == 403
+    assert arham.request("DELETE", url, json=theirs).status_code == 403
+    staff = arham.post("/api/admin/users", json={"username": "riya", "password": "riya-pass-1"})
+    assert staff.status_code == 200 and staff.json()["role"] == "member"
+    riya_url = f"/api/admin/users/{staff.json()['id']}"
+    assert arham.post(f"{riya_url}/password", json={"password": "riya-pass-2"}).status_code == 200
+    # Its own password it may change, with its own typed again.
+    own = arham.post(f"/api/admin/users/{arham_id}/password",
+                     json={"password": "arham-pass-2"} | theirs)  # fmt: skip
+    assert own.status_code == 200
+
+    # The primary account: an admin to an employee and back, with its own password.
+    arham_url = f"/api/admin/users/{arham_id}"
+    assert boss.post(f"{arham_url}/role", json={"role": "member"}).status_code == 403
+    down = boss.post(f"{arham_url}/role", json={"role": "member"} | mine)
+    assert down.status_code == 200 and down.json()["role"] == "member"
+    up = boss.post(f"{arham_url}/role", json={"role": "admin"} | mine)
+    assert up.json()["role"] == "admin"
+    assert boss.post(f"{url}/role", json={"role": "member"} | mine).status_code == 422  # itself
+    # Its password, and removing it: their work comes to the primary account.
+    assert (
+        boss.post(f"{arham_url}/password", json={"password": "arham-pass-3"} | mine).status_code
+        == 200
+    )
+    with env.sessions() as db:
+        db.add(Job(source="https://x.test/a", presets=["square-1x1"], status="done",
+                   owner_id=arham_id))  # fmt: skip
+        db.commit()
+    assert boss.request("DELETE", arham_url, json={"my_password": "nope"}).status_code == 403
+    assert boss.request("DELETE", arham_url, json=mine).status_code == 200
+    with env.sessions() as db:
+        assert db.get(User, arham_id) is None
+        assert db.query(Job).filter(Job.source == "https://x.test/a").one().owner_id == me["id"]
+        # Never the primary account itself, from anywhere.
+        primary = db.get(User, me["id"])
+        with pytest.raises(accounts.AccountError, match="primary"):
+            accounts.remove(db, primary, env.settings.presets_dir)
+
+
+def test_the_primary_account_is_marked_and_handed_over_on_the_computer(env):
+    from agentic_editor import accounts
+    from agentic_editor.db import User
+
+    with env.sessions() as db:
+        first = accounts.primary(db)
+        other = accounts.create(
+            db, "prajjwal", "prajjwal-pass-1", "admin", env.settings.presets_dir
+        )
+        staff = accounts.create(db, "riya", "riya-pass-12", "member", env.settings.presets_dir)
+        assert accounts.is_primary(db, first) and not accounts.is_primary(db, other)
+        with pytest.raises(accounts.AccountError, match="only an admin"):
+            accounts.set_primary(db, staff)
+        accounts.set_primary(db, other)
+        assert accounts.primary(db).id == other.id and not db.get(User, first.id).is_primary
+        with pytest.raises(accounts.AccountError, match="primary"):
+            accounts.set_role(db, other, "member", env.settings.presets_dir)
+    assert env.client.get("/api/me").json()["primary"] is False
+
+
 def test_only_the_admin_watches_a_folder_on_the_computer(env, tmp_path):
     _, riya = employee(env)
     feed = {"name": "mine", "kind": "folder", "location": str(tmp_path), "presets": ["square-1x1"]}

@@ -311,6 +311,8 @@ export type Me = {
   user: string;
   id: string;
   role: "admin" | "member";
+  /** The primary account: the one admin who makes, changes and removes the other admins. */
+  primary?: boolean;
   notice_accepted: boolean;
   /** Features this account tries first (trial_reel, fun). */
   features?: string[];
@@ -372,6 +374,7 @@ export type Account = {
   id: string;
   username: string;
   role: "admin" | "member";
+  primary?: boolean;
   created_at: string;
   last_seen_at: string | null;
   jobs: number;
@@ -847,8 +850,12 @@ export const api = {
   assignedPresets: (id: string) => request<Assigned>("GET", `/admin/users/${id}/presets`),
   assignPresets: (id: string, names: string[], replace: boolean) =>
     request<Assigned>("PUT", `/admin/users/${id}/presets`, { names, replace }),
-  removeAccount: (id: string, deleteWork: boolean) =>
-    request("DELETE", `/admin/users/${id}?delete_work=${deleteWork}`),
+  removeAccount: (id: string, deleteWork: boolean, myPassword = "") =>
+    request("DELETE", `/admin/users/${id}?delete_work=${deleteWork}`, {
+      my_password: myPassword,
+    }),
+  changeRole: (id: string, role: "member" | "admin", myPassword: string) =>
+    request<Account>("POST", `/admin/users/${id}/role`, { role, my_password: myPassword }),
   upload: async (file: File, options: UploadOptions = {}) => {
     const { status, statusText, body } = await sendFile("/api/uploads", file, options);
     return settle<{ source: string; name: string }>("/uploads", status, statusText, body);
