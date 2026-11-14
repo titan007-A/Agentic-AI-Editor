@@ -519,6 +519,54 @@ def test_folders_inside_a_presets_folder_sort_its_videos(env):
     assert out.json()["outputs"][0]["folder_id"] is None
 
 
+def test_cut_videos_and_folders_are_pasted_into_another_folder(env):
+    add_outputs(env, 4)
+    client = env.client
+    videos = [j["outputs"][0]["id"] for j in client.get("/api/piles/ready").json()]
+    videos += [j["outputs"][0]["id"] for j in client.get("/api/piles/look").json()]
+
+    def make(name, parent=None, preset="square-1x1"):
+        body = {"preset": preset, "name": name, "parent_id": parent}
+        made = client.post("/api/pile-folders", json=body)
+        assert made.status_code == 200, made.text
+        return made.json()["id"]
+
+    a, b = make("A"), make("B")
+    a1 = make("Inner", a)
+
+    def paste(**body):
+        return client.post("/api/pile-folders/paste", json={"preset": "square-1x1", **body})
+
+    # Two videos (one from each pile) and a folder into B, all at once.
+    done = paste(output_ids=[videos[0], videos[-1]], folder_ids=[a1], to=b)
+    assert done.json() == {"videos": 2, "folders": 1}
+    placed = {
+        j["outputs"][0]["id"]: j["outputs"][0]["folder_id"]
+        for pile in ("ready", "look")
+        for j in client.get(f"/api/piles/{pile}").json()
+    }
+    assert placed[videos[0]] == b and placed[videos[-1]] == b and placed[videos[1]] is None
+    folders = {f["id"]: f for f in client.get("/api/pile-folders").json()}
+    assert folders[a1]["parent_id"] == b
+    # Back out to the preset's folder.
+    assert paste(output_ids=[videos[0]], to=None).json() == {"videos": 1, "folders": 0}
+    # A folder can't go inside itself or a folder inside it.
+    assert paste(folder_ids=[b], to=b).status_code == 422
+    assert paste(folder_ids=[b], to=a1).status_code == 422
+    # Names can't clash beside each other: another "Inner" can't join B's.
+    other_inner = make("Inner", a)
+    clash = paste(folder_ids=[other_inner], to=b)
+    assert clash.status_code == 409 and "Inner" in clash.json()["detail"]
+    assert folders[a1]["parent_id"] == b  # nothing moved by the refused paste
+    # Another preset's folder or video: refused, and nothing moves.
+    vocal = make("V", preset="vocal-music-9x16")
+    assert paste(output_ids=[videos[1]], to=vocal).status_code == 422
+    assert paste(folder_ids=[vocal], to=None).status_code == 422
+    assert paste(output_ids=[videos[1]], folder_ids=[a], to=b).json() == {"videos": 1, "folders": 1}
+    assert paste().status_code == 422  # nothing to paste
+    assert paste(output_ids=[999999], to=None).status_code == 404
+
+
 def test_an_employee_sees_and_uses_only_their_own_pile_folders(env):
     _, riya = employee(env, presets=["square-1x1"])
     mine = env.client.post("/api/pile-folders", json={"preset": "square-1x1", "name": "Boss"})
