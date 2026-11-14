@@ -1,6 +1,15 @@
 "use client";
 
-import { KeyRound, ListChecks, SlidersHorizontal, Trash2, UserPlus } from "lucide-react";
+import {
+  Crown,
+  KeyRound,
+  ListChecks,
+  ShieldMinus,
+  ShieldPlus,
+  SlidersHorizontal,
+  Trash2,
+  UserPlus,
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -51,6 +60,10 @@ export default function PeoplePage() {
   const [resetMyPassword, setResetMyPassword] = useState("");
   const [removing, setRemoving] = useState<Account | null>(null);
   const [deleteWork, setDeleteWork] = useState(false);
+  const [removeMyPassword, setRemoveMyPassword] = useState("");
+  // An account whose role the primary account is changing, and its own password for it.
+  const [promoting, setPromoting] = useState<Account | null>(null);
+  const [roleMyPassword, setRoleMyPassword] = useState("");
   // Assigning presets to one employee: what they have now, and what is ticked.
   const [assigning, setAssigning] = useState<Account | null>(null);
   const [assigned, setAssigned] = useState<Assigned | null>(null);
@@ -74,6 +87,10 @@ export default function PeoplePage() {
     return <p className="text-sm text-muted-foreground">Only the admin manages accounts.</p>;
   }
   if (people === null) return <p className="text-sm text-muted-foreground">Loading...</p>;
+  // The primary account makes, changes and removes the other admins; the others run employees.
+  const primary = me?.primary === true;
+  const boss = people.find((p) => p.primary);
+  const adding = primary ? role : "member";
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -82,8 +99,8 @@ export default function PeoplePage() {
       const made = await api.createAccount(
         username.trim().toLowerCase(),
         password,
-        role,
-        role === "admin" ? myPassword : "",
+        adding,
+        adding === "admin" ? myPassword : "",
       );
       toast.success(
         made.role === "admin"
@@ -168,7 +185,11 @@ export default function PeoplePage() {
     if (!removing) return;
     setBusy(true);
     try {
-      await api.removeAccount(removing.id, deleteWork);
+      await api.removeAccount(
+        removing.id,
+        deleteWork,
+        removing.role === "admin" ? removeMyPassword : "",
+      );
       toast.success(
         deleteWork
           ? `${removing.username} and their jobs are removed`
@@ -176,6 +197,28 @@ export default function PeoplePage() {
       );
       setRemoving(null);
       setDeleteWork(false);
+      setRemoveMyPassword("");
+      await load();
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeRole() {
+    if (!promoting) return;
+    const next = promoting.role === "admin" ? "member" : "admin";
+    setBusy(true);
+    try {
+      await api.changeRole(promoting.id, next, roleMyPassword);
+      toast.success(
+        next === "admin"
+          ? `${promoting.username} is an admin now`
+          : `${promoting.username} is an employee now`,
+      );
+      setPromoting(null);
+      setRoleMyPassword("");
       await load();
     } catch (err) {
       toast.error(errorText(err));
@@ -223,19 +266,21 @@ export default function PeoplePage() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="new-role">Role</Label>
-              <Select value={role} onValueChange={(v) => setRole(v as "member" | "admin")}>
-                <SelectTrigger id="new-role" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="member">Employee</SelectItem>
-                  <SelectItem value="admin">Admin</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {role === "admin" && (
+            {primary && (
+              <div className="space-y-2">
+                <Label htmlFor="new-role">Role</Label>
+                <Select value={role} onValueChange={(v) => setRole(v as "member" | "admin")}>
+                  <SelectTrigger id="new-role" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="member">Employee</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {adding === "admin" && (
               <div className="space-y-2">
                 <Label htmlFor="my-password">Your password</Label>
                 <Input
@@ -255,16 +300,18 @@ export default function PeoplePage() {
                 busy ||
                 username.trim().length < 3 ||
                 password.length < MIN_PASSWORD ||
-                (role === "admin" && !myPassword)
+                (adding === "admin" && !myPassword)
               }
             >
-              <UserPlus /> Add {role === "admin" ? "admin" : "employee"}
+              <UserPlus /> Add {adding === "admin" ? "admin" : "employee"}
             </Button>
           </form>
           <p className="mt-3 text-xs text-muted-foreground">
-            {role === "admin"
-              ? "An admin sees everyone's jobs, uses the same presets as you, and manages People, so type your own password to make one. Admins are removed only on the Mac (aiedit user remove NAME)."
+            {adding === "admin"
+              ? "An admin sees everyone's jobs, uses the same presets as you, and manages employees, so type your own password to make one. You can change or remove them here later."
               : "They start with no presets: tick the ones they should use with Assign presets on their card below, or send one preset to several people from the Presets page."}
+            {!primary &&
+              ` Admins are made, changed and removed by the primary account${boss ? ` (${boss.username})` : ""}.`}
           </p>
         </CardContent>
       </Card>
@@ -278,6 +325,11 @@ export default function PeoplePage() {
                 <Badge variant={person.role === "admin" ? "default" : "secondary"}>
                   {person.role === "admin" ? "admin" : "employee"}
                 </Badge>
+                {person.primary && (
+                  <Badge variant="outline" className="gap-1">
+                    <Crown className="size-3" aria-hidden /> primary
+                  </Badge>
+                )}
                 {person.id === me?.id && <Badge variant="outline">you</Badge>}
               </CardTitle>
             </CardHeader>
@@ -286,10 +338,25 @@ export default function PeoplePage() {
                 {person.jobs} {person.jobs === 1 ? "job" : "jobs"} · {person.presets} presets · last
                 seen {seen(person.last_seen_at)}
               </p>
-              {person.role === "admin" && person.id !== me?.id && (
-                <Button variant="outline" onClick={() => setResetting(person)}>
-                  <KeyRound /> New password
-                </Button>
+              {person.role === "admin" && person.id !== me?.id && primary && (
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setResetting(person)}>
+                    <KeyRound /> New password
+                  </Button>
+                  <Button variant="outline" onClick={() => setPromoting(person)}>
+                    <ShieldMinus /> Make employee
+                  </Button>
+                  <Button variant="outline" onClick={() => setRemoving(person)}>
+                    <Trash2 /> Remove
+                  </Button>
+                </div>
+              )}
+              {person.role === "admin" && person.id !== me?.id && !primary && (
+                <p className="text-xs text-muted-foreground">
+                  {person.primary
+                    ? "The primary account: it manages the admins."
+                    : "Admins are managed by the primary account."}
+                </p>
               )}
               {person.role === "member" && (
                 <div className="flex flex-wrap gap-2">
@@ -307,6 +374,11 @@ export default function PeoplePage() {
                   <Button variant="outline" onClick={() => setRemoving(person)}>
                     <Trash2 /> Remove
                   </Button>
+                  {primary && (
+                    <Button variant="outline" onClick={() => setPromoting(person)}>
+                      <ShieldPlus /> Make admin
+                    </Button>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -434,15 +506,76 @@ export default function PeoplePage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={removing !== null} onOpenChange={(open) => !open && setRemoving(null)}>
+      <Dialog
+        open={promoting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPromoting(null);
+            setRoleMyPassword("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Make {promoting?.username} {promoting?.role === "admin" ? "an employee" : "an admin"}?
+            </DialogTitle>
+            <DialogDescription>
+              {promoting?.role === "admin"
+                ? "They stop seeing everyone's jobs and People, and get a presets folder of their own (empty: assign presets after). They are logged out everywhere."
+                : "They see everyone's jobs, use the admins' presets and manage employees. They are logged out everywhere and log in again."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="role-my-password">Your password</Label>
+            <Input
+              id="role-my-password"
+              type="password"
+              autoComplete="current-password"
+              placeholder="to confirm it's you"
+              value={roleMyPassword}
+              onChange={(e) => setRoleMyPassword(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button onClick={changeRole} disabled={busy || !roleMyPassword}>
+              {promoting?.role === "admin" ? "Make employee" : "Make admin"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={removing !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRemoving(null);
+            setRemoveMyPassword("");
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Remove {removing?.username}?</DialogTitle>
             <DialogDescription>
-              Their account and presets are deleted and they are logged out. Their jobs and feeds
-              become yours, unless you delete those too.
+              {removing?.role === "admin"
+                ? "Their account is deleted and they are logged out; the admins' presets stay. Their jobs and feeds become yours, unless you delete those too."
+                : "Their account and presets are deleted and they are logged out. Their jobs and feeds become yours, unless you delete those too."}
             </DialogDescription>
           </DialogHeader>
+          {removing?.role === "admin" && (
+            <div className="space-y-2">
+              <Label htmlFor="remove-my-password">Your password</Label>
+              <Input
+                id="remove-my-password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="to confirm it's you"
+                value={removeMyPassword}
+                onChange={(e) => setRemoveMyPassword(e.target.value)}
+              />
+            </div>
+          )}
           <label className="flex min-h-11 items-center gap-3 text-sm">
             <Checkbox
               checked={deleteWork}
@@ -451,7 +584,11 @@ export default function PeoplePage() {
             Also delete their jobs and feeds
           </label>
           <DialogFooter>
-            <Button variant="destructive" onClick={remove} disabled={busy}>
+            <Button
+              variant="destructive"
+              onClick={remove}
+              disabled={busy || (removing?.role === "admin" && !removeMyPassword)}
+            >
               Remove
             </Button>
           </DialogFooter>
