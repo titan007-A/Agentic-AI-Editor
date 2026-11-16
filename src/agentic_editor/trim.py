@@ -245,6 +245,8 @@ def whole_sentences(
 
 
 def apply(edl: EDL, analysis: Analysis, preset: Preset) -> EDL:
+    if not preset.trim:  # the whole video was asked for
+        return edl
     clip = edl.clips[0]
     start, end, notes = trim_silence(clip.start, clip.end, analysis.silences)
     lines = build_lines(analysis)

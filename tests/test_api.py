@@ -2335,3 +2335,45 @@ def test_niche_schedules_are_made_changed_and_removed(env):
     assert admin.delete(f"/api/niche/schedules/{made['id']}").status_code == 200
     assert admin.get("/api/niche/schedules").json() == []
     assert admin.get("/api/niche").json() == []  # the searches list isn't mistaken for it
+
+
+def test_a_job_can_keep_the_whole_video(env):
+    seen = []
+    run = env.run
+
+    def recording(source, presets, *args, **kwargs):
+        seen.append([p.trim for p in presets])
+        return run(source, presets, *args, **kwargs)
+
+    env.run = recording
+    asked = {"sources": ["https://x.test/v"], "presets": ["square-1x1"], "trim": False}
+    kept = env.client.post("/api/jobs", json=asked).json()[0]
+    assert kept["trim"] is False and start(env.client)[0]["trim"] is True
+    again = env.client.post(f"/api/jobs/{kept['id']}/regenerate", json={"preset": "square-1x1"})
+    assert again.json()["trim"] is False
+    assert seen == [[False], [True], [False]]
+
+
+def test_a_failed_job_can_be_tried_again(env):
+    run, tries = env.run, []
+
+    def flaky(source, presets, *args, **kwargs):
+        tries.append(source)
+        if len(tries) == 1:
+            raise ConnectionError("the download timed out")
+        return run(source, presets, *args, **kwargs)
+
+    env.run = flaky
+    failed = start(env.client)[0]
+    assert env.client.get(f"/api/jobs/{failed['id']}").json()["status"] == "failed"
+    retried = env.client.post(f"/api/jobs/{failed['id']}/retry")
+    assert retried.status_code == 200, retried.text
+    job = env.client.get(f"/api/jobs/{failed['id']}").json()
+    assert job["status"] == "done" and job["error"] is None and len(job["outputs"]) == 1
+    assert tries == ["https://x.test/v"] * 2
+    with env.sessions() as db:
+        stages = [e.message for e in db.scalars(select(Event).where(Event.job_id == failed["id"]))]
+    assert "tried again" in stages
+    # Only a failed job goes back in the queue.
+    assert env.client.post(f"/api/jobs/{failed['id']}/retry").status_code == 409
+    assert env.client.post("/api/jobs/nope/retry").status_code == 404

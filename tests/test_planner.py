@@ -323,3 +323,33 @@ def test_the_hook_and_title_are_written_in_the_reels_language(make_analysis):
     plan_with_llm(llm, make_analysis(transcript(), 20.0), PRESET)
     # Nothing set: the post caption's default, English, as the model mostly wrote anyway.
     assert "Write the hook and title in English." in llm.prompts[1][-1]["content"]
+
+
+def test_a_preset_that_does_not_trim_plans_the_whole_video(make_analysis):
+    from agentic_editor import pipeline
+
+    analysis = make_analysis(transcript(), 21.5)  # 21.5 s, the preset allows 6-12 s
+    preset = PRESET.model_copy(update={"trim": False, "zoom_punch_ins": False})
+    llm = FakeLLM(final(0))  # one question: the hook and title, no candidates to pick
+    llm.model = "fake"
+    [(edl, planner)] = pipeline.plan(llm, analysis, preset, None)
+    assert (edl.clips[0].start, edl.clips[0].end) == (0.0, 21.5)
+    assert edl.hook == "Nobody saw this coming" and planner == "fake"
+    assert "kept the whole video: not trimmed" in edl.decisions
+    assert len(llm.prompts) == 1
+
+
+def test_the_whole_video_is_kept_without_a_model_or_words(make_analysis):
+    from agentic_editor import pipeline
+
+    preset = PRESET.model_copy(update={"trim": False, "zoom_punch_ins": False})
+
+    class Down(FakeLLM):
+        def chat_json(self, messages, schema, **kwargs):
+            raise LLMError("no model")
+
+    for llm, words in ((Down(), transcript()), (FakeLLM(), [])):
+        llm.model = "fake"
+        [(edl, planner)] = pipeline.plan(llm, make_analysis(words, 30.0), preset, None)
+        assert (edl.clips[0].start, edl.clips[0].end) == (0.0, 30.0)
+        assert planner == "heuristic" and edl.hook == ""

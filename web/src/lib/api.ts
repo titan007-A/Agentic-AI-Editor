@@ -97,6 +97,8 @@ export type Job = {
   unnamed: string[];
   /** Roughly how long a queued or running job still has, in seconds; null if unknown. */
   eta_seconds?: number | null;
+  /** False when the person chose to keep the whole video, not cut to the preset's length. */
+  trim?: boolean;
 };
 
 export type ResearchItem = {
@@ -314,7 +316,7 @@ export type Me = {
   /** The primary account: the one admin who makes, changes and removes the other admins. */
   primary?: boolean;
   notice_accepted: boolean;
-  /** Features this account tries first (trial_reel, fun). */
+  /** Features this account tries first (trial_reel, fun, niche_finder, trim_choice). */
   features?: string[];
 };
 
@@ -755,8 +757,9 @@ export const api = {
   storage: () => request<{ keep_days: number }>("GET", "/system/storage"),
   setStorage: (keepDays: number) =>
     request<{ keep_days: number }>("PUT", "/system/storage", { keep_days: keepDays }),
-  createJobs: (sources: string[], presets: string[], notes: string) =>
-    request<Job[]>("POST", "/jobs", { sources, presets, notes: notes || null }),
+  createJobs: (sources: string[], presets: string[], notes: string, trim = true) =>
+    request<Job[]>("POST", "/jobs", { sources, presets, notes: notes || null, trim }),
+  retryJob: (id: string) => request<Job>("POST", `/jobs/${id}/retry`),
   regenerate: (id: string, preset: string, notes: string) =>
     request<Job>("POST", `/jobs/${id}/regenerate`, { preset, notes: notes || null }),
   feeds: () => request<Feed[]>("GET", "/feeds"),

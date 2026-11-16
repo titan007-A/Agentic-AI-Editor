@@ -495,6 +495,19 @@ def plan_variants(
     return edls
 
 
+def plan_whole(llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None) -> EDL:
+    """The plan for the whole video as one segment, when the person chose not to trim it:
+    the model writes its hook, title and caption place; where it starts and ends is set."""
+    lines = build_lines(analysis)
+    if not lines:
+        raise LLMError("the transcript is empty, nothing to plan from")
+    every = Candidate(
+        start_line=0, end_line=len(lines) - 1, hook=5, completeness=5, peak=5,
+        reason="the whole video, not trimmed",
+    )  # fmt: skip
+    return finalize(llm, [every], lines, preset, analysis, notes, keep_start=True)
+
+
 def onscreen_language(preset: Preset) -> str | None:
     """The language of the words a reel shows, by name, for its hook and title: the
     one-liner's, else the captions' when translated, else the post caption's; None (the

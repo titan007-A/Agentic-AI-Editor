@@ -56,6 +56,8 @@ def check_format(info: ffmpeg.MediaInfo, preset: Preset, source_duration: float)
     if not info.has_audio:
         issues.append(Issue("format", "output has no audio track"))
     shortest = min(preset.min_duration, source_duration)
+    if not preset.trim:  # the whole video, as long as it is
+        return issues
     if info.duration < shortest - DURATION_TOLERANCE:
         issues.append(Issue("duration", f"{info.duration:.1f}s is under the {shortest:g}s minimum"))
     if info.duration > preset.max_duration + DURATION_TOLERANCE:

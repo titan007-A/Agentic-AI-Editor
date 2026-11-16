@@ -337,6 +337,9 @@ class Preset(Strict):
     fps: int = Field(default=30, ge=12, le=60)
     min_duration: float = Field(gt=0)
     max_duration: float = Field(gt=0)
+    # False keeps the whole video: it isn't cut to min/max_duration and its opening isn't
+    # moved. Set for a job whose person chose not to trim it (Job.trim).
+    trim: bool = True
     captions: CaptionStyle = CaptionStyle()
     hook: Hook = Hook()
     title_overlay: TitleOverlay = TitleOverlay()

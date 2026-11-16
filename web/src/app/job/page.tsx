@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { JobStatus, jobLabel, needsName } from "@/components/job-status";
 import { NameSongForm } from "@/components/name-song-form";
 import { OutputCard } from "@/components/output-card";
+import { RetryButton } from "@/components/retry-button";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -123,8 +124,12 @@ function JobDetail() {
           </h1>
           <p className="truncate text-xs text-muted-foreground">{job.source}</p>
           {job.notes && <p className="text-sm">Notes: {job.notes}</p>}
+          {job.trim === false && (
+            <p className="text-sm">Whole video: not trimmed to the preset&apos;s length</p>
+          )}
         </div>
         <JobStatus job={now} />
+        {job.status === "failed" && <RetryButton job={job} onRetried={setLoaded} />}
         {!active && (
           <Button
             variant="ghost"

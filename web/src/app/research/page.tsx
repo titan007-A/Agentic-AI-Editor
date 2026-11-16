@@ -12,6 +12,7 @@ import { PdfChooser } from "@/components/pdf-chooser";
 import { fromPage, ReelCard } from "@/components/reel-card";
 import { ResearchChat } from "@/components/research-chat";
 import { TrendRadar } from "@/components/trend-radar";
+import { useTrimChoice } from "@/components/trim-choice";
 import { ResearchQuestions } from "@/components/research-questions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +33,7 @@ import {
   type ResearchItem,
   type Site,
 } from "@/lib/api";
-import { entryFields, fieldNotes } from "@/lib/preset-fields.mjs";
+import { asksTrim, entryFields, fieldNotes } from "@/lib/preset-fields.mjs";
 import { cn } from "@/lib/utils";
 
 const RUNNING_POLL_MS = 3000;
@@ -144,6 +145,7 @@ function Researcher() {
   const [started, setStarted] = useState<{ of: string; jobs: Started[] }>({ of: "", jobs: [] });
   const [notes, setNotes] = useState("");
   const fieldValues = useFieldValues();
+  const trimChoice = useTrimChoice();
   const [editing, setEditing] = useState(false);
 
   const refreshList = useCallback(
@@ -234,16 +236,22 @@ function Researcher() {
 
   async function editChosen() {
     if (!current || editing) return;
+    const presetOf = (item: ResearchItem) => presets.find((p) => p.name === chosen[item.id]);
+    const picked = current.items.filter((i) => i.id in chosen);
+    const trim = await trimChoice.choose(picked.map(presetOf));
+    if (trim === null) return;
     setEditing(true);
     const jobs: Started[] = [];
     try {
       // One job a reel: each has its own preset.
       const used: Record<string, number> = {};
-      for (const item of current.items.filter((i) => i.id in chosen)) {
+      for (const item of picked) {
         const entry = item.entry === null ? undefined : current.entries[item.entry];
         const given = fieldNotes(fieldsOf(item), fieldValues.values, used);
         const told = [entry && entryNotes(entry), given, notes.trim()].filter(Boolean).join("\n");
-        const [job] = await api.createJobs([item.url], [chosen[item.id]], told);
+        const preset = presetOf(item);
+        const keep = !trim && preset !== undefined && asksTrim(preset);
+        const [job] = await api.createJobs([item.url], [chosen[item.id]], told, !keep);
         jobs.push({ item, jobId: job.id });
       }
       fieldValues.keep(used);
@@ -698,6 +706,7 @@ function Researcher() {
           {current.status === "done" && <ResearchChat research={current} onSent={setLoaded} />}
         </div>
       )}
+      {trimChoice.dialog}
     </div>
   );
 }

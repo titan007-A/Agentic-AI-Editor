@@ -80,3 +80,10 @@ def test_cut_off_face_is_a_framing_issue():
 def test_well_framed_faces_pass():
     vision = FakeVision([{"face_visible": True, "face_cut_off": False}] * 2)
     assert check_faces(vision, ["a.jpg", "b.jpg"]) == []
+
+
+def test_the_whole_video_kept_is_any_length():
+    whole = PRESET.model_copy(update={"trim": False})
+    assert check_format(info(duration=75), whole, 75.0) == []
+    assert check_format(info(duration=8), whole, 8.0) == []
+    assert [i.kind for i in check_format(info(width=720, duration=75), whole, 75)] == ["format"]

@@ -478,7 +478,7 @@ def confidence(
     if planner == "heuristic":
         doubts.append("planned without the language model")
     doubts += edl.doubts
-    if edl.duration < preset.min_duration - 0.5:
+    if preset.trim and edl.duration < preset.min_duration - 0.5:
         doubts.append(f"only {edl.duration:.0f}s long, under the {preset.min_duration:g}s minimum")
     score = 1.0 - 0.3 * len(issues) - 0.2 * (len(doubts) - len(issues))
     return round(max(0.0, min(1.0, score)), 2), doubts
