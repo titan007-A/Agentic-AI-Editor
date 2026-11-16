@@ -91,9 +91,13 @@ class _Vision:
 
 @pytest.fixture
 def evidence(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        watermarks, "_evidence", lambda *a: [tmp_path / "m.jpg", tmp_path / "c.jpg"]
-    )
+    # The box sits in the middle of its close-up, with half its size around it.
+    images = [tmp_path / "m.jpg", tmp_path / "c.jpg", tmp_path / "b.jpg"]
+    monkeypatch.setattr(watermarks, "_evidence", lambda *a: (images, (50, 15, 150, 45)))
+
+
+def _line(text, x0=60, y0=20, x1=140, y1=40):
+    return ocr.Line(x0=x0, y0=y0, x1=x1, y1=y1, text=text, score=0.99)
 
 
 MARK = Watermark(x=10, y=10, width=100, height=30, spans=[(0, 5)], windows=4)
@@ -102,14 +106,14 @@ MARK = Watermark(x=10, y=10, width=100, height=30, spans=[(0, 5)], windows=4)
 def test_a_candidate_ocr_reads_nothing_on_is_never_blurred(evidence, tmp_path):
     vision = _Vision(overlay=True)
     (mark,) = watermarks.confirm(
-        vision, tmp_path / "v.mp4", [MARK], "ffmpeg", tmp_path, lambda p: ""
+        vision, tmp_path / "v.mp4", [MARK], "ffmpeg", tmp_path, lambda p: []
     )
     assert mark.confirmed is False and vision.asked == []
 
 
 def test_text_ocr_reads_still_needs_the_vision_model_to_call_it_an_overlay(evidence, tmp_path):
     vision = _Vision(overlay=False)  # a sign on the stage
-    read = lambda p: "@canciones_antiguas"  # noqa: E731
+    read = lambda p: [_line("@canciones_antiguas")]  # noqa: E731
     (mark,) = watermarks.confirm(vision, tmp_path / "v.mp4", [MARK], "ffmpeg", tmp_path, read)
     assert mark.confirmed is False and vision.asked == ["confirm"]
     vision = _Vision(overlay=True)
@@ -124,6 +128,29 @@ def test_when_ocr_fails_the_vision_model_reads(evidence, tmp_path):
     vision = _Vision(overlay=True)
     (mark,) = watermarks.confirm(vision, tmp_path / "v.mp4", [MARK], "ffmpeg", tmp_path, broken)
     assert vision.asked == ["read", "confirm"] and mark.confirmed is True
+
+
+def test_writing_beside_the_box_is_not_the_boxs(evidence, tmp_path):
+    # A singer's mic stand, with the end of a lyric line in the close-up's margin: the
+    # lyric is an overlay, so asked about it the model said yes and her face was blurred.
+    vision = _Vision(overlay=True)
+    lyric = _line("Moscow", x0=0, y0=0, x1=60, y1=20)
+    (mark,) = watermarks.confirm(
+        vision, tmp_path / "v.mp4", [MARK], "ffmpeg", tmp_path, lambda p: [lyric]
+    )
+    assert mark.confirmed is False and vision.asked == []
+    # Half a handle running past the box's edge is still the box's.
+    handle = _line("@canciones_antiguas", x0=90, y0=20, x1=200, y1=40)
+    (mark,) = watermarks.confirm(
+        vision, tmp_path / "v.mp4", [MARK], "ffmpeg", tmp_path, lambda p: [lyric, handle]
+    )
+    assert mark.confirmed is True and vision.asked == ["confirm"]
+
+
+def test_share_of_a_line_inside_a_box():
+    assert watermarks.inside(_line("x", 0, 0, 10, 10), (0, 0, 10, 10)) == 1.0
+    assert watermarks.inside(_line("x", 5, 0, 15, 10), (0, 0, 10, 10)) == 0.5
+    assert watermarks.inside(_line("x", 20, 20, 30, 30), (0, 0, 10, 10)) == 0.0
 
 
 def test_ocr_reads_rendered_text_when_its_models_are_here(tmp_path):
