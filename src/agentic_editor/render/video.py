@@ -49,32 +49,91 @@ class Layers:
     shot_commands: dict[int, Path] = field(default_factory=dict)
 
 
+# Blur boxes kept per mark. Each is an overlay of a whole frame on every frame, so a
+# lyric with 28 lines blurred one by one took a render from a minute to hours.
+MAX_BLURS = 4
+
+Span = tuple[float, float]
+
+
+def _join(spans: list[Span]) -> list[Span]:
+    joined: list[Span] = []
+    for a, b in sorted(spans):
+        if joined and a <= joined[-1][1]:
+            joined[-1] = (joined[-1][0], max(joined[-1][1], b))
+        else:
+            joined.append((a, b))
+    return joined
+
+
+def blur_boxes(mark: Watermark, limit: int = MAX_BLURS) -> list[tuple[int, int, list[Span]]]:
+    """(x, width, spans) to blur for one mark. Lines on screen together are blurred as
+    one box over all of them, and the boxes closest in width are joined until at most
+    `limit` are left: every line stays covered, with a few overlays instead of one per
+    line."""
+    pieces = [p for p in mark.pieces() if p[1] > 0]
+    if len(pieces) <= 1:
+        return pieces
+    cuts = sorted({t for _, _, spans in pieces for span in spans for t in span})
+    boxes: dict[tuple[int, int], list[Span]] = {}
+    for a, b in itertools.pairwise(cuts):
+        middle = (a + b) / 2
+        on = [(x, w) for x, w, spans in pieces if any(s <= middle < e for s, e in spans)]
+        if on:
+            box = (min(x for x, _ in on), max(x + w for x, w in on))
+            boxes.setdefault(box, []).append((a, b))
+
+    def extra(p: tuple[int, int], q: tuple[int, int]) -> float:
+        """Picture blurred for nothing when p and q become one box: width x time."""
+        width = max(p[1], q[1]) - min(p[0], q[0])
+        return sum(
+            (width - (box[1] - box[0])) * sum(b - a for a, b in boxes[box]) for box in (p, q)
+        )
+
+    while len(boxes) > limit:
+        p, q = min(itertools.combinations(boxes, 2), key=lambda pq: extra(*pq))
+        joined = (min(p[0], q[0]), max(p[1], q[1]))
+        spans = boxes.pop(p) + boxes.pop(q) + boxes.pop(joined, [])
+        boxes[joined] = spans
+    found = [(x0, x1 - x0, _join(spans)) for (x0, x1), spans in boxes.items()]
+    return sorted(found, key=lambda box: box[2][0])
+
+
 def blur_chain(
     clip: Clip, index: int, marks: list[Watermark], strength: float
 ) -> tuple[list[str], str]:
     """Graph parts that blur each watermark while it is on screen during this clip, in
     source pixels and before any cropping. Returns the parts and the label they end on."""
-    parts: list[str] = []
-    current = f"{index}:v"
-    pieces = [(mark, piece) for mark in marks for piece in mark.pieces()]
-    for k, (mark, (x, width, shown)) in enumerate(pieces):
-        visible = [(max(a, clip.start), min(b, clip.end)) for a, b in shown
-                   if b > clip.start and a < clip.end]  # fmt: skip
-        if not visible or width <= 0:
-            continue
+    blurs = []
+    for mark in marks:
+        for x, width, shown in blur_boxes(mark):
+            visible = [(max(a, clip.start), min(b, clip.end)) for a, b in shown
+                       if b > clip.start and a < clip.end]  # fmt: skip
+            if visible:
+                blurs.append((mark, x, width, visible))
+    if not blurs:
+        return [], f"{index}:v"
+    # Every patch is cut from the clip itself, by one split. Cutting each from the one
+    # before (a split and overlay per patch, one inside the next) makes ffmpeg's frame
+    # requests double at every step: 28 patches never got past the first frame.
+    base = f"w{index}_s"
+    patches = "".join(f"[w{index}_{k}p]" for k in range(len(blurs)))
+    parts = [f"[{index}:v]split={len(blurs) + 1}[{base}]{patches}"]
+    current = base
+    for k, (mark, x, width, visible) in enumerate(blurs):
         # Inputs are seeked to the clip start, so their timestamps start at zero.
         enable = "+".join(
             f"between(t,{a - clip.start:.3f},{b - clip.start:.3f})" for a, b in visible
         )
         # Big lettering survives a blur sized for a small handle, so scale with the box.
         sigma = min(max(strength, 0.4 * mark.height), max(width, mark.height) / 2)
-        base, patch, done = f"w{index}_{k}b", f"w{index}_{k}p", f"w{index}_{k}"
-        parts.append(f"[{current}]split=2[{base}][{patch}]")
+        patch, done = f"w{index}_{k}p", f"w{index}_{k}"
+        # The blur runs only while its patch is shown: off screen it is wasted work.
         parts.append(
             f"[{patch}]crop={width}:{mark.height}:{x}:{mark.y},"
-            f"gblur=sigma={sigma:g}:steps=3[{patch}b]"
+            f"gblur=sigma={sigma:g}:steps=3:enable='{enable}'[{patch}b]"
         )
-        parts.append(f"[{base}][{patch}b]overlay={x}:{mark.y}:enable='{enable}'[{done}]")
+        parts.append(f"[{current}][{patch}b]overlay={x}:{mark.y}:enable='{enable}'[{done}]")
         current = done
     return parts, current
 
