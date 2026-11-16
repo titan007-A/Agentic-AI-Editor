@@ -87,6 +87,51 @@ def test_lyrics_that_change_width_are_blurred_line_by_line():
     assert "enable='between(t,10.000,20.000)'" in graph
 
 
+def test_many_lyric_lines_take_a_few_flat_blurs():
+    from agentic_editor.analysis.watermarks import Part
+    from agentic_editor.render.video import MAX_BLURS, blur_boxes
+
+    # 28 lines, each up 1.5-2 s and overlapping the next, like a live reel's burnt-in words.
+    parts = [
+        Part(x=876 - 48 * (k % 3 == 0), width=66 + 17 * (k % 9), spans=[(k * 1.2, k * 1.2 + 1.8)])
+        for k in range(28)
+    ]
+    mark = Watermark(
+        x=828, y=972, width=250, height=176, spans=[(0, 36)], windows=30, parts=parts
+    )  # fmt: skip
+    boxes = blur_boxes(mark)
+    assert len(boxes) <= MAX_BLURS
+    # Every moment a line is up, a box at least as wide as that line is up too.
+    for part in parts:
+        for a, b in part.spans:
+            for t in (a + 0.01, (a + b) / 2, b - 0.01):
+                assert any(
+                    x <= part.x and part.x + part.width <= x + w
+                    and any(s <= t < e for s, e in spans)
+                    for x, w, spans in boxes
+                )  # fmt: skip
+    edl = EDL(clips=[Clip(start=0, end=36)], crop_mode="none")
+    graph, _ = build_graph(edl, VERTICAL, (1080, 1920), Layers(watermarks=[mark]))
+    # One split feeds every patch: no split of a split, which ffmpeg can't get through.
+    assert graph.count("split=") == 1
+    assert f"[0:v]split={len(boxes) + 1}[w0_s]" in graph
+    assert graph.count("gblur=") == len(boxes)
+
+
+def test_lines_on_screen_together_are_blurred_as_one_box():
+    from agentic_editor.analysis.watermarks import Part
+    from agentic_editor.render.video import blur_boxes
+
+    mark = Watermark(
+        x=100, y=600, width=500, height=50, spans=[(0, 20)], windows=8,
+        parts=[Part(x=200, width=100, spans=[(0, 6)]), Part(x=150, width=300, spans=[(4, 10)])],
+    )  # fmt: skip
+    assert blur_boxes(mark) == [
+        (200, 100, [(0, 4)]),
+        (150, 300, [(4, 10)]),
+    ]
+
+
 def test_clip_without_a_visible_watermark_is_left_alone():
     mark = Watermark(x=100, y=20, width=200, height=60, spans=[(0, 4)], windows=1)
     edl = EDL(clips=[Clip(start=10, end=20)], crop_mode="none")
