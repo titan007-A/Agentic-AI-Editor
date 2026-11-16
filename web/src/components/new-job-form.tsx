@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { filled, PresetFieldInputs, useFieldValues } from "@/components/job-fields";
 import { Textarea } from "@/components/ui/textarea";
+import { useTrimChoice } from "@/components/trim-choice";
 import { UploadList } from "@/components/upload-list";
 import { useUploads } from "@/hooks/use-uploads";
 import { api, errorText, type Job, type Preset } from "@/lib/api";
@@ -24,6 +25,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const fieldValues = useFieldValues();
+  const trimChoice = useTrimChoice();
 
   useEffect(() => {
     api
@@ -55,6 +57,8 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const trim = await trimChoice.choose([preset]);
+    if (trim === null) return;
     setBusy(true);
     try {
       let jobs: Job[];
@@ -65,11 +69,11 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
         for (const source of sources) {
           const given = fieldNotes(fields, fieldValues.values, used);
           const told = [given, notes.trim()].filter(Boolean).join("\n");
-          jobs.push(...(await api.createJobs([source], chosen, told)));
+          jobs.push(...(await api.createJobs([source], chosen, told, trim)));
         }
         fieldValues.keep(used);
       } else {
-        jobs = await api.createJobs(sources, chosen, notes);
+        jobs = await api.createJobs(sources, chosen, notes, trim);
       }
       toast.success(`${jobs.length} job${jobs.length === 1 ? "" : "s"} queued`);
       setLinks("");
@@ -178,6 +182,7 @@ export function NewJobForm({ onCreated }: { onCreated: (jobs: Job[]) => void }) 
               : `Start ${sources.length > 1 ? `${sources.length} jobs` : "job"}`}
           </Button>
         </form>
+        {trimChoice.dialog}
       </CardContent>
     </Card>
   );

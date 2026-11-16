@@ -41,7 +41,7 @@ from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL, Clip, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
 from agentic_editor.llm import LLMError, OllamaClient
-from agentic_editor.planner import overlap, pick_emphasis, plan_variants
+from agentic_editor.planner import overlap, pick_emphasis, plan_variants, plan_whole
 from agentic_editor.presets import Preset
 from agentic_editor.render import audio, compose
 from agentic_editor.render.audio import measure_loudness
@@ -106,7 +106,10 @@ def plan(
 ) -> list[tuple[EDL, str]]:
     """Plan each version with the LLM, falling back to the energy heuristic if it can't
     deliver; then trim each one to the preset and choose its opening inside what it keeps.
-    A version that trims down onto one already made is left out."""
+    A version that trims down onto one already made is left out. A preset that doesn't
+    trim (the person chose to keep the whole video) gets one plan of all of it."""
+    if not preset.trim:
+        return [whole_plan(llm, analysis, preset, notes)]
     try:
         edls = plan_variants(llm, analysis, preset, notes, preset.hook.variants, start_at)
         planner = llm.model
@@ -129,6 +132,26 @@ def plan(
                 edl = edl.noted(f"no punch-in zooms ({exc})")
         planned.append((edl.model_copy(update={"variant": len(planned)}), planner))
     return planned
+
+
+def whole_plan(
+    llm: OllamaClient, analysis: Analysis, preset: Preset, notes: str | None
+) -> tuple[EDL, str]:
+    """All of the video, start to end, with the model's hook and title (none when it can't
+    give them): not cut to the preset's length, its opening not moved."""
+    clip = Clip(start=0.0, end=max(analysis.duration, 0.1), reason="the whole video, not trimmed")
+    try:
+        edl, planner = plan_whole(llm, analysis, preset, notes), llm.model
+    except (LLMError, httpx.HTTPError) as exc:
+        log.warning("%s: no hook or title for the whole video (%s)", preset.name, exc)
+        edl, planner = EDL(clips=[clip], crop_mode=preset.framing.mode), "heuristic"
+    edl = edl.model_copy(update={"clips": [clip]}).noted("kept the whole video: not trimmed")
+    if preset.zoom_punch_ins and planner != "heuristic":
+        try:
+            edl = edl.model_copy(update={"zooms": pick_emphasis(llm, edl, analysis)})
+        except LLMError as exc:
+            edl = edl.noted(f"no punch-in zooms ({exc})")
+    return edl, planner
 
 
 def needs_faces(edl: EDL, preset: Preset, analysis: Analysis) -> bool:

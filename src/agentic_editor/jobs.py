@@ -247,6 +247,7 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             job.started_at = job.started_at or datetime.now(UTC)
             db.commit()
             source, preset_names, notes = job.source, list(job.presets), job.notes
+            trim = job.trim
             owner = db.get(User, job.owner_id) if job.owner_id else None
             folder = accounts.presets_dir(owner, settings.presets_dir)
 
@@ -255,6 +256,8 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
         if missing:
             raise ValueError(f"unknown preset(s): {', '.join(missing)}")
         presets = [available[name] for name in preset_names]
+        if not trim:  # the person chose to keep the whole video
+            presets = [p.model_copy(update={"trim": False}) for p in presets]
         track.outputs = max(1, sum(p.hook.variants for p in presets))
         result = run(source, presets, settings, get_backends(), notes, track, run_id=job_id)
 

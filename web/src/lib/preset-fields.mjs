@@ -160,3 +160,28 @@ export function hasWords(text, words) {
   const pattern = wordsPattern(words);
   return !!pattern && pattern.test(text);
 }
+
+/**
+ * Whether a preset makes reels about a song: its text names the song or artist, or its
+ * post caption is about the song.
+ * @param {import("./api").Preset} preset
+ * @returns {boolean}
+ */
+export function aboutSong(preset) {
+  const named = (preset.text_blocks ?? []).some((b) =>
+    /\{(song|artist)\}/.test(String(b.text ?? "")),
+  );
+  const caption = preset.post_caption ?? {};
+  return named || (caption.enabled === true && (caption.about ?? "song") === "song");
+}
+
+/**
+ * Whether starting an edit with this preset asks to trim the video to its length or keep
+ * all of it (the trim_choice feature): not for a song's preset, nor one that only upscales
+ * (always the whole video).
+ * @param {import("./api").Preset} preset
+ * @returns {boolean}
+ */
+export function asksTrim(preset) {
+  return !aboutSong(preset) && preset.upscale?.enabled !== true;
+}

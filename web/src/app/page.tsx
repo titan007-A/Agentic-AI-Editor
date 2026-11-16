@@ -92,7 +92,7 @@ export default function Dashboard() {
             </Button>
           )}
         </div>
-        <JobList jobs={jobs} />
+        <JobList jobs={jobs} onChange={refresh} />
       </section>
 
       <Dialog open={clearing} onOpenChange={setClearing}>

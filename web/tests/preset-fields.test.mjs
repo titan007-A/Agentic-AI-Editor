@@ -132,3 +132,26 @@ test("a selection becomes its words and which place in the text it is", async ()
   assert.equal(hasWords(text, "speaks louder"), true);
   assert.equal(hasWords(text, "rock"), false);
 });
+
+test("only presets that aren't about a song ask whether to trim", async () => {
+  const { aboutSong, asksTrim } = await import("../src/lib/preset-fields.mjs");
+  // aman's 80s (names the song, caption about it) and military (caption about the video).
+  const eighties = {
+    text_blocks: [{ anchor: "top", text: "{song}" }],
+    post_caption: { enabled: true, about: "song" },
+  };
+  const military = {
+    text_blocks: [{ anchor: "bottom", text: "Sígueme" }],
+    post_caption: { enabled: true, about: "video" },
+  };
+  assert.equal(aboutSong(eighties), true);
+  assert.equal(asksTrim(eighties), false);
+  assert.equal(asksTrim(military), true);
+  // A caption about the song names it even with no {song} in the text.
+  assert.equal(asksTrim({ post_caption: { enabled: true, about: "song" } }), false);
+  // No post caption at all: nothing says it is about a song.
+  assert.equal(asksTrim({ post_caption: { enabled: false, about: "song" } }), true);
+  assert.equal(asksTrim({ text_blocks: [{ text: "by {artist}" }] }), false);
+  // An upscale is always the whole video.
+  assert.equal(asksTrim({ upscale: { enabled: true } }), false);
+});

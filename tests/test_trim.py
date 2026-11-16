@@ -138,3 +138,10 @@ def test_dead_air_at_any_timestamp_is_steered_around(make_analysis):
         0.0, 20.0, VOCALS.model_copy(update={"min_duration": 5}), analysis
     )
     assert (start, round(end, 3)) == (0.0, 8.014) and note.endswith("clear of 8s without voice")
+
+
+def test_a_preset_that_does_not_trim_keeps_the_plan(make_analysis):
+    analysis = make_analysis([], 120.0, energy(120.0, loud=(60.0, 100.0)), silences=[(0, 3)])
+    whole = plan(0.0, 120.0)
+    assert apply(whole, analysis, VOCALS.model_copy(update={"trim": False})) == whole
+    assert apply(whole, analysis, VOCALS) != whole

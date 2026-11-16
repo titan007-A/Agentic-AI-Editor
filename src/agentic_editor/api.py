@@ -203,6 +203,8 @@ class JobRequest(BaseModel):
     sources: list[str] = Field(min_length=1)
     presets: list[str] = Field(min_length=1, max_length=1)
     notes: str | None = None
+    # False keeps the whole video instead of cutting it to the preset's length.
+    trim: bool = True
 
 
 class RegenerateRequest(BaseModel):
@@ -583,6 +585,8 @@ class JobView(BaseModel):
     error: str | None
     parent_id: str | None
     created_at: datetime
+    # False when the person chose to keep the whole video (JobRequest.trim).
+    trim: bool = True
     outputs: list[OutputView] = []
     # Presets that couldn't name the song: the job page asks for it, then regenerates.
     unnamed: list[str] = []
@@ -641,6 +645,7 @@ def job_view(
         error=job.error,
         parent_id=job.parent_id,
         created_at=job.created_at,
+        trim=job.trim,
         outputs=outputs,
         owner=owner,
         unnamed=UNNAMED.findall(job.error or ""),
@@ -1217,6 +1222,7 @@ def create_app(
                     title=title,
                     presets=body.presets,
                     notes=body.notes,
+                    trim=body.trim,
                     owner_id=account.id,
                 )
             )
@@ -1915,10 +1921,25 @@ def create_app(
             title=job.title,
             presets=[body.preset],
             notes=notes or None,
+            trim=job.trim,
             parent_id=job.id,
             owner_id=job.owner_id,
         )
         return view(new, account, session)
+
+    @app.post("/api/jobs/{job_id}/retry")
+    def retry(job_id: str, account: User, session: DB) -> JobView:
+        """A failed job back in the queue, as it was asked for: same video, presets, notes."""
+        job = find_job(job_id, session, account)
+        if job.status != "failed":
+            raise HTTPException(409, "only a failed job can be tried again")
+        job.status, job.stage, job.progress, job.error = "queued", "queued", 0.0, None
+        # Its turn comes as a job asked for now, after the ones already waiting.
+        job.created_at, job.started_at = datetime.now(UTC), None
+        session.add(Event(job_id=job.id, stage="queued", message="tried again", progress=0.0))
+        session.commit()
+        jobs.process(job.id)
+        return view(job, account, session)
 
     @app.get("/api/jobs/{job_id}/events")
     async def job_events(job_id: str, request: Request, account: User):
