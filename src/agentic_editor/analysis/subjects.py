@@ -66,13 +66,34 @@ PROMPT = (
 )
 
 
+LOOK_BACK = 5.0  # seconds before a time past the last frame that are read to find it
+
+
 def grab(video: Path, at: float, dest: Path, ffmpeg_bin: str) -> Path:
-    subprocess.run(
+    """The frame shown at `at`, scaled down. When the sound runs on after the picture
+    ends, a time near the end has no frame of its own and shows the last one: reading
+    the seconds up to `at` and keeping the latest frame finds it."""
+    out = ["-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "3", str(dest)]
+    dest.unlink(missing_ok=True)
+    tried = subprocess.run(
         [ffmpeg_bin, "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(video),
-         "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2", "-q:v", "3", str(dest)],
-        check=True,
+         "-frames:v", "1", *out],
+        capture_output=True, text=True,
     )  # fmt: skip
-    return dest
+    if tried.returncode == 0 and dest.exists():
+        return dest
+    start = max(at - LOOK_BACK, 0.0)
+    if at > start:
+        subprocess.run(
+            [ffmpeg_bin, "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", str(video),
+             "-t", f"{at - start:.3f}", "-update", "1", *out],
+            capture_output=True,
+        )  # fmt: skip
+        if dest.exists():
+            return dest
+    raise subprocess.CalledProcessError(
+        tried.returncode or 1, tried.args, tried.stdout, tried.stderr
+    )
 
 
 def to_source(found: _Found, size: tuple[int, int]) -> Subject | None:
