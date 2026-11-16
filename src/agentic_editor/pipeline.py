@@ -1375,14 +1375,15 @@ def confirmed_watermarks(
         return []
     model = vision.model.replace(":", "_").replace("/", "_")
     reads = ocr.available()  # decided with OCR's reading or the vision model's: kept apart
-    cache = work_dir / f"watermarks-v{watermarks.VERSION}-{model}{'-ocr' if reads else ''}.json"
+    name = f"watermarks-v{watermarks.VERSION}-c{watermarks.CHECKS_VERSION}-{model}"
+    cache = work_dir / f"{name}{'-ocr' if reads else ''}.json"
     if cache.exists():
         checked = [Watermark.model_validate(m) for m in json.loads(cache.read_text())]
     else:
         progress("analyze", f"checking {len(candidates)} possible watermark(s)")
 
-        def read(close_up: Path) -> str:
-            return " ".join(line.text for line in ocr.read(close_up, settings.models_dir))
+        def read(close_up: Path) -> list[ocr.Line]:
+            return ocr.read(close_up, settings.models_dir)
 
         checked = watermarks.confirm(
             vision, video, candidates, settings.ffmpeg_bin, work_dir / "watermark-checks",

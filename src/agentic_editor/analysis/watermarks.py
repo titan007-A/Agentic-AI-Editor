@@ -32,6 +32,8 @@ WINDOW_STEP = 1.0  # seconds between window starts
 PRESENCE_SECONDS = 1.5
 # Bump when detection changes, so cached candidates from the old detector aren't reused.
 VERSION = 6
+# Bump when the overlay check changes: candidates stay, their verdicts are asked again.
+CHECKS_VERSION = 2
 
 EDGE_LEVEL = 28  # gray-level step that counts as an edge
 PERSISTENT_SHARE = 0.9  # of a window's frames an edge has to be in
@@ -490,8 +492,12 @@ class _Verdict(BaseModel):
     overlay: bool
 
 
-def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> list[Path]:
-    """The frame with the box drawn on it, and a close-up of the box."""
+CLOSE_WIDTH = 384  # close-ups narrower than this are blown up to it
+
+
+def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> tuple[list[Path], Box]:
+    """The frame with the box drawn on it, a close-up of the box with some picture around
+    it, and the box alone; and where the box sits in the close-up, in its pixels."""
     from PIL import Image, ImageDraw
 
     # The middle of a span can fall where a jumping mark is in its other place.
@@ -504,28 +510,52 @@ def _evidence(video: Path, mark: Watermark, ffmpeg_bin: str, dest: Path) -> list
         check=True,
     )  # fmt: skip
     image = Image.open(frame).convert("RGB")
+
+    def blown_up(area: Box):
+        crop = image.crop(area)
+        scale = max(CLOSE_WIDTH, crop.width) / crop.width
+        return crop.resize((round(crop.width * scale), round(crop.height * scale))), scale
+
     pad_x, pad_y = mark.width // 2, mark.height // 2
-    close = image.crop(
+    left, top = max(0, mark.x - pad_x), max(0, mark.y - pad_y)
+    close, scale = blown_up(
         (
-            max(0, mark.x - pad_x),
-            max(0, mark.y - pad_y),
+            left,
+            top,
             min(image.width, mark.x + mark.width + pad_x),
             min(image.height, mark.y + mark.height + pad_y),
         )
     )
-    close = close.resize(
-        (max(384, close.width), round(close.height * max(384, close.width) / close.width))
+    box = (
+        round((mark.x - left) * scale),
+        round((mark.y - top) * scale),
+        round((mark.x + mark.width - left) * scale),
+        round((mark.y + mark.height - top) * scale),
     )
+    alone, _ = blown_up((mark.x, mark.y, mark.x + mark.width, mark.y + mark.height))
     marked = image.copy()
     line = max(3, image.width // 300)
     ImageDraw.Draw(marked).rectangle(
         (mark.x, mark.y, mark.x + mark.width, mark.y + mark.height), outline=(255, 0, 0), width=line
     )
     marked.thumbnail((1024, 1024))
-    paths = [dest / "marked.jpg", dest / "close.jpg"]
+    paths = [dest / "marked.jpg", dest / "close.jpg", dest / "box.jpg"]
     marked.save(paths[0], quality=88)
     close.save(paths[1], quality=92)
-    return paths
+    alone.save(paths[2], quality=92)
+    return paths, box
+
+
+# Of a line of text's area: at least this much inside the box for the box to say it.
+INSIDE = 0.5
+
+
+def inside(line, box: Box) -> float:
+    """Share of an OCR line's area (x0, y0, x1, y1) that lies inside `box`."""
+    width = min(line.x1, box[2]) - max(line.x0, box[0])
+    height = min(line.y1, box[3]) - max(line.y0, box[1])
+    area = (line.x1 - line.x0) * (line.y1 - line.y0)
+    return max(0, width) * max(0, height) / area if area > 0 else 0.0
 
 
 # Read from the close-up alone: shown the whole frame, the model copies out a caption
@@ -556,12 +586,12 @@ def confirm(
     marks: list[Watermark],
     ffmpeg_bin: str,
     work_dir: Path,
-    read: Callable[[Path], str] | None = None,
+    read: Callable[[Path], list] | None = None,
 ):
     """Ask the vision model which candidates are overlays rather than parts of the scene.
-    `read` (OCR) reads the close-up first when given: it reads only real letters, where
-    the vision model now and then reads a watermark into a trouser leg or an empty strip.
-    The vision model reads it only where `read` fails."""
+    `read` (OCR: lines with boxes) reads the close-up first when given: it reads only real
+    letters, where the vision model now and then reads a watermark into a trouser leg or an
+    empty strip. The vision model reads the box alone only where `read` fails."""
     from agentic_editor.llm import LLMError, parse
 
     confirmed = []
@@ -569,21 +599,30 @@ def confirm(
         dest = work_dir / f"watermark-{i}"
         dest.mkdir(parents=True, exist_ok=True)
         try:
-            images = _evidence(video, mark, ffmpeg_bin, dest)
+            images, box = _evidence(video, mark, ffmpeg_bin, dest)
             text = None
             if read is not None:
                 try:
-                    text = read(images[1]).strip()
+                    lines = read(images[1])
                 except Exception as exc:  # OCR missing or broken: the vision model reads
                     log.warning("OCR couldn't read watermark candidate %d: %s", i, exc)
+                else:
+                    # Only writing in the box counts. The close-up's margin can hold a
+                    # lyric beside a singer's mic stand, and the stand was then blurred
+                    # as a watermark for the lyric's sake, her face with it.
+                    text = " ".join(ln.text for ln in lines if inside(ln, box) >= INSIDE)
+                    beside = [ln.text for ln in lines if inside(ln, box) < INSIDE]
+                    if beside:
+                        log.info("watermark candidate %d: %r is beside its box", i, beside)
             if text is None:
                 reply = vision.chat_json(
                     [{"role": "user", "content": READ_PROMPT}],
                     _Reading.model_json_schema(),
-                    images=images[1:],
+                    images=images[2:],
                     temperature=0.0,
                 )
-                text = parse(_Reading, reply).text.strip()
+                text = parse(_Reading, reply).text
+            text = text.strip()
             # Only a mark with something to read is blurred: a watermark names its owner,
             # and an empty strip or a piece of furniture has nothing to read.
             overlay = (
@@ -593,7 +632,7 @@ def confirm(
                     vision.chat_json(
                         [{"role": "user", "content": CONFIRM_PROMPT.format(text=json.dumps(text))}],
                         _Verdict.model_json_schema(),
-                        images=images,
+                        images=images[:2],
                         temperature=0.0,
                     ),
                 ).overlay

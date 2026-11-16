@@ -98,7 +98,8 @@ class Vision:
 
 
 def test_only_a_mark_the_vision_model_can_read_is_an_overlay(tmp_path, monkeypatch):
-    monkeypatch.setattr(watermarks, "_evidence", lambda *args: ["marked.jpg", "close.jpg"])
+    images = ["marked.jpg", "close.jpg", "box.jpg"]
+    monkeypatch.setattr(watermarks, "_evidence", lambda *args: (images, (20, 10, 60, 30)))
     mark = Watermark(x=0, y=0, width=40, height=20, spans=[(0.0, 5.0)], windows=4)
 
     def verdict(vision):
@@ -106,10 +107,12 @@ def test_only_a_mark_the_vision_model_can_read_is_an_overlay(tmp_path, monkeypat
 
     assert verdict(Vision("@audit.channel", True))
     assert not verdict(Vision("GENROUTER H3000", False))
-    # Nothing to read in the close-up: not asked about the frame, where a caption outside
-    # the box would be read instead.
+    # Nothing to read in the box: not asked about the frame, where a caption outside the
+    # box would be read instead. The box is read alone, without the close-up's margin.
     empty = Vision("", True)
-    assert not verdict(empty) and empty.asked == [["close.jpg"]]
+    assert not verdict(empty) and empty.asked == [["box.jpg"]]
+    seen = Vision("@audit.channel", True)
+    assert verdict(seen) and seen.asked == [["box.jpg"], ["marked.jpg", "close.jpg"]]
 
 
 def test_spans_bridge_a_single_missing_window():
