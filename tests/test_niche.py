@@ -147,7 +147,7 @@ def test_accounts_the_model_doesnt_think_fit_are_left_out_and_said_so():
     assert any("ran out" in n for n in notes)
 
 
-def test_a_niche_search_keeps_its_accounts_and_never_shows_them_again(tmp_path):
+def test_a_niche_search_keeps_its_accounts_and_learns_from_votes(tmp_path):
     from types import SimpleNamespace
 
     from sqlalchemy import select
@@ -190,7 +190,7 @@ def test_a_niche_search_keeps_its_accounts_and_never_shows_them_again(tmp_path):
     jobs.run_niche("s2", Session, None, router=router, find=find, pause=0)
     with Session() as db:
         second = {a.handle for a in db.get(NicheSearch, "s2").accounts}
-        assert second and not second & first  # never shown twice
+        assert second and nope_handle not in second  # not wanted: not shown again
         handles = list(db.scalars(select(NicheAccount.handle).where(NicheAccount.owner_id == "u1")))
         assert len(handles) == len(set(handles))
     told = [p for p in model.prompts if "liked" in p]
@@ -445,3 +445,62 @@ def test_a_search_made_before_the_choice_looks_for_pages_and_keeps_the_kind(tmp_
         found = db.get(NicheSearch, "s1")
         assert [(a.handle, a.kind) for a in found.accounts] == [("boxingclips", "page")]
         assert any("not pages" in n for n in found.notes)
+
+
+def test_accounts_come_again_unless_written_to_lately_or_not_wanted(tmp_path):
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from agentic_editor import jobs
+    from agentic_editor.db import NicheAccount, NicheSearch, make_sessionmaker
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+
+    def find(query, count, page=1):
+        return hits(*[(f"https://www.instagram.com/coach{i}/", f"Coach (@coach{i})",
+                       f"{(i + 2) * 30}K Followers - vocal coach") for i in range(6)])  # fmt: skip
+
+    class Fits(dict):
+        def get(self, key, default=None):
+            return 8
+
+    router = SimpleNamespace(planner=Model(Fits()))
+    with Session() as db:
+        db.add(NicheSearch(id="s1", owner_id="u1", niche="vocal coaches", filters={}))
+        db.commit()
+    jobs.run_niche("s1", Session, None, router=router, find=find, pause=0)
+    now = datetime.now(UTC)
+    with Session() as db:
+        rows = {a.handle: a for a in db.get(NicheSearch, "s1").accounts}
+        assert set(rows) == {f"coach{i}" for i in range(6)}
+        assert all(a.times_shown == 1 and a.shown_at for a in rows.values())
+        rows["coach1"].vote = -1  # not wanted
+        rows["coach2"].dm_opens, rows["coach2"].dm_opened_at = 1, now  # written to just now
+        rows["coach4"].dm_opens, rows["coach4"].dm_opened_at = 2, now - timedelta(days=31)
+        # Someone else in the team wrote to coach3: nobody is shown it for a while.
+        db.add(NicheAccount(owner_id="u2", handle="coach3", dm_opens=1, dm_opened_at=now))
+        db.add(NicheSearch(id="s2", owner_id="u1", niche="vocal coaches", filters={}))
+        db.commit()
+    jobs.run_niche("s2", Session, None, router=router, find=find, pause=0)
+    with Session() as db:
+        again = {a.handle: a for a in db.get(NicheSearch, "s2").accounts}
+        assert set(again) == {"coach0", "coach4", "coach5"}
+        assert again["coach0"].times_shown == 2 and again["coach4"].dm_opens == 2  # kept
+        handles = list(db.scalars(select(NicheAccount.handle).where(NicheAccount.owner_id == "u1")))
+        assert len(handles) == len(set(handles)) == 6  # one row per account, moved
+        assert {a.handle for a in db.get(NicheSearch, "s1").accounts} == {
+            "coach1",
+            "coach2",
+            "coach3",
+        }
+
+
+def test_a_top_at_or_under_the_bottom_means_at_least_the_bottom():
+    assert Filters(min_followers=500_000, max_followers=500_000).max_followers is None
+    assert Filters(min_followers=500_000, max_followers=100_000).max_followers is None
+    assert Filters(min_followers=10_000, max_followers=100_000).max_followers == 100_000
+    assert Filters(min_followers=500_000, max_followers=500_000).keeps(
+        Account("a", followers=900_000)
+    )

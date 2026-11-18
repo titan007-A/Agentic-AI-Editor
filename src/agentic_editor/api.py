@@ -1756,16 +1756,36 @@ def create_app(
         if not features.enabled(account, "niche_finder", session):
             raise HTTPException(403, "not on for this account yet")
 
-    def niche_account_view(a: NicheAccount) -> dict:
+    def team_dms(session: Session, handles: list[str]) -> dict[str, tuple[int, datetime | None]]:
+        """Messages opened to these accounts from the finder by everyone, and the last time."""
+        if not handles:
+            return {}
+        rows = session.execute(
+            select(
+                NicheAccount.handle,
+                func.sum(NicheAccount.dm_opens),
+                func.max(NicheAccount.dm_opened_at),
+            )
+            .where(NicheAccount.handle.in_(handles), NicheAccount.dm_opens > 0)
+            .group_by(NicheAccount.handle)
+        )
+        return {h: (int(n or 0), at) for h, n, at in rows}
+
+    def niche_account_view(a: NicheAccount, dms: dict | None = None) -> dict:
+        opened, last = (dms or {}).get(a.handle, (a.dm_opens or 0, a.dm_opened_at))
+        last = last.replace(tzinfo=UTC) if last is not None and last.tzinfo is None else last
         return {
             "id": a.id, "handle": a.handle, "name": a.name, "followers": a.followers,
             "posts": a.posts, "about": a.about, "fit": a.fit, "why": a.why, "kind": a.kind,
             "vote": a.vote,
             "reason": a.reason, "url": f"https://www.instagram.com/{a.handle}/",
             "message_url": f"https://ig.me/m/{a.handle}",
+            # Everyone's opened messages to it, theirs, and the last one's time.
+            "dm_opens": opened, "my_dm_opens": a.dm_opens or 0, "dm_opened_at": last,
+            "times_shown": a.times_shown or 1,
         }  # fmt: skip
 
-    def niche_view(found: NicheSearch, with_accounts: bool = False) -> dict:
+    def niche_view(found: NicheSearch, with_accounts: bool = False, session=None) -> dict:
         view = {
             "id": found.id, "niche": found.niche, "filters": found.filters,
             "status": found.status, "message": found.message, "progress": found.progress,
@@ -1774,7 +1794,8 @@ def create_app(
         }  # fmt: skip
         if with_accounts:
             ordered = sorted(found.accounts, key=lambda a: (-(a.fit or 0), -(a.followers or 0)))
-            view["accounts"] = [niche_account_view(a) for a in ordered]
+            dms = team_dms(session, [a.handle for a in ordered]) if session is not None else {}
+            view["accounts"] = [niche_account_view(a, dms) for a in ordered]
         return view
 
     def find_niche(search_id: str, session: Session, account: Account) -> NicheSearch:
@@ -1872,7 +1893,7 @@ def create_app(
     @app.get("/api/niche/{search_id}")
     def get_niche(search_id: str, account: User, session: DB) -> dict:
         niche_user(account, session)
-        return niche_view(find_niche(search_id, session, account), with_accounts=True)
+        return niche_view(find_niche(search_id, session, account), True, session)
 
     @app.delete("/api/niche/{search_id}")
     def delete_niche(search_id: str, account: User, session: DB) -> dict:
@@ -1895,7 +1916,20 @@ def create_app(
             raise HTTPException(404, "no such account")
         found.vote, found.reason = body.vote, body.reason.strip()
         session.commit()
-        return niche_account_view(found)
+        return niche_account_view(found, team_dms(session, [found.handle]))
+
+    @app.post("/api/niche/accounts/{account_id}/dm")
+    def niche_dm_opened(account_id: int, account: User, session: DB) -> dict:
+        """The person opened a message to the account: counted, and it isn't shown again
+        to anyone for niche.REPEAT_AFTER_DAYS."""
+        niche_user(account, session)
+        found = session.get(NicheAccount, account_id)
+        if found is None or found.owner_id != account.id:
+            raise HTTPException(404, "no such account")
+        found.dm_opens = (found.dm_opens or 0) + 1
+        found.dm_opened_at = datetime.now(UTC)
+        session.commit()
+        return niche_account_view(found, team_dms(session, [found.handle]))
 
     @app.get("/api/jobs")
     def list_jobs(account: User, session: DB) -> list[JobView]:

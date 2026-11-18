@@ -115,6 +115,32 @@ function AccountCard({
         </span>
       </div>
       {account.name && <p className="text-sm">{account.name}</p>}
+      {(Boolean(account.dm_opens) || (account.times_shown ?? 1) > 1) && (
+        <p className="flex flex-wrap gap-2 text-xs" data-testid="niche-dm">
+          {Boolean(account.dm_opens) && (
+            <span
+              className="rounded-full border border-[var(--teal)] px-2 py-0.5 font-semibold text-[var(--teal)]"
+              title={
+                account.my_dm_opens
+                  ? `You opened ${account.my_dm_opens}; the team ${account.dm_opens}`
+                  : "Opened by others in the team"
+              }
+            >
+              DM opened {account.dm_opens}×
+              {account.dm_opened_at &&
+                `, last ${new Date(account.dm_opened_at).toLocaleDateString(undefined, {
+                  day: "numeric",
+                  month: "short",
+                })}`}
+            </span>
+          )}
+          {(account.times_shown ?? 1) > 1 && (
+            <span className="rounded-full border px-2 py-0.5 text-muted-foreground">
+              shown before
+            </span>
+          )}
+        </p>
+      )}
       {account.why && (
         <p className="text-sm text-muted-foreground">
           {account.fit !== null && <span className="font-semibold">{account.fit}/10 · </span>}
@@ -133,7 +159,18 @@ function AccountCard({
           </a>
         </Button>
         <Button asChild size="sm">
-          <a href={account.message_url} target="_blank" rel="noreferrer">
+          <a
+            href={account.message_url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => {
+              // Counted as it opens (Instagram opens in its own tab or app).
+              api
+                .nicheDmOpened(account.id)
+                .then(onChange)
+                .catch((err) => toast.error(errorText(err)));
+            }}
+          >
             <MessageCircle /> Message
           </a>
         </Button>
@@ -344,8 +381,9 @@ export default function AccountsPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Instagram accounts of a niche, found through web search (Instagram itself isn&apos;t
-          asked), up to 100 a run, never one you were shown before. Follower counts are what the
-          search engine last saw.
+          asked), up to 100 a run. An account anyone in the team opened a message to isn&apos;t
+          shown again for 30 days, and one you marked as not wanted never is; the rest can come
+          again. Follower counts are what the search engine last saw.
         </p>
       </div>
       <Card className="tape">

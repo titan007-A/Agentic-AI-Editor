@@ -1255,9 +1255,10 @@ def run_niche(
     search_id: str, Session: sessionmaker, settings: Settings, router=None, find=None,
     pause: float | None = None,
 ) -> None:  # fmt: skip
-    """Find accounts for a niche search (niche.py) and keep them as the person's: an account
-    shown once, to anyone's search of theirs, is never shown to them again. Like a job, it
-    never stays "running": whatever happens is stored."""
+    """Find accounts for a niche search (niche.py) and keep them as the person's. An account
+    shown before may be shown again (it then moves to this search), unless the person didn't
+    want it or anyone opened a message to it in the last niche.REPEAT_AFTER_DAYS. Like a job,
+    it never stays "running": whatever happens is stored."""
 
     def progress(message: str, value: float) -> None:
         with Session() as db:
@@ -1272,7 +1273,13 @@ def run_niche(
             db.commit()
             owner, text, wanted = found.owner_id, found.niche, dict(found.filters or {})
             mine = list(db.scalars(select(NicheAccount).where(NicheAccount.owner_id == owner)))
-            seen = {a.handle for a in mine}
+            lately = datetime.now(UTC) - timedelta(days=niche.REPEAT_AFTER_DAYS)
+            written = db.scalars(
+                select(NicheAccount.handle).where(
+                    NicheAccount.dm_opened_at >= lately.replace(tzinfo=None)
+                )
+            )
+            seen = set(written) | {a.handle for a in mine if a.vote < 0}
             voted = sorted((a for a in mine if a.vote), key=lambda a: a.created_at, reverse=True)
             liked = [f"@{a.handle} ({a.why[:60]}) {a.reason}".strip() for a in voted if a.vote > 0]
             disliked = [
@@ -1293,20 +1300,28 @@ def run_niche(
         )
         with Session() as db:
             found = db.get(NicheSearch, search_id)
-            known = set(
-                db.scalars(select(NicheAccount.handle).where(NicheAccount.owner_id == owner))
-            )
+            known = {
+                a.handle: a
+                for a in db.scalars(select(NicheAccount).where(NicheAccount.owner_id == owner))
+            }
+            now = datetime.now(UTC)
             for a in accounts_found:
-                if a.handle in known:
+                again = known.get(a.handle)
+                if again is not None:
+                    # Shown before: it moves to this search, with what was found now.
+                    again.search_id, again.shown_at = search_id, now
+                    again.times_shown = (again.times_shown or 1) + 1
+                    again.name, again.about, again.fit, again.why = a.name, a.about, a.fit, a.why
+                    again.followers = a.followers if a.followers is not None else again.followers
+                    again.posts = a.posts if a.posts is not None else again.posts
+                    again.kind = a.kind or again.kind
                     continue
-                known.add(a.handle)
-                db.add(
-                    NicheAccount(
-                        search_id=search_id, owner_id=owner, handle=a.handle, name=a.name,
-                        followers=a.followers, posts=a.posts, about=a.about, fit=a.fit, why=a.why,
-                        kind=a.kind,
-                    )
+                known[a.handle] = NicheAccount(
+                    search_id=search_id, owner_id=owner, handle=a.handle, name=a.name,
+                    followers=a.followers, posts=a.posts, about=a.about, fit=a.fit, why=a.why,
+                    kind=a.kind, shown_at=now,
                 )  # fmt: skip
+                db.add(known[a.handle])
             found.status, found.progress = "done", 1.0
             found.message = f"found {len(accounts_found)} accounts"
             found.notes = notes

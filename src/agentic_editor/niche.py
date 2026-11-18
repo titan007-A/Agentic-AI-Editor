@@ -5,8 +5,9 @@ Followers, ... Posts"); posts and reels give their account; lists of "top accoun
 pages themselves, read) give more handles. Handles without numbers, and every account the
 model named, are looked up by their own profile page (one the engines don't know is left
 out: the model may have made it up). The model then judges how well each fits, with what
-the person liked and disliked before, and up to RUN_SIZE that pass the filters and were
-never shown to that person before are kept.
+the person liked and disliked before, and up to RUN_SIZE that pass the filters are kept:
+an account shown before may come again, except one anyone opened a message to in the last
+REPEAT_AFTER (so two people don't write to the same account) or one the person didn't want.
 
 Pages, people or both: most want pages (theme, fan, meme, clip, news pages, a series),
 not a person's own account. The model says which kind each account is while it judges
@@ -43,10 +44,13 @@ ANY = {"", "any", "all", "none", "-", "anywhere", "no", "n/a"}
 
 RUN_SIZE = 100  # accounts kept by one run
 PER_QUERY = 30  # results asked of the engines for each search
-ROUNDS = 8  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
-QUERIES = 12  # searches the model writes a round
-KNOWN = 30  # accounts the model is asked to name a round
-LOOKUPS = 90  # handles without a follower count looked up by name, a round
+ROUNDS = 12  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
+QUERIES = 14  # searches the model writes a round
+KNOWN = 40  # accounts the model is asked to name a round
+LOOKUPS = 120  # handles without a follower count looked up by name, a round
+# An account someone opened a message to isn't shown again for this long; others may come
+# back in any later search.
+REPEAT_AFTER_DAYS = 30
 LIST_PAGES = 4  # pages listing accounts read a round
 LIST_HANDLES = 60  # handles taken from one such page at most
 PAUSE = 1.0  # s between one worker's searches, so the engines don't turn it away
@@ -123,6 +127,12 @@ class Filters:
     language: str = ""
     country: str = ""
     kind: str = "any"  # "pages", "people" or "any" (KINDS)
+
+    def __post_init__(self) -> None:
+        # "500K to 500K" (a top at or under the bottom) means at least the bottom: as typed
+        # it could only keep accounts of exactly that many followers.
+        if self.max_followers is not None and self.max_followers <= self.min_followers:
+            self.max_followers = None
 
     def says(self) -> str:
         parts = []
@@ -464,7 +474,9 @@ page shows: the topic as the name; "daily", "page", "fan page", "memes", "clips"
 posts.
 Then rate 0-10 how well it is an account in that niche (10: exactly that; 5: related; 0: not
 at all, a brand page when creators were asked for, a fan page of something else, a dead or
-spam account){kind_rule}. Say in one line what it is and why.
+spam account){kind_rule}. A wanted language or country lowers the rating only when the
+account clearly posts in another language or is clearly from somewhere else; most accounts
+don't say, and then judge by the niche alone. Say in one line what it is and why.
 {accounts}"""
 
 # The rating rule for an account of another kind than the one wanted (Filters.kind).
@@ -600,9 +612,9 @@ def run(
     size: int = RUN_SIZE,
     read: Callable[[str], str] | None = None,
 ) -> tuple[list[Account], list[str]]:
-    """Up to `size` accounts of the niche, best fit first, none of `seen` (shown before or
-    hidden), all passing `filters` (of the kind it asks for); and notes on what went wrong
-    on the way. `planner` is
+    """Up to `size` accounts of the niche, best fit first, none of `seen` (written to lately
+    or not wanted), all passing `filters` (of the kind it asks for); and notes on what went
+    wrong on the way. `planner` is
     opened only to plan and to judge, so the GPU is free while the web is searched."""
     if find is None:
         find = engines
