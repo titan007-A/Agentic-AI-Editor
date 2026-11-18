@@ -24,10 +24,29 @@ ORGANIZATIONS = "query Organizations { account { organizations { id name } } }"
 CREATE = """
 mutation CreatePost($input: CreatePostInput!) {
   createPost(input: $input) {
-    ... on PostActionSuccess { post { id } }
+    ... on PostActionSuccess { post { id dueAt status } }
     ... on MutationError { message }
   }
 }"""
+POST_FIELDS = "id status dueAt sentAt text channelId error { message rawError } assets { source }"
+POST = "query Post($id: PostId!) { post(input: { id: $id }) { " + POST_FIELDS + " } }"
+POSTS = (
+    "query Posts($input: PostsInput!, $after: String) {\n"
+    "  posts(first: 50, after: $after, input: $input) {\n"
+    "    pageInfo { hasNextPage endCursor }\n"
+    "    edges { node { " + POST_FIELDS + " } }\n"
+    "  }\n"
+    "}"
+)
+DELETE = """
+mutation DeletePost($id: PostId!) {
+  deletePost(input: { id: $id }) {
+    ... on DeletePostSuccess { id }
+    ... on MutationError { message }
+  }
+}"""
+# Posts still waiting for something: what a link to a video must keep serving.
+PENDING = ["scheduled", "sending", "draft", "error", "needs_approval"]
 
 
 # Buffer's API can't mark a reel as an Instagram trial reel: one meant as a trial goes in as
@@ -54,6 +73,52 @@ PERSONAL = "personal profile"
 
 class BufferError(RuntimeError):
     pass
+
+
+@dataclass
+class Posted:
+    """A post as Buffer tells it: its state, when it goes out and, once it went wrong,
+    Buffer's words (`error`) and the network's own (`raw_error`)."""
+
+    id: str
+    status: str = ""
+    due_at: datetime | None = None
+    sent_at: datetime | None = None
+    error: str = ""
+    raw_error: str = ""
+    text: str = ""
+    channel_id: str = ""
+    # The links of its pictures or videos.
+    assets: tuple[str, ...] = ()
+
+
+def when(value: str | None) -> datetime | None:
+    """A time from Buffer (ISO 8601, Z for UTC)."""
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def posted(node: dict) -> Posted:
+    error = node.get("error") or {}
+    return Posted(
+        id=node["id"],
+        status=node.get("status") or "",
+        due_at=when(node.get("dueAt")),
+        sent_at=when(node.get("sentAt")),
+        error=error.get("message") or "",
+        raw_error=error.get("rawError") or "",
+        text=node.get("text") or "",
+        channel_id=node.get("channelId") or "",
+        assets=tuple(a.get("source") or "" for a in node.get("assets") or []),
+    )
+
+
+def media_problem(error: str, raw_error: str = "") -> bool:
+    """Instagram (or another network) couldn't take the video itself: worth sending it
+    again, unlike a disconnected account or a refused caption."""
+    said = f"{error} {raw_error}".lower()
+    return "media" in said or "container" in said or "video" in said
 
 
 class Count:
@@ -205,14 +270,64 @@ def trial_tag(
     return made["tag"]["id"]
 
 
+def create(
+    key: str, data: dict, client: httpx.Client | None = None, count: Count | None = None
+) -> Posted:
+    """The new post, with when Buffer will send it."""
+    result = call(key, CREATE, {"input": data}, client=client, count=count)["createPost"]
+    if result.get("message") and not result.get("post"):
+        raise BufferError(plain(result["message"]))
+    return posted(result["post"])
+
+
 def create_post(
     key: str, data: dict, client: httpx.Client | None = None, count: Count | None = None
 ) -> str:
     """The new post's id in Buffer."""
-    result = call(key, CREATE, {"input": data}, client=client, count=count)["createPost"]
-    if result.get("message") and not result.get("post"):
-        raise BufferError(plain(result["message"]))
-    return result["post"]["id"]
+    return create(key, data, client, count).id
+
+
+def post(
+    key: str, post_id: str, client: httpx.Client | None = None, count: Count | None = None
+) -> Posted | None:
+    """How a post stands now; None when Buffer doesn't have it any more (deleted there)."""
+    try:
+        found = call(key, POST, {"id": post_id}, client=client, count=count).get("post")
+    except BufferError as exc:
+        if "not found" in str(exc).lower():
+            return None
+        raise
+    return posted(found) if found else None
+
+
+def delete_post(
+    key: str, post_id: str, client: httpx.Client | None = None, count: Count | None = None
+) -> None:
+    result = call(key, DELETE, {"id": post_id}, client=client, count=count)["deletePost"]
+    if result.get("message") and not result.get("id"):
+        raise BufferError(result["message"])
+
+
+def pending(
+    key: str, client: httpx.Client | None = None, count: Count | None = None
+) -> list[Posted]:
+    """Every post of the key's account still waiting (PENDING), in all its organizations."""
+    found = []
+    organizations = call(key, ORGANIZATIONS, client=client, count=count)["account"]["organizations"]
+    for organization in organizations:
+        after = None
+        while True:
+            variables = {
+                "input": {"organizationId": organization["id"], "filter": {"status": PENDING}},
+                "after": after,
+            }
+            page = call(key, POSTS, variables, client=client, count=count)["posts"]
+            found += [posted(edge["node"]) for edge in page.get("edges") or []]
+            info = page.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                break
+            after = info.get("endCursor")
+    return found
 
 
 def plain(message: str) -> str:

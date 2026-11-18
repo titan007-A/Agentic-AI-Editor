@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { ChannelLine, ChannelPicker, channelsOf } from "@/components/buffer-channels";
+import { BufferPostList } from "@/components/buffer-posts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -61,6 +62,8 @@ export default function BufferPage() {
           alone: nobody else sees or uses them.
         </p>
       </div>
+
+      {state.keys.length > 0 && <BufferPostList />}
 
       <Card className="tape">
         <CardHeader>

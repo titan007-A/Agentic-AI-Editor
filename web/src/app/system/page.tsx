@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { HostingCard } from "@/components/hosting-card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -135,6 +136,8 @@ export default function SystemPage() {
           </CardContent>
         </Card>
       )}
+
+      {admin && <HostingCard />}
 
       <Card>
         <CardHeader>

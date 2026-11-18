@@ -118,3 +118,70 @@ def test_a_trial_reel_is_a_draft_under_the_trial_tag_made_once():
     old = buffer.Channel("c1", "My page", "instagram", None, False)
     assert buffer.trial_tag("k", old, client=fake(handler)) == "t9"
     assert asked[-2:] == ["ChannelOrganization(", "Tags("]
+
+
+def test_a_post_is_read_with_its_state_error_and_video():
+    node = {
+        "id": "p1",
+        "status": "error",
+        "dueAt": "2026-11-18T01:00:00.000Z",
+        "sentAt": None,
+        "text": "In 2016, Maren Morris",
+        "channelId": "c1",
+        "error": {"message": "issue with the media", "rawError": "media container: ERROR"},
+        "assets": [{"source": "https://x.test/api/pub/abc.mp4"}],
+    }
+
+    def handler(request):
+        body = json.loads(request.content)
+        if body["variables"]["id"] == "gone":
+            return httpx.Response(200, json={"errors": [{"message": "Post not found"}]})
+        assert "rawError" in body["query"] and "assets" in body["query"]
+        return httpx.Response(200, json={"data": {"post": node}})
+
+    found = buffer.post("k", "p1", client=fake(handler))
+    assert found.status == "error" and found.due_at == datetime(2026, 11, 18, 1, tzinfo=UTC)
+    assert found.raw_error == "media container: ERROR" and found.channel_id == "c1"
+    assert found.assets == ("https://x.test/api/pub/abc.mp4",) and found.sent_at is None
+    assert buffer.post("k", "gone", client=fake(handler)) is None
+    assert buffer.media_problem(found.error, found.raw_error)
+    assert not buffer.media_problem("The channel needs to be reconnected")
+
+
+def test_a_new_post_comes_back_with_its_time_and_a_post_can_be_deleted():
+    def handler(request):
+        body = json.loads(request.content)
+        if "deletePost" in body["query"]:
+            if body["variables"]["id"] == "locked":
+                return httpx.Response(200, json={"data": {"deletePost": {"message": "no"}}})
+            return httpx.Response(200, json={"data": {"deletePost": {"id": "p1"}}})
+        post = {"id": "p9", "dueAt": "2026-11-18T13:05:00Z", "status": "scheduled"}
+        return httpx.Response(200, json={"data": {"createPost": {"post": post}}})
+
+    made = buffer.create("k", {}, client=fake(handler))
+    assert made.id == "p9" and made.status == "scheduled" and made.due_at.hour == 13
+    buffer.delete_post("k", "p1", client=fake(handler))
+    with pytest.raises(buffer.BufferError, match="no"):
+        buffer.delete_post("k", "locked", client=fake(handler))
+
+
+def test_waiting_posts_of_every_organization_are_read_page_by_page():
+    pages = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        if "Organizations" in body["query"]:
+            orgs = [{"id": "o1", "name": "A"}, {"id": "o2", "name": "B"}]
+            return httpx.Response(200, json={"data": {"account": {"organizations": orgs}}})
+        variables = body["variables"]
+        assert variables["input"]["filter"] == {"status": buffer.PENDING}
+        pages.append((variables["input"]["organizationId"], variables["after"]))
+        more = variables["input"]["organizationId"] == "o1" and variables["after"] is None
+        nodes = [{"node": {"id": f"{len(pages)}", "status": "scheduled"}}]
+        info = {"hasNextPage": more, "endCursor": "next" if more else None}
+        return httpx.Response(200, json={"data": {"posts": {"edges": nodes, "pageInfo": info}}})
+
+    count = buffer.Count()
+    found = buffer.pending("k", client=fake(handler), count=count)
+    assert [p.id for p in found] == ["1", "2", "3"] and count.n == 4
+    assert pages == [("o1", None), ("o1", "next"), ("o2", None)]

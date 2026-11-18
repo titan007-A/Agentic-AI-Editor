@@ -227,6 +227,24 @@ uploads: it fetches the video from an unguessable link on this editor (/api/pub/
 it posts, so the server must be reachable over https then (set PUBLIC_URL in .env if the
 editor is opened another way) and Cloudflare must let Buffer's fetch through.
 
+Every post is followed until it goes out: a few minutes after its time the editor asks Buffer
+how it went. The Buffer page lists the posts (failed ones first, and counted beside the
+Buffer tab), and a reel's card shows its own. When Instagram couldn't take a video, the
+editor sends it once more by itself a few minutes later, away from the round minutes posts
+pile up on (each account can turn that off); a failed post can also be sent again now or at
+a time, or removed from Buffer. Each download of a /api/pub video is logged with how much
+of it went out.
+
+The videos can be served from Cloudflare R2 instead of this machine, so a big reel doesn't
+depend on a home connection when its post goes out: an admin enters the bucket's account ID,
+API token (Object Read & Write), bucket and public custom domain on the System page; it is
+tested (put, read back through the public address, delete) before it is saved. A video is
+put in the bucket when the Buffer dialog opens and deleted an hour after its post went out
+(at most 8 GB at a time; past that, or if an upload fails, the editor's own link is used).
+The editor's own copies in media/pub are deleted three days after their post went out, a
+week after a failure nobody sent again, and old ones from before posts were followed after
+two weeks, once the posts still waiting in Buffer were read.
+
 ### Accounts
 
 The owner is the admin; employees get accounts of their own. Each employee has presets of

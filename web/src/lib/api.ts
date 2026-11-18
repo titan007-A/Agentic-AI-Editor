@@ -36,6 +36,8 @@ export type Output = {
   caption_song: string;
   caption_artist: string;
   caption_topic: string;
+  /** The reel's posts in Buffer and how each went; empty from older servers. */
+  posts?: BufferPost[];
 };
 
 export type Verdict = "approved" | "posted" | "dismissed";
@@ -318,6 +320,8 @@ export type Me = {
   notice_accepted: boolean;
   /** Features this account tries first (trial_reel, fun, niche_finder, trim_choice). */
   features?: string[];
+  /** Its Buffer posts that failed in the last week (the header shows the number). */
+  buffer_failed?: number;
 };
 
 export type FunBadge = {
@@ -493,6 +497,65 @@ export type BufferResult = {
   draft?: boolean;
   tagged?: boolean;
   note?: string;
+};
+export type BufferPostStatus =
+  | "scheduled"
+  | "sending"
+  | "needs_approval"
+  | "draft"
+  | "sent"
+  | "error"
+  | "gone"
+  | "retried"
+  | "unknown";
+/** A post the editor put in Buffer, followed until it went out. */
+export type BufferPost = {
+  id: string;
+  post_id: string;
+  channel: string;
+  service: string;
+  output_id: number | null;
+  title: string;
+  text: string;
+  status: BufferPostStatus;
+  due_at: string | null;
+  sent_at: string | null;
+  /** Buffer's words when it failed, and the network's own. */
+  error: string;
+  raw_error: string;
+  draft: boolean;
+  /** Its video went to Buffer from Cloudflare R2, not from this machine. */
+  hosted: boolean;
+  /** Sent again by the editor itself after the first try failed. */
+  auto: boolean;
+  /** The failed post this one sends again. */
+  retry_of: string | null;
+  /** Instagram's last download of the video from this machine stopped before the end. */
+  instagram_cut: boolean;
+  created_at: string;
+};
+export type BufferPosts = { posts: BufferPost[]; auto_retry: boolean; hosted: boolean };
+/** Cloudflare R2 for the videos Buffer fetches, as an admin set it up. */
+export type Hosting = {
+  configured: boolean;
+  enabled: boolean;
+  files: number;
+  account_id?: string;
+  access_key_id?: string;
+  /** The secret's last four letters; the secret itself never comes back. */
+  secret_tail?: string;
+  bucket?: string;
+  public_url?: string;
+  bytes?: number;
+  cap?: number;
+};
+export type HostingForm = {
+  account_id: string;
+  access_key_id: string;
+  /** Empty keeps the one saved before. */
+  secret_access_key: string;
+  bucket: string;
+  public_url: string;
 };
 
 /** A connected Instagram account (direct Meta API, not Buffer). */
@@ -709,7 +772,21 @@ export const api = {
       trial?: boolean;
     },
   ) =>
-    request<{ results: BufferResult[]; link: string }>("POST", `/outputs/${outputId}/buffer`, body),
+    request<{ results: BufferResult[]; link: string; hosted?: boolean }>(
+      "POST",
+      `/outputs/${outputId}/buffer`,
+      body,
+    ),
+  bufferPosts: () => request<BufferPosts>("GET", "/buffer/posts"),
+  /** Sends a failed post again: now, or at `dueAt` (ISO). The new post. */
+  retryBufferPost: (id: string, dueAt: string | null = null) =>
+    request<BufferPost>("POST", `/buffer/posts/${id}/retry`, { due_at: dueAt }),
+  dismissBufferPost: (id: string) => request<{ ok: boolean }>("DELETE", `/buffer/posts/${id}`),
+  setBufferAutoRetry: (on: boolean) =>
+    request<{ auto_retry: boolean }>("PUT", "/buffer/auto-retry", { on }),
+  hosting: () => request<Hosting>("GET", "/admin/hosting"),
+  setHosting: (form: HostingForm) => request<Hosting>("PUT", "/admin/hosting", form),
+  switchHosting: (on: boolean) => request<Hosting>("POST", `/admin/hosting/${on ? "on" : "off"}`),
   igChannels: () => request<IgChannel[]>("GET", "/instagram/channels"),
   removeIgChannel: (id: string) => request<{ ok: boolean }>("DELETE", `/instagram/channels/${id}`),
   changeIgChannel: (

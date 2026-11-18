@@ -1843,16 +1843,17 @@ def fake_buffer(monkeypatch):
 
     sent = []
 
-    def create_post(key, data, client=None, count=None):
+    def create(key, data, client=None, count=None):
         if count is not None:
             count.n += 1
         if data["channelId"] == "c9":
             raise buffer.BufferError(buffer.plain("Instagram personal profile channels require x"))
         sent.append((key, data))
-        return f"post-{len(sent)}"
+        status = "draft" if data.get("saveToDraft") else "scheduled"
+        return buffer.Posted(f"post-{len(sent)}", status, buffer.when(data.get("dueAt")))
 
     monkeypatch.setattr(buffer, "channels", channels)
-    monkeypatch.setattr(buffer, "create_post", create_post)
+    monkeypatch.setattr(buffer, "create", create)
     return shown, sent
 
 
@@ -1983,6 +1984,7 @@ def test_buffer_says_plainly_what_went_wrong(env, monkeypatch):
     assert state["keys"][0]["channels"][0]["personal"] is True
     output = output_of(admin)
     body = {"channels": ["c9"], "text": "x", "mode": "addToQueue"}
+    env.settings.public_url = ""  # a PUBLIC_URL in a local .env would give an https link
     plain = admin.post(f"/api/outputs/{output}/buffer", json=body)
     assert plain.status_code == 422 and "https" in plain.json()["detail"]  # the test client is http
     env.settings.public_url = "https://editor.example.com"
@@ -2377,3 +2379,176 @@ def test_a_failed_job_can_be_tried_again(env):
     # Only a failed job goes back in the queue.
     assert env.client.post(f"/api/jobs/{failed['id']}/retry").status_code == 409
     assert env.client.post("/api/jobs/nope/retry").status_code == 404
+
+
+def test_posts_sent_to_buffer_are_followed_and_a_failed_one_sent_again(env, monkeypatch):
+    from agentic_editor import buffer
+    from agentic_editor.db import BufferPost
+
+    _, sent = fake_buffer(monkeypatch)
+    deleted = []
+    monkeypatch.setattr(
+        buffer, "delete_post", lambda key, post_id, client=None, count=None: deleted.append(post_id)
+    )
+    env.settings.public_url = "https://editor.example.com"
+    admin = env.client
+    admin.post("/api/buffer/keys", json={"key": "key-one-1234"})
+    output = output_of(admin)
+    due = "2026-11-18T01:00:00Z"
+    body = {"channels": ["c1"], "text": "Caption", "mode": "customScheduled", "due_at": due,
+            "first_comment": "first!"}  # fmt: skip
+    posted = admin.post(f"/api/outputs/{output}/buffer", json=body).json()
+    assert posted["results"][0]["ok"] and posted["hosted"] is False
+    assert posted["link"].startswith("https://editor.example.com/api/pub/")
+    (post,) = admin.get("/api/buffer/posts").json()["posts"]
+    assert post["status"] == "scheduled" and post["output_id"] == output
+    assert post["channel"] == "Spanish page" and post["due_at"].startswith("2026-11-18T01:00")
+    job = admin.get("/api/jobs").json()[0]
+    assert [p["id"] for p in job["outputs"][0]["posts"]] == [post["id"]]
+    assert admin.get("/api/me").json()["buffer_failed"] == 0
+
+    # Instagram couldn't take it: it shows first, counted for the header.
+    with env.sessions() as session:
+        row = session.get(BufferPost, post["id"])
+        row.status, row.error = "error", "issue with the media"
+        session.commit()
+    assert admin.get("/api/me").json()["buffer_failed"] == 1
+    _, riya = employee(env, presets=["square-1x1"])
+    assert riya.get("/api/buffer/posts").json()["posts"] == []
+    assert riya.post(f"/api/buffer/posts/{post['id']}/retry", json={}).status_code == 404
+    assert riya.delete(f"/api/buffer/posts/{post['id']}").status_code == 404
+
+    again = admin.post(f"/api/buffer/posts/{post['id']}/retry", json={})
+    assert again.status_code == 200, again.text
+    assert again.json()["retry_of"] == post["id"] and deleted == ["post-1"]
+    key, data = sent[-1]
+    assert key == "key-one-1234" and data["mode"] == "shareNow" and data["text"] == "Caption"
+    assert data["assets"] == [{"video": {"url": posted["link"]}}]  # the same file
+    assert data["metadata"]["instagram"]["firstComment"] == "first!"
+    shown = admin.get("/api/buffer/posts").json()["posts"]
+    assert [p["id"] for p in shown] == [again.json()["id"]]  # the new one stands for both
+    assert admin.post(f"/api/buffer/posts/{post['id']}/retry", json={}).status_code == 422
+
+    # A failed post can be removed from Buffer instead.
+    with env.sessions() as session:
+        row = session.get(BufferPost, again.json()["id"])
+        row.status = "error"
+        session.commit()
+    assert admin.delete(f"/api/buffer/posts/{again.json()['id']}").status_code == 200
+    assert deleted[-1] == again.json()["post_id"]
+    assert admin.get("/api/me").json()["buffer_failed"] == 0
+
+    assert admin.get("/api/buffer/posts").json()["auto_retry"] is True
+    assert admin.put("/api/buffer/auto-retry", json={"on": False}).json() == {"auto_retry": False}
+    assert admin.get("/api/buffer/posts").json()["auto_retry"] is False
+
+
+def test_a_download_of_a_posted_video_is_noted_on_its_post(env, monkeypatch):
+    from agentic_editor.db import BufferPost
+
+    fake_buffer(monkeypatch)
+    env.settings.public_url = "https://editor.example.com"
+    admin = env.client
+    admin.post("/api/buffer/keys", json={"key": "key-one-1234"})
+    output = output_of(admin)
+    body = {"channels": ["c1"], "text": "x", "mode": "addToQueue"}
+    link = admin.post(f"/api/outputs/{output}/buffer", json=body).json()["link"]
+    path = link.split("editor.example.com")[1]
+    got = TestClient(admin.app).get(path)  # anyone with the link, no login
+    assert got.status_code == 200 and got.content == b"fake video"
+    assert "immutable" in got.headers["cache-control"]
+    with env.sessions() as session:
+        (row,) = session.scalars(select(BufferPost)).all()
+        (fetch,) = row.fetches
+    assert fetch["whole"] and fetch["bytes"] == fetch["of"] == len(b"fake video")
+    assert fetch["by"] == "testclient"
+
+
+def r2_body(**more):
+    return {"account_id": "0123456789abcdef0123456789abcdef", "access_key_id": "AKID12345678",
+            "secret_access_key": "secret-key-9876", "bucket": "aiedit-reels",
+            "public_url": "https://media.example.com/"} | more  # fmt: skip
+
+
+def test_r2_is_set_up_by_an_admin_after_a_check(env, monkeypatch):
+    from agentic_editor import hosting
+
+    checked = []
+    monkeypatch.setattr(hosting, "check", lambda config: checked.append(config))
+    admin = env.client
+    assert admin.get("/api/admin/hosting").json()["configured"] is False
+    _, riya = employee(env, presets=["square-1x1"])
+    assert riya.get("/api/admin/hosting").status_code == 403
+    assert riya.put("/api/admin/hosting", json=r2_body()).status_code == 403
+    assert admin.put("/api/admin/hosting", json=r2_body(account_id="not hex!")).status_code == 422
+
+    def refuse(config):
+        raise hosting.HostingError("the public address answered 404")
+
+    monkeypatch.setattr(hosting, "check", refuse)
+    failed = admin.put("/api/admin/hosting", json=r2_body())
+    assert failed.status_code == 422 and "not saved" in failed.json()["detail"]
+    assert admin.get("/api/admin/hosting").json()["configured"] is False
+
+    monkeypatch.setattr(hosting, "check", lambda config: checked.append(config))
+    state = admin.put("/api/admin/hosting", json=r2_body())
+    assert state.status_code == 200, state.text
+    shown = state.json()
+    assert shown["configured"] and shown["enabled"] and shown["bucket"] == "aiedit-reels"
+    assert shown["public_url"] == "https://media.example.com" and shown["secret_tail"] == "9876"
+    assert "secret-key" not in state.text  # the secret never goes back to the browser
+    # Saved again without the secret: the one saved before stays.
+    admin.put("/api/admin/hosting", json=r2_body(secret_access_key="", bucket="other-bucket"))
+    assert checked[-1].secret_access_key == "secret-key-9876"
+    assert checked[-1].bucket == "other-bucket"
+    assert admin.post("/api/admin/hosting/off").json()["enabled"] is False
+    assert admin.post("/api/admin/hosting/on").json()["enabled"] is True
+
+
+def test_with_r2_buffer_gets_the_buckets_link_and_falls_back_to_ours(env, monkeypatch):
+    import time as time_
+
+    from agentic_editor import hosting
+    from agentic_editor.db import BufferPost, HostedFile
+
+    _, sent = fake_buffer(monkeypatch)
+    monkeypatch.setattr(hosting, "check", lambda config: None)
+    put = []
+
+    def upload(config, path, key):
+        time_.sleep(0.1)
+        put.append(key)
+
+    monkeypatch.setattr(hosting, "upload", upload)
+    env.settings.public_url = "https://editor.example.com"
+    admin = env.client
+    admin.put("/api/admin/hosting", json=r2_body())
+    admin.post("/api/buffer/keys", json={"key": "key-one-1234"})
+    output = output_of(admin)
+    # Opening the dialog starts the upload; the post waits for it, and it happens once.
+    assert admin.get(f"/api/outputs/{output}/buffer").status_code == 200
+    body = {"channels": ["c1", "c2"], "text": "x", "mode": "addToQueue"}
+    posted = admin.post(f"/api/outputs/{output}/buffer", json=body).json()
+    assert posted["hosted"] and posted["link"].startswith("https://media.example.com/reels/")
+    assert (
+        len(put) == 1 and [d["assets"][0]["video"]["url"] for _, d in sent] == [posted["link"]] * 2
+    )
+    with env.sessions() as session:
+        rows = session.scalars(select(BufferPost)).all()
+        assert {r.hosted for r in rows} == {put[0]} and len(rows) == 2
+        assert session.get(HostedFile, put[0]).size == len(b"fake video")
+
+    # The upload fails: our own link, said so.
+    def broken(config, path, key):
+        raise hosting.HostingError("the token may not write to this bucket")
+
+    monkeypatch.setattr(hosting, "upload", broken)
+    second = output_of(admin)
+    posted = admin.post(f"/api/outputs/{second}/buffer", json=body | {"channels": ["c1"]}).json()
+    assert not posted["hosted"] and "/api/pub/" in posted["link"]
+    assert "may not write" in posted["results"][0]["note"]
+    # Turned off: our own link, nothing tried.
+    admin.post("/api/admin/hosting/off")
+    third = output_of(admin)
+    posted = admin.post(f"/api/outputs/{third}/buffer", json=body | {"channels": ["c1"]}).json()
+    assert not posted["hosted"] and "note" not in posted["results"][0]

@@ -523,6 +523,58 @@ class PresetBuffer(Base):
     channels: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
+class BufferPost(Base):
+    """A post the editor put in someone's Buffer, followed until it went out (or didn't):
+    buffer_posts asks Buffer how it went, sends a failed one again and cleans up its video
+    after. Kept apart from the reel (output_id is no link), which may be deleted first."""
+
+    __tablename__ = "buffer_posts"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    post_id: Mapped[str] = mapped_column(String(40), unique=True)  # Buffer's
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    key_id: Mapped[str | None] = mapped_column(String(12))  # the key it was made with
+    channel_id: Mapped[str] = mapped_column(String(40))
+    channel: Mapped[str] = mapped_column(Text, default="")  # its name, as shown then
+    service: Mapped[str] = mapped_column(String(20), default="")
+    output_id: Mapped[int | None] = mapped_column(index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    first_comment: Mapped[str] = mapped_column(Text, default="")
+    # Kept in Buffer's drafts (a trial reel): goes out when the person sends it there.
+    draft: Mapped[bool] = mapped_column(default=False)
+    link: Mapped[str] = mapped_column(Text)  # the video link Buffer was given
+    pub: Mapped[str] = mapped_column(String(64), default="")  # its file in media/pub
+    hosted: Mapped[str] = mapped_column(String(120), default="")  # its R2 key; "": ours
+    due_at: Mapped[datetime | None]
+    # scheduled, sending, needs_approval, draft, sent, error, gone (deleted in Buffer),
+    # retried (sent again as another post), unknown (still not out long after its time)
+    status: Mapped[str] = mapped_column(String(16), default="scheduled", index=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    raw_error: Mapped[str] = mapped_column(Text, default="")
+    sent_at: Mapped[datetime | None]
+    checked_at: Mapped[datetime | None]
+    checks: Mapped[int] = mapped_column(default=0)
+    # The last downloads of its video from this machine: {at, by, bytes, of, seconds, whole}.
+    fetches: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    retry_of: Mapped[str | None] = mapped_column(String(12))
+    retried_by: Mapped[str | None] = mapped_column(String(12))
+    auto: Mapped[bool] = mapped_column(default=False)  # sent again by the editor itself
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class HostedFile(Base):
+    """A video put on Cloudflare R2 for Buffer (hosting.py), until buffer_posts deletes it."""
+
+    __tablename__ = "hosted_files"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    pub: Mapped[str] = mapped_column(String(64), index=True)
+    size: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    deleted_at: Mapped[datetime | None]
+
+
 class NicheSearch(Base):
     """One run of the niche account finder (niche.py) for one person."""
 
