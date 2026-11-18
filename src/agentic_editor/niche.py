@@ -6,8 +6,8 @@ pages themselves, read) give more handles. Handles without numbers, and every ac
 model named, are looked up by their own profile page (one the engines don't know is left
 out: the model may have made it up). The model then judges how well each fits, with what
 the person liked and disliked before, and up to RUN_SIZE that pass the filters are kept:
-an account shown before may come again, except one anyone opened a message to in the last
-REPEAT_AFTER (so two people don't write to the same account) or one the person didn't want.
+an account shown before may come again, except one the person opened a message to in the
+last REPEAT_AFTER_DAYS (others in the team still see it) or one they didn't want.
 
 Pages, people or both: most want pages (theme, fan, meme, clip, news pages, a series),
 not a person's own account. The model says which kind each account is while it judges
@@ -48,8 +48,8 @@ ROUNDS = 12  # rounds of searches, each with new ones, while fewer than RUN_SIZE
 QUERIES = 14  # searches the model writes a round
 KNOWN = 40  # accounts the model is asked to name a round
 LOOKUPS = 120  # handles without a follower count looked up by name, a round
-# An account someone opened a message to isn't shown again for this long; others may come
-# back in any later search.
+# An account a person opened a message to isn't shown to them again for this long (others
+# still see it); the rest may come back in any later search.
 REPEAT_AFTER_DAYS = 30
 LIST_PAGES = 4  # pages listing accounts read a round
 LIST_HANDLES = 60  # handles taken from one such page at most

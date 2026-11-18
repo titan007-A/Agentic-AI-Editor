@@ -1257,8 +1257,8 @@ def run_niche(
 ) -> None:  # fmt: skip
     """Find accounts for a niche search (niche.py) and keep them as the person's. An account
     shown before may be shown again (it then moves to this search), unless the person didn't
-    want it or anyone opened a message to it in the last niche.REPEAT_AFTER_DAYS. Like a job,
-    it never stays "running": whatever happens is stored."""
+    want it or opened a message to it in the last niche.REPEAT_AFTER_DAYS (others still see
+    it). Like a job, it never stays "running": whatever happens is stored."""
 
     def progress(message: str, value: float) -> None:
         with Session() as db:
@@ -1274,12 +1274,12 @@ def run_niche(
             owner, text, wanted = found.owner_id, found.niche, dict(found.filters or {})
             mine = list(db.scalars(select(NicheAccount).where(NicheAccount.owner_id == owner)))
             lately = datetime.now(UTC) - timedelta(days=niche.REPEAT_AFTER_DAYS)
-            written = db.scalars(
-                select(NicheAccount.handle).where(
-                    NicheAccount.dm_opened_at >= lately.replace(tzinfo=None)
-                )
-            )
-            seen = set(written) | {a.handle for a in mine if a.vote < 0}
+            written = {
+                a.handle
+                for a in mine
+                if a.dm_opened_at is not None and a.dm_opened_at >= lately.replace(tzinfo=None)
+            }
+            seen = written | {a.handle for a in mine if a.vote < 0}
             voted = sorted((a for a in mine if a.vote), key=lambda a: a.created_at, reverse=True)
             liked = [f"@{a.handle} ({a.why[:60]}) {a.reason}".strip() for a in voted if a.vote > 0]
             disliked = [
