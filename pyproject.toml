@@ -5,6 +5,7 @@ description = "Local agentic video editor: download, analyze, plan, render and r
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "boto3>=1.35",
     "ddgs>=9",
     "fastapi>=0.115",
     "httpx>=0.28",
@@ -47,6 +48,7 @@ aiedit = "agentic_editor.cli:main"
 
 [dependency-groups]
 dev = [
+    "moto[server]>=5",
     "pre-commit>=4.7.0",
     "pytest>=8.3",
     "ruff>=0.8",

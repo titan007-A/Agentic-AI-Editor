@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { POSTS_CHANGED } from "@/components/buffer-posts";
 import { FestivalSkin } from "@/components/festival-skin";
 import { FortuneCookie } from "@/components/fortune-cookie";
 import { LofiButton } from "@/components/lofi-button";
@@ -20,7 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { forgetMe, useMe } from "@/hooks/use-me";
-import { api } from "@/lib/api";
+import { api, type Me } from "@/lib/api";
 import { mayLeave } from "@/lib/leave-guard.mjs";
 import { cn } from "@/lib/utils";
 
@@ -60,7 +61,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
     ...(me?.features?.includes("fun") ? [{ href: "/team/", label: "Team" }] : []),
     ...(me?.features?.includes("niche_finder") ? [{ href: "/accounts/", label: "Accounts" }] : []),
   ];
-  const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])];
+  const failed = useFailedPosts(me);
+  const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])].map((link) =>
+    link.href === "/buffer/" && failed > 0
+      ? { ...link, count: failed, countLabel: `${failed} failed post${failed === 1 ? "" : "s"}` }
+      : link,
+  );
 
   if (onLogin) return <main className="mx-auto w-full max-w-sm px-4 py-12">{children}</main>;
   if (onPublic) return <>{children}</>;
@@ -135,7 +141,37 @@ export function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-type NavLink = { href: string; label: string };
+type NavLink = { href: string; label: string; count?: number; countLabel?: string };
+
+/** How many of the account's Buffer posts failed, asked again when posts change. */
+function useFailedPosts(me: Me | null): number {
+  // Asked again after posts changed; until then, what the page load said.
+  const [asked, setAsked] = useState<number | null>(null);
+  useEffect(() => {
+    if (!me) return;
+    const ask = () =>
+      api
+        .me()
+        .then((now) => setAsked(now.buffer_failed ?? 0))
+        .catch(() => {});
+    window.addEventListener(POSTS_CHANGED, ask);
+    return () => window.removeEventListener(POSTS_CHANGED, ask);
+  }, [me]);
+  return asked ?? me?.buffer_failed ?? 0;
+}
+
+function Count({ link }: { link: NavLink }) {
+  if (!link.count) return null;
+  return (
+    <span
+      className="ml-1 inline-grid min-w-5 place-items-center rounded-full bg-destructive px-1 text-[11px] leading-5 font-bold text-white"
+      aria-label={link.countLabel}
+      title={link.countLabel}
+    >
+      {link.count}
+    </span>
+  );
+}
 
 function isActive(href: string, pathname: string): boolean {
   return href === "/" ? pathname === "/" || pathname.startsWith("/job") : pathname.startsWith(href);
@@ -196,6 +232,7 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
         {links.map((link) => (
           <span key={link.href} className={LINK_CLASS}>
             <span className="py-1">{link.label}</span>
+            <Count link={link} />
           </span>
         ))}
         <span className={LINK_CLASS}>
@@ -217,6 +254,7 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
             )}
           >
             <span className={cn("py-1", active && "scribble")}>{link.label}</span>
+            <Count link={link} />
           </Link>
         );
       })}
@@ -234,6 +272,12 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
               <span className={cn("py-1", restActive && "scribble")}>
                 {restActive ? restActive.label : "More"}
               </span>
+              {rest.some((link) => link.count) && (
+                <span
+                  className="ml-1 size-2 rounded-full bg-destructive"
+                  aria-label="a page here needs a look"
+                />
+              )}
               <ChevronDown className="ml-0.5 size-4" aria-hidden />
             </button>
           </DropdownMenuTrigger>
@@ -249,6 +293,7 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
                     className={cn("font-semibold", active && "underline underline-offset-4")}
                   >
                     {link.label}
+                    <Count link={link} />
                   </Link>
                 </DropdownMenuItem>
               );

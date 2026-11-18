@@ -5,9 +5,9 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import secrets
-import shutil
 import signal
 import threading
 import time
@@ -34,11 +34,13 @@ from agentic_editor import (
     assets,
     autopilot,
     buffer,
+    buffer_posts,
     cleanup,
     comments,
     eta,
     features,
     fun,
+    hosting,
     instagram,
     jobs,
     research,
@@ -52,6 +54,7 @@ from agentic_editor.db import (
     Feed,
     FeedItem,
     HiddenAccount,
+    HostedFile,
     InstagramChannel,
     InstagramComment,
     Job,
@@ -136,6 +139,24 @@ class BufferPostRequest(BaseModel):
     # An Instagram trial reel: Buffer's API can't say so, so it goes in as a draft tagged
     # buffer.TRIAL_TAG, for the person to turn Trial on in Buffer (feature trial_reel).
     trial: bool = False
+
+
+class RetryRequest(BaseModel):
+    # None: send it now.
+    due_at: datetime | None = None
+
+
+class AutoRetryRequest(BaseModel):
+    on: bool
+
+
+class HostingRequest(BaseModel):
+    account_id: str = Field(min_length=8, max_length=64, pattern=r"^[0-9a-fA-F]+$")
+    access_key_id: str = Field(min_length=8, max_length=128)
+    # Empty: keep the one saved before.
+    secret_access_key: str = Field(default="", max_length=256)
+    bucket: str = Field(min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
+    public_url: str = Field(min_length=9, max_length=300)
 
 
 class ShareRequest(BaseModel):
@@ -567,6 +588,8 @@ class OutputView(BaseModel):
     caption_song: str = ""
     caption_artist: str = ""
     caption_topic: str = ""
+    # The reel's posts in Buffer and how each went (buffer_posts.view).
+    posts: list[dict] = []
 
 
 # A failure line in a job's error (pipeline.edit): "<preset>: UnnamedSong: ...".
@@ -603,6 +626,7 @@ def job_view(
     owner: str | None = None,
     labels: dict[str, str] | None = None,
     eta_seconds: int | None = None,
+    posts: dict[int, list[dict]] | None = None,
 ) -> JobView:
     outputs = [
         OutputView(
@@ -629,6 +653,7 @@ def job_view(
             caption_song=o.caption_song or "",
             caption_artist=o.caption_artist or "",
             caption_topic=o.caption_topic or "",
+            posts=(posts or {}).get(o.id, []),
         )
         for o in job.outputs
         if only is None or o.id == only
@@ -711,6 +736,10 @@ def create_app(
                 await asyncio.to_thread(cleanup.sweep, make_session, settings)
             except Exception:
                 log.exception("deleting old videos failed")
+            try:
+                await asyncio.to_thread(buffer_posts.watch, make_session, settings)
+            except Exception:
+                log.exception("following the Buffer posts failed")
             await asyncio.sleep(SCAN_SECONDS)
 
     @asynccontextmanager
@@ -800,19 +829,23 @@ def create_app(
         names: dict[str | None, str] | None = None,
         labels: dict | None = None,
         etas: dict[str, int] | None = None,
+        posts: dict[int, list[dict]] | None = None,
     ) -> JobView:
         """The job as its viewer sees it: the admin with who started it. A list passes
-        `names`, `labels` (a cache) and `etas` worked out once, so a long one doesn't look
-        each owner up again."""
+        `names`, `labels` (a cache), `etas` and its outputs' Buffer `posts` worked out once,
+        so a long one doesn't look each owner up again."""
         shown = preset_labels(job.owner_id, session, labels)
         left = None
         if job.status in ("queued", "running"):
             if etas is None:
                 etas = eta.estimates(session, settings.max_concurrent_jobs)
             left = etas.get(job.id)
+        if posts is None:
+            posts = buffer_posts.for_outputs(session, [o.id for o in job.outputs])
         if account.role != accounts.ADMIN:
-            return job_view(job, only, labels=shown, eta_seconds=left)
-        return job_view(job, only, (names or owners(session)).get(job.owner_id), shown, left)
+            return job_view(job, only, labels=shown, eta_seconds=left, posts=posts)
+        owner = (names or owners(session)).get(job.owner_id)
+        return job_view(job, only, owner, shown, left, posts)
 
     def find_job(job_id: str, session: Session, account: Account) -> Job:
         job = session.get(Job, job_id)
@@ -916,6 +949,7 @@ def create_app(
             "primary": accounts.is_primary(session, account),
             "notice_accepted": accepted,
             "features": features.of(account, session),
+            "buffer_failed": buffer_posts.failed_count(session, account.id),
         }
 
     @app.get("/api/fun")
@@ -1868,11 +1902,15 @@ def create_app(
         query = select(Job).options(selectinload(Job.outputs))
         if account.role != accounts.ADMIN:
             query = query.where(Job.owner_id == account.id)
-        rows = session.scalars(query.order_by(Job.created_at.desc()).limit(200))
+        rows = session.scalars(query.order_by(Job.created_at.desc()).limit(200)).all()
         names = owners(session) if account.role == accounts.ADMIN else None
         labels: dict = {}
         etas = eta.estimates(session, settings.max_concurrent_jobs)
-        return [view(j, account, session, names=names, labels=labels, etas=etas) for j in rows]
+        posts = buffer_posts.for_outputs(session, [o.id for j in rows for o in j.outputs])
+        return [
+            view(j, account, session, names=names, labels=labels, etas=etas, posts=posts)
+            for j in rows
+        ]
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, account: User, session: DB) -> JobView:
@@ -1997,11 +2035,7 @@ def create_app(
         query = select(BufferKeyRow).where(BufferKeyRow.owner_id == account.id)
         return list(session.scalars(query.order_by(BufferKeyRow.created_at)))
 
-    def spent(row: BufferKeyRow, count: buffer.Count) -> None:
-        today = date.today().isoformat()
-        if row.used_on != today:
-            row.used_on, row.used = today, 0
-        row.used += count.n
+    spent = buffer_posts.spent
 
     async def refresh_key(row: BufferKeyRow) -> None:
         count = buffer.Count()
@@ -2140,6 +2174,14 @@ def create_app(
         output = find_output(output_id, session, me)
         who = poster(output, me, session)
         state = await buffer_state(who, session)
+        if hosting.usable(hosting.load(session)) and Path(output.path).is_file():
+            # Up to R2 while the person writes the post; the post waits for it if needed.
+            pub = prepared_pub(output)
+            threading.Thread(
+                target=buffer_posts.ensure_hosted,
+                args=(make_session, settings, pub),
+                daemon=True,
+            ).start()
         preset = presets(who).get(output.preset)
         return {
             "keys": state["keys"],
@@ -2150,32 +2192,68 @@ def create_app(
         }
 
     pub_dir = settings.media_dir / "pub"
+    # The file in media/pub each reel opened in the Buffer dialog got, by output: its copy
+    # goes up to R2 while the person writes the post, and the post uses that same file.
+    prepared: dict[int, tuple[int, str]] = {}
+    prepared_lock = threading.Lock()
 
-    def public_link(output: Output, request: Request) -> str:
-        """A link anyone can open, for Buffer to fetch the video from when it posts: an
-        unguessable name for a hard link to the file, so deleting the job keeps it."""
-        base = (settings.public_url or str(request.base_url)).rstrip("/")
-        if not base.startswith("https://"):
-            raise HTTPException(
-                422,
-                "Buffer needs an https link to fetch the video: open the editor at its "
-                "https address, or set PUBLIC_URL in .env",
-            )
-        pub_dir.mkdir(parents=True, exist_ok=True)
-        name = f"{secrets.token_urlsafe(24)}.mp4"
-        try:
-            (pub_dir / name).hardlink_to(output.path)
-        except OSError:
-            shutil.copy2(output.path, pub_dir / name)
-        return f"{base}/api/pub/{name}"
+    def prepared_pub(output: Output) -> str:
+        with prepared_lock:
+            inode = Path(output.path).stat().st_ino
+            found = prepared.get(output.id)
+            if found and found[0] == inode and (pub_dir / found[1]).is_file():
+                return found[1]
+            pub = buffer_posts.make_pub(settings, Path(output.path))
+            prepared[output.id] = (inode, pub)
+            return pub
+
+    def public_base(request: Request) -> str:
+        return (settings.public_url or str(request.base_url)).rstrip("/")
+
+    class TrackedFile(FileResponse):
+        """A /api/pub download, noted on the posts using the file once it ended: how much of
+        it went out, to whom (Instagram or another address) and how long it took."""
+
+        def __init__(self, path: Path, name: str, ip: str) -> None:
+            super().__init__(path, media_type="video/mp4", headers={"Cache-Control": hosting.CACHE})
+            self.name, self.ip = name, ip
+
+        async def __call__(self, scope, receive, send) -> None:
+            sent, whole, began = 0, False, time.monotonic()
+
+            async def counted(message) -> None:
+                nonlocal sent, whole
+                await send(message)
+                if message["type"] == "http.response.body":
+                    sent += len(message.get("body", b""))
+                    whole = whole or not message.get("more_body", False)
+
+            await super().__call__(scope, receive, counted)
+            if scope.get("method") == "HEAD":
+                return
+            size = int(self.headers.get("content-length", 0) or 0)
+            entry = {
+                "at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "by": buffer_posts.who(self.ip),
+                "bytes": sent,
+                "of": size,
+                "seconds": round(time.monotonic() - began, 1),
+                "whole": whole and sent >= size,
+            }
+            log.info(
+                "pub %s: %s of %s bytes to %s in %.1f s%s",
+                self.name, sent, size, self.ip, entry["seconds"],
+                "" if entry["whole"] else " (stopped before the end)",
+            )  # fmt: skip
+            await asyncio.to_thread(buffer_posts.fetched, make_session, self.name, entry)
 
     @app.get("/api/pub/{name}")
-    def public_video(name: str) -> FileResponse:
+    def public_video(name: str, request: Request) -> FileResponse:
         """A video handed to another service; open to anyone with the link."""
         path = pub_dir / name
         if not PUB_NAME.fullmatch(name) or not path.is_file():
             raise HTTPException(404, "no such video")
-        return FileResponse(path, media_type="video/mp4")
+        return TrackedFile(path, name, request.client.host if request.client else "")
 
     @app.post("/api/outputs/{output_id}/buffer")
     async def post_to_buffer(
@@ -2196,10 +2274,21 @@ def create_app(
             raise HTTPException(
                 422, "none of the keys shows that channel any more; refresh them on the Buffer page"
             )
-        link = public_link(output, request)
+        base = public_base(request)
+        pub = prepared_pub(output)
+        hosted, host_note = await asyncio.to_thread(
+            buffer_posts.ensure_hosted, make_session, settings, pub
+        )
+        try:
+            link = buffer_posts.link_of(session, hosted, pub, base)
+        except buffer.BufferError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if not hosted:
+            buffer_posts.remember_base(session, base)
         due = body.due_at
         if due is not None and due.tzinfo is None:
             due = due.replace(tzinfo=UTC)
+        title = output.title or output.job.title or ""
         results = []
         for channel_id in wanted:
             row = keys[channel_id]
@@ -2223,11 +2312,31 @@ def create_app(
                     channel, link, body.text, body.mode, due, body.first_comment,
                     draft=trial, tags=tags,
                 )  # fmt: skip
-                post = await asyncio.to_thread(buffer.create_post, row.key, data, None, count)
-                result = {"channel": channel.name, "ok": True, "post": post}
+                made = await asyncio.to_thread(buffer.create, row.key, data, None, count)
+                kept = buffer_posts.record(
+                    session,
+                    owner_id=who.id,
+                    key=row,
+                    channel=channel,
+                    made=made,
+                    link=link,
+                    pub=pub,
+                    hosted=hosted or "",
+                    text=body.text,
+                    first_comment=body.first_comment,
+                    draft=trial,
+                    output_id=output.id,
+                    title=title,
+                    due_at=due,
+                )
+                result = {"channel": channel.name, "ok": True, "post": made.id}
                 if trial:
                     result |= {"draft": True, "tagged": bool(tags), "note": note}
+                if host_note:
+                    result["note"] = "; ".join(n for n in (result.get("note"), host_note) if n)
                 results.append(result)
+                session.flush()
+                result["followed"] = kept.id
             except buffer.BufferError as exc:
                 if "refused the API key" in str(exc):
                     row.error = str(exc)
@@ -2241,12 +2350,108 @@ def create_app(
             link_preset(who, output.preset, wanted, session)
         session.commit()
         log.info(
-            "buffer: output %s by %s -> %s",
+            "buffer: output %s by %s -> %s (%s)",
             output_id,
             who.username,
             [r | {"key": keys[c].label} for r, c in zip(results, wanted, strict=True)],
+            "R2" if hosted else "editor's link",
         )
-        return {"results": results, "link": link}
+        return {"results": results, "link": link, "hosted": bool(hosted)}
+
+    # Posts made here, followed until they went out (buffer_posts).
+    @app.get("/api/buffer/posts")
+    def buffer_post_list(me: User, session: DB) -> dict:
+        return {
+            "posts": [buffer_posts.view(r) for r in buffer_posts.shown(session, me.id)],
+            "auto_retry": buffer_posts.auto_retry_on(session, me.id),
+            "hosted": hosting.usable(hosting.load(session)),
+        }
+
+    @app.post("/api/buffer/posts/{post_id}/retry")
+    async def retry_buffer_post(post_id: str, body: RetryRequest, me: User) -> dict:
+        due = body.due_at
+        if due is not None and due.tzinfo is None:
+            due = due.replace(tzinfo=UTC)
+        try:
+            return await asyncio.to_thread(
+                buffer_posts.retry_by_id, make_session, settings, post_id, me.id, due
+            )
+        except LookupError as exc:
+            raise HTTPException(404, "no such post") from exc
+        except (buffer.BufferError, hosting.HostingError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.delete("/api/buffer/posts/{post_id}")
+    async def dismiss_buffer_post(post_id: str, me: User) -> dict:
+        try:
+            await asyncio.to_thread(buffer_posts.dismiss, make_session, post_id, me.id)
+        except LookupError as exc:
+            raise HTTPException(404, "no such post") from exc
+        except buffer.BufferError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"ok": True}
+
+    @app.put("/api/buffer/auto-retry")
+    def set_buffer_auto_retry(body: AutoRetryRequest, me: User, session: DB) -> dict:
+        buffer_posts.set_auto_retry(session, me.id, body.on)
+        session.commit()
+        return {"auto_retry": body.on}
+
+    # Cloudflare R2 for the videos Buffer fetches (hosting.py), set up by an admin.
+    def hosting_view(session: Session) -> dict:
+        config = hosting.load(session)
+        files = session.scalars(select(HostedFile).where(HostedFile.deleted_at.is_(None))).all()
+        if config is None:
+            return {"configured": False, "enabled": False, "files": len(files)}
+        return {
+            "configured": True,
+            "enabled": config.enabled,
+            "account_id": config.account_id,
+            "access_key_id": config.access_key_id,
+            "secret_tail": config.secret_access_key[-4:],
+            "bucket": config.bucket,
+            "public_url": config.public_url,
+            "files": len(files),
+            "bytes": buffer_posts.hosted_bytes(session),
+            "cap": hosting.CAP,
+        }
+
+    @app.get("/api/admin/hosting")
+    def hosting_status(_: Admin, session: DB) -> dict:
+        return hosting_view(session)
+
+    @app.put("/api/admin/hosting")
+    async def set_hosting(body: HostingRequest, _: Admin, session: DB) -> dict:
+        old = hosting.load(session)
+        secret = body.secret_access_key.strip() or (old.secret_access_key if old else "")
+        if not secret:
+            raise HTTPException(422, "give the secret access key")
+        config = hosting.R2(
+            account_id=body.account_id.strip().lower(),
+            access_key_id=body.access_key_id.strip(),
+            secret_access_key=secret,
+            bucket=body.bucket.strip(),
+            public_url=body.public_url.strip().rstrip("/"),
+            endpoint=os.environ.get("R2_ENDPOINT", ""),
+        )
+        try:
+            await asyncio.to_thread(hosting.check, config)
+        except hosting.HostingError as exc:
+            raise HTTPException(422, f"not saved: {exc}") from exc
+        hosting.save(session, config)
+        session.commit()
+        log.info("R2 hosting set up: bucket %s at %s", config.bucket, config.public_url)
+        return hosting_view(session)
+
+    @app.post("/api/admin/hosting/{state}")
+    def switch_hosting(state: Literal["on", "off"], _: Admin, session: DB) -> dict:
+        config = hosting.load(session)
+        if config is None:
+            raise HTTPException(409, "set R2 up first")
+        config.enabled = state == "on"
+        hosting.save(session, config)
+        session.commit()
+        return hosting_view(session)
 
     # ------------------------------------------------------------------ Instagram direct
     # OAuth: redirect to Instagram, handle callback, manage channels, post reels.
@@ -2673,11 +2878,13 @@ def create_app(
             query.options(selectinload(Output.job).selectinload(Job.outputs))
             .order_by(Output.id.desc())
             .limit(PILE_LIMIT)
-        )
+        ).all()
         names = owners(session) if account.role == accounts.ADMIN else None
         labels: dict = {}
+        posts = buffer_posts.for_outputs(session, [o.id for o in outputs])
         return [
-            view(o.job, account, session, only=o.id, names=names, labels=labels) for o in outputs
+            view(o.job, account, session, only=o.id, names=names, labels=labels, posts=posts)
+            for o in outputs
         ]
 
     def folder_view(folder: PileFolder) -> PileFolderView:

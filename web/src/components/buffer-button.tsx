@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { ChannelPicker, channelsOf, channelWarning } from "@/components/buffer-channels";
+import { postsChanged } from "@/components/buffer-posts";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -98,9 +99,14 @@ export function BufferButton({ output, title }: { output: Output; title: string 
             { duration: 10000 },
           );
           if (r.note) toast.warning(`${r.channel}: ${r.note}`);
-        } else toast.success(`Sent to Buffer: ${r.channel}`);
+        } else {
+          toast.success(`Sent to Buffer: ${r.channel}`);
+          // Such as: Cloudflare R2 couldn't take it, so the editor's own link was used.
+          if (r.note) toast.warning(`${r.channel}: ${r.note}`, { duration: 10000 });
+        }
       }
       for (const r of failed) toast.error(`${r.channel}: ${r.error}`);
+      if (results.some((r) => r.ok)) postsChanged();
       if (!failed.length) setOpen(false);
     } catch (err) {
       toast.error(errorText(err));

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { BufferButton } from "@/components/buffer-button";
+import { ReelPosts } from "@/components/buffer-posts";
 import { InstagramButton } from "@/components/instagram-button";
 import { jobLabel } from "@/components/job-status";
 import { OutputVideo } from "@/components/output-video";
@@ -198,6 +199,7 @@ export function OutputCard({
           </Dialog>
           {actions}
         </div>
+        <ReelPosts outputId={output.id} posts={output.posts ?? []} />
         <PostCaption output={output} />
       </CardContent>
     </Card>
