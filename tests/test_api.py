@@ -2300,11 +2300,22 @@ def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
         f"/api/niche/accounts/{acc['id']}/vote", json={"vote": -1, "reason": "brand"}
     )
     assert voted.json()["vote"] == -1
+    assert acc["dm_opens"] == 0 and acc["times_shown"] == 1 and acc["dm_opened_at"] is None
+    # Opening a message counts, for the person and for the team.
+    assert admin.post(f"/api/niche/accounts/{acc['id']}/dm").json()["dm_opens"] == 1
+    opened = admin.post(f"/api/niche/accounts/{acc['id']}/dm").json()
+    assert opened["dm_opens"] == 2 and opened["my_dm_opens"] == 2 and opened["dm_opened_at"]
+    with env.sessions() as session:
+        session.add(NicheAccount(owner_id="someone", handle="vocalmaria", dm_opens=3))
+        session.commit()
+    (acc,) = admin.get(f"/api/niche/{started['id']}").json()["accounts"]
+    assert acc["dm_opens"] == 5 and acc["my_dm_opens"] == 2
+    assert admin.post("/api/niche/accounts/99999/dm").status_code == 404
     assert [s["count"] for s in admin.get("/api/niche").json()] == [1]
-    # Deleting the search keeps the account known (never shown again).
+    # Deleting the search keeps the account known (its votes and messages).
     assert admin.delete(f"/api/niche/{started['id']}").status_code == 200
     with env.sessions() as session:
-        kept = session.query(NicheAccount).one()
+        kept = session.query(NicheAccount).filter_by(owner_id=me_id).one()
         assert kept.handle == "vocalmaria" and kept.search_id is None
     # Someone else: not theirs, and not on for them.
     _, riya = employee(env, presets=["square-1x1"])
@@ -2313,6 +2324,7 @@ def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
         session.merge(Setting(key="feature:niche_finder", value=json_.dumps([name, "riya"])))
         session.commit()
     assert riya.get("/api/niche").json() == []
+    assert riya.post(f"/api/niche/accounts/{acc['id']}/dm").status_code == 404
 
 
 def test_niche_schedules_are_made_changed_and_removed(env):

@@ -675,6 +675,13 @@ export type NicheAccount = {
   reason: string;
   url: string;
   message_url: string;
+  /** Messages opened to it from the finder by everyone in the team; the person's own. */
+  dm_opens?: number;
+  my_dm_opens?: number;
+  /** The last of them; null when none. */
+  dm_opened_at?: string | null;
+  /** Searches that showed it to the person (more than 1: shown again). */
+  times_shown?: number;
 };
 
 /** Pages (theme, fan, meme, news pages), people's own accounts, or any account. */
@@ -737,6 +744,8 @@ export const api = {
   deleteNicheSchedule: (id: string) => request<{ ok: boolean }>("DELETE", `/niche/schedules/${id}`),
   voteNiche: (id: number, vote: -1 | 0 | 1, reason = "") =>
     request<NicheAccount>("POST", `/niche/accounts/${id}/vote`, { vote, reason }),
+  /** The person opened a message to the account: counted, and kept out of searches for 30 days. */
+  nicheDmOpened: (id: number) => request<NicheAccount>("POST", `/niche/accounts/${id}/dm`),
   wrapped: (month?: string) =>
     request<FunWrapped>("GET", `/fun/wrapped${month ? `?month=${month}` : ""}`),
   acceptNotice: () => request("POST", "/notice"),

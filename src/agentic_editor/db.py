@@ -613,8 +613,9 @@ class NicheSchedule(Base):
 
 
 class NicheAccount(Base):
-    """An account the finder showed someone: never shown to them again, even when its
-    search is deleted (it stays, without a search)."""
+    """An account the finder showed someone, once per person: it stays when its search is
+    deleted (without a search). Shown again by a later search (niche.REPEAT_AFTER), it moves
+    to that search. Not shown again for a while once anyone opened a message to it."""
 
     __tablename__ = "niche_accounts"
     __table_args__ = (UniqueConstraint("owner_id", "handle"),)
@@ -635,6 +636,12 @@ class NicheAccount(Base):
     kind: Mapped[str] = mapped_column(String(16), default="")
     vote: Mapped[int] = mapped_column(default=0)  # 1 liked, -1 not wanted
     reason: Mapped[str] = mapped_column(Text, default="")
+    # Times this person opened a message to it from the finder, and the last time.
+    dm_opens: Mapped[int] = mapped_column(default=0)
+    dm_opened_at: Mapped[datetime | None]
+    # Searches that showed it to this person, and when the last one did (None: when made).
+    times_shown: Mapped[int] = mapped_column(default=1)
+    shown_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(default=_now)
     search: Mapped[NicheSearch | None] = relationship(back_populates="accounts")
 
