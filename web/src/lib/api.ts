@@ -744,7 +744,7 @@ export const api = {
   deleteNicheSchedule: (id: string) => request<{ ok: boolean }>("DELETE", `/niche/schedules/${id}`),
   voteNiche: (id: number, vote: -1 | 0 | 1, reason = "") =>
     request<NicheAccount>("POST", `/niche/accounts/${id}/vote`, { vote, reason }),
-  /** The person opened a message to the account: counted, and kept out of searches for 30 days. */
+  /** The person opened a message to the account: counted, and kept out of their searches for 30 days. */
   nicheDmOpened: (id: number) => request<NicheAccount>("POST", `/niche/accounts/${id}/dm`),
   wrapped: (month?: string) =>
     request<FunWrapped>("GET", `/fun/wrapped${month ? `?month=${month}` : ""}`),

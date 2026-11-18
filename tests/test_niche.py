@@ -479,22 +479,25 @@ def test_accounts_come_again_unless_written_to_lately_or_not_wanted(tmp_path):
         rows["coach1"].vote = -1  # not wanted
         rows["coach2"].dm_opens, rows["coach2"].dm_opened_at = 1, now  # written to just now
         rows["coach4"].dm_opens, rows["coach4"].dm_opened_at = 2, now - timedelta(days=31)
-        # Someone else in the team wrote to coach3: nobody is shown it for a while.
+        # Someone else in the team wrote to coach3: they don't see it for a while, u1 does.
         db.add(NicheAccount(owner_id="u2", handle="coach3", dm_opens=1, dm_opened_at=now))
         db.add(NicheSearch(id="s2", owner_id="u1", niche="vocal coaches", filters={}))
         db.commit()
     jobs.run_niche("s2", Session, None, router=router, find=find, pause=0)
     with Session() as db:
         again = {a.handle: a for a in db.get(NicheSearch, "s2").accounts}
-        assert set(again) == {"coach0", "coach4", "coach5"}
+        assert set(again) == {"coach0", "coach3", "coach4", "coach5"}
         assert again["coach0"].times_shown == 2 and again["coach4"].dm_opens == 2  # kept
         handles = list(db.scalars(select(NicheAccount.handle).where(NicheAccount.owner_id == "u1")))
         assert len(handles) == len(set(handles)) == 6  # one row per account, moved
-        assert {a.handle for a in db.get(NicheSearch, "s1").accounts} == {
-            "coach1",
-            "coach2",
-            "coach3",
-        }
+        assert {a.handle for a in db.get(NicheSearch, "s1").accounts} == {"coach1", "coach2"}
+        # The one who wrote to coach3 isn't shown it again for now.
+        db.add(NicheSearch(id="s3", owner_id="u2", niche="vocal coaches", filters={}))
+        db.commit()
+    jobs.run_niche("s3", Session, None, router=router, find=find, pause=0)
+    with Session() as db:
+        theirs = {a.handle for a in db.get(NicheSearch, "s3").accounts}
+        assert "coach3" not in theirs and {"coach1", "coach2"} <= theirs
 
 
 def test_a_top_at_or_under_the_bottom_means_at_least_the_bottom():

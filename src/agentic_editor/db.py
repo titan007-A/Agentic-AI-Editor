@@ -615,7 +615,8 @@ class NicheSchedule(Base):
 class NicheAccount(Base):
     """An account the finder showed someone, once per person: it stays when its search is
     deleted (without a search). Shown again by a later search (niche.REPEAT_AFTER), it moves
-    to that search. Not shown again for a while once anyone opened a message to it."""
+    to that search. Not shown to the person again for a while once they opened a message to
+    it."""
 
     __tablename__ = "niche_accounts"
     __table_args__ = (UniqueConstraint("owner_id", "handle"),)

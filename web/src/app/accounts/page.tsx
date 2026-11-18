@@ -381,9 +381,10 @@ export default function AccountsPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Instagram accounts of a niche, found through web search (Instagram itself isn&apos;t
-          asked), up to 100 a run. An account anyone in the team opened a message to isn&apos;t
-          shown again for 30 days, and one you marked as not wanted never is; the rest can come
-          again. Follower counts are what the search engine last saw.
+          asked), up to 100 a run. An account you opened a message to isn&apos;t shown to you again
+          for 30 days (others in the team still see it, with the count), and one you marked as not
+          wanted never is; the rest can come again. Follower counts are what the search engine last
+          saw.
         </p>
       </div>
       <Card className="tape">

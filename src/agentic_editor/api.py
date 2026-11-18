@@ -1920,8 +1920,8 @@ def create_app(
 
     @app.post("/api/niche/accounts/{account_id}/dm")
     def niche_dm_opened(account_id: int, account: User, session: DB) -> dict:
-        """The person opened a message to the account: counted, and it isn't shown again
-        to anyone for niche.REPEAT_AFTER_DAYS."""
+        """The person opened a message to the account: counted, and it isn't shown to them
+        again for niche.REPEAT_AFTER_DAYS (others still see it)."""
         niche_user(account, session)
         found = session.get(NicheAccount, account_id)
         if found is None or found.owner_id != account.id:
