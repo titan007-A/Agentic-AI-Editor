@@ -682,3 +682,21 @@ def test_accounts_with_numbers_are_judged_while_the_others_are_looked_up():
                             read=lambda u: "")  # fmt: skip
     assert {a.handle for a in accounts} == {"withnumbers", "oldies.page"}
     assert overlapped and overlapped[0]  # the look-up went on while the model judged
+
+
+def test_the_model_is_held_to_one_rating_for_each_account():
+    """A schema that allowed any number let the model answer a batch with none at all."""
+    schema = niche.fits_schema(4)
+    assert schema["properties"]["fits"]["minItems"] == 4
+    assert schema["properties"]["fits"]["maxItems"] == 4
+    n = schema["$defs"]["_Fit"]["properties"]["n"]
+    assert (n["minimum"], n["maximum"]) == (1, 4)
+
+    class Asked(Model):
+        def chat_json(self, messages, schema, **kw):
+            self.schemas = [*getattr(self, "schemas", []), schema]
+            return super().chat_json(messages, schema, **kw)
+
+    model = Asked({})
+    niche.rate(model, "x", Filters(), "", [Account(f"a{i}", followers=1) for i in range(3)])
+    assert model.schemas[0]["properties"]["fits"]["minItems"] == 3

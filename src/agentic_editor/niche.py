@@ -658,6 +658,15 @@ def _count(n: int | None) -> str:
     return "?" if n is None else str(n)
 
 
+def fits_schema(count: int) -> dict:
+    """_Fits for the model, with one answer for each of `count` accounts: allowed any number,
+    the model now and then answered a batch with none at all ({"fits": []})."""
+    schema = _Fits.model_json_schema()
+    schema["properties"]["fits"] |= {"minItems": count, "maxItems": count}
+    schema["$defs"]["_Fit"]["properties"]["n"] |= {"minimum": 1, "maximum": count}
+    return schema
+
+
 def _rate_batch(llm, niche: str, filters: Filters, taste: str, group: list[Account],
                 meaning: str = "") -> None:  # fmt: skip
     lines = "\n".join(
@@ -675,7 +684,7 @@ def _rate_batch(llm, niche: str, filters: Filters, taste: str, group: list[Accou
         accounts=lines,
     )
     asked = [{"role": "user", "content": prompt}]
-    reply = parse(_Fits, llm.chat_json(asked, _Fits.model_json_schema(), temperature=0.0))
+    reply = parse(_Fits, llm.chat_json(asked, fits_schema(len(group)), temperature=0.0))
     for fit in reply.fits:
         if 1 <= fit.n <= len(group):
             group[fit.n - 1].fit = fit.fit
