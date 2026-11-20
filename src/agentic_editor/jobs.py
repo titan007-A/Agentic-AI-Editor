@@ -1251,6 +1251,38 @@ NICHE_RETRY = 60  # s a niche search waits while another one runs
 NICHE_TASTE = 15  # liked and not-wanted accounts the finder is told of
 
 
+def keep_niche_accounts(db, search_id: str, owner: str | None, accounts_found: list) -> None:
+    """Accounts a niche search found, as the person's: one shown before moves to this search
+    with what was found now (counted as shown again once a search)."""
+    handles = [a.handle for a in accounts_found]
+    known = {
+        a.handle: a
+        for a in db.scalars(
+            select(NicheAccount).where(
+                NicheAccount.owner_id == owner, NicheAccount.handle.in_(handles)
+            )
+        )
+    }
+    now = datetime.now(UTC)
+    for a in accounts_found:
+        again = known.get(a.handle)
+        if again is not None:
+            if again.search_id != search_id:
+                again.search_id, again.shown_at = search_id, now
+                again.times_shown = (again.times_shown or 1) + 1
+            again.name, again.about, again.fit, again.why = a.name, a.about, a.fit, a.why
+            again.followers = a.followers if a.followers is not None else again.followers
+            again.posts = a.posts if a.posts is not None else again.posts
+            again.kind = a.kind or again.kind
+            continue
+        known[a.handle] = NicheAccount(
+            search_id=search_id, owner_id=owner, handle=a.handle, name=a.name,
+            followers=a.followers, posts=a.posts, about=a.about, fit=a.fit, why=a.why,
+            kind=a.kind, shown_at=now,
+        )  # fmt: skip
+        db.add(known[a.handle])
+
+
 def run_niche(
     search_id: str, Session: sessionmaker, settings: Settings, router=None, find=None,
     pause: float | None = None,
@@ -1295,33 +1327,19 @@ def run_niche(
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         taste = niche.taste_line(liked[:NICHE_TASTE], disliked[:NICHE_TASTE])
         options = {k: v for k, v in (("find", find), ("pause", pause)) if v is not None}
+
+        def keep(accounts_found: list[niche.Account]) -> None:
+            """Accounts found, kept as the person's at once: they show while it goes on."""
+            with Session() as db:
+                keep_niche_accounts(db, search_id, owner, accounts_found)
+                db.commit()
+
         accounts_found, notes = niche.run(
-            text, filters, router.planner, seen, taste, progress, **options
+            text, filters, router.planner, seen, taste, progress, found_now=keep, **options
         )
         with Session() as db:
             found = db.get(NicheSearch, search_id)
-            known = {
-                a.handle: a
-                for a in db.scalars(select(NicheAccount).where(NicheAccount.owner_id == owner))
-            }
-            now = datetime.now(UTC)
-            for a in accounts_found:
-                again = known.get(a.handle)
-                if again is not None:
-                    # Shown before: it moves to this search, with what was found now.
-                    again.search_id, again.shown_at = search_id, now
-                    again.times_shown = (again.times_shown or 1) + 1
-                    again.name, again.about, again.fit, again.why = a.name, a.about, a.fit, a.why
-                    again.followers = a.followers if a.followers is not None else again.followers
-                    again.posts = a.posts if a.posts is not None else again.posts
-                    again.kind = a.kind or again.kind
-                    continue
-                known[a.handle] = NicheAccount(
-                    search_id=search_id, owner_id=owner, handle=a.handle, name=a.name,
-                    followers=a.followers, posts=a.posts, about=a.about, fit=a.fit, why=a.why,
-                    kind=a.kind, shown_at=now,
-                )  # fmt: skip
-                db.add(known[a.handle])
+            keep_niche_accounts(db, search_id, owner, accounts_found)
             found.status, found.progress = "done", 1.0
             found.message = f"found {len(accounts_found)} accounts"
             found.notes = notes

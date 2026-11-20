@@ -143,7 +143,7 @@ def test_accounts_the_model_doesnt_think_fit_are_left_out_and_said_so():
     accounts, notes = niche.run("vocal coaches", Filters(), Model({"realcoach": 9}), set(),
                                 pause=0, find=find, size=5)  # fmt: skip
     assert [a.handle for a in accounts] == ["realcoach"]
-    assert accounts[0].message_url == "https://ig.me/m/realcoach"
+    assert accounts[0].message_url == "https://www.instagram.com/m/realcoach"
     assert any("ran out" in n for n in notes)
 
 
@@ -507,3 +507,209 @@ def test_a_top_at_or_under_the_bottom_means_at_least_the_bottom():
     assert Filters(min_followers=500_000, max_followers=500_000).keeps(
         Account("a", followers=900_000)
     )
+
+
+class Repeating(Model):
+    """A planning model that says what the niche means, then writes the same two searches
+    every round, and leaves the last account of every batch unrated the first time."""
+
+    def __init__(self, fits):
+        super().__init__(fits)
+        self.left_out: set[str] = set()
+
+    def chat_json(self, messages, schema, **kw):
+        prompt = messages[-1]["content"]
+        if "Write" in prompt:
+            self.prompts.append(prompt)
+            return {"meaning": "pages of classic English songs: oldies, classic rock",
+                    "queries": ["classic songs page", "oldies page"], "accounts": []}  # fmt: skip
+        reply = super().chat_json(messages, schema, **kw)
+        last = reply["fits"][-1]
+        handle = last["why"].split()[0]
+        if handle not in self.left_out:
+            self.left_out.add(handle)
+            reply["fits"] = reply["fits"][:-1]  # the model skipped it
+        return reply
+
+
+def counting_find():
+    """New accounts for every search: a run stops for lack of them, never for its searches."""
+    counter = iter(range(10_000))
+    asked: list[str] = []
+
+    def find(query, count, page=1):
+        asked.append(query)
+        if query.startswith("site:instagram.com/"):
+            return []
+        n = next(counter)
+        return hits(*[(f"https://www.instagram.com/page{n}x{i}/", f"Page (@page{n}x{i})",
+                       f"{(i + 2) * 30}K Followers - songs") for i in range(3)])  # fmt: skip
+
+    return find, asked
+
+
+def test_a_run_goes_on_when_the_model_repeats_its_searches():
+    class Fits(dict):
+        def get(self, key, default=None):
+            return 8
+
+    find, asked = counting_find()
+    model = Repeating(Fits())
+    accounts, notes = niche.run("english classic music", Filters(kind="pages"), model, set(),
+                                pause=0, find=find, size=40, read=lambda u: "")  # fmt: skip
+    assert len(accounts) == 40  # it used to stop after the first round: "the searches ran out"
+    # The model was asked again for new ones, then searches were made from the niche.
+    assert any("Every search you wrote was one already asked" in p for p in model.prompts)
+    assert any("english classic music daily" in q for q in asked)
+    # How the niche was read is kept to, said to the judge and to the person.
+    later = [p for p in model.prompts if "Write" in p][-1]
+    assert "What they mean (keep every search to it): pages of classic English songs" in later
+    assert 'First, in "meaning"' in model.prompts[0]
+    assert notes[0] == "looked for: pages of classic English songs: oldies, classic rock"
+
+
+def test_accounts_a_rating_reply_left_out_are_asked_about_again():
+    model = Repeating({})
+    group = [Account(f"page{i}", followers=1000, about="songs") for i in range(5)]
+    niche.rate(model, "classic songs", Filters(), "", group, "pages of classic songs")
+    assert all(a.fit is not None for a in group)  # the skipped one was asked about again
+    assert "They mean: pages of classic songs" in model.prompts[0]
+    assert "8: one of its\nsub-niches" in model.prompts[0]
+
+
+def test_a_run_stops_starting_rounds_after_its_time_and_hands_over_each_rounds_finds():
+    class Fits(dict):
+        def get(self, key, default=None):
+            return 8
+
+    find, _ = counting_find()
+    now = [0.0]
+    rounds: list[list[str]] = []
+
+    def found_now(accounts):
+        rounds.append([a.handle for a in accounts])
+        now[0] += 200  # each round takes 200 s
+
+    accounts, notes = niche.run(
+        "english classic music", Filters(), Model(Fits()), set(), pause=0, find=find,
+        size=1000, read=lambda u: "", found_now=found_now, budget=500, clock=lambda: now[0],
+    )  # fmt: skip
+    assert len(rounds) == 3  # started at 0, 200 and 400 s; none at 600
+    assert sum(len(r) for r in rounds) == len(accounts)
+    assert notes[-1].endswith("stopped after 8 minutes")
+
+
+def test_a_run_ends_after_rounds_that_find_nothing_new():
+    def find(query, count, page=1):
+        return hits(("https://www.instagram.com/only/", "Only (@only)", "50K Followers - x"))
+
+    model = Model({"only": 9})
+    accounts, notes = niche.run("x niche", Filters(), model, set(), pause=0, find=find, size=50,
+                                read=lambda u: "")  # fmt: skip
+    assert [a.handle for a in accounts] == ["only"]
+    planned = [p for p in model.prompts if "Write" in p and "already asked" not in p]
+    assert len(planned) == 1 + niche.DRY_ROUNDS  # not all twelve rounds
+    assert notes[-1].endswith("the searches ran out")
+
+
+def test_lists_on_sites_that_cant_be_read_are_left_alone():
+    assert not niche.readable("https://www.tiktok.com/discover/indianclassicalmusic")
+    assert not niche.readable("https://m.facebook.com/pages/x")
+    assert not niche.readable("https://in.pinterest.com/pin/1")
+    assert niche.readable("https://www.feedspot.com/top-music-pages")
+    assert niche.readable("https://blog.example/tiktok.com-tips")
+
+
+def test_a_niche_search_shows_its_accounts_while_it_runs(tmp_path):
+    from types import SimpleNamespace
+
+    from agentic_editor import jobs
+    from agentic_editor.db import NicheAccount, NicheSearch, make_sessionmaker
+
+    Session = make_sessionmaker(tmp_path / "app.db")
+    with Session() as db:
+        db.add(NicheSearch(id="s1", owner_id="u1", niche="classic songs", filters={}))
+        db.add(NicheAccount(search_id=None, owner_id="u1", handle="page0x2", name="old",
+                            about="", why="", reason="", times_shown=1))  # fmt: skip
+        db.commit()
+    seen_mid_run: list[int] = []
+
+    class Fits(dict):  # a third fit: the first round doesn't find all it wants
+        def get(self, key, default=None):
+            return 8 if key.endswith("x2") else 2
+
+    class Watching(Model):
+        def chat_json(self, messages, schema, **kw):
+            with Session() as db:
+                seen_mid_run.append(len(db.get(NicheSearch, "s1").accounts))
+            return super().chat_json(messages, schema, **kw)
+
+    find, _ = counting_find()
+    jobs.run_niche("s1", Session, None, router=SimpleNamespace(planner=Watching(Fits())),
+                   find=find, pause=0)  # fmt: skip
+    with Session() as db:
+        s1 = db.get(NicheSearch, "s1")
+        assert s1.status == "done"
+        again = next(a for a in s1.accounts if a.handle == "page0x2")
+        assert again.times_shown == 2  # shown again once, though kept each round and at the end
+    assert max(seen_mid_run) > 0  # accounts were there before the search ended
+
+
+def test_accounts_with_numbers_are_judged_while_the_others_are_looked_up():
+    import threading
+
+    judging = threading.Event()
+    overlapped: list[bool] = []
+
+    def find(query, count, page=1):
+        if query.startswith("site:instagram.com/"):  # a look-up
+            overlapped.append(judging.wait(timeout=5))
+            handle = query.split("/", 1)[1].split()[0]
+            return hits((f"https://www.instagram.com/{handle}/", handle, "70K Followers - songs"))
+        return hits(
+            ("https://www.instagram.com/withnumbers/", "With (@withnumbers)", "90K Followers"),
+            ("https://www.instagram.com/oldies.page/reel/Ab1/", "Oldies on Instagram", "a reel"),
+        )
+
+    class Judging(Model):
+        def chat_json(self, messages, schema, **kw):
+            if "Write" not in messages[-1]["content"]:
+                judging.set()
+            return super().chat_json(messages, schema, **kw)
+
+    accounts, _ = niche.run("oldies", Filters(min_followers=50_000), Judging({"withnumbers": 9,
+                            "oldies.page": 8}), set(), pause=0, find=find, size=2,
+                            read=lambda u: "")  # fmt: skip
+    assert {a.handle for a in accounts} == {"withnumbers", "oldies.page"}
+    assert overlapped and overlapped[0]  # the look-up went on while the model judged
+
+
+def test_the_model_is_held_to_one_rating_for_each_account():
+    """A schema that allowed any number let the model answer a batch with none at all."""
+    schema = niche.fits_schema(4)
+    assert schema["properties"]["fits"]["minItems"] == 4
+    assert schema["properties"]["fits"]["maxItems"] == 4
+    n = schema["$defs"]["_Fit"]["properties"]["n"]
+    assert (n["minimum"], n["maximum"]) == (1, 4)
+
+    class Asked(Model):
+        def chat_json(self, messages, schema, **kw):
+            self.schemas = [*getattr(self, "schemas", []), schema]
+            return super().chat_json(messages, schema, **kw)
+
+    model = Asked({})
+    niche.rate(model, "x", Filters(), "", [Account(f"a{i}", followers=1) for i in range(3)])
+    assert model.schemas[0]["properties"]["fits"]["minItems"] == 3
+
+
+def test_a_run_goes_on_until_it_has_its_size_and_keeps_the_best_of_its_last_round():
+    class Fits(dict):
+        def get(self, key, default=None):
+            return 9 if key.endswith("x2") else 7
+
+    find, _ = counting_find()
+    accounts, notes = niche.run("oldies", Filters(), Model(Fits()), set(), pause=0, find=find,
+                                read=lambda u: "")  # fmt: skip
+    assert niche.RUN_SIZE == 60 and len(accounts) == 60  # the person wants 50-60 a search
+    assert all(a.fit == 9 for a in accounts[:30])  # the best of the round first
+    assert not any("found" in n and "ran out" in n for n in notes)

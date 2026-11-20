@@ -43,6 +43,7 @@ from agentic_editor import (
     hosting,
     instagram,
     jobs,
+    niche,
     research,
     songlist,
 )
@@ -1827,7 +1828,7 @@ def create_app(
             "posts": a.posts, "about": a.about, "fit": a.fit, "why": a.why, "kind": a.kind,
             "vote": a.vote,
             "reason": a.reason, "url": f"https://www.instagram.com/{a.handle}/",
-            "message_url": f"https://ig.me/m/{a.handle}",
+            "message_url": niche.message_link(a.handle),
             # Everyone's opened messages to it, theirs, and the last one's time.
             "dm_opens": opened, "my_dm_opens": a.dm_opens or 0, "dm_opened_at": last,
             "times_shown": a.times_shown or 1,
