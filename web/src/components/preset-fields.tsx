@@ -96,8 +96,14 @@ const NULLABLE = new Set([
   "framing.text_gap_below",
 ]);
 
-/** A preset that only makes the video bigger and sharper: nothing else in it is used. */
+/** A preset that only downloads, or only makes the video bigger and sharper: nothing else
+ * in it is used. */
 export const UPSCALE_FIELDS: Field[] = [
+  {
+    path: "download_only",
+    label: "Only download (the video as it came: no cutting, text, framing or sound changes)",
+    kind: "switch",
+  },
   {
     path: "upscale.enabled",
     label: "Only upscale (no cutting, text or sound changes)",

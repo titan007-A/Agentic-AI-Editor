@@ -185,5 +185,5 @@ export function aboutSong(preset) {
  * @returns {boolean}
  */
 export function asksTrim(preset) {
-  return !aboutSong(preset) && preset.upscale?.enabled !== true;
+  return !aboutSong(preset) && preset.upscale?.enabled !== true && preset.download_only !== true;
 }
