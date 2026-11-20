@@ -77,7 +77,58 @@ INSTAGRAM_EXPIRED = (
     "login has most likely expired or been signed out. Add fresh cookies there, then tap "
     "Retry."
 )
+INSTAGRAM_GATED = (
+    "Instagram won't show this reel even to the Instagram login on the System page: it says "
+    '"{said}". That is the account\'s settings: in it, set Sensitive content to More and '
+    "make sure its birthday makes it 25 or older, then tap Retry. If Instagram still says so, "
+    "it doesn't show this reel in this country."
+)
 INSTAGRAM_COOKIES = "instagram-cookies.txt"
+# The code in a reel's or post's link: instagram.com/reel/<code>/, /p/<code>/, /tv/<code>/
+SHORTCODE = re.compile(r"instagram\.com/(?:[\w.]+/)?(?:reels?|p|tv)/([\w-]+)")
+SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+INSTAGRAM_APP_ID = "936619743392459"  # the website's own, which its API asks for
+
+
+def instagram_gate(url: str, cookies: Path) -> str | None:
+    """What Instagram tells the signed-in account when it won't show it a reel ("This
+    content may be inappropriate. It's unavailable for certain audiences..."), from the API
+    yt-dlp asks (yt-dlp only says "HTTP Error 400"); None when it says nothing of the kind."""
+    import http.cookiejar
+
+    import httpx
+
+    found = SHORTCODE.search(url)
+    if not found:
+        return None
+    pk = 0
+    for letter in found.group(1):
+        if letter not in SHORTCODE_ALPHABET:
+            return None
+        pk = pk * 64 + SHORTCODE_ALPHABET.index(letter)
+    jar = http.cookiejar.MozillaCookieJar(str(cookies))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+        signed = {c.name: c.value for c in jar if "instagram.com" in c.domain}
+        reply = httpx.get(
+            f"https://i.instagram.com/api/v1/media/{pk}/info/",
+            cookies=signed, timeout=15,
+            headers={"X-IG-App-ID": INSTAGRAM_APP_ID, "X-CSRFToken": signed.get("csrftoken", ""),
+                     "User-Agent": BROWSER, "Accept": "*/*"},
+        ).json()  # fmt: skip
+    except (OSError, ValueError, httpx.HTTPError, http.cookiejar.LoadError):
+        return None
+    if not isinstance(reply, dict) or not reply.get("gating_type"):
+        return None
+    said = " ".join(str(reply.get(k) or "").strip() for k in ("title", "description"))
+    return said.strip() or None
+
+
+# A browser's name, for the one request made to Instagram's API without yt-dlp.
+BROWSER = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/130.0.0.0 Safari/537.36"
+)
 
 
 def instagram_cookies_path(settings=None) -> Path:
@@ -192,6 +243,10 @@ def _extract(url: str, options: dict, download: bool, signed: bool = False) -> t
         with _with_cookies(options, cookies) as asked, YoutubeDL(asked) as ydl:
             return ydl.extract_info(url, download=download), True
     except Exception as exc:
+        # Signed in, a reel Instagram still won't show comes back as "HTTP Error 400";
+        # Instagram's own words say why (the account's settings or age).
+        if said := instagram_gate(url, cookies):
+            raise RuntimeError(INSTAGRAM_GATED.format(said=said)) from exc
         if LOGIN_WALL.search(str(exc)):
             raise RuntimeError(INSTAGRAM_EXPIRED) from exc
         raise
