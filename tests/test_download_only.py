@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -7,6 +8,8 @@ import pytest
 from agentic_editor import download, pipeline
 from agentic_editor.presets import Preset
 from agentic_editor.settings import get_settings
+
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
 
 
 def make(path: Path, video: list[str], audio: list[str]) -> Path:
@@ -32,6 +35,7 @@ def only_download(name="dl") -> Preset:
     return Preset(name=name, label=name, min_duration=1, max_duration=60, download_only=True)
 
 
+@needs_ffmpeg
 @pytest.mark.parametrize(
     ("video", "audio", "copied"),
     [
