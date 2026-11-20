@@ -209,6 +209,8 @@ class RemoveRequest(BaseModel):
 
 class PrivateRequest(BaseModel):
     on: bool
+    # For an employee: the admin (by id) their presets are for, with the primary account.
+    by: str | None = None
 
 
 class AccountView(BaseModel):
@@ -217,8 +219,10 @@ class AccountView(BaseModel):
     role: str
     # The one admin who makes, changes and removes the other admins.
     primary: bool = False
-    # An admin whose presets only they and the primary account see.
+    # An admin whose presets only they and the primary account see; for an employee, whose
+    # presets only one admin (presets_by, their id) and the primary account see.
     private_presets: bool = False
+    presets_by: str | None = None
     created_at: datetime
     last_seen_at: datetime | None
     jobs: int
@@ -877,8 +881,8 @@ def create_app(
         target = session.get(Account, owner)
         if target is None:
             raise HTTPException(404, "no such account")
-        if target.role == accounts.ADMIN and not accounts.is_primary(session, account):
-            raise HTTPException(403, "only the primary account sees another admin's presets")
+        if not accounts.can_see_presets(session, account, target):
+            raise HTTPException(403, "these presets are private to another admin")
         return target
 
     def presets_dir(account: Account | None) -> Path:
@@ -1137,6 +1141,10 @@ def create_app(
         members = list(session.scalars(query.order_by(Account.username)))
         if body is not None and body.to is not None and len(members) != len(set(body.to)):
             raise HTTPException(422, "send presets only to employees")
+        mine = [m for m in members if accounts.can_see_presets(session, me, m)]
+        if body is not None and body.to is not None and len(mine) != len(members):
+            raise HTTPException(403, "these presets are private to another admin")
+        members = mine  # "all": not those whose presets are another admin's alone
         for member in members:
             save_preset(preset, presets_dir(member))
         return {"sent_to": [m.username for m in members]}
@@ -3118,7 +3126,8 @@ def create_app(
                 username=a.username,
                 role=a.role,
                 primary=boss is not None and a.id == boss.id,
-                private_presets=a.private_presets,
+                private_presets=a.private_presets or a.presets_by is not None,
+                presets_by=a.presets_by,
                 created_at=a.created_at,
                 last_seen_at=a.last_seen_at,
                 jobs=counts.get(a.id, 0) + (counts.get(None, 0) if a is first else 0),
@@ -3172,6 +3181,13 @@ def create_app(
             presets=len(list(presets_dir(account).glob("*.yaml"))),
         )  # fmt: skip
 
+    def managed(account_id: str, me: Account, session: Session) -> Account:
+        """An employee whose presets this admin may see and change."""
+        target = employee(account_id, session)
+        if not accounts.can_see_presets(session, me, target):
+            raise HTTPException(403, "these presets are private to another admin")
+        return target
+
     def find_account(account_id: str, session: Session) -> Account:
         account = session.get(Account, account_id)
         if account is None:
@@ -3196,14 +3212,14 @@ def create_app(
 
     @app.get("/api/admin/users/{account_id}/presets")
     def assigned_presets(account_id: str, me: Admin, session: DB) -> dict:
-        return assigned(employee(account_id, session), me)
+        return assigned(managed(account_id, me, session), me)
 
     @app.put("/api/admin/users/{account_id}/presets")
     def assign_presets(account_id: str, body: AssignRequest, me: Admin, session: DB) -> dict:
         """Set which of the admin's presets one employee has: the ticked ones they lack are
         copied to them (and, with replace, the ones they have are refreshed), and the
         unticked ones they have are removed. Presets only they have are left alone."""
-        target = employee(account_id, session)
+        target = managed(account_id, me, session)
         mine = presets(me)
         unknown = sorted(set(body.names) - set(mine))
         if unknown:
@@ -3260,11 +3276,13 @@ def create_app(
         back on the shared ones: the primary account only."""
         target = find_account(account_id, session)
         primary_only(me, session)
+        by = find_account(body.by, session) if body.by else None
         try:
-            count = accounts.set_private_presets(session, target, settings.presets_dir, body.on)
+            count = accounts.set_private_presets(session, target, settings.presets_dir, body.on, by)
         except accounts.AccountError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {"private_presets": target.private_presets, "presets": count}
+        private = target.private_presets or target.presets_by is not None
+        return {"private_presets": private, "presets_by": target.presets_by, "presets": count}
 
     @app.delete("/api/admin/users/{account_id}")
     def remove_account(

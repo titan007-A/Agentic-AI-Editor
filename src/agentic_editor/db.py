@@ -47,6 +47,9 @@ class User(Base):
     # An admin whose presets are their own (presets/people/<id>, as an employee's), seen
     # only by them and the primary account, not by the other admins (accounts.presets_dir).
     private_presets: Mapped[bool] = mapped_column(default=False)
+    # An employee whose presets only this admin (by id) and the primary account see, change
+    # and send to; None: every admin (accounts.can_see_presets).
+    presets_by: Mapped[str | None] = mapped_column(String(12), default=None)
     # Raised on a password change or removal, which ends every session signed in before.
     session_version: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=_now)

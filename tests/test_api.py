@@ -2617,7 +2617,7 @@ def test_an_admins_private_presets_are_seen_by_them_and_the_primary_account_only
     # Only the primary account turns it on; the shared presets come along as copies.
     assert arham.put(url, json={"on": True}).status_code == 403
     turned = boss.put(url, json={"on": True}).json()
-    assert turned == {"private_presets": True, "presets": len(shared)}
+    assert turned == {"private_presets": True, "presets_by": None, "presets": len(shared)}
     me = boss.get("/api/me").json()
     mine = f"/api/admin/users/{me['id']}/private-presets"
     assert boss.put(mine, json={"on": True}).status_code == 422  # the primary's stay shared
@@ -2641,3 +2641,40 @@ def test_an_admins_private_presets_are_seen_by_them_and_the_primary_account_only
     assert boss.put(url, json={"on": False}).json()["private_presets"] is False
     assert "kick-clips" not in [p["name"] for p in prajjwal.get("/api/presets").json()]
     assert boss.put(url, json={"on": True}).json()["presets"] == len(shared) + 1
+
+
+def test_an_employees_presets_can_be_one_admins_and_the_primarys_alone(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    boss = env.client
+    clients = {}
+    for name in ("prajjwal", "arham"):
+        ask = {"username": name, "password": f"{name}-pass-1", "role": "admin"}
+        assert (
+            boss.post("/api/admin/users", json=ask | {"my_password": PASSWORD}).status_code == 200
+        )
+        clients[name] = TestClient(boss.app)
+        login = {"username": name, "password": f"{name}-pass-1"}
+        assert clients[name].post("/api/login", json=login).status_code == 200
+    prajjwal, arham = clients["prajjwal"], clients["arham"]
+    worker, _ = employee(env, "employee")
+    people = {a["username"]: a for a in boss.get("/api/admin/users").json()}
+    url = f"/api/admin/users/{worker['id']}/private-presets"
+    assert boss.put(url, json={"on": True}).status_code == 422  # for which admin?
+    assert arham.put(url, json={"on": True, "by": people["arham"]["id"]}).status_code == 403
+    done = boss.put(url, json={"on": True, "by": people["prajjwal"]["id"]}).json()
+    assert done["private_presets"] and done["presets_by"] == people["prajjwal"]["id"]
+
+    whose = f"/api/presets?owner={worker['id']}"
+    assert prajjwal.get(whose).status_code == 200 and boss.get(whose).status_code == 200
+    assert arham.get(whose).status_code == 403
+    assert arham.get(f"/api/admin/users/{worker['id']}/presets").status_code == 403
+    name = boss.get("/api/presets").json()[0]["name"]
+    sent = arham.post(f"/api/presets/{name}/share", json={"to": [worker["id"]]})
+    assert sent.status_code == 403
+    assert arham.post(f"/api/presets/{name}/share", json={}).json()["sent_to"] == []
+    assert prajjwal.post(f"/api/presets/{name}/share", json={}).json()["sent_to"] == ["employee"]
+    listed = {a["username"]: a for a in arham.get("/api/admin/users").json()}
+    assert listed["employee"]["presets_by"] == people["prajjwal"]["id"]
+
+    assert boss.put(url, json={"on": False}).json()["presets_by"] is None
+    assert arham.get(whose).status_code == 200

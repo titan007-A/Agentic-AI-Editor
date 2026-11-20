@@ -83,13 +83,36 @@ def presets_dir(user: User | None, root: Path) -> Path:
     return root / PEOPLE / user.id
 
 
-def set_private_presets(session: Session, user: User, root: Path, on: bool) -> int:
+def can_see_presets(session: Session, viewer: User, owner: User) -> bool:
+    """Whether `viewer` may see (and change) `owner`'s presets: their own; any employee's
+    for an admin, unless the employee's are another admin's alone (presets_by); another
+    admin's only for the primary account."""
+    if viewer.id == owner.id:
+        return True
+    if viewer.role != ADMIN:
+        return False
+    if is_primary(session, viewer):
+        return True
+    if owner.role == ADMIN:
+        return False
+    return owner.presets_by in (None, viewer.id)
+
+
+def set_private_presets(
+    session: Session, user: User, root: Path, on: bool, by: User | None = None
+) -> int:
     """Give an admin presets of their own, seen only by them and the primary account, or
     put them back on the admins' shared ones. Turned on, the shared presets are copied in
     first (none of theirs replaced), so they keep every preset they had; turned off, their
-    folder stays for when it is turned on again. How many presets they have now."""
+    folder stays for when it is turned on again. An employee's presets are made the admin
+    `by`'s alone (and the primary account's), or every admin's again. How many presets
+    they have now."""
     if user.role != ADMIN:
-        raise AccountError("only an admin's presets can be made private; an employee's are")
+        if on and (by is None or by.role != ADMIN):
+            raise AccountError("say which admin an employee's private presets are for")
+        user.presets_by = by.id if on and by is not None else None
+        session.commit()
+        return len(list(presets_dir(user, root).glob("*.yaml")))
     if on and is_primary(session, user):
         raise AccountError("the primary account sees every preset; its own stay shared")
     if on and not user.private_presets:
@@ -158,6 +181,8 @@ def set_role(session: Session, user: User, role: str, presets_root: Path) -> Non
         presets_dir(User(id=user.id, role=MEMBER), presets_root).mkdir(parents=True, exist_ok=True)
     if role == MEMBER:
         user.private_presets = False  # an employee's presets are their own anyway
+    else:
+        user.presets_by = None
     user.role = role
     user.session_version += 1
     session.commit()
