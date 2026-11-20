@@ -532,7 +532,7 @@ export default function AccountsPage() {
         language,
         country,
       });
-      toast.success("Searching: this takes a few minutes");
+      toast.success("Searching: the first accounts show in 3-4 minutes, more each round");
       await load();
       setOpen(made);
     } catch (err) {
@@ -570,10 +570,10 @@ export default function AccountsPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Instagram accounts of a niche, found through web search (Instagram itself isn&apos;t
-          asked), up to 100 a run. An account you opened a message to isn&apos;t shown to you again
-          for 30 days (others in the team still see it, with the count), and one you marked as not
-          wanted never is; the rest can come again. Follower counts are what the search engine last
-          saw.
+          asked): a run goes on until it has 60 (up to 18 minutes), and they show here as they come.
+          An account you opened a message to isn&apos;t shown to you again for 30 days (others in
+          the team still see it, with the count), and one you marked as not wanted never is; the
+          rest can come again. Follower counts are what the search engine last saw.
         </p>
       </div>
       <Card className="tape">
@@ -695,14 +695,14 @@ export default function AccountsPage() {
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                {when({ hour, days })}. No days picked is every day. Each run brings up to 100
+                {when({ hour, days })}. No days picked is every day. Each run brings up to 60
                 accounts you haven&apos;t seen; a run the server missed starts once it is back.
               </p>
             </div>
           )}
           <div className="flex flex-wrap gap-2">
             <Button disabled={busy || niche.trim().length < 3} onClick={start}>
-              <Search /> {busy ? "Starting..." : "Find 100 accounts now"}
+              <Search /> {busy ? "Starting..." : "Find 60 accounts now"}
             </Button>
             {scheduled && (
               <Button

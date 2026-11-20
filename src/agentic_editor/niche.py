@@ -24,9 +24,9 @@ model first says in one line what it takes the person to mean, and both the sear
 the judging keep to that (once each read it its own way, and the judge turned down what
 the searches found); the person sees that line, to word the niche better when it's wrong.
 The rounds go on while new accounts turn up (the model repeating its searches is no reason
-to stop: searches are made up from the niche then), until RUN_SIZE are found or BUDGET
-seconds have gone; what each round finds is handed over at once, so it shows while the
-search goes on."""
+to stop: searches are made up from the niche then), until RUN_SIZE are found (the person
+wants 50-60 a search) or BUDGET seconds have gone; what each round finds is handed over at
+once, so it shows while the search goes on, from the first round (3-4 minutes) on."""
 
 import logging
 import re
@@ -53,7 +53,7 @@ PAGES = (1,)
 # What people type in a filter for "no filter".
 ANY = {"", "any", "all", "none", "-", "anywhere", "no", "n/a"}
 
-RUN_SIZE = 100  # accounts kept by one run
+RUN_SIZE = 60  # a run goes on until it has kept this many (or its BUDGET is spent)
 PER_QUERY = 30  # results asked of the engines for each search
 ROUNDS = 12  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
 QUERIES = 14  # searches the model writes a round
@@ -68,8 +68,8 @@ PAUSE = 1.0  # s between one worker's searches, so the engines don't turn it awa
 MIN_FIT = 6  # of 10
 RATE_BATCH = 15
 RERATE_BATCH = 6  # accounts a reply left out are asked about again in batches this size
-# No new round starts after this long (s): a run once took 15 minutes for 7 accounts.
-BUDGET = 9 * 60
+# No new round starts after this long (s); a round takes 2-4 minutes and keeps 10-20.
+BUDGET = 18 * 60
 DRY_ROUNDS = 2  # rounds in a row that find no new account end the run
 # Searches made up from the niche when the model only repeats ones already asked: the words
 # pages put in their name and bio.
@@ -836,10 +836,11 @@ def run(
             step(f"judging {len(later)} accounts", lo + span * 0.75)
             with _opened(planner) as llm:
                 rate(llm, niche, filters, taste, later, meaning)
-        able = ready + later
+        # The best of the round first: a round that reaches `size` keeps those.
+        able = sorted(ready + later, key=lambda a: (-(a.fit or 0), -(a.followers or 0)))
         new: list[Account] = []
         for account in able:
-            if account.fit is None or account.fit < MIN_FIT:
+            if account.fit is None or account.fit < MIN_FIT or len(kept) >= size:
                 continue
             if filters.takes(account.kind):
                 kept[account.handle] = account

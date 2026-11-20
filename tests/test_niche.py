@@ -629,14 +629,14 @@ def test_a_niche_search_shows_its_accounts_while_it_runs(tmp_path):
     Session = make_sessionmaker(tmp_path / "app.db")
     with Session() as db:
         db.add(NicheSearch(id="s1", owner_id="u1", niche="classic songs", filters={}))
-        db.add(NicheAccount(search_id=None, owner_id="u1", handle="page0x0", name="old",
+        db.add(NicheAccount(search_id=None, owner_id="u1", handle="page0x2", name="old",
                             about="", why="", reason="", times_shown=1))  # fmt: skip
         db.commit()
     seen_mid_run: list[int] = []
 
-    class Fits(dict):
+    class Fits(dict):  # a third fit: the first round doesn't find all it wants
         def get(self, key, default=None):
-            return 8
+            return 8 if key.endswith("x2") else 2
 
     class Watching(Model):
         def chat_json(self, messages, schema, **kw):
@@ -650,7 +650,7 @@ def test_a_niche_search_shows_its_accounts_while_it_runs(tmp_path):
     with Session() as db:
         s1 = db.get(NicheSearch, "s1")
         assert s1.status == "done"
-        again = next(a for a in s1.accounts if a.handle == "page0x0")
+        again = next(a for a in s1.accounts if a.handle == "page0x2")
         assert again.times_shown == 2  # shown again once, though kept each round and at the end
     assert max(seen_mid_run) > 0  # accounts were there before the search ended
 
@@ -700,3 +700,16 @@ def test_the_model_is_held_to_one_rating_for_each_account():
     model = Asked({})
     niche.rate(model, "x", Filters(), "", [Account(f"a{i}", followers=1) for i in range(3)])
     assert model.schemas[0]["properties"]["fits"]["minItems"] == 3
+
+
+def test_a_run_goes_on_until_it_has_its_size_and_keeps_the_best_of_its_last_round():
+    class Fits(dict):
+        def get(self, key, default=None):
+            return 9 if key.endswith("x2") else 7
+
+    find, _ = counting_find()
+    accounts, notes = niche.run("oldies", Filters(), Model(Fits()), set(), pause=0, find=find,
+                                read=lambda u: "")  # fmt: skip
+    assert niche.RUN_SIZE == 60 and len(accounts) == 60  # the person wants 50-60 a search
+    assert all(a.fit == 9 for a in accounts[:30])  # the best of the round first
+    assert not any("found" in n and "ran out" in n for n in notes)
