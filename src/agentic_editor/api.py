@@ -207,6 +207,14 @@ class RemoveRequest(BaseModel):
     my_password: str = ""
 
 
+# The DM queue's message until the person writes their own.
+DM_MESSAGE = "Are you interested in selling your page?"
+
+
+class NicheMessage(BaseModel):
+    message: str = Field(max_length=1000)
+
+
 class PrivateRequest(BaseModel):
     on: bool
     # For an employee: the admin (by id) their presets are for, with the primary account.
@@ -1943,6 +1951,22 @@ def create_app(
         found.vote, found.reason = body.vote, body.reason.strip()
         session.commit()
         return niche_account_view(found, team_dms(session, [found.handle]))
+
+    @app.get("/api/niche-message")
+    def niche_message(account: User, session: DB) -> dict:
+        """The message the person sends found accounts (the DM queue), {handle} and {name}
+        filled per account by the page."""
+        niche_user(account, session)
+        row = session.get(Setting, f"niche_message:{account.id}")
+        return {"message": row.value if row else DM_MESSAGE}
+
+    @app.put("/api/niche-message")
+    def set_niche_message(body: NicheMessage, account: User, session: DB) -> dict:
+        niche_user(account, session)
+        text = body.message.strip() or DM_MESSAGE
+        session.merge(Setting(key=f"niche_message:{account.id}", value=text))
+        session.commit()
+        return {"message": text}
 
     @app.post("/api/niche/accounts/{account_id}/dm")
     def niche_dm_opened(account_id: int, account: User, session: DB) -> dict:

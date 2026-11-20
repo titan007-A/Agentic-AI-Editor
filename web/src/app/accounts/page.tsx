@@ -74,12 +74,165 @@ function followers(n: number | null): string {
   return String(n);
 }
 
+/** The queue's message for one account: {handle} and {name} filled in. */
+function dmText(message: string, account: Pick<NicheAccount, "handle" | "name">) {
+  return message
+    .replaceAll("{handle}", account.handle)
+    .replaceAll("{name}", account.name || account.handle);
+}
+
+/** Opens the account's Instagram chat and copies the message, in the one tap a browser
+ * allows both in: the person pastes and sends it there. Counted as opened. */
+function openDm(
+  account: NicheAccount,
+  message: string | null,
+  onChange: (a: NicheAccount) => void,
+) {
+  window.open(account.message_url, "_blank", "noreferrer");
+  if (message !== null) {
+    navigator.clipboard
+      ?.writeText(dmText(message, account))
+      .then(() => toast.success(`Message copied: paste it in @${account.handle}'s chat and send`))
+      .catch(() => toast.error("Couldn't copy the message; copy it from the queue"));
+  }
+  api
+    .nicheDmOpened(account.id)
+    .then(onChange)
+    .catch((err) => toast.error(errorText(err)));
+}
+
+/**
+ * The DM queue (dm_queue feature): one saved message, and each found account not yet
+ * messaged by this person, one after another. A tap copies the message and opens the
+ * account's chat; Instagram sends nothing by itself, so the person pastes and sends.
+ */
+function DmQueue({
+  accounts,
+  everywhere,
+  onChange,
+}: {
+  accounts: NicheAccount[];
+  everywhere: () => Promise<NicheAccount[]>;
+  onChange: (a: NicheAccount) => void;
+}) {
+  const [message, setMessage] = useState<string | null>(null);
+  const [saved, setSaved] = useState("");
+  const [all, setAll] = useState<NicheAccount[] | null>(null);
+  const [skipped, setSkipped] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    api
+      .nicheMessage()
+      .then((m) => {
+        setMessage(m.message);
+        setSaved(m.message);
+      })
+      .catch((err) => toast.error(errorText(err)));
+  }, []);
+
+  const pool = all ?? accounts;
+  const waiting = pool.filter((a) => !a.my_dm_opens && a.vote >= 0 && !skipped.has(a.id));
+  const done = pool.filter((a) => a.my_dm_opens).length;
+  const next = waiting[0];
+
+  function changed(a: NicheAccount) {
+    setAll((list) => list?.map((x) => (x.handle === a.handle ? { ...x, ...a } : x)) ?? null);
+    onChange(a);
+  }
+
+  async function save() {
+    if (message === null) return;
+    try {
+      const m = await api.setNicheMessage(message);
+      setMessage(m.message);
+      setSaved(m.message);
+      toast.success("Message saved");
+    } catch (err) {
+      toast.error(errorText(err));
+    }
+  }
+
+  return (
+    <div className="sketch-tile space-y-3 p-3" data-testid="dm-queue">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-semibold">DM queue</p>
+        <p className="text-sm text-muted-foreground tabular-nums">
+          {done} messaged · {waiting.length} to go
+        </p>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="dm-message">
+          Your message ({"{handle}"} and {"{name}"} fill in)
+        </Label>
+        <Textarea
+          id="dm-message"
+          rows={2}
+          value={message ?? ""}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+        {message !== null && message !== saved && (
+          <Button size="sm" variant="outline" onClick={save}>
+            Save message
+          </Button>
+        )}
+      </div>
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox
+          checked={all !== null}
+          onCheckedChange={(on) => {
+            if (on) {
+              everywhere()
+                .then(setAll)
+                .catch((err) => toast.error(errorText(err)));
+            } else setAll(null);
+          }}
+        />
+        Every account of all my searches, not only this one
+      </label>
+      {next ? (
+        <div className="space-y-2">
+          <p className="text-sm break-words">
+            Next: <span className="font-semibold">@{next.handle}</span>
+            {next.followers !== null && ` · ${followers(next.followers)} followers`}
+            {next.name && ` · ${next.name}`}
+          </p>
+          {message !== null && (
+            <p className="rounded-md border bg-muted/40 p-2 text-sm break-words select-all">
+              {dmText(message, next)}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => openDm(next, message, changed)}>
+              <MessageCircle /> Copy message &amp; open @{next.handle}
+            </Button>
+            <Button variant="outline" onClick={() => setSkipped((s) => new Set([...s, next.id]))}>
+              Skip
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Instagram opens their chat with your message copied: paste, send, come back here and tap
+            again for the next one. Instagram doesn&apos;t let any app send these for you without
+            risking your account.
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Everyone here has had your message. Run another search for more.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function AccountCard({
   account,
   onChange,
+  message = null,
 }: {
   account: NicheAccount;
   onChange: (a: NicheAccount) => void;
+  /** With the DM queue, the message the Message button copies too. */
+  message?: string | null;
 }) {
   const [asking, setAsking] = useState(false);
   const [reason, setReason] = useState(account.reason);
@@ -163,12 +316,11 @@ function AccountCard({
             href={account.message_url}
             target="_blank"
             rel="noreferrer"
-            onClick={() => {
-              // Counted as it opens (Instagram opens in its own tab or app).
-              api
-                .nicheDmOpened(account.id)
-                .then(onChange)
-                .catch((err) => toast.error(errorText(err)));
+            onClick={(e) => {
+              // Counted as it opens (Instagram opens in its own tab or app); a message
+              // given is copied as well.
+              e.preventDefault();
+              openDm(account, message, onChange);
             }}
           >
             <MessageCircle /> Message
@@ -221,6 +373,7 @@ function AccountCard({
 export default function AccountsPage() {
   const me = useMe();
   const allowed = me?.features?.includes("niche_finder") ?? false;
+  const queueOn = me?.features?.includes("dm_queue") ?? false;
   const [searches, setSearches] = useState<NicheSearch[]>([]);
   const [open, setOpen] = useState<NicheSearch | null>(null);
   const [niche, setNiche] = useState("");
@@ -658,6 +811,35 @@ export default function AccountsPage() {
               {n}
             </p>
           ))}
+          {queueOn && accounts.length > 0 && (
+            <DmQueue
+              key={open?.id}
+              accounts={accounts}
+              everywhere={async () => {
+                // Each account once, as its latest search shows it.
+                const found = await Promise.all(
+                  searches.filter((s) => s.status === "done").map((s) => api.nicheSearch(s.id)),
+                );
+                const byHandle = new Map<string, NicheAccount>();
+                for (const a of found.flatMap((s) => s.accounts ?? [])) {
+                  if (!byHandle.has(a.handle)) byHandle.set(a.handle, a);
+                }
+                return [...byHandle.values()];
+              }}
+              onChange={(next) =>
+                setOpen((o) =>
+                  o
+                    ? {
+                        ...o,
+                        accounts: o.accounts?.map((x) =>
+                          x.handle === next.handle ? { ...x, ...next, id: x.id } : x,
+                        ),
+                      }
+                    : o,
+                )
+              }
+            />
+          )}
           <ul className="grid gap-2 sm:grid-cols-2" aria-label="Accounts">
             {accounts.map((a) => (
               <AccountCard

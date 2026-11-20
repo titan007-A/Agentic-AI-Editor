@@ -14,13 +14,16 @@ from agentic_editor.db import User as Account
 # starting an edit with a preset that isn't about a song asks whether to cut the video to
 # the preset's length or keep all of it (JobRequest.trim). youtube_songs: the Researcher
 # finds whole songs' YouTube videos on the singers' and labels' channels (research.SONGS).
-FEATURES = ("trial_reel", "fun", "niche_finder", "trim_choice", "youtube_songs")
+# dm_queue: the Accounts tab's message queue: one saved message, copied as each found
+# account's Instagram chat opens, one after another (the person sends each one).
+FEATURES = ("trial_reel", "fun", "niche_finder", "trim_choice", "youtube_songs", "dm_queue")
 DEFAULT_USERS = ("siddhant",)
 # Features first tried by other accounts than DEFAULT_USERS.
 DEFAULTS = {
     "niche_finder": ("siddhant", "aman"),
     "trim_choice": ("aman",),
     "youtube_songs": ("siddhant", "prajjwal"),
+    "dm_queue": ("siddhant-content",),
 }
 # In a feature's list: every account, now and later (new admins and employees too).
 EVERYONE = "*"
