@@ -384,6 +384,8 @@ export type Account = {
   primary?: boolean;
   /** An admin whose presets only they and the primary account see. */
   private_presets?: boolean;
+  /** For an employee: the admin (by id) whose alone, with the primary account, their presets are. */
+  presets_by?: string | null;
   created_at: string;
   last_seen_at: string | null;
   jobs: number;
@@ -960,11 +962,11 @@ export const api = {
     }),
   changeRole: (id: string, role: "member" | "admin", myPassword: string) =>
     request<Account>("POST", `/admin/users/${id}/role`, { role, my_password: myPassword }),
-  setPrivatePresets: (id: string, on: boolean) =>
-    request<{ private_presets: boolean; presets: number }>(
+  setPrivatePresets: (id: string, on: boolean, by: string | null = null) =>
+    request<{ private_presets: boolean; presets_by: string | null; presets: number }>(
       "PUT",
       `/admin/users/${id}/private-presets`,
-      { on },
+      { on, by },
     ),
   upload: async (file: File, options: UploadOptions = {}) => {
     const { status, statusText, body } = await sendFile("/api/uploads", file, options);

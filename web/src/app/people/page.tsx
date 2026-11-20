@@ -87,6 +87,23 @@ export default function PeoplePage() {
     if (me?.role === "admin") load();
   }, [me?.role, load]);
 
+  async function setPresetsBy(person: Account, by: string | null) {
+    setToggling(person.id);
+    try {
+      await api.setPrivatePresets(person.id, by !== null, by);
+      toast.success(
+        by
+          ? `${person.username}'s presets are private now`
+          : `every admin sees ${person.username}'s presets again`,
+      );
+      await load();
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setToggling(null);
+    }
+  }
+
   async function togglePrivate(person: Account) {
     setToggling(person.id);
     try {
@@ -399,29 +416,57 @@ export default function PeoplePage() {
                     : "Admins are managed by the primary account."}
                 </p>
               )}
-              {person.role === "member" && (
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => openAssign(person)}>
-                    <ListChecks /> Assign presets
-                  </Button>
-                  <Button variant="outline" asChild>
-                    <Link href={`/presets/?owner=${person.id}`}>
-                      <SlidersHorizontal /> Presets
-                    </Link>
-                  </Button>
-                  <Button variant="outline" onClick={() => setResetting(person)}>
-                    <KeyRound /> New password
-                  </Button>
-                  <Button variant="outline" onClick={() => setRemoving(person)}>
-                    <Trash2 /> Remove
-                  </Button>
-                  {primary && (
-                    <Button variant="outline" onClick={() => setPromoting(person)}>
-                      <ShieldPlus /> Make admin
-                    </Button>
-                  )}
-                </div>
+              {person.role === "member" && person.presets_by && (
+                <p className="text-xs text-muted-foreground">
+                  Private presets: only{" "}
+                  {people.find((p) => p.id === person.presets_by)?.username ?? "one admin"} and the
+                  primary account see them.
+                </p>
               )}
+              {person.role === "member" && primary && (
+                <label className="flex flex-wrap items-center gap-2 text-sm">
+                  <Lock className="size-4" aria-hidden /> Presets seen by
+                  <select
+                    className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                    value={person.presets_by ?? ""}
+                    disabled={toggling === person.id}
+                    onChange={(e) => setPresetsBy(person, e.target.value || null)}
+                  >
+                    <option value="">every admin</option>
+                    {people
+                      .filter((p) => p.role === "admin" && !p.primary)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.username} and you only
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+              {person.role === "member" &&
+                (primary || !person.presets_by || person.presets_by === me?.id) && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => openAssign(person)}>
+                      <ListChecks /> Assign presets
+                    </Button>
+                    <Button variant="outline" asChild>
+                      <Link href={`/presets/?owner=${person.id}`}>
+                        <SlidersHorizontal /> Presets
+                      </Link>
+                    </Button>
+                    <Button variant="outline" onClick={() => setResetting(person)}>
+                      <KeyRound /> New password
+                    </Button>
+                    <Button variant="outline" onClick={() => setRemoving(person)}>
+                      <Trash2 /> Remove
+                    </Button>
+                    {primary && (
+                      <Button variant="outline" onClick={() => setPromoting(person)}>
+                        <ShieldPlus /> Make admin
+                      </Button>
+                    )}
+                  </div>
+                )}
             </CardContent>
           </Card>
         ))}

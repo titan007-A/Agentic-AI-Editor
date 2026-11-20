@@ -112,7 +112,10 @@ function Presets() {
     else url.searchParams.delete("owner");
     window.history.replaceState(null, "", url);
   }
-  const members = people.filter((p) => p.role === "member");
+  // The employees whose presets this admin may open: not those private to another admin.
+  const members = people.filter(
+    (p) => p.role === "member" && (me?.primary || !p.presets_by || p.presets_by === me?.id),
+  );
   // Whose presets the picker offers: the employees, and for the primary account the admins
   // with private presets too (the other admins can't open those).
   const pickable = [
