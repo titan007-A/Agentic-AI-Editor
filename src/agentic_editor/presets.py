@@ -154,6 +154,10 @@ class PostCaption(Strict):
     max_words: int = Field(default=220, ge=10, le=1000)
 
 
+# The post caption a download-only preset writes unless it says otherwise.
+DOWNLOAD_CAPTION = PostCaption(enabled=True, about="video")
+
+
 class TitleOverlay(Strict):
     enabled: bool = False
     font: FontName = "Anton-Regular"
@@ -390,6 +394,10 @@ class Preset(Strict):
                 data["silence"] = {k: v for k, v in silence.items() if k != "max_pause"}
             elif silence is None:
                 data.pop("silence", None)  # a section left empty once max_pause went
+            # A download-only preset writes the post's caption, about what the video shows,
+            # unless it says otherwise: the video comes as it was, ready to post with one.
+            if data.get("download_only") is True and "post_caption" not in data:
+                data["post_caption"] = DOWNLOAD_CAPTION.model_dump()
         return data
 
     @field_validator("random_fields")

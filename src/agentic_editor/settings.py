@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # machine that looks up many videos is asked to "confirm you're not a bot", and every
     # YouTube download fails until it signs in. Relative to the repository like the rest.
     cookies_file: Path | None = None
+    # A cookies.txt of a browser signed in to Instagram, for the reels Instagram shows only to
+    # people signed in (marked sensitive or not for everyone). None: the one the primary
+    # account saved on the System page (download.instagram_cookies_path), when there is one.
+    instagram_cookies_file: Path | None = None
 
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"

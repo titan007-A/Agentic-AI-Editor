@@ -74,7 +74,12 @@ from agentic_editor.db import (
 )
 from agentic_editor.db import BufferKey as BufferKeyRow
 from agentic_editor.db import User as Account
-from agentic_editor.download import update_ytdlp
+from agentic_editor.download import (
+    forget_instagram_cookies,
+    instagram_login,
+    save_instagram_cookies,
+    update_ytdlp,
+)
 from agentic_editor.ffmpeg import probe as ffmpeg_probe
 from agentic_editor.llm import LLMError
 from agentic_editor.pipeline import UPLOAD_PREFIX
@@ -255,6 +260,11 @@ class RegenerateRequest(BaseModel):
 class LabelsRequest(BaseModel):
     # Preset (file) name -> the name shown for it, for the admin and every employee.
     labels: dict[str, str]
+
+
+class InstagramCookies(BaseModel):
+    # A cookies.txt (or JSON) exported from instagram.com while signed in.
+    cookies: str = Field(min_length=20, max_length=500_000)
 
 
 class KeepRequest(BaseModel):
@@ -1030,6 +1040,31 @@ def create_app(
             "whisper_model": settings.whisper_model,
             "yt_dlp": yt_dlp.version.__version__,
         }
+
+    @app.get("/api/system/instagram-login")
+    def get_instagram_login(_: Admin) -> dict:
+        """Whether downloads can sign in to Instagram (for the reels it shows only to people
+        signed in), and until when; never the cookies."""
+        return instagram_login(settings)
+
+    def instagram_login_owner(me: Account, session: Session) -> None:
+        """The Instagram login is a sign-in to someone's account: only the primary account
+        sets or removes it."""
+        if not accounts.is_primary(session, me):
+            raise HTTPException(403, "only the primary account sets the Instagram login")
+
+    @app.put("/api/system/instagram-login")
+    def set_instagram_login(body: InstagramCookies, me: Admin, session: DB) -> dict:
+        instagram_login_owner(me, session)
+        try:
+            return save_instagram_cookies(body.cookies, settings)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.delete("/api/system/instagram-login")
+    def delete_instagram_login(me: Admin, session: DB) -> dict:
+        instagram_login_owner(me, session)
+        return forget_instagram_cookies(settings)
 
     @app.post("/api/system/update-ytdlp")
     async def ytdlp_update(_: Admin) -> dict:

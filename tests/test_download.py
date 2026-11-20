@@ -1,6 +1,8 @@
+import re
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yt_dlp
@@ -115,3 +117,94 @@ def test_youtube_asking_to_sign_in_says_what_to_do(tmp_path, monkeypatch):
     monkeypatch.setattr(yt_dlp, "YoutubeDL", Blocked)
     with pytest.raises(RuntimeError, match="an admin adds a YouTube cookies file"):
         download.fetch("https://www.youtube.com/shorts/qzAm4LKWkBU", tmp_path)
+
+
+SENSITIVE = (
+    "ERROR: [Instagram] Df2AEd5RJ3U: This content isn't available to everyone: It can't be "
+    "seen by certain audiences."
+)
+COOKIES = (
+    "# Netscape HTTP Cookie File\n"
+    ".instagram.com\tTRUE\t/\tTRUE\t1795000000\tsessionid\t123%3Aabc\n"
+    ".instagram.com\tTRUE\t/\tTRUE\t1795000000\tcsrftoken\txyz\n"
+    ".google.com\tTRUE\t/\tTRUE\t1795000000\tSID\tnot-instagram\n"
+)
+
+
+class Restricted:
+    """Instagram through yt-dlp: a reel shown only to people signed in; signed in, it comes."""
+
+    asked: ClassVar[list[dict]] = []
+
+    def __init__(self, options):
+        self.options = options
+        Restricted.asked.append(options)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def extract_info(self, url, download=False):
+        cookies = self.options.get("cookiefile")
+        if not cookies or not re.search(r"sessionid\t\S", Path(cookies).read_text()):
+            raise yt_dlp.utils.DownloadError(SENSITIVE)
+        if download:
+            Path(self.options["outtmpl"].replace("%(ext)s", "mp4")).write_text("video")
+        return {"extractor_key": "Instagram", "id": "Df2AEd5RJ3U", "title": "Video by kick"}
+
+
+@pytest.fixture
+def instagram(tmp_path, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    Restricted.asked = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Restricted)
+    monkeypatch.setattr(get_settings(), "instagram_cookies_file", tmp_path / "ig-cookies.txt")
+    return tmp_path / "ig-cookies.txt"
+
+
+def test_a_reel_instagram_shows_only_signed_in_says_what_to_do(tmp_path, instagram):
+    url = "https://www.instagram.com/reel/Df2AEd5RJ3U/?cnvx=abc"
+    with pytest.raises(RuntimeError, match="no Instagram login is set up for downloads yet"):
+        download.fetch(url, tmp_path / "sources")
+
+
+def test_with_an_instagram_login_such_a_reel_downloads_signed_in(tmp_path, instagram):
+    state = download.save_instagram_cookies(COOKIES)
+    assert state["set"] and state["until"].year == 2026
+    kept = instagram.read_text()
+    assert "sessionid" in kept and "google" not in kept  # only Instagram's are kept
+    assert instagram.stat().st_mode & 0o777 == 0o600
+    url = "https://www.instagram.com/reel/Df2AEd5RJ3U/"
+    source = download.fetch(url, tmp_path / "sources")
+    assert source.path.read_text() == "video"
+    # Asked without the login first; signed in after, and straight away for the download.
+    assert [("cookiefile" in o) for o in Restricted.asked] == [False, True, True]
+
+
+def test_an_expired_instagram_login_says_so(tmp_path, instagram):
+    download.save_instagram_cookies(COOKIES)
+    instagram.write_text(COOKIES.replace("sessionid\t123%3Aabc", "sessionid\t"))
+    with pytest.raises(RuntimeError, match="login has most likely expired"):
+        download.fetch("https://www.instagram.com/reel/Df2AEd5RJ3U/", tmp_path / "sources")
+
+
+def test_other_sites_never_get_the_instagram_login(tmp_path, instagram):
+    download.save_instagram_cookies(COOKIES)
+    with pytest.raises(yt_dlp.utils.DownloadError):
+        download.fetch("https://kick.com/x/clips/clip_1", tmp_path / "sources")
+    assert not any("cookiefile" in o for o in Restricted.asked)
+
+
+def test_instagram_cookies_are_checked_before_they_are_kept(instagram):
+    with pytest.raises(ValueError, match="no Instagram sign-in"):
+        download.save_instagram_cookies(".google.com\tTRUE\t/\tTRUE\t0\tSID\tx\n" * 2)
+    assert not instagram.exists()
+    exported = (
+        '[{"domain": ".instagram.com", "name": "sessionid", "value": "1%3Aq", "path": "/", '
+        '"secure": true, "expirationDate": 1795000000.5}]'
+    )
+    assert download.save_instagram_cookies(exported)["set"]  # a JSON export works too
+    assert download.forget_instagram_cookies() == {"set": False, "since": None, "until": None}

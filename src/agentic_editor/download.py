@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic_editor import slots
@@ -28,10 +30,19 @@ class Source:
 
 
 @contextmanager
+def _with_cookies(options: dict, path: Path) -> Iterator[dict]:
+    """`options` with a copy of the cookies file at `path`: yt-dlp writes its cookies back
+    when done, and lookups run at once would write one file together."""
+    with tempfile.TemporaryDirectory() as folder:
+        copy = Path(folder) / "cookies.txt"
+        shutil.copyfile(path, copy)
+        yield {**options, "cookiefile": str(copy)}
+
+
+@contextmanager
 def signed_in(options: dict) -> Iterator[dict]:
     """yt-dlp's `options` with the settings' cookies file (see Settings.cookies_file), when
-    there is one. Each gets a copy: yt-dlp writes its cookies back when done, and lookups
-    run at once would write one file together."""
+    there is one, as a copy (see _with_cookies)."""
     cookies = get_settings().cookies_file
     if cookies is None:
         yield options
@@ -41,10 +52,149 @@ def signed_in(options: dict) -> Iterator[dict]:
         log.warning("the cookies file %s isn't there; YouTube may ask to sign in", path)
         yield options
         return
-    with tempfile.TemporaryDirectory() as folder:
-        copy = Path(folder) / "cookies.txt"
-        shutil.copyfile(path, copy)
-        yield {**options, "cookiefile": str(copy)}
+    with _with_cookies(options, path) as signed:
+        yield signed
+
+
+# --- Instagram reels shown only to people signed in ---------------------------------------
+
+# What Instagram (through yt-dlp) says of a reel it shows only to people signed in: one
+# marked sensitive or not for everyone ("can't be seen by certain audiences"), or a check
+# that wants a login.
+LOGIN_WALL = re.compile(
+    r"isn't available to everyone|can't be seen by certain audiences|empty media response|"
+    r"login required|log in to|rate-limit reached|requested content is not available|"
+    r"--cookies",
+    re.I,
+)
+INSTAGRAM_LOGIN = (
+    "Instagram shows this reel only to people signed in (it is marked sensitive, or not for "
+    "everyone), and no Instagram login is set up for downloads yet. The primary account can "
+    "add one on the System page; then tap Retry."
+)
+INSTAGRAM_EXPIRED = (
+    "Instagram turned this reel away even with the Instagram login on the System page: the "
+    "login has most likely expired or been signed out. Add fresh cookies there, then tap "
+    "Retry."
+)
+INSTAGRAM_COOKIES = "instagram-cookies.txt"
+
+
+def instagram_cookies_path(settings=None) -> Path:
+    """Where the Instagram cookies are: Settings.instagram_cookies_file, else the file the
+    System page saves in the media folder. `settings`: the server's (get_settings())."""
+    settings = settings or get_settings()
+    chosen = settings.instagram_cookies_file
+    if chosen is None:
+        return settings.media_dir / INSTAGRAM_COOKIES
+    return chosen.expanduser() if chosen.expanduser().is_absolute() else ROOT / chosen
+
+
+def _instagram(url: str) -> bool:
+    host = re.sub(r"^https?://", "", url.lower()).split("/", 1)[0]
+    return host == "instagram.com" or host.endswith(".instagram.com")
+
+
+def _netscape(text: str) -> list[list[str]]:
+    """The cookies in a cookies.txt (Netscape format: domain, subdomains, path, secure,
+    expiry, name, value, by tabs), or in the JSON list some exporters write instead."""
+    text = text.strip()
+    rows: list[list[str]] = []
+    if text.startswith("["):
+        try:
+            items = json.loads(text)
+        except ValueError as exc:
+            raise ValueError("that isn't a cookies file (broken JSON)") from exc
+        for c in items if isinstance(items, list) else []:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            domain = str(c.get("domain") or "")
+            rows.append([
+                domain, "TRUE" if domain.startswith(".") else "FALSE", str(c.get("path") or "/"),
+                "TRUE" if c.get("secure") else "FALSE",
+                str(int(float(c.get("expirationDate") or c.get("expires") or 0))),
+                str(c["name"]), str(c.get("value") or ""),
+            ])  # fmt: skip
+        return rows
+    for line in text.splitlines():
+        line = line.strip().removeprefix("#HttpOnly_")
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) == 7:
+            rows.append(fields)
+    return rows
+
+
+def save_instagram_cookies(text: str, settings=None) -> dict:
+    """Keep the cookies of a browser signed in to Instagram (pasted cookies.txt or JSON) for
+    the reels that need a login: only Instagram's, readable by this user alone. Raises
+    ValueError when they hold no Instagram sign-in."""
+    rows = [r for r in _netscape(text) if "instagram.com" in r[0]]
+    if not any(r[5] == "sessionid" and r[6] for r in rows):
+        raise ValueError(
+            "no Instagram sign-in in those cookies (no sessionid for instagram.com): export "
+            "them from instagram.com while signed in"
+        )
+    lines = ["# Netscape HTTP Cookie File", *("\t".join(r) for r in rows)]
+    path = instagram_cookies_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_suffix(".part")
+    partial.unlink(missing_ok=True)
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        out.write("\n".join(lines) + "\n")
+    partial.replace(path)
+    log.info("Instagram cookies saved for downloads (%d cookies)", len(rows))
+    return instagram_login(settings)
+
+
+def forget_instagram_cookies(settings=None) -> dict:
+    instagram_cookies_path(settings).unlink(missing_ok=True)
+    return instagram_login(settings)
+
+
+def instagram_login(settings=None) -> dict:
+    """Whether Instagram cookies are set, since when, and until when the sign-in lasts (the
+    sessionid's expiry); never the cookies themselves."""
+    path = instagram_cookies_path(settings)
+    if not path.is_file():
+        return {"set": False, "since": None, "until": None}
+    since = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    until = None
+    try:
+        for row in _netscape(path.read_text(encoding="utf-8")):
+            if row[5] == "sessionid" and row[4].isdigit() and int(row[4]) > 0:
+                until = datetime.fromtimestamp(int(row[4]), UTC)
+    except OSError:
+        pass
+    return {"set": True, "since": since, "until": until}
+
+
+def _extract(url: str, options: dict, download: bool, signed: bool = False) -> tuple[dict, bool]:
+    """yt-dlp's info for `url` (downloading it when asked), and whether it took the
+    Instagram sign-in. An Instagram reel shown only to people signed in is asked for again
+    with the Instagram cookies, when there are any; `signed` goes to them at once."""
+    from yt_dlp import YoutubeDL
+
+    cookies = instagram_cookies_path() if _instagram(url) else None
+    if not signed:
+        try:
+            with _explained(), signed_in(options) as asked, YoutubeDL(asked) as ydl:
+                return ydl.extract_info(url, download=download), False
+        except Exception as exc:
+            if cookies is None or not LOGIN_WALL.search(str(exc)):
+                raise
+            if not cookies.is_file():
+                raise RuntimeError(INSTAGRAM_LOGIN) from exc
+            log.info("Instagram shows %s only to people signed in: asking signed in", url)
+    try:
+        with _with_cookies(options, cookies) as asked, YoutubeDL(asked) as ydl:
+            return ydl.extract_info(url, download=download), True
+    except Exception as exc:
+        if LOGIN_WALL.search(str(exc)):
+            raise RuntimeError(INSTAGRAM_EXPIRED) from exc
+        raise
 
 
 # What YouTube says when it wants this machine signed in before it gives a video.
@@ -121,11 +271,8 @@ def fetch(url: str, sources_dir: Path) -> Source:
             log.info("already downloaded: %s", source.title)
             return source
 
-    from yt_dlp import YoutubeDL
-
     options = {"quiet": True, "no_warnings": True, "noplaylist": True}
-    with _explained(), signed_in(options) as options, YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info, signed = _extract(url, options, download=False)
     key = _slug(f"{info.get('extractor_key', 'web')}-{info.get('id') or url}")
     dest = sources_dir / key
     dest.mkdir(parents=True, exist_ok=True)
@@ -135,9 +282,7 @@ def fetch(url: str, sources_dir: Path) -> Source:
         if source is not None:
             log.info("already downloaded: %s", source.title)
         else:
-            options = _ytdlp_options(dest)
-            with _explained(), signed_in(options) as options, YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
+            info, _ = _extract(url, _ytdlp_options(dest), download=True, signed=signed)
             path = next(p for p in dest.iterdir() if p.stem == "source" and p.suffix != ".json")
             source = Source(
                 path=path,
