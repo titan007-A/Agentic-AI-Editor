@@ -178,6 +178,11 @@ function Presets() {
   }, [dirty]);
 
   function edit(next: Preset) {
+    // Made download-only: it writes the post's caption, about what the video shows (it can
+    // be turned off again below).
+    if (next.download_only && !draft?.download_only && !next.post_caption?.enabled) {
+      next = { ...next, post_caption: { ...next.post_caption, enabled: true, about: "video" } };
+    }
     setDraft(next);
     setDirty(true);
   }
@@ -533,10 +538,27 @@ function Presets() {
         </Card>
 
         {upscaleOnly ? (
-          <p className="text-sm text-muted-foreground">
-            This preset only {draft.download_only ? "downloads" : "upscales"}, so its editing
-            settings aren&apos;t used and are hidden.
-          </p>
+          <>
+            {SECTIONS.filter((section) => section.title === "Post caption").map((section) => (
+              <Card key={section.title} data-testid="download-caption">
+                <CardHeader>
+                  <CardTitle>{section.title}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <PresetSection
+                    fields={section.fields}
+                    preset={draft}
+                    fonts={fonts}
+                    onChange={edit}
+                  />
+                </CardContent>
+              </Card>
+            ))}
+            <p className="text-sm text-muted-foreground">
+              This preset only {draft.download_only ? "downloads" : "upscales"}, so its editing
+              settings aren&apos;t used and are hidden; the post caption above still is.
+            </p>
+          </>
         ) : (
           <>
             <Card>

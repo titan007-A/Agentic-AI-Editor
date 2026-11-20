@@ -65,3 +65,13 @@ def test_a_download_only_preset_gives_the_whole_video_unedited_as_an_mp4(
     assert ("copied" in out.edl.decisions[0]) is copied
     meta = json.loads((out.path.parent / "source.json").read_text())
     assert meta["url"] == "https://kick.com/yera/clips/clip_1"
+
+
+def test_a_download_only_preset_writes_the_post_caption_unless_told_not_to():
+    preset = only_download()
+    assert preset.post_caption.enabled and preset.post_caption.about == "video"
+    off = Preset(name="x", label="x", min_duration=1, max_duration=60, download_only=True,
+                 post_caption={"enabled": False})  # fmt: skip
+    assert not off.post_caption.enabled  # said so: stays off
+    edited = Preset(name="y", label="y", min_duration=1, max_duration=60)
+    assert not edited.post_caption.enabled  # other presets: as before
