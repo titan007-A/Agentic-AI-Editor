@@ -2596,3 +2596,48 @@ def test_with_r2_buffer_gets_the_buckets_link_and_falls_back_to_ours(env, monkey
     third = output_of(admin)
     posted = admin.post(f"/api/outputs/{third}/buffer", json=body | {"channels": ["c1"]}).json()
     assert not posted["hosted"] and "note" not in posted["results"][0]
+
+
+def test_an_admins_private_presets_are_seen_by_them_and_the_primary_account_only(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    boss = env.client
+    clients = {}
+    for name in ("prajjwal", "arham"):
+        ask = {"username": name, "password": f"{name}-pass-1", "role": "admin"}
+        made = boss.post("/api/admin/users", json=ask | {"my_password": PASSWORD})
+        assert made.status_code == 200, made.text
+        clients[name] = TestClient(boss.app)
+        login = {"username": name, "password": f"{name}-pass-1"}
+        assert clients[name].post("/api/login", json=login).status_code == 200
+    prajjwal, arham = clients["prajjwal"], clients["arham"]
+    people = {a["username"]: a for a in boss.get("/api/admin/users").json()}
+    url = f"/api/admin/users/{people['prajjwal']['id']}/private-presets"
+    shared = sorted(p["name"] for p in boss.get("/api/presets").json())
+
+    # Only the primary account turns it on; the shared presets come along as copies.
+    assert arham.put(url, json={"on": True}).status_code == 403
+    turned = boss.put(url, json={"on": True}).json()
+    assert turned == {"private_presets": True, "presets": len(shared)}
+    me = boss.get("/api/me").json()
+    mine = f"/api/admin/users/{me['id']}/private-presets"
+    assert boss.put(mine, json={"on": True}).status_code == 422  # the primary's stay shared
+    assert boss.get("/api/admin/users").json()[-2]["private_presets"] is True
+
+    # A preset prajjwal makes is his: arham and the shared folder don't have it.
+    own = next(p for p in prajjwal.get("/api/presets").json() if p["name"] == shared[0])
+    made = prajjwal.put("/api/presets/kick-clips", json=own | {"name": "kick-clips",
+                                                               "label": "Kick clips"})  # fmt: skip
+    assert made.status_code == 200, made.text
+    assert "kick-clips" in [p["name"] for p in prajjwal.get("/api/presets").json()]
+    assert "kick-clips" not in [p["name"] for p in arham.get("/api/presets").json()]
+    assert "kick-clips" not in [p["name"] for p in boss.get("/api/presets").json()]
+    whose = f"/api/presets?owner={people['prajjwal']['id']}"
+    assert arham.get(whose).status_code == 403
+    assert "kick-clips" in [p["name"] for p in boss.get(whose).json()]
+    # His copies are his: a change to a shared preset doesn't reach him, nor his to it.
+    assert len(prajjwal.get("/api/presets").json()) == len(shared) + 1
+
+    # Back on the shared presets: his folder waits for when it is turned on again.
+    assert boss.put(url, json={"on": False}).json()["private_presets"] is False
+    assert "kick-clips" not in [p["name"] for p in prajjwal.get("/api/presets").json()]
+    assert boss.put(url, json={"on": True}).json()["presets"] == len(shared) + 1

@@ -1,8 +1,10 @@
 """Accounts: the admin, who manages everyone, and the employees (members) they create.
 
-Each employee has presets of their own, in a folder under the presets folder; the admin's
+Each employee has presets of their own, in a folder under the presets folder; the admins'
 are the presets folder itself. An employee starts with none: the admin sends them the ones
-they should use, so nobody sees presets meant for someone else.
+they should use, so nobody sees presets meant for someone else. The primary account can
+give an admin private presets: a folder of their own like an employee's, which the other
+admins can't see (set_private_presets).
 """
 
 import re
@@ -76,9 +78,29 @@ def set_primary(session: Session, user: User) -> None:
 def presets_dir(user: User | None, root: Path) -> Path:
     """Where this account's presets live. None, a job from before accounts, is the
     admin's. Folders are named by id, which is always safe in a path."""
-    if user is None or user.role == ADMIN:
+    if user is None or (user.role == ADMIN and not user.private_presets):
         return root
     return root / PEOPLE / user.id
+
+
+def set_private_presets(session: Session, user: User, root: Path, on: bool) -> int:
+    """Give an admin presets of their own, seen only by them and the primary account, or
+    put them back on the admins' shared ones. Turned on, the shared presets are copied in
+    first (none of theirs replaced), so they keep every preset they had; turned off, their
+    folder stays for when it is turned on again. How many presets they have now."""
+    if user.role != ADMIN:
+        raise AccountError("only an admin's presets can be made private; an employee's are")
+    if on and is_primary(session, user):
+        raise AccountError("the primary account sees every preset; its own stay shared")
+    if on and not user.private_presets:
+        folder = root / PEOPLE / user.id
+        folder.mkdir(parents=True, exist_ok=True)
+        for preset in root.glob("*.yaml"):
+            if not (folder / preset.name).exists():
+                shutil.copy2(preset, folder / preset.name)
+    user.private_presets = on
+    session.commit()
+    return len(list(presets_dir(user, root).glob("*.yaml")))
 
 
 def check_password(password: str) -> None:
@@ -134,6 +156,8 @@ def set_role(session: Session, user: User, role: str, presets_root: Path) -> Non
         raise AccountError("this is the only admin; make another one first")
     if role == MEMBER and user.role == ADMIN:
         presets_dir(User(id=user.id, role=MEMBER), presets_root).mkdir(parents=True, exist_ok=True)
+    if role == MEMBER:
+        user.private_presets = False  # an employee's presets are their own anyway
     user.role = role
     user.session_version += 1
     session.commit()
@@ -162,7 +186,7 @@ def remove(
     for kind in (BufferKey, PresetBuffer):
         for item in session.scalars(select(kind).where(kind.owner_id == user.id)):
             session.delete(item)
-    if user.role == MEMBER:
+    if user.role == MEMBER or user.private_presets:
         shutil.rmtree(presets_dir(user, presets_root), ignore_errors=True)
     session.delete(user)
     session.commit()

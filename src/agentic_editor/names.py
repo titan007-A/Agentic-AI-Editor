@@ -25,7 +25,12 @@ SEPARATORS = ("—", "–", " - ", " -", "- ", "-")
 PLACEHOLDERS = ("{song}", "{artist}")
 FIELD = re.compile(r"\{(\w+)\}")
 # Filled elsewhere: the song and artist from the name, the headline by headline.py.
-OWN = {"song", "artist", "headline"}
+OWN = {"song", "artist", "headline", "channel", "CHANNEL"}
+# The channel the video comes from, filled for every reel ({CHANNEL} in capitals): a Kick
+# clip's streamer, as its link names them (the clip's uploader is whoever clipped it),
+# else the video's uploader.
+CHANNELS = ("{channel}", "{CHANNEL}")
+KICK = re.compile(r"https?://(?:www\.)?kick\.com/([\w-]+)/", re.I)
 YEAR = re.compile(r"[(\[][^)\]]*?\b((?:19|20)\d{2})\b[^)\]]*[)\]]")
 ANY_YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 
@@ -89,6 +94,17 @@ def _from_name(title: str) -> tuple[str, str]:
     raise UnnamedSong(
         f"'{title}' doesn't say the song and artist; name it 'Song - Artist'{NOTES_HINT}"
     )
+
+
+def channel_of(url: str, uploader: str) -> str:
+    """Whose channel a video is from: a Kick link's streamer, else its uploader."""
+    if match := KICK.match(url or ""):
+        return match.group(1)
+    return (uploader or "").strip()
+
+
+def names_channel(preset: Preset) -> bool:
+    return any(p in block.text for block in preset.text_blocks for p in CHANNELS)
 
 
 def names_song(preset: Preset) -> bool:
@@ -213,9 +229,11 @@ def fill(
     the video's name, and its own fields from `given` or, for {year}, the name, and else
     `find_year` (song, artist) -> the year the song came out."""
     own = fields(preset)
-    if not names_song(preset) and not own:
+    if not names_song(preset) and not own and not names_channel(preset):
         return preset
     values = dict(given or {})
+    channel = values.get("channel", "")
+    values["channel"], values["CHANNEL"] = channel, channel.upper()
     if "year" in own and "year" not in values and (year := year_of(title)):
         values["year"] = year
     if names_song(preset):

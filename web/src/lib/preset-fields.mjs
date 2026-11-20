@@ -3,7 +3,9 @@
 // A preset's own words in braces, "Día {day} : Canción : {song_number}", which only the
 // person can give; the song, artist and headline are found by the editor (names.py).
 const FIELD = /\{(\w+)\}/g;
-const FOUND = new Set(["song", "artist", "headline"]);
+// Filled for every reel, never asked: {channel} / {CHANNEL} is whose channel the video is
+// from (a Kick clip's streamer), see names.channel_of.
+const FOUND = new Set(["song", "artist", "headline", "channel", "CHANNEL"]);
 
 /**
  * The words a preset needs given, in the order its text has them. Blocks above or below

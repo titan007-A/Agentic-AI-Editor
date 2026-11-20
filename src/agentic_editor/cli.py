@@ -227,6 +227,11 @@ def _user(args: argparse.Namespace) -> int:
             elif args.action == "primary":
                 accounts.set_primary(session, user)
                 print(f"{user.username} is now the primary account")
+            elif args.action in ("private", "shared"):
+                on = args.action == "private"
+                count = accounts.set_private_presets(session, user, settings.presets_dir, on)
+                where = "their own, seen by them and the primary account" if on else "shared"
+                print(f"{user.username}'s presets are {where} ({count})")
             elif args.action == "remove":
                 keeper = next((a for a in accounts.admins(session) if a.id != user.id), None)
                 accounts.remove(session, user, settings.presets_dir, keep_work_for=keeper)
@@ -291,7 +296,10 @@ def main(argv: list[str] | None = None) -> int:
         handler=_hash_password
     )
     user = commands.add_parser("user", help="accounts: add, list, passwd, role, primary, remove")
-    user.add_argument("action", choices=["add", "list", "passwd", "role", "primary", "remove"])
+    user.add_argument(
+        "action",
+        choices=["add", "list", "passwd", "role", "primary", "private", "shared", "remove"],
+    )
     user.add_argument("name", nargs="?", help="the account's username")
     user.add_argument("role", nargs="?", choices=["admin", "member"], help="for role")
     user.add_argument("--admin", action="store_true", help="add: make an admin, not an employee")

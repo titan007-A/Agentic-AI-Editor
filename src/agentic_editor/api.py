@@ -207,12 +207,18 @@ class RemoveRequest(BaseModel):
     my_password: str = ""
 
 
+class PrivateRequest(BaseModel):
+    on: bool
+
+
 class AccountView(BaseModel):
     id: str
     username: str
     role: str
     # The one admin who makes, changes and removes the other admins.
     primary: bool = False
+    # An admin whose presets only they and the primary account see.
+    private_presets: bool = False
     created_at: datetime
     last_seen_at: datetime | None
     jobs: int
@@ -862,7 +868,8 @@ def create_app(
 
     def whose(account: Account, owner: str | None, session: Session) -> Account | None:
         """The account whose presets a request is about: the caller's own, or, for the
-        admin, any employee's named by id."""
+        admin, any employee's named by id; an admin's private presets only for the primary
+        account."""
         if not owner or owner == account.id:
             return account
         if account.role != accounts.ADMIN:
@@ -870,6 +877,8 @@ def create_app(
         target = session.get(Account, owner)
         if target is None:
             raise HTTPException(404, "no such account")
+        if target.role == accounts.ADMIN and not accounts.is_primary(session, account):
+            raise HTTPException(403, "only the primary account sees another admin's presets")
         return target
 
     def presets_dir(account: Account | None) -> Path:
@@ -3109,6 +3118,7 @@ def create_app(
                 username=a.username,
                 role=a.role,
                 primary=boss is not None and a.id == boss.id,
+                private_presets=a.private_presets,
                 created_at=a.created_at,
                 last_seen_at=a.last_seen_at,
                 jobs=counts.get(a.id, 0) + (counts.get(None, 0) if a is first else 0),
@@ -3243,6 +3253,18 @@ def create_app(
             jobs=session.scalar(select(func.count()).where(Job.owner_id == target.id)) or 0,
             presets=len(list(presets_dir(target).glob("*.yaml"))),
         )  # fmt: skip
+
+    @app.put("/api/admin/users/{account_id}/private-presets")
+    def private_presets(account_id: str, body: PrivateRequest, me: Admin, session: DB) -> dict:
+        """Give an admin presets of their own that the other admins can't see, or put them
+        back on the shared ones: the primary account only."""
+        target = find_account(account_id, session)
+        primary_only(me, session)
+        try:
+            count = accounts.set_private_presets(session, target, settings.presets_dir, body.on)
+        except accounts.AccountError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"private_presets": target.private_presets, "presets": count}
 
     @app.delete("/api/admin/users/{account_id}")
     def remove_account(

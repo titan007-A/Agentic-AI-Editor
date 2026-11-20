@@ -277,3 +277,17 @@ def test_coloured_words_with_a_field_in_them_keep_their_colour_once_it_is_filled
         [("Day 7", "#FFFFFF")],
         [("Song 3", "#FFE000")],
     ]
+
+
+def test_the_channel_a_video_comes_from_is_filled_never_asked():
+    # A Kick clip's streamer is in its link; the clip's uploader is whoever clipped it.
+    kick = "https://kick.com/amandasoliss/clips/clip_01M7M53K777FYJ5FBZCV3N311P"
+    assert names.channel_of(kick, "ktf_alan") == "amandasoliss"
+    assert names.channel_of("https://www.youtube.com/watch?v=x", "Some Channel") == "Some Channel"
+    assert names.channel_of("", "") == ""
+    preset = stories("KICK  KICK.COM/{CHANNEL}")
+    assert names.wanted(preset) == set()  # nothing to ask for
+    filled = names.fill(preset, "clip", {"channel": "yera"})
+    assert filled.text_blocks[1].text == "KICK  KICK.COM/YERA"
+    lower = names.fill(stories("by @{channel}"), "clip", {"channel": "Yera"})
+    assert lower.text_blocks[1].text == "by @Yera"
