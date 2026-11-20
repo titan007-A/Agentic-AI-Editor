@@ -2326,7 +2326,9 @@ def test_the_accounts_tab_is_for_the_people_trying_it(env, monkeypatch):
         session.commit()
     got = admin.get(f"/api/niche/{started['id']}").json()
     (acc,) = got["accounts"]
-    assert acc["message_url"] == "https://ig.me/m/vocalmaria" and acc["followers"] == 45100
+    assert (
+        acc["message_url"] == "https://www.instagram.com/m/vocalmaria" and acc["followers"] == 45100
+    )
     assert acc["kind"] == "person"
     voted = admin.post(
         f"/api/niche/accounts/{acc['id']}/vote", json={"vote": -1, "reason": "brand"}

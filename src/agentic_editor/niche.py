@@ -17,11 +17,22 @@ people are). The model tells people from the rest reliably; a series' or magazin
 account it calls a business as often as a page, so businesses aren't left out by kind:
 their fit decides (one there to sell something is rated low when pages are wanted).
 
-Follower counts are what the search engine last saw, so they can be a little old."""
+Follower counts are what the search engine last saw, so they can be a little old.
+
+A niche is often vague ("english classic music": oldies? classical? classic rock?). The
+model first says in one line what it takes the person to mean, and both the searches and
+the judging keep to that (once each read it its own way, and the judge turned down what
+the searches found); the person sees that line, to word the niche better when it's wrong.
+The rounds go on while new accounts turn up (the model repeating its searches is no reason
+to stop: searches are made up from the niche then), until RUN_SIZE are found or BUDGET
+seconds have gone; what each round finds is handed over at once, so it shows while the
+search goes on."""
 
 import logging
 import re
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Literal
@@ -56,6 +67,24 @@ LIST_HANDLES = 60  # handles taken from one such page at most
 PAUSE = 1.0  # s between one worker's searches, so the engines don't turn it away
 MIN_FIT = 6  # of 10
 RATE_BATCH = 15
+RERATE_BATCH = 6  # accounts a reply left out are asked about again in batches this size
+# No new round starts after this long (s): a run once took 15 minutes for 7 accounts.
+BUDGET = 9 * 60
+DRY_ROUNDS = 2  # rounds in a row that find no new account end the run
+# Searches made up from the niche when the model only repeats ones already asked: the words
+# pages put in their name and bio.
+PAGE_WORDS = (
+    "page", "daily", "fan page", "memes", "edits", "clips", "videos", "updates", "hub",
+    "lovers", "vibes", "world", "status", "community", "official", "facts", "news",
+    "collection", "best", "only",
+)  # fmt: skip
+PEOPLE_WORDS = ("creator", "artist", "blogger", "coach", "official", "my", "founder")
+# Sites a list of accounts can't be read from (a login wall, a script-only page): asking
+# them only waits out the timeout.
+UNREADABLE = (
+    "tiktok.com", "facebook.com", "linktr.ee", "x.com", "twitter.com", "youtube.com",
+    "pinterest.", "threads.net", "snapchat.com", "instagram.com",
+)  # fmt: skip
 
 # instagram.com/<this>/ is a page, not an account.
 NOT_ACCOUNTS = {
@@ -97,6 +126,13 @@ KINDS: dict[str, set[str] | None] = {
 }
 
 
+def message_link(handle: str) -> str:
+    """The link that opens a chat with the account: Instagram's own /m/<handle>, which the
+    app opens on a phone and the website on a computer. (ig.me/m/<handle>, which leads
+    there, answers 400 to every browser but an iPhone's.)"""
+    return f"https://www.instagram.com/m/{handle}"
+
+
 @dataclass
 class Account:
     handle: str
@@ -117,7 +153,7 @@ class Account:
 
     @property
     def message_url(self) -> str:
-        return f"https://ig.me/m/{self.handle}"
+        return message_link(self.handle)
 
 
 @dataclass
@@ -362,6 +398,13 @@ def listed(page: str) -> list[str]:
     return handles[:LIST_HANDLES]
 
 
+def readable(url: str) -> bool:
+    """Whether a page that lists accounts can be read at all (see UNREADABLE)."""
+    host = re.sub(r"^https?://(www\.)?", "", url.lower()).split("/", 1)[0]
+    return not any(host == site or host.endswith(f".{site}") or (site.endswith(".") and
+                   site in host) for site in UNREADABLE)  # fmt: skip
+
+
 def read_lists(pages: dict[str, str], read: Callable[[str], str]) -> dict[str, Account]:
     """Accounts the pages that list accounts (link: title) name."""
     found: dict[str, Account] = {}
@@ -406,6 +449,11 @@ def look_up(
 
 
 class _Queries(BaseModel):
+    meaning: str = Field(
+        default="",
+        description="one line: exactly which accounts are wanted, the niche read the way the "
+        "person most likely means it",
+    )
     queries: list[str] = Field(description="web searches, short, in the niche's words")
     accounts: list[str] = Field(
         default_factory=list,
@@ -432,13 +480,26 @@ PLAN = """Someone wants to find Instagram accounts in this niche, to reach out t
 {filters}
 {taste}
 {kind}
+{meaning}
 Write {count} different web searches that would find such accounts' Instagram profile pages:
 the kinds of account, the topics, the words such accounts put in their name and bio, in
-the niche's own language(s), and related sub-niches. Short searches, no "site:", no quotes,
-none like these already used: {used}
+the niche's own language(s), and related sub-niches. Each search a different angle (a
+sub-niche, an era or style, a format such as clips, edits, memes or facts, the words fans
+use); short searches, no "site:", no quotes, none like these already used: {used}
 Also name up to {known} real Instagram accounts of that kind in this niche that you know, by
 their exact handle (without @), best known first. Only ones you are sure exist: none rather
 than a guess. Not these, already found: {named}"""
+
+# How the planning model is asked what the niche means (the first round), and told it after.
+ASK_MEANING = """First, in "meaning", say in one line exactly which accounts they want: read
+the niche the way they most likely mean it (a vague or misspelt niche too: "english classic
+music" most likely means pages of classic English songs such as oldies, retro and classic
+rock, not Indian classical music), with its sub-niches. Every search keeps to it."""
+TOLD_MEANING = "What they mean (keep every search to it): {meaning}"
+# Said when the model's searches were all ones asked before.
+AGAIN = """
+Every search you wrote was one already asked. Write NEW ones: other sub-niches, other words
+for the topic, its eras, styles, formats, places, the hashtags fans use."""
 
 # What the planning model is told of the kind of account wanted (Filters.kind).
 PLAN_KIND = {
@@ -457,6 +518,7 @@ NOT companies or shops.""",
 
 RATE = """Someone wants Instagram accounts in this niche, to reach out to them:
 {niche}
+{meaning}
 {filters}
 {taste}
 For each account below (what a web search says about it), first say what kind it is:
@@ -472,11 +534,14 @@ for commissions", "freelance", "available for work"; following hundreds or thous
 page shows: the topic as the name; "daily", "page", "fan page", "memes", "clips", "edits",
 "updates", "follow for more", "DM for promo", "credits to the owners"; following few; many
 posts.
-Then rate 0-10 how well it is an account in that niche (10: exactly that; 5: related; 0: not
-at all, a brand page when creators were asked for, a fan page of something else, a dead or
-spam account){kind_rule}. A wanted language or country lowers the rating only when the
-account clearly posts in another language or is clearly from somewhere else; most accounts
-don't say, and then judge by the niche alone. Say in one line what it is and why.
+Then rate 0-10 how well it is an account in that niche: 10: exactly that; 8: one of its
+sub-niches or a close variant, which the same people would follow (for "english classic
+music", a classic rock, oldies or 80s hits page); 6: overlapping, most of its audience would
+care; 4: loosely related; 0: not at all, a brand page when creators were asked for, a fan
+page of something else, a dead or spam account{kind_rule}. A wanted language or country
+lowers the rating only when the account clearly posts in another language or is clearly from
+somewhere else; most accounts don't say, and then judge by the niche alone. Say in one
+line what it is and why.
 {accounts}"""
 
 # The rating rule for an account of another kind than the one wanted (Filters.kind).
@@ -500,46 +565,89 @@ def taste_line(liked: list[str], disliked: list[str]) -> str:
 HANDLE = re.compile(r"^(?:https?://)?(?:www\.)?(?:instagram\.com/)?@?([A-Za-z0-9._]{2,30})/?$")
 
 
+def _words_of(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s'&-]", " ", text).split())
+
+
+def made_up(niche: str, filters: Filters, used: list[str], count: int) -> list[str]:
+    """Searches made from the niche itself, with the words pages (or people) put in their
+    name and bio, and the language and place: for when the model only repeats itself."""
+    base = _words_of(niche)
+    words = PEOPLE_WORDS if filters.kind == "people" else PAGE_WORDS
+    places = [x for x in (filters.country, filters.language) if x]
+    seen = {q.lower() for q in used}
+    out: list[str] = []
+    for place in [*places, ""]:
+        for word in words:
+            query = " ".join(x for x in (base, word, place) if x)
+            if query.lower() not in seen and len(query) <= 120:
+                seen.add(query.lower())
+                out.append(query)
+            if len(out) >= count:
+                return out
+    return out
+
+
+def _queries_schema() -> dict:
+    """_Queries for the model, every field required: Ollama leaves out a field the schema
+    doesn't require (the model never named accounts while "accounts" could be left out)."""
+    schema = _Queries.model_json_schema()
+    schema["required"] = list(schema["properties"])
+    return schema
+
+
 def plan(
     llm, niche: str, filters: Filters, taste: str, used: list[str], count: int = QUERIES,
-    named: list[str] | None = None, known: int = KNOWN,
-) -> tuple[list[str], list[str]]:  # fmt: skip
-    """Searches for the niche from the planning model, and the handles of accounts it knows
-    in it; the niche itself as the search when it fails."""
-    prompt = PLAN.format(
-        niche=niche.strip(),
-        filters=f"Wanted: {filters.says()}." if filters.says() else "",
-        taste=taste,
-        kind=PLAN_KIND.get(filters.kind, ""),
-        count=count,
-        used="; ".join(used[-40:]) or "(none yet)",
-        known=known,
-        named=", ".join((named or [])[-80:]) or "(none yet)",
-    )
+    named: list[str] | None = None, known: int = KNOWN, meaning: str = "",
+) -> tuple[list[str], list[str], str]:  # fmt: skip
+    """New searches for the niche from the planning model, the handles of accounts it knows
+    in it, and what it takes the niche to mean (asked in the first round, `meaning` after).
+    A model that only repeats searches already asked is asked once more; searches made up
+    from the niche fill in what it still doesn't give, and stand in when it fails."""
+    seen = {q.lower() for q in used}
+    out: list[str] = []
     handles: list[str] = []
-    try:
-        asked = [{"role": "user", "content": prompt}]
-        reply = parse(_Queries, llm.chat_json(asked, _Queries.model_json_schema(), temperature=0.4))
-        queries = [" ".join(q.replace('"', " ").split()) for q in reply.queries]
+
+    def take(queries: list[str]) -> None:
+        for query in queries:
+            query = " ".join(query.replace('"', " ").replace("site:", " ").split())
+            if query and query.lower() not in seen and len(query) <= 120:
+                seen.add(query.lower())
+                out.append(query)
+
+    for attempt in range(2):
+        prompt = PLAN.format(
+            niche=niche.strip(),
+            filters=f"Wanted: {filters.says()}." if filters.says() else "",
+            taste=taste,
+            kind=PLAN_KIND.get(filters.kind, ""),
+            meaning=TOLD_MEANING.format(meaning=meaning) if meaning else ASK_MEANING,
+            count=count,
+            used="; ".join([*used[-40:], *out]) or "(none yet)",
+            known=known,
+            named=", ".join((named or [])[-80:]) or "(none yet)",
+        ) + (AGAIN if attempt else "")
+        try:
+            asked = [{"role": "user", "content": prompt}]
+            temperature = 0.4 if attempt == 0 else 0.9
+            reply = parse(_Queries, llm.chat_json(asked, _queries_schema(),
+                                                  temperature=temperature))  # fmt: skip
+        except LLMError as exc:
+            log.warning("couldn't plan niche searches: %s", exc)
+            break
+        if not meaning and reply.meaning.strip():
+            meaning = " ".join(reply.meaning.split())[:300]
+        take(reply.queries)
         for said in reply.accounts:
             found = HANDLE.match(said.strip())
             handle = found.group(1).lower().rstrip(".") if found else ""
             if handle and handle not in NOT_ACCOUNTS and handle not in handles:
                 handles.append(handle)
-    except LLMError as exc:
-        log.warning("couldn't plan niche searches: %s", exc)
-        queries = []
-    extra = " ".join(x for x in (filters.language, filters.country) if x)
-    if not queries:
-        queries = [niche.strip(), f"{niche.strip()} {extra}".strip()]
-    seen = {q.lower() for q in used}
-    out = []
-    for query in queries:
-        query = query.replace("site:", "").strip()
-        if query and query.lower() not in seen and len(query) <= 120:
-            seen.add(query.lower())
-            out.append(query)
-    return out[:count], handles[:known]
+        if len(out) >= count // 2:
+            break
+    if len(out) < count // 2:
+        take(made_up(niche, filters, [*used, *out], count - len(out)))
+    return out[:count], handles[:known], meaning
 
 
 def _one_line(text: str, limit: int = 300) -> str:
@@ -550,35 +658,49 @@ def _count(n: int | None) -> str:
     return "?" if n is None else str(n)
 
 
-def rate(llm, niche: str, filters: Filters, taste: str, accounts: list[Account]) -> None:
-    """Each account's fit (0-10) and why, from the planning model; a batch it can't rate
-    keeps None (left out)."""
-    for start in range(0, len(accounts), RATE_BATCH):
-        group = accounts[start : start + RATE_BATCH]
-        lines = "\n".join(
-            f"{n}. @{a.handle} | name: {a.name or '?'} | followers: {_count(a.followers)} | "
-            f"following: {_count(a.following)} | posts: {_count(a.posts)} | says: "
-            f"{_one_line(a.about)}"
-            for n, a in enumerate(group, 1)
-        )
-        prompt = RATE.format(
-            niche=niche.strip(),
-            filters=f"Wanted: {filters.says()}." if filters.says() else "",
-            taste=taste,
-            kind_rule=RATE_KIND.get(filters.kind, ""),
-            accounts=lines,
-        )
-        try:
-            asked = [{"role": "user", "content": prompt}]
-            reply = parse(_Fits, llm.chat_json(asked, _Fits.model_json_schema(), temperature=0.0))
-        except LLMError as exc:
-            log.warning("couldn't rate accounts %d-%d: %s", start + 1, start + len(group), exc)
-            continue
-        for fit in reply.fits:
-            if 1 <= fit.n <= len(group):
-                group[fit.n - 1].fit = fit.fit
-                group[fit.n - 1].why = fit.why.strip()[:200]
-                group[fit.n - 1].kind = fit.kind
+def _rate_batch(llm, niche: str, filters: Filters, taste: str, group: list[Account],
+                meaning: str = "") -> None:  # fmt: skip
+    lines = "\n".join(
+        f"{n}. @{a.handle} | name: {a.name or '?'} | followers: {_count(a.followers)} | "
+        f"following: {_count(a.following)} | posts: {_count(a.posts)} | says: "
+        f"{_one_line(a.about)}"
+        for n, a in enumerate(group, 1)
+    )
+    prompt = RATE.format(
+        niche=niche.strip(),
+        meaning=f"They mean: {meaning}" if meaning else "",
+        filters=f"Wanted: {filters.says()}." if filters.says() else "",
+        taste=taste,
+        kind_rule=RATE_KIND.get(filters.kind, ""),
+        accounts=lines,
+    )
+    asked = [{"role": "user", "content": prompt}]
+    reply = parse(_Fits, llm.chat_json(asked, _Fits.model_json_schema(), temperature=0.0))
+    for fit in reply.fits:
+        if 1 <= fit.n <= len(group):
+            group[fit.n - 1].fit = fit.fit
+            group[fit.n - 1].why = fit.why.strip()[:200]
+            group[fit.n - 1].kind = fit.kind
+
+
+def rate(llm, niche: str, filters: Filters, taste: str, accounts: list[Account],
+         meaning: str = "") -> None:  # fmt: skip
+    """Each account's fit (0-10), kind and why, from the planning model. The accounts a
+    reply left out, or a batch it couldn't answer, are asked about once more in smaller
+    batches (they were lost before: 39 of 54 in one run); one still unrated keeps None (left
+    out)."""
+    for size in (RATE_BATCH, RERATE_BATCH):
+        todo = [a for a in accounts if a.fit is None]
+        for start in range(0, len(todo), size):
+            group = todo[start : start + size]
+            try:
+                _rate_batch(llm, niche, filters, taste, group, meaning)
+            except LLMError as exc:
+                log.warning("couldn't rate %d accounts: %s", len(group), exc)
+        if all(a.fit is not None for a in accounts):
+            return
+    missing = sum(a.fit is None for a in accounts)
+    log.warning("%d of %d accounts got no rating", missing, len(accounts))
 
 
 def _opened(planner):
@@ -611,30 +733,48 @@ def run(
     pause: float = PAUSE,
     size: int = RUN_SIZE,
     read: Callable[[str], str] | None = None,
+    found_now: Callable[[list[Account]], None] | None = None,
+    budget: float = BUDGET,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[list[Account], list[str]]:
     """Up to `size` accounts of the niche, best fit first, none of `seen` (written to lately
     or not wanted), all passing `filters` (of the kind it asks for); and notes on what went
-    wrong on the way. `planner` is
-    opened only to plan and to judge, so the GPU is free while the web is searched."""
+    wrong on the way, the first saying how the niche was read. `found_now` is handed each
+    round's new accounts as they are found. No round starts once `budget` seconds have
+    gone. `planner` is opened only to plan and to judge, so the GPU is free while the web
+    is searched."""
     if find is None:
         find = engines
     if read is None:
         read = read_page
     say = progress or (lambda message, value: None)
+    began = clock()
     kept: dict[str, Account] = {}
     judged: set[str] = set()
     used: list[str] = []
     named: list[str] = []
     lists_read: set[str] = set()
     notes: list[str] = []
+    meaning = ""
     failures = 0
+    dry = 0  # rounds in a row that found no new account
     other_kind = 0  # fitting accounts of another kind than the one asked for
+    ended = "the searches ran out"
     for round_ in range(ROUNDS):
+        if round_ and clock() - began >= budget:
+            ended = f"stopped after {round(budget / 60)} minutes"
+            break
         lo, hi = round_ / ROUNDS, (round_ + 1) / ROUNDS
         span = hi - lo
-        say("planning searches", lo)
+
+        def step(message: str, value: float) -> None:
+            say(f"{len(kept)} found · {message}" if kept else message, value)
+
+        step("planning searches", lo)
         with _opened(planner) as llm:
-            queries, known = plan(llm, niche, filters, taste, used, named=named + list(kept))
+            queries, known, meaning = plan(
+                llm, niche, filters, taste, used, named=named + list(kept), meaning=meaning
+            )
         known = [h for h in known if h not in named]
         if not queries and not known:
             break
@@ -642,50 +782,73 @@ def run(
         named += known
         lists: dict[str, str] = {}
         found, failed = gather(
-            queries, find, pause, say, (lo, lo + span * 0.4), lists, kind=filters.kind
+            queries, find, pause, step, (lo, lo + span * 0.4), lists, kind=filters.kind
         )
         failures += len(failed)
         for handle in known:
             found.setdefault(handle, Account(handle, query="named by the model"))
             found[handle].sources.add("suggested")
-        pages = {u: t for u, t in lists.items() if u not in lists_read}
+        pages = {u: t for u, t in lists.items() if u not in lists_read and readable(u)}
         pages = dict(list(pages.items())[:LIST_PAGES])
         if pages:
             lists_read.update(pages)
-            say(f"reading {len(pages)} lists of accounts", lo + span * 0.45)
+            step(f"reading {len(pages)} lists of accounts", lo + span * 0.45)
             for handle, account in read_lists(pages, read).items():
                 if handle in found:
                     found[handle].sources |= account.sources
                 else:
                     found[handle] = account
         fresh = [a for h, a in found.items() if h not in seen and h not in judged and h not in kept]
+        dry = dry + 1 if not fresh else 0
+        if dry >= DRY_ROUNDS:
+            break
         fresh.sort(key=lambda a: min((LOOKUP_ORDER.get(s, 3) for s in a.sources), default=3))
-        say(f"looking up {min(LOOKUPS, sum(a.followers is None for a in fresh))} accounts' "
-            "followers", lo + span * 0.5)  # fmt: skip
-        look_up(fresh, find, pause)
+        # The accounts the searches gave numbers for are judged while the others are looked
+        # up: the model and the web each wait for the other no more (a minute a round).
+        ready = [a for a in fresh if a.followers is not None and filters.keeps(a)]
+        looking = min(LOOKUPS, sum(a.followers is None for a in fresh))
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="lookup") as pool:
+            lookups = pool.submit(look_up, fresh, find, pause)
+            if ready:
+                step(f"judging {len(ready)} accounts, looking up {looking} more",
+                     lo + span * 0.5)  # fmt: skip
+                with _opened(planner) as llm:
+                    rate(llm, niche, filters, taste, ready, meaning)
+            step(f"looking up {looking} accounts' followers", lo + span * 0.6)
+            lookups.result()
         judged.update(a.handle for a in fresh)
         # An account only the model named that no profile page was found for may not exist.
-        fresh = [a for a in fresh if a.sources != {"suggested"}]
-        able = [a for a in fresh if filters.keeps(a)]
-        say(f"judging {len(able)} accounts", lo + span * 0.75)
-        if able:
+        rated = {a.handle for a in ready}
+        later = [
+            a for a in fresh
+            if a.handle not in rated and a.sources != {"suggested"} and filters.keeps(a)
+        ]  # fmt: skip
+        if later:
+            step(f"judging {len(later)} accounts", lo + span * 0.75)
             with _opened(planner) as llm:
-                rate(llm, niche, filters, taste, able)
+                rate(llm, niche, filters, taste, later, meaning)
+        able = ready + later
+        new: list[Account] = []
         for account in able:
             if account.fit is None or account.fit < MIN_FIT:
                 continue
             if filters.takes(account.kind):
                 kept[account.handle] = account
+                new.append(account)
             else:
                 other_kind += 1
+        if new and found_now is not None:
+            found_now(new)
         if len(kept) >= size:
             break
+    if meaning:
+        notes.append(f"looked for: {meaning}")
     if failures:
         notes.append(f"{failures} searches got no answer from the search engines")
     if other_kind:
         notes.append(OTHER_KIND[filters.kind].format(n=other_kind))
     ranked = sorted(kept.values(), key=lambda a: (-(a.fit or 0), -(a.followers or 0)))[:size]
     if len(ranked) < size:
-        notes.append(f"found {len(ranked)} new accounts that fit; the searches ran out")
+        notes.append(f"found {len(ranked)} new accounts that fit; {ended}")
     say(f"found {len(ranked)} accounts", 1.0)
     return ranked, notes

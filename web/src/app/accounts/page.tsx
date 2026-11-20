@@ -81,19 +81,41 @@ function dmText(message: string, account: Pick<NicheAccount, "handle" | "name">)
     .replaceAll("{name}", account.name || account.handle);
 }
 
-/** Opens the account's Instagram chat and copies the message, in the one tap a browser
- * allows both in: the person pastes and sends it there. Counted as opened. */
-function openDm(
-  account: NicheAccount,
-  message: string | null,
-  onChange: (a: NicheAccount) => void,
-) {
-  window.open(account.message_url, "_blank", "noreferrer");
+/** Copies text at once, while the page still has the focus: a chat opening in a new tab or
+ * the Instagram app takes it away, and the clipboard API then refuses ("Document is not
+ * focused"). The old copy command works there and on phones; the API is the fallback. */
+function copyNow(text: string): boolean {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  if (!copied) void navigator.clipboard?.writeText(text).catch(() => undefined);
+  return copied;
+}
+
+/** What a tap on a Message link does before the link itself opens the chat (Instagram's
+ * app on a phone, its site on a computer): copies the message, so the person pastes and
+ * sends it there, and counts the message as opened. */
+function onDm(account: NicheAccount, message: string | null, onChange: (a: NicheAccount) => void) {
   if (message !== null) {
-    navigator.clipboard
-      ?.writeText(dmText(message, account))
-      .then(() => toast.success(`Message copied: paste it in @${account.handle}'s chat and send`))
-      .catch(() => toast.error("Couldn't copy the message; copy it from the queue"));
+    if (copyNow(dmText(message, account))) {
+      toast.success(`Message copied: paste it in @${account.handle}'s chat and send`);
+    } else {
+      toast.message("Copy the message from the queue if it doesn't paste");
+    }
   }
   api
     .nicheDmOpened(account.id)
@@ -110,10 +132,13 @@ function DmQueue({
   accounts,
   everywhere,
   onChange,
+  onSaved,
 }: {
   accounts: NicheAccount[];
   everywhere: () => Promise<NicheAccount[]>;
   onChange: (a: NicheAccount) => void;
+  /** The message as saved, which the Message buttons on the cards copy too. */
+  onSaved: (message: string) => void;
 }) {
   const [message, setMessage] = useState<string | null>(null);
   const [saved, setSaved] = useState("");
@@ -126,9 +151,10 @@ function DmQueue({
       .then((m) => {
         setMessage(m.message);
         setSaved(m.message);
+        onSaved(m.message);
       })
       .catch((err) => toast.error(errorText(err)));
-  }, []);
+  }, [onSaved]);
 
   const pool = all ?? accounts;
   const waiting = pool.filter((a) => !a.my_dm_opens && a.vote >= 0 && !skipped.has(a.id));
@@ -146,6 +172,7 @@ function DmQueue({
       const m = await api.setNicheMessage(message);
       setMessage(m.message);
       setSaved(m.message);
+      onSaved(m.message);
       toast.success("Message saved");
     } catch (err) {
       toast.error(errorText(err));
@@ -202,8 +229,16 @@ function DmQueue({
             </p>
           )}
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => openDm(next, message, changed)}>
-              <MessageCircle /> Copy message &amp; open @{next.handle}
+            <Button asChild>
+              <a
+                href={next.message_url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="dm-open"
+                onClick={() => onDm(next, message, changed)}
+              >
+                <MessageCircle /> Copy message &amp; open @{next.handle}
+              </a>
             </Button>
             <Button variant="outline" onClick={() => setSkipped((s) => new Set([...s, next.id]))}>
               Skip
@@ -316,12 +351,9 @@ function AccountCard({
             href={account.message_url}
             target="_blank"
             rel="noreferrer"
-            onClick={(e) => {
-              // Counted as it opens (Instagram opens in its own tab or app); a message
-              // given is copied as well.
-              e.preventDefault();
-              openDm(account, message, onChange);
-            }}
+            // The link itself opens the chat (on a phone, in the Instagram app); the tap
+            // counts it and copies a message given.
+            onClick={() => onDm(account, message, onChange)}
           >
             <MessageCircle /> Message
           </a>
@@ -376,6 +408,8 @@ export default function AccountsPage() {
   const queueOn = me?.features?.includes("dm_queue") ?? false;
   const [searches, setSearches] = useState<NicheSearch[]>([]);
   const [open, setOpen] = useState<NicheSearch | null>(null);
+  // The DM queue's saved message, which each card's Message button copies too.
+  const [dmMessage, setDmMessage] = useState<string | null>(null);
   const [niche, setNiche] = useState("");
   const [kind, setKind] = useState<NicheKind>("pages");
   const [min, setMin] = useState("10000");
@@ -428,7 +462,9 @@ export default function AccountsPage() {
     const every = window.setInterval(async () => {
       const list = await load();
       const now = list?.find((s) => s.id === open?.id);
-      if (now && open && now.status !== open.status) void show(now.id);
+      // Accounts show as each round finds them, not only at the end.
+      const more = now && open && now.count !== (open.accounts?.length ?? 0);
+      if (now && open && (now.status !== open.status || more)) void show(now.id);
     }, 3000);
     return () => window.clearInterval(every);
   }, [active, load, show, open]);
@@ -768,7 +804,11 @@ export default function AccountsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-hand text-2xl font-bold">
                 <Users className="mr-1 inline size-5" />
-                {current.status === "done" ? `${accounts.length} accounts` : "Searching"}
+                {current.status === "done"
+                  ? `${accounts.length} accounts`
+                  : accounts.length > 0
+                    ? `Searching · ${accounts.length} found so far`
+                    : "Searching"}
               </h2>
               <div className="flex gap-2">
                 {accounts.length > 0 && (
@@ -815,6 +855,7 @@ export default function AccountsPage() {
             <DmQueue
               key={open?.id}
               accounts={accounts}
+              onSaved={setDmMessage}
               everywhere={async () => {
                 // Each account once, as its latest search shows it.
                 const found = await Promise.all(
@@ -845,6 +886,7 @@ export default function AccountsPage() {
               <AccountCard
                 key={a.id}
                 account={a}
+                message={queueOn ? dmMessage : null}
                 onChange={(next) =>
                   setOpen((o) =>
                     o
