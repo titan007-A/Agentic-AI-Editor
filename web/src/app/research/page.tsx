@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { HiddenAccounts } from "@/components/hidden-accounts";
 import { InstagramAccounts, learning } from "@/components/instagram-accounts";
 import { PdfChooser } from "@/components/pdf-chooser";
-import { fromPage, ReelCard } from "@/components/reel-card";
+import { fromPage, isSong, ReelCard } from "@/components/reel-card";
 import { ResearchChat } from "@/components/research-chat";
 import { TrendRadar } from "@/components/trend-radar";
 import { useTrimChoice } from "@/components/trim-choice";
@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { filled, PresetFieldInputs, useFieldValues } from "@/components/job-fields";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { useMe } from "@/hooks/use-me";
 import { usePolling } from "@/hooks/use-polling";
 import {
   api,
@@ -70,6 +71,7 @@ const SITES: { site: Site; label: string }[] = [
   { site: "instagram", label: "Instagram reels" },
   { site: "shorts", label: "YouTube Shorts" },
   { site: "x", label: "X (posts with a video)" },
+  { site: "songs", label: "YouTube full songs (artist / label channel)" },
 ];
 
 /** A PDF song's words as the lines of a job's notes the edit reads (see names.py). */
@@ -147,6 +149,9 @@ function Researcher() {
   const fieldValues = useFieldValues();
   const trimChoice = useTrimChoice();
   const [editing, setEditing] = useState(false);
+  // Whole songs' YouTube videos: for accounts with the youtube_songs feature.
+  const songsOn = useMe()?.features?.includes("youtube_songs") ?? false;
+  const offered = SITES.filter((s) => s.site !== "songs" || songsOn);
 
   const refreshList = useCallback(
     () =>
@@ -238,7 +243,8 @@ function Researcher() {
     if (!current || editing) return;
     const presetOf = (item: ResearchItem) => presets.find((p) => p.name === chosen[item.id]);
     const picked = current.items.filter((i) => i.id in chosen);
-    const trim = await trimChoice.choose(picked.map(presetOf));
+    // A whole song is always cut to its preset's length: it's never asked about.
+    const trim = await trimChoice.choose(picked.filter((i) => !isSong(i)).map(presetOf));
     if (trim === null) return;
     setEditing(true);
     const jobs: Started[] = [];
@@ -250,7 +256,7 @@ function Researcher() {
         const given = fieldNotes(fieldsOf(item), fieldValues.values, used);
         const told = [entry && entryNotes(entry), given, notes.trim()].filter(Boolean).join("\n");
         const preset = presetOf(item);
-        const keep = !trim && preset !== undefined && asksTrim(preset);
+        const keep = !trim && !isSong(item) && preset !== undefined && asksTrim(preset);
         const [job] = await api.createJobs([item.url], [chosen[item.id]], told, !keep);
         jobs.push({ item, jobId: job.id });
       }
@@ -314,6 +320,15 @@ function Researcher() {
           showed you before. With source pages, 4 in 10 come from them and 6 from the search. Choose
           up to 10 of them to edit.
         </p>
+        {songsOn && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            YouTube full songs searches YouTube itself for whole songs on the singer&apos;s own
+            channel or an official label&apos;s (T-Series, Sony Music, VEVO...). The model looks at
+            every one and leaves out streams, interviews, medleys, lyric or audio-only videos and
+            fan uploads. It gives up to 30 (of up to 90 it rates), and each edit cuts the song to
+            its preset&apos;s length.
+          </p>
+        )}
       </div>
 
       <InstagramAccounts accounts={accounts} presets={presets} onChange={refreshAccounts} />
@@ -394,16 +409,16 @@ function Researcher() {
             <fieldset className="space-y-1">
               <legend className="text-sm font-medium">Search</legend>
               <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {SITES.map(({ site, label }) => (
+                {offered.map(({ site, label }) => (
                   <label key={site} className="flex items-center gap-2 text-sm">
                     <Checkbox
                       checked={sites.includes(site)}
                       onCheckedChange={(on) =>
                         setSites(
                           on
-                            ? SITES.map((s) => s.site).filter(
-                                (s) => s === site || sites.includes(s),
-                              )
+                            ? offered
+                                .map((s) => s.site)
+                                .filter((s) => s === site || sites.includes(s))
                             : sites.filter((s) => s !== site),
                         )
                       }

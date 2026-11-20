@@ -72,10 +72,16 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-")[:80] or "video"
 
 
+# The best version up to 4K (3840 on the long side, either way up): official music videos
+# come in 8K, many times the size and the decoding, for reels made 1080 wide. A video only
+# offered larger still comes at its best; one whose size the site doesn't say passes.
+FORMAT = "bv*[width<=?3840][height<=?3840]+ba/b[width<=?3840][height<=?3840]/bv*+ba/b"
+
+
 def _ytdlp_options(dest: Path) -> dict:
     settings = get_settings()
     options = {
-        "format": "bv*+ba/b",
+        "format": FORMAT,
         "merge_output_format": "mkv",
         "outtmpl": str(dest / "source.%(ext)s"),
         "noplaylist": True,

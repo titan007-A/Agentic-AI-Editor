@@ -1,5 +1,5 @@
-"""The researcher: Instagram reels and YouTube Shorts for what a person describes, ranked by
-how well they fit it and how far they have spread.
+"""The researcher: Instagram reels, YouTube Shorts and whole songs' YouTube videos for what a
+person describes, ranked by how well they fit it and how far they have spread.
 
 Instagram has no open search, so it is searched the way a chat assistant does: web search
 engines with "site:instagram.com/reel ..." (free, no key: see websearch). The planning
@@ -11,6 +11,14 @@ Engines index only part of Instagram, mostly popular reels a few days old or mor
 research finds plenty, never everything. YouTube is searched the same way
 ("site:youtube.com/shorts ..."), for Shorts only: a link to a video, or one YouTube says is
 longer than a Short, is left out.
+
+Whole songs ("songs") are found with YouTube's own search instead (yt-dlp, no key), which
+finds far more than the engines index: only a song's own video (not a Short, a jukebox, a
+lyric or audio-only copy) on the singer's own channel, their VEVO or an official music
+label's (T-Series, Sony Music...), never a fan's or a reupload. A search's results already
+say each one's channel, its badge and length, so only those that may be a song are looked
+up; a verified channel that is neither known nor named after the singer is the planning
+model's to judge as it rates. The edit then cuts a song to its preset's length.
 
 A research can be for one of the owner's Instagram accounts: the account is learned first
 (its own reels, found the same way, and what the planning model reads in them), and the
@@ -43,12 +51,12 @@ log = logging.getLogger(__name__)
 
 # A reel's link, also one under an account ("instagram.com/<name>/reel/<code>").
 REEL = re.compile(r"https?://(?:www\.|m\.)?instagram\.com/(?:[\w.]+/)?(?:reels?|p)/([\w-]{5,})")
-# A YouTube video's link; a research takes only Shorts ("/shorts/"), but an edited one may
-# have been given as a watch link too.
+# A YouTube video's link: a Short ("/shorts/"), or a watch link (a whole song, or a Short an
+# edit was given that way).
 VIDEO = re.compile(
     r"https?://(?:www\.|m\.)?(?:youtube\.com/(?:shorts/|watch\?v=)|youtu\.be/)([\w-]{11})"
 )
-YOUTUBE = "yt:"  # a Short's code is this and its video id: Instagram codes have no colon
+YOUTUBE = "yt:"  # a YouTube video's code is this and its id: Instagram codes have no colon
 # A post on X (Twitter): its link, and its code ("x:" and the post's id).
 POST = re.compile(
     r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/(?:\w{1,15}|i(?:/web)?)/status/(\d{5,25})"
@@ -60,11 +68,48 @@ SITES = {
     "instagram": "site:instagram.com/reel",
     "shorts": "site:youtube.com/shorts",
     "x": "site:x.com video",
+    "songs": "ytsearch",  # YouTube's own search, not the engines (see _youtube_songs)
 }
+SONGS = "songs"
 SITE = SITES["instagram"]
 # What a daily research searches: X only when the person asks for it.
 DAILY_SITES = ("instagram", "shorts")
 MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
+# A whole song's video, in seconds: shorter is a clip or a teaser, longer a jukebox or a
+# concert.
+MIN_SONG, MAX_SONG = 90, 600
+SONG_RESULTS = 20  # YouTube's first page of results, for each search
+SONGS_SHOWN = 30  # with whole songs, the best this many are kept: the owner wants many
+SONGS_REELS = 90  # and this many looked up and rated
+SONGS_PER_CHANNEL = 5  # of them at most from one channel: a label posts many singers' songs
+SONGS_PER_ARTIST = 4  # and of one singer: twice as many shown, twice PER_ARTIST
+# A title that says it's the song's own video: what a verified channel nobody knows needs,
+# besides the model's word, when it isn't named after the singer.
+OFFICIAL = re.compile(
+    r"\b(?:official|ufficiale|oficial|officiel|offiziell|full video|music video|mv)\b",
+    re.IGNORECASE,
+)
+# Not a song's own video, by its title: a compilation, a lyric, audio-only or altered copy,
+# a teaser. ("bts" is a band, so not "behind the scenes" by its letters.)
+NOT_A_SONG = re.compile(
+    r"\b(?:jukebox|lyrics?|lyrical|audio|visuali[sz]er|8d|slowed|reverb|sped up|nightcore|"
+    r"karaoke|instrumental|teaser|trailer|making of|behind the scenes|reaction|full album|"
+    r"non ?stop|playlist|compilation|back to back)\b",
+    re.IGNORECASE,
+)
+# Official music labels' channels, as compact lowercase names start: a singer's songs are
+# often on their label's channel, not their own. Any other verified channel the model judges.
+LABELS = (
+    "tseries", "sonymusic", "zeemusic", "saregama", "tipsofficial", "tipsmusic",
+    "yrf", "speedrecords", "desimelodies", "whitehillmusic", "timesmusic", "venusmovies",
+    "universalmusic", "warnermusic", "emimusic", "atlanticrecords", "columbiarecords",
+    "interscope", "republicrecords", "capitolrecords", "islandrecords", "rcarecords",
+    "defjam", "epicrecords", "parlophone", "elektrarecords", "bigmachine", "ultramusic",
+    "spinninrecords", "adityamusic", "laharimusic", "thinkmusic", "muzik247",
+    "panoramamusic", "jjustmusic", "humblemusic", "geetmp3", "rhino",
+)  # fmt: skip
+# What a search for reels has that YouTube's search would take literally.
+NOT_FOR_YOUTUBE = re.compile(r"\b(?:reels?|shorts|instagram|insta|tiktok|viral)\b", re.I)
 # Picture quality, by the short side of the best version the site offers: below SD is left
 # out (it looks soft once edited at 1080 wide), SD ranks a little lower than HD.
 SD, HD = 480, 720
@@ -133,6 +178,12 @@ class Reel:
     looked_up: bool = False
     views: int | None = None  # YouTube gives them; Instagram doesn't without signing in
     long: bool = False  # a YouTube video, not a Short: left out
+    full: bool = False  # a whole song's YouTube video (site "songs"), not a Short
+    # A whole song's channel, as its name, badge and title tell: "own" (the singer's, or
+    # their VEVO), "label", "source" (a page the owner chose); "" when the model judges.
+    channel_kind: str = ""
+    usable: bool | None = None  # the model's word on a whole song's video (see RATE)
+    unfit: str = ""  # why a whole song's video can't be used ("not a song's video"...)
     no_video: bool = False  # a post on X without a video (or one yt-dlp can't read): left out
     page: str = ""  # the Instagram source page it was searched for: kept only when its own
     source: str = ""  # the source page it came from ("instagram:name"), "" when a search's
@@ -153,8 +204,12 @@ class Reel:
     seen: bool = False  # shown by an earlier research
 
     @property
-    def short(self) -> bool:
+    def youtube(self) -> bool:
         return self.code.startswith(YOUTUBE)
+
+    @property
+    def short(self) -> bool:
+        return self.youtube and not self.full
 
     @property
     def on_x(self) -> bool:
@@ -162,6 +217,8 @@ class Reel:
 
     @property
     def kind(self) -> str:
+        if self.full:
+            return "YouTube song (whole video)"
         return "YouTube Short" if self.short else "X post" if self.on_x else "Instagram reel"
 
     @property
@@ -184,7 +241,8 @@ class Result:
     repeats: int = 0  # shown by an earlier research, so left out
     considered: int = 0  # reels looked up and rated
     # Reels found but not given, by why: "edited", "shown before", "the account's own",
-    # "didn't fit", "hidden account", "not a Short", "low quality", "same account".
+    # "didn't fit", "hidden account", "not a Short", "low quality", "same account", and
+    # for whole songs "not a song's video", "not the artist's or a label's channel".
     left_out: dict[str, int] = field(default_factory=dict)
     cutoff: float | None = None  # the best score of the reels that fit but weren't given
 
@@ -246,6 +304,7 @@ class Rating(BaseModel):
     matches: str = Field(max_length=200)
     preset: str = Field(max_length=80)
     preset_why: str = Field(max_length=200)
+    usable: bool  # a whole song's video is one to edit, on the singer's or a label's channel
 
 
 class Ratings(BaseModel):
@@ -314,7 +373,8 @@ PLAN_FOR = (
     "Hinglish, comes first. " + SEARCHES
 )
 RATE = (
-    "Rate how well each reel (an Instagram reel or a YouTube Short) fits what the editor "
+    "Rate how well each reel (an Instagram reel, a YouTube Short or a YouTube song's whole "
+    "video) fits what the editor "
     "wants, from its account, caption "
     "and search snippet. Judge only the content asked for, not popularity: music of another "
     "language or country than the one asked for is 0, and so is a reel that only shares a "
@@ -328,6 +388,13 @@ RATE = (
     "- matches: a few words on which part of what they want it matches, else ''\n"
     "- preset: the name of the preset it suits best, exactly as listed, else ''\n"
     "- preset_why: a few words on why that preset\n"
+    "- usable: for a YouTube song, true only when it is one song's own video that a reel "
+    "can be edited from (its official music video, or the singer performing it) and its "
+    "account (the YouTube channel) is the singer's or band's own (or their VEVO) or an "
+    "official music label's (T-Series, Sony Music, Universal Music, Atlantic...); false for "
+    "a stream, a podcast or interview, a compilation or medley of many songs, a lyric or "
+    "still-picture video, a cover by someone else, and a fan's, reupload, radio or TV "
+    "show's channel; for any other reel, true\n"
     "Judge each reel by its own caption: reels found by the same search are often about "
     "different songs and fit differently. Judge the music by its artist and song, not by "
     "the language its caption is written in: a Spanish caption about an Italian song is "
@@ -397,8 +464,114 @@ def code_of(link: str) -> str | None:
     return None
 
 
-def kind_of(code: str) -> str:
-    return Reel(code=code, url="", query="").kind
+def kind_of(code: str, url: str = "") -> str:
+    """What a reel is, by its code and link: a YouTube video that isn't a Short's link is
+    a whole song (see song_url)."""
+    full = code.startswith(YOUTUBE) and bool(url) and "/shorts/" not in url
+    return Reel(code=code, url=url, query="", full=full).kind
+
+
+def song_url(code: str) -> str:
+    """A whole song's video's link (a YouTube code's), where reel_url gives a Short's."""
+    return f"https://www.youtube.com/watch?v={code.removeprefix(YOUTUBE)}"
+
+
+NOT_SONG = "not a song's video"
+NOT_USABLE = "not a song video to edit"  # the model's word (see judge_songs)
+LIVE = ("is_live", "is_upcoming", "was_live", "post_live")  # streams, on or past
+OFF_CHANNEL = "not the artist's or a label's channel"
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text.casefold())
+
+
+def _bare(channel: str) -> str:
+    """A compact channel name without the words channels add to a singer's name."""
+    return re.sub(r"(?:official|music|vevo|tv|channel)+$", "", channel)
+
+
+def channel_kind(channel: str, verified: bool | None, title: str) -> str | None:
+    """Whose channel a whole song's video is on, as far as its name, badge and title tell:
+    "own" (a VEVO, or the singer's: titles say "Singer - Song"), "label" (an official
+    label's), "" (verified, the model judges), None (not one to take: a "- Topic" channel
+    shows a still picture, and anyone may name a channel after a singer without YouTube's
+    badge)."""
+    name = _compact(channel)
+    if not name or channel.casefold().rstrip().endswith("- topic"):
+        return None
+    if name.endswith("vevo"):
+        return "own"
+    if not verified:
+        return None
+    if name.startswith(LABELS):
+        return "label"
+    singer = re.split(r"\s[-–—]\s", title, maxsplit=1)
+    bare = _bare(name)
+    if len(singer) == 2 and len(bare) >= 3 and bare in _compact(singer[0]):
+        return "own"
+    return ""
+
+
+def not_a_song(link: str, title: str, duration: float | None, media_type=None, live=None) -> str:
+    """Why a YouTube video isn't a whole song's own (NOT_SONG), "" when it may be: a Short,
+    a live stream, too short or too long (see MIN_SONG), or a title that says it's a
+    compilation, a lyric or audio-only copy, a teaser (see NOT_A_SONG)."""
+    if "/shorts/" in link or media_type == "short" or live in LIVE:
+        return NOT_SONG
+    if duration is not None and not MIN_SONG <= duration <= MAX_SONG:
+        return NOT_SONG
+    return NOT_SONG if NOT_A_SONG.search(title) else ""
+
+
+def _song(entry: dict, query: str, source: str = "") -> Reel | None:
+    """A whole song's video from a YouTube listing (a search's, a channel's), with what the
+    listing says: its channel, views, length, and why it can't be used, if it can't."""
+    link = entry.get("url") or ""
+    code = code_of(link) or (YOUTUBE + entry["id"] if entry.get("id") else None)
+    if not code or not code.startswith(YOUTUBE):
+        return None
+    title = entry.get("title") or ""
+    reel = Reel(code, song_url(code), query, title=title[:200], full=True)
+    reel.snippet = (entry.get("description") or "")[:500]
+    reel.account = entry.get("channel") or entry.get("uploader") or ""
+    reel.views = _count(entry.get("view_count"))
+    if isinstance(entry.get("duration"), int | float):
+        reel.duration = float(entry["duration"])
+    reel.unfit = not_a_song(link, title, reel.duration, live=entry.get("live_status"))
+    if not reel.unfit:
+        kind = (
+            "source"
+            if source
+            else channel_kind(reel.account, entry.get("channel_is_verified"), title)
+        )
+        reel.channel_kind, reel.unfit = (kind, "") if kind is not None else ("", OFF_CHANNEL)
+    return reel
+
+
+def judge_songs(reels: list[Reel]) -> None:
+    """After rating, the model's look at every whole song: one it says isn't a song's own
+    video to edit (a stream, an interview, a medley, a fan's upload...), or didn't judge,
+    is left out. Of the rest, one on a verified channel that is neither a VEVO, a known
+    label's nor the title's singer's is the singer's own when it's named after the singer
+    the model names; else it's kept ("judged") only when its title also says it's the
+    official video or names the channel: the model alone takes a verified reupload too."""
+    for r in reels:
+        if not r.full or r.unfit:
+            continue
+        if not r.usable:
+            r.unfit = NOT_USABLE
+        elif not r.channel_kind:
+            name, artist = _compact(r.account), _compact(r.artist)
+            bare = _bare(name)
+            own = artist and name and (artist in name or (len(bare) >= 3 and bare in artist))
+            named = len(bare) >= 3 and bare in _compact(r.title or r.caption)
+            if own:
+                r.channel_kind = "own"
+            elif named or OFFICIAL.search(r.title or r.caption):
+                r.channel_kind = "judged"
+            else:
+                r.unfit = OFF_CHANNEL
 
 
 def reel_url(code: str) -> str:
@@ -663,7 +836,7 @@ def describe(found) -> str:
         who = f"@{item.handle}" if item.handle else item.account or "?"
         fit = "?" if item.relevance is None else f"{round(item.relevance * 10)}/10"
         lines.append(
-            f"#{item.rank + 1} {kind_of(item.code).removeprefix('Instagram ')}"
+            f"#{item.rank + 1} {kind_of(item.code, item.url).removeprefix('Instagram ')}"
             f" by {who}: song {item.song or '?'}; fit {fit} ({item.why}); "
             f"matches {item.matches or '?'}; preset {item.preset or '-'} ({item.preset_why}); "
             f"{item.likes if item.likes is not None else '?'} likes, "
@@ -693,30 +866,65 @@ def _engines(query: str, count: int) -> list[dict]:
     return websearch.search(query, count)
 
 
+def _youtube_songs(query: str, count: int) -> list[dict]:
+    """YouTube's own search results for a query, as yt-dlp lists them without opening each
+    one: link, title, channel and its badge, length, views."""
+    from yt_dlp import YoutubeDL
+
+    options = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}
+    options = {**options, "socket_timeout": 15, "logger": _Quiet()}
+    with signed_in(options) as options, YoutubeDL(options) as ydl:
+        return ydl.extract_info(f"ytsearch{count}:{query}", download=False).get("entries") or []
+
+
+def song_query(query: str) -> str:
+    """A search written for reels, as YouTube's search is asked it for whole songs."""
+    return " ".join(NOT_FOR_YOUTUBE.sub(" ", query).split()) or query
+
+
 def search(
     queries: list[str],
     find=_engines,
     pause: float | None = None,
     progress: Progress | None = None,
     sites: tuple[str, ...] = ("instagram",),
+    songs=_youtube_songs,
 ) -> tuple[list[Reel], list[str]]:
     """Reels the searches find on each of `sites` (see SITES), each once, in the order
-    found; and the searches that failed (an engine turned it away, or none answered)."""
+    found; and the searches that failed (an engine turned it away, or none answered).
+    Whole songs ("songs") are searched on YouTube itself (`songs`); those that can't be
+    used, as what the search said shows, come marked (Reel.unfit) to be counted."""
     from agentic_editor import websearch
 
     pause = PAUSE if pause is None else pause
     found: dict[str, Reel] = {}
     failed = []
     asked = [(query, site) for query in queries for site in sites]
+
+    def ask(asking: tuple[str, str]) -> list[dict]:
+        query, site = asking
+        if site == SONGS:
+            return songs(song_query(query), SONG_RESULTS)
+        return find(f"{SITES[site]} {query}", PER_QUERY)
+
     # A few searches at once (each pausing after its own): kept in the order asked.
-    answers = websearch.each(asked, lambda ask: find(f"{SITES[ask[1]]} {ask[0]}", PER_QUERY), pause)
+    answers = websearch.each(asked, ask, pause)
     for n, ((query, site), hits) in enumerate(answers):
         if progress:
-            where = {"shorts": " (YouTube Shorts)", "x": " (X)"}.get(site, "")
-            progress(f"searching: {query}{where}", 0.05 + 0.35 * (n + 1) / len(asked))
+            where = {"shorts": " (YouTube Shorts)", "x": " (X)", SONGS: " (YouTube songs)"}
+            progress(f"searching: {query}{where.get(site, '')}", 0.05 + 0.35 * (n + 1) / len(asked))
         if isinstance(hits, Exception):  # the engines are third parties: one failing is one less
             log.warning("search %r on %s failed: %s", query, site, hits)
             failed.append(query)
+            continue
+        if site == SONGS:
+            for entry in hits:
+                # A Short is the Shorts search's: kept out of the way of its code.
+                if "/shorts/" in (entry.get("url") or ""):
+                    continue
+                reel = _song(entry, query)
+                if reel and reel.code not in found:
+                    found[reel.code] = reel
             continue
         for hit in hits:
             link = hit.get("href", "")
@@ -773,10 +981,23 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
             # A post with a few videos: the first is the one edited (see download.fetch).
             first = next(iter(meta["entries"]), None) or {}
             meta = {**meta, **{k: v for k, v in first.items() if v is not None}}
-        if reel.short:
-            # A Short is vertical and at most MAX_SHORT long; YouTube says which it is.
+        if reel.youtube:
             kind, length = meta.get("media_type"), meta.get("duration") or 0
-            reel.long = kind not in (None, "short") or length > MAX_SHORT
+            if reel.full:
+                title = meta.get("title") or reel.title
+                reel.unfit = not_a_song(
+                    reel.url, title, meta.get("duration"), kind, meta.get("live_status")
+                )
+                verified = meta.get("channel_is_verified")
+                # The channel again, as the video's page says (the search's word stands
+                # when the page doesn't say); a source page's is the owner's choice.
+                if not reel.unfit and reel.channel_kind != "source" and verified is not None:
+                    found = channel_kind(meta.get("channel") or reel.account, verified, title)
+                    reel.channel_kind = found or ""
+                    reel.unfit = OFF_CHANNEL if found is None else ""
+            else:
+                # A Short is vertical and at most MAX_SHORT long; YouTube says which it is.
+                reel.long = kind not in (None, "short") or length > MAX_SHORT
             reel.account = meta.get("channel") or meta.get("uploader") or ""
             reel.handle = (meta.get("uploader_id") or "").removeprefix("@").lower()
             title, about = meta.get("title") or "", meta.get("description") or ""
@@ -823,7 +1044,8 @@ def source_of(text: str) -> str | None:
 
 
 def _channel_shorts(url: str, count: int) -> list[dict]:
-    """A YouTube channel's latest Shorts, newest first, as its Shorts tab lists them."""
+    """A YouTube channel's latest Shorts (or videos), newest first, as the tab of `url`
+    lists them."""
     from yt_dlp import YoutubeDL
 
     options = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist"}
@@ -838,10 +1060,12 @@ def from_sources(
     pause: float | None = None,
     channel=_channel_shorts,
     each: int = PER_SOURCE,
+    songs: bool = False,
 ) -> list[Reel]:
     """The latest `each` reels of each source page: a YouTube channel's Shorts tab lists
-    them; an Instagram page can't be listed without signing in, so it is searched for, and
-    what the search finds is kept only when it is the page's own (see run)."""
+    them (and with `songs` its Videos tab its whole songs); an Instagram page can't be
+    listed without signing in, so it is searched for, and what the search finds is kept
+    only when it is the page's own (see run)."""
     found: dict[str, Reel] = {}
     for source in sources[:MAX_SOURCES]:
         kind, name = source.split(":", 1)
@@ -859,6 +1083,17 @@ def from_sources(
                     reel = Reel(code, reel_url(code), f"from {name}", title=title)
                     reel.source = source
                     found[code] = reel
+            if songs:
+                try:
+                    videos = channel(f"https://www.youtube.com/{name}/videos", each)
+                except Exception as exc:
+                    log.warning("couldn't list %s's videos: %s", name, exc)
+                    videos = []
+                for entry in videos:
+                    reel = _song(entry, f"from {name}", source)
+                    if reel and not reel.unfit and reel.code not in found:
+                        reel.source = source
+                        found[reel.code] = reel
         else:
             reels, _ = search([f'"{name}"'], find, pause)
             for reel in reels[: each * 2]:  # half of what a search finds is others'
@@ -920,6 +1155,7 @@ def rate(
                 title = rating.song.strip()
                 reel.song = f"{title} - {reel.artist}" if title and reel.artist else title
                 reel.matches = rating.matches.strip()
+                reel.usable = rating.usable
                 if rating.preset.strip() in context.presets:
                     reel.preset = rating.preset.strip()
                     reel.preset_why = rating.preset_why.strip()
@@ -1023,7 +1259,11 @@ def pick(
     a side with too few leaves its places to the other. The pages were chosen by the
     owner, so they share their places between them, whatever `per_account` (and fill the
     searches' empty ones with no cap), and a singer's own channel isn't held to
-    `per_artist`."""
+    `per_artist`.
+
+    Whole songs come SONGS_PER_CHANNEL from one channel (a label's posts many singers'
+    songs), and all of them when the singer was asked for: the channel is often theirs;
+    and SONGS_PER_ARTIST of one singer."""
     named = f" {_same(asked)} "
     picked: list[Reel] = []
     passed = {"same account": 0, "same song": 0, "same artist": 0}
@@ -1039,16 +1279,19 @@ def pick(
 
     def blocked(reel: Reel, filling: bool = False) -> str | None:
         who, song, artist = _same(reel.handle or reel.account), _same(reel.song), _same(reel.artist)
+        wanted = artist and f" {artist} " in named
         cap = per_account
         if reel.source:  # a page filling the searches' empty places has no cap of its own
             cap = count if filling else page_cap
+        elif reel.full:
+            cap = count if wanted else max(per_account, SONGS_PER_CHANNEL)
         if who and accounts.get(who, 0) >= cap:
             return "same account"
         if song and songs.get(song, 0) >= per_song:
             return "same song"
-        wanted = artist and f" {artist} " in named
         free = wanted or (reel.source and sourced is not None)
-        if per_artist is not None and artist and not free and artists.get(artist, 0) >= per_artist:
+        most = max(per_artist, SONGS_PER_ARTIST) if reel.full and per_artist else per_artist
+        if most is not None and artist and not free and artists.get(artist, 0) >= most:
             return "same artist"
         return None
 
@@ -1166,33 +1409,40 @@ def run(
     context: Context | None = None,
     sites: tuple[str, ...] = ("instagram",),
     channel=_channel_shorts,
+    songs=_youtube_songs,
 ) -> Result:
     """Search, look up, rate, rank and pick the best few. `planner()` opens the planning
     model, which holds the GPU, so it is opened only to plan and to rate, never while
     waiting on the web. Reels in `used` (already edited), in `seen` (shown by an earlier
     research), the account's own and those that don't fit are left out, so each research
-    brings new ones."""
+    brings new ones. With whole songs more are looked up and given (SONGS_REELS,
+    SONGS_SHOWN), and only those the model says are a song's own video to edit."""
     context = context or Context()
+    many = SONGS in sites
+    limit, shown = (SONGS_REELS, SONGS_SHOWN) if many else (MAX_REELS, SHOWN)
     progress("planning the searches", 0.02)
     with planner() as llm:
         brief, queries = plan(llm, description, context)
-    reels, failed = search(queries, find, pause, progress, sites)
+    reels, failed = search(queries, find, pause, progress, sites, songs)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
     if context.sources:
         progress("looking at your source pages", 0.42)
         # The pages first, their share of what is looked up, so the searches still count.
-        share = round(MAX_REELS * SOURCE_SHARE)
+        share = round(limit * SOURCE_SHARE)
         each = max(PER_SOURCE, -(-share // len(context.sources[:MAX_SOURCES])))
-        picked = from_sources(context.sources, find, pause, channel, each)[:share]
+        picked = from_sources(context.sources, find, pause, channel, each, many)[:share]
         taken = {r.code for r in picked}
         reels = picked + [r for r in reels if r.code not in taken]
+    # Whole songs the search already shows can't be used aren't looked up.
+    unfit = Counter(r.unfit for r in reels if r.unfit)
+    reels = [r for r in reels if not r.unfit]
     left_out = {
         "edited": sum(r.code in used for r in reels),
         "shown before": sum(r.code in seen and r.code not in used for r in reels),
         "the account's own": sum(r.code in context.own - used - seen for r in reels),
     }
-    reels = [r for r in reels if r.code not in used | seen | context.own][:MAX_REELS]
+    reels = [r for r in reels if r.code not in used | seen | context.own][:limit]
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
     reels = [r for r in reels if not r.page or r.handle == r.page]  # another's, found by name
@@ -1203,7 +1453,8 @@ def run(
     reels = [r for r in reels if r.handle not in context.hidden]
     left_out["not a Short"] = sum(r.long for r in reels)
     left_out["no video"] = sum(r.no_video for r in reels)
-    reels = [r for r in reels if not r.long and not r.no_video]
+    unfit.update(r.unfit for r in reels if r.unfit)
+    reels = [r for r in reels if not r.long and not r.no_video and not r.unfit]
     left_out["low quality"] = sum(r.quality == "low" for r in reels)
     reels = [r for r in reels if r.quality != "low"]
     progress(f"rating {len(reels)} reels", 0.7)
@@ -1214,14 +1465,18 @@ def run(
             if brief:
                 wanted = f"{brief} (their words: {wanted})" if wanted else brief
             rate(llm, wanted, reels, context=context)
+    judge_songs(reels)
+    unfit.update(r.unfit for r in reels if r.unfit)
+    reels = [r for r in reels if not r.unfit]
+    left_out.update(unfit)
     fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
     left_out["didn't fit"] = len(reels) - len(fitting)
     suggest(fitting, context)
     spread(fitting)
     # Only the person's own words (and answers) free an artist: the model's brief may name
     # examples of a genre they didn't ask for.
-    sourced = round(SHOWN * SOURCE_SHARE) if context.sources else None
-    picked, passed, cutoff = pick(rank(fitting), asked=description, sourced=sourced)
+    sourced = round(shown * SOURCE_SHARE) if context.sources else None
+    picked, passed, cutoff = pick(rank(fitting), shown, asked=description, sourced=sourced)
     left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
     return Result(
         queries,
@@ -1249,6 +1504,7 @@ def run_pdf(
     context: Context | None = None,
     sites: tuple[str, ...] = ("instagram",),
     kind: str = "songs",
+    songs=_youtube_songs,
 ) -> list[tuple[int, Reel]]:
     """For each item a PDF lists (see pdf_entries), the best few reels of it, PER_ENTRY at
     most, as (its entry's number, reel): searched for by its name and who or what it is
@@ -1257,7 +1513,7 @@ def run_pdf(
     aircraft"...): songs are searched for as performances, anything else as itself. An
     item nothing fitting turned up for is searched for once more, with other words: the
     engines give a different few each time."""
-    songs = is_songs(kind)
+    of_songs = is_songs(kind)
     context = context or Context()
     given: list[tuple[int, Reel]] = []
     taken = used | seen | context.own
@@ -1266,7 +1522,7 @@ def run_pdf(
         song, singer = entry["song"], entry["singer"]
         who = " - ".join(x for x in (song, singer) if x)
         progress(f"searching for {who} ({n + 1} of {len(entries)})", 0.05 + 0.9 * n / len(entries))
-        if songs:
+        if of_songs:
             rounds = [[f"{singer} {song}", f"{song} {singer} live"],
                       [f"{song} {singer} reel", f"{singer} {song} performance"]]  # fmt: skip
         else:
@@ -1276,9 +1532,10 @@ def run_pdf(
         looked: set[str] = set()  # by the first round: not again in the second
         for queries in rounds:
             queries = _tidy(queries)
-            reels, failed = search(queries, find, pause, sites=sites)
+            reels, failed = search(queries, find, pause, sites=sites, songs=songs)
             answered = answered or len(failed) < len(queries) * len(sites)
-            reels = [r for r in reels if r.code not in taken | looked][:PDF_REELS]
+            reels = [r for r in reels if r.code not in taken | looked and not r.unfit]
+            reels = reels[:PDF_REELS]
             looked |= {r.code for r in reels}
             look_up(reels, info)
             reels = [
@@ -1286,6 +1543,7 @@ def run_pdf(
                 for r in reels
                 if not r.long
                 and not r.no_video
+                and not r.unfit
                 and r.quality != "low"
                 and r.handle not in context.hidden
                 and not (context.handle and r.handle == context.handle)
@@ -1294,13 +1552,16 @@ def run_pdf(
                 with planner() as llm:
                     wish = (
                         f"reels of the song '{song}' by {singer}, {singer} singing it"
-                        if songs
+                        if of_songs
                         else f"reels showing {song}"
                         + (f" ({singer})" if singer else "")
                         + f": one of a list of {kind}, the reel about this one itself"
                     )
                     rate(llm, wish, reels, context=context)
-            fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
+            judge_songs(reels)
+            fitting = [
+                r for r in reels if not r.unfit and (r.relevance is None or r.relevance >= MIN_FIT)
+            ]
             suggest(fitting, context)
             if entry.get("preset"):
                 # The preset the person chose for the song's section (see songlist.py).
