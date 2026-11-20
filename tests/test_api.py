@@ -2678,3 +2678,27 @@ def test_an_employees_presets_can_be_one_admins_and_the_primarys_alone(env, monk
 
     assert boss.put(url, json={"on": False}).json()["presets_by"] is None
     assert arham.get(whose).status_code == 200
+
+
+def test_the_dm_queue_keeps_each_persons_message(env):
+    import json as json_
+
+    from agentic_editor import features
+    from agentic_editor.db import Setting
+
+    assert features.DEFAULTS["dm_queue"] == ("siddhant-content",)
+    name = env.client.get("/api/me").json()["user"]
+    assert env.client.get("/api/niche-message").status_code == 403  # no Accounts tab yet
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:niche_finder", value=json_.dumps([name])))
+        session.commit()
+    first = env.client.get("/api/niche-message").json()
+    assert first == {"message": "Are you interested in selling your page?"}
+    mine = "Hi @{handle}, are you interested in selling {name}?"
+    assert env.client.put("/api/niche-message", json={"message": f"  {mine} "}).json() == {
+        "message": mine
+    }
+    assert env.client.get("/api/niche-message").json()["message"] == mine
+    # Emptied, it goes back to the first message rather than sending nothing.
+    reset = env.client.put("/api/niche-message", json={"message": " "}).json()
+    assert reset["message"] == "Are you interested in selling your page?"

@@ -751,6 +751,9 @@ export const api = {
     request<NicheAccount>("POST", `/niche/accounts/${id}/vote`, { vote, reason }),
   /** The person opened a message to the account: counted, and kept out of their searches for 30 days. */
   nicheDmOpened: (id: number) => request<NicheAccount>("POST", `/niche/accounts/${id}/dm`),
+  nicheMessage: () => request<{ message: string }>("GET", "/niche-message"),
+  setNicheMessage: (message: string) =>
+    request<{ message: string }>("PUT", "/niche-message", { message }),
   wrapped: (month?: string) =>
     request<FunWrapped>("GET", `/fun/wrapped${month ? `?month=${month}` : ""}`),
   acceptNotice: () => request("POST", "/notice"),
