@@ -44,6 +44,9 @@ class User(Base):
     # The primary account: the one admin who makes, changes and removes the other admins
     # (accounts.primary; until one is marked, the first admin).
     is_primary: Mapped[bool] = mapped_column(default=False)
+    # An admin whose presets are their own (presets/people/<id>, as an employee's), seen
+    # only by them and the primary account, not by the other admins (accounts.presets_dir).
+    private_presets: Mapped[bool] = mapped_column(default=False)
     # Raised on a password change or removal, which ends every session signed in before.
     session_version: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=_now)

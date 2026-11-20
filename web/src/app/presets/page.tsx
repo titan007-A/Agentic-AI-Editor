@@ -113,6 +113,12 @@ function Presets() {
     window.history.replaceState(null, "", url);
   }
   const members = people.filter((p) => p.role === "member");
+  // Whose presets the picker offers: the employees, and for the primary account the admins
+  // with private presets too (the other admins can't open those).
+  const pickable = [
+    ...members,
+    ...(me?.primary ? people.filter((p) => p.role === "admin" && p.private_presets) : []),
+  ];
 
   async function share() {
     if (!draft) return;
@@ -303,7 +309,7 @@ function Presets() {
     </Dialog>
   );
 
-  const ownerPicker = me?.role === "admin" && members.length > 0 && (
+  const ownerPicker = me?.role === "admin" && pickable.length > 0 && (
     <div className="mb-4 space-y-2">
       <Label htmlFor="owner-picker">Whose presets</Label>
       <Select value={owner ?? "me"} onValueChange={(v) => showOwner(v === "me" ? null : v)}>
@@ -312,9 +318,10 @@ function Presets() {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="me">Mine ({me.user})</SelectItem>
-          {members.map((p) => (
+          {pickable.map((p) => (
             <SelectItem key={p.id} value={p.id}>
               {p.username}
+              {p.role === "admin" ? " (admin, private)" : ""}
             </SelectItem>
           ))}
         </SelectContent>

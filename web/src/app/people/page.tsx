@@ -4,6 +4,8 @@ import {
   Crown,
   KeyRound,
   ListChecks,
+  Lock,
+  LockOpen,
   ShieldMinus,
   ShieldPlus,
   SlidersHorizontal,
@@ -69,6 +71,8 @@ export default function PeoplePage() {
   const [assigned, setAssigned] = useState<Assigned | null>(null);
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [replace, setReplace] = useState(false);
+  // The admin whose private presets are being turned on or off.
+  const [toggling, setToggling] = useState<string | null>(null);
 
   const load = useCallback(
     () =>
@@ -82,6 +86,23 @@ export default function PeoplePage() {
   useEffect(() => {
     if (me?.role === "admin") load();
   }, [me?.role, load]);
+
+  async function togglePrivate(person: Account) {
+    setToggling(person.id);
+    try {
+      const done = await api.setPrivatePresets(person.id, !person.private_presets);
+      toast.success(
+        done.private_presets
+          ? `${person.username}'s ${done.presets} presets are private now`
+          : `${person.username} is back on the shared presets`,
+      );
+      await load();
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setToggling(null);
+    }
+  }
 
   if (me && me.role !== "admin") {
     return <p className="text-sm text-muted-foreground">Only the admin manages accounts.</p>;
@@ -338,8 +359,28 @@ export default function PeoplePage() {
                 {person.jobs} {person.jobs === 1 ? "job" : "jobs"} · {person.presets} presets · last
                 seen {seen(person.last_seen_at)}
               </p>
+              {person.role === "admin" && person.private_presets && (
+                <p className="text-xs text-muted-foreground">
+                  Private presets: only {person.username} and the primary account see them.
+                </p>
+              )}
               {person.role === "admin" && person.id !== me?.id && primary && (
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => togglePrivate(person)}
+                    disabled={toggling === person.id}
+                  >
+                    {person.private_presets ? <LockOpen /> : <Lock />}
+                    {person.private_presets ? "Share presets with admins" : "Make presets private"}
+                  </Button>
+                  {person.private_presets && (
+                    <Button variant="outline" asChild>
+                      <Link href={`/presets/?owner=${person.id}`}>
+                        <SlidersHorizontal /> Presets
+                      </Link>
+                    </Button>
+                  )}
                   <Button variant="outline" onClick={() => setResetting(person)}>
                     <KeyRound /> New password
                   </Button>

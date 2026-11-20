@@ -1053,8 +1053,10 @@ def edit_presets(
     presets = [compose.moved_layout(p, face) for p in presets]
     # "song:" and "artist:" lines are always taken, so the instruction reader never sees
     # them; a preset that doesn't name the song still gets them for its reel's song.
-    wanted = set().union({"song", "artist"}, *(names.wanted(p) for p in presets))
+    wanted = set().union({"song", "artist", "channel"}, *(names.wanted(p) for p in presets))
     given, notes = names.from_notes(notes, wanted)
+    # {channel}: a "channel:" line in the notes wins over the video's own.
+    given.setdefault("channel", names.channel_of(source.url, source.uploader))
     presets, instructed, notes_for, start_at = understand(router, presets, notes, progress)
     failures: list[str] = []
     errors: list[Exception] = []
