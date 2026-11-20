@@ -208,3 +208,54 @@ def test_instagram_cookies_are_checked_before_they_are_kept(instagram):
     )
     assert download.save_instagram_cookies(exported)["set"]  # a JSON export works too
     assert download.forget_instagram_cookies() == {"set": False, "since": None, "until": None}
+
+
+def test_a_reel_refused_to_the_login_too_says_instagrams_reason(tmp_path, instagram, monkeypatch):
+    """Signed in, Instagram answers a reel it won't show that account with a 400 (all yt-dlp
+    says); its own reason is asked for and passed on, with what to change."""
+
+    class Gated(Restricted):
+        def extract_info(self, url, download=False):
+            if self.options.get("cookiefile"):
+                raise yt_dlp.utils.DownloadError(
+                    "ERROR: [Instagram] DdeOTl4M7tx: Video info extraction failed: HTTP Error "
+                    "400: Bad Request (caused by <HTTPError 400: Bad Request>)"
+                )
+            return super().extract_info(url, download)
+
+    download.save_instagram_cookies(COOKIES)
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Gated)
+    asked = []
+    monkeypatch.setattr(
+        download, "instagram_gate",
+        lambda url, cookies: asked.append(url) or "People under 25 can't see this content",
+    )  # fmt: skip
+    with pytest.raises(RuntimeError) as failed:
+        download.fetch("https://www.instagram.com/reel/DdeOTl4M7tx/", tmp_path / "sources")
+    assert '"People under 25 can\'t see this content"' in str(failed.value)
+    assert "Sensitive content to More" in str(failed.value) and asked
+
+
+def test_instagrams_reason_is_read_from_its_api(tmp_path, monkeypatch):
+    import httpx
+
+    cookies = tmp_path / "c.txt"
+    cookies.write_text(COOKIES)
+    seen = {}
+
+    class Reply:
+        def json(self):
+            return {"message": "geoblock_required", "gating_type": "unappealable",
+                    "title": "This content may be inappropriate",
+                    "description": "It's unavailable for certain audiences."}  # fmt: skip
+
+    def get(url, cookies=None, headers=None, timeout=None):
+        seen.update(url=url, cookies=cookies, headers=headers)
+        return Reply()
+
+    monkeypatch.setattr(httpx, "get", get)
+    said = download.instagram_gate("https://www.instagram.com/reel/Df2AEd5RJ3U/?x=1", cookies)
+    assert said == "This content may be inappropriate It's unavailable for certain audiences."
+    assert seen["url"].endswith("/media/4032410823334075860/info/")  # the reel's own number
+    assert seen["cookies"]["sessionid"] == "123%3Aabc" and "SID" not in seen["cookies"]
+    assert download.instagram_gate("https://kick.com/x", cookies) is None
