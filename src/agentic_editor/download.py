@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -84,6 +85,10 @@ INSTAGRAM_GATED = (
     "it doesn't show this reel in this country."
 )
 INSTAGRAM_COOKIES = "instagram-cookies.txt"
+# Instagram now and then answers a signed-in request with a server error ("HTTP Error 560")
+# that is gone a little later: asked once more after this pause (s).
+INSTAGRAM_BUSY = re.compile(r"HTTP Error 5\d\d")
+INSTAGRAM_PAUSE = 20.0
 # The code in a reel's or post's link: instagram.com/reel/<code>/, /p/<code>/, /tv/<code>/
 SHORTCODE = re.compile(r"instagram\.com/(?:[\w.]+/)?(?:reels?|p|tv)/([\w-]+)")
 SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -240,8 +245,16 @@ def _extract(url: str, options: dict, download: bool, signed: bool = False) -> t
                 raise RuntimeError(INSTAGRAM_LOGIN) from exc
             log.info("Instagram shows %s only to people signed in: asking signed in", url)
     try:
-        with _with_cookies(options, cookies) as asked, YoutubeDL(asked) as ydl:
-            return ydl.extract_info(url, download=download), True
+        try:
+            with _with_cookies(options, cookies) as asked, YoutubeDL(asked) as ydl:
+                return ydl.extract_info(url, download=download), True
+        except Exception as exc:
+            if not INSTAGRAM_BUSY.search(str(exc)):
+                raise
+            log.info("Instagram was busy with %s (%s): asking again shortly", url, exc)
+            time.sleep(INSTAGRAM_PAUSE)
+            with _with_cookies(options, cookies) as asked, YoutubeDL(asked) as ydl:
+                return ydl.extract_info(url, download=download), True
     except Exception as exc:
         # Signed in, a reel Instagram still won't show comes back as "HTTP Error 400";
         # Instagram's own words say why (the account's settings or age).
