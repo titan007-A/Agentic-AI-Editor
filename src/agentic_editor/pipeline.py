@@ -8,6 +8,7 @@ import functools
 import json
 import logging
 import secrets
+import subprocess
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -47,7 +48,7 @@ from agentic_editor.render import audio, compose
 from agentic_editor.render.audio import measure_loudness
 from agentic_editor.render.video import crop_size
 from agentic_editor.router import ModelRouter
-from agentic_editor.settings import Settings
+from agentic_editor.settings import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
@@ -949,9 +950,10 @@ def edit(
     run_id: str,
 ) -> Result:
     """Every preset's version of the video. A preset that only upscales (preset.upscale)
-    is made from the whole video by itself; the others are edited together (edit_presets),
-    and one side failing doesn't lose what the other made."""
-    upscaling = [p for p in presets if p.upscale.enabled]
+    or only downloads (preset.download_only) is made from the whole video by itself; the
+    others are edited together (edit_presets), and one side failing doesn't lose what the
+    other made."""
+    upscaling = [p for p in presets if p.upscale.enabled or p.download_only]
     if not upscaling:
         return edit_presets(source, work_dir, presets, settings, backends, notes, progress,
                             run_id)  # fmt: skip
@@ -962,12 +964,15 @@ def edit(
     errors: list[Exception] = []
     for preset in upscaling:
         try:
-            outputs.append(upscaled(source, preset, out_dir, settings, backends, progress))
+            if preset.download_only:
+                outputs.append(original(source, preset, out_dir, progress))
+            else:
+                outputs.append(upscaled(source, preset, out_dir, settings, backends, progress))
         except Exception as exc:
             log.exception("upscaling %s failed", preset.name)
             failures.append(f"{preset.name}: {type(exc).__name__}: {exc}")
             errors.append(exc)
-    rest = [p for p in presets if not p.upscale.enabled]
+    rest = [p for p in presets if not (p.upscale.enabled or p.download_only)]
     if rest:
         try:
             edited = edit_presets(source, work_dir, rest, settings, backends, notes, progress,
@@ -988,6 +993,57 @@ def edit(
             raise errors[0]
         raise RuntimeError("; ".join(failures)) from errors[-1]
     return Result(source.title, outputs, failures)
+
+
+def _codecs(path: Path) -> tuple[str, str]:
+    """The video's and the sound's codec names ("" for a stream it hasn't)."""
+    out = subprocess.run(
+        [get_settings().ffprobe_bin, "-v", "error", "-show_entries",
+         "stream=codec_type,codec_name", "-of", "json", str(path)],
+        capture_output=True, text=True, errors="replace",
+    )  # fmt: skip
+    streams = json.loads(out.stdout or "{}").get("streams", [])
+    kind = {s.get("codec_type"): s.get("codec_name", "") for s in reversed(streams)}
+    return kind.get("video", ""), kind.get("audio", "")
+
+
+def original(source: download.Source, preset: Preset, out_dir: Path, progress: Progress) -> Output:
+    """The video as it came, whole and unedited, as an MP4 any phone plays: its own
+    streams when they are H.264 and AAC (copied, nothing lost), else the same picture and
+    sound made into those at its own size and frame rate."""
+    dest = out_dir / f"{preset.name}.mp4"
+    progress("render", f"keeping the original for {preset.name}")
+    video, audio = _codecs(source.path)
+    copied = video == "h264" and audio in ("aac", "")
+    if copied:
+        codec = ["-c", "copy"]
+    else:
+        codec = ["-c:v", "libx264", "-preset", "medium", "-crf", "17", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-b:a", "192k"]  # fmt: skip
+    ffmpeg.run(["-y", "-i", str(source.path), "-map", "0:v:0", "-map", "0:a:0?", *codec,
+                "-movflags", "+faststart", str(dest)])  # fmt: skip
+    length = ffmpeg.probe(dest).duration
+    thumbnail = out_dir / f"{preset.name}-thumb.jpg"
+    try:
+        ffmpeg.run(["-y", "-ss", f"{length / 3:.2f}", "-i", str(dest), "-frames:v", "1",
+                    "-vf", "scale=720:-2", "-q:v", "3", str(thumbnail)])  # fmt: skip
+    except ffmpeg.FFmpegError as exc:
+        log.warning("no thumbnail for %s: %s", preset.name, exc)
+        thumbnail = None
+    how = (
+        "the original's own streams, copied"
+        if copied
+        else f"the original ({video or '?'}/{audio or 'no sound'}) made into H.264/AAC"
+    )
+    edl = EDL(
+        clips=[Clip(start=0.0, end=max(length, 0.1), reason="the whole video, as downloaded")],
+        title=source.title,
+        crop_mode="none",
+        decisions=[f"only downloaded: {how}"],
+    )
+    (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
+    progress("done", f"{preset.name} -> {dest}")
+    return Output(preset.name, dest, edl, "download", thumbnail)
 
 
 def upscaled(

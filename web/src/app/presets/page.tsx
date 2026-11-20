@@ -405,7 +405,7 @@ function Presets() {
     );
   }
 
-  const upscaleOnly = draft.upscale?.enabled === true;
+  const upscaleOnly = draft.upscale?.enabled === true || draft.download_only === true;
 
   return (
     <>
@@ -517,20 +517,22 @@ function Presets() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Upscale only</CardTitle>
+            <CardTitle>No editing: only download, or only upscale</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <PresetSection fields={UPSCALE_FIELDS} preset={draft} fonts={fonts} onChange={edit} />
             <p className="text-xs text-muted-foreground">
-              Makes the whole video bigger and sharper with Real-ESRGAN, and lightly redraws blurry
-              faces with GFPGAN. The length, picture and sound stay as they are.
+              Only download gives the video as it came, whole, as an MP4 any phone plays. Only
+              upscale makes the whole video bigger and sharper with Real-ESRGAN, and lightly redraws
+              blurry faces with GFPGAN. The length, picture and sound stay as they are.
             </p>
           </CardContent>
         </Card>
 
         {upscaleOnly ? (
           <p className="text-sm text-muted-foreground">
-            This preset only upscales, so its editing settings aren&apos;t used and are hidden.
+            This preset only {draft.download_only ? "downloads" : "upscales"}, so its editing
+            settings aren&apos;t used and are hidden.
           </p>
         ) : (
           <>

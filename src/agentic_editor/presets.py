@@ -344,6 +344,9 @@ class Preset(Strict):
     # False keeps the whole video: it isn't cut to min/max_duration and its opening isn't
     # moved. Set for a job whose person chose not to trim it (Job.trim).
     trim: bool = True
+    # Only download: the video as it came, whole and unedited (no cut, text, framing,
+    # grade or sound change), as an MP4 any phone plays; the rest of the preset is unused.
+    download_only: bool = False
     captions: CaptionStyle = CaptionStyle()
     hook: Hook = Hook()
     title_overlay: TitleOverlay = TitleOverlay()
