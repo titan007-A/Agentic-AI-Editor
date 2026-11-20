@@ -25,13 +25,17 @@ function ago(when: string): string {
   return `${Math.round(days / 365)} years ago`;
 }
 
+/** A whole song's YouTube video (see research.SONGS): a YouTube code without a Short's link. */
+export const isSong = (item: ResearchItem) =>
+  item.code.startsWith("yt:") && !item.url.includes("/shorts/");
 /** A YouTube Short rather than an Instagram reel (see research.YOUTUBE). */
-export const isShort = (item: ResearchItem) => item.code.startsWith("yt:");
+export const isShort = (item: ResearchItem) => item.code.startsWith("yt:") && !isSong(item);
 /** A post on X with a video (see research.X). */
 export const onX = (item: ResearchItem) => item.code.startsWith("x:");
 
 /** Where the reel is: the site's name, what it calls the video, and both together. */
 export function siteOf(item: ResearchItem): { site: string; what: string; label: string } {
+  if (isSong(item)) return { site: "YouTube", what: "song", label: "YouTube song" };
   if (isShort(item)) return { site: "YouTube", what: "Short", label: "YouTube Short" };
   if (onX(item)) return { site: "X", what: "post", label: "X post" };
   return { site: "Instagram", what: "reel", label: "Instagram reel" };

@@ -226,7 +226,8 @@ export type PdfChoice = {
 };
 
 /** Where a research searches: Instagram reels, YouTube Shorts. */
-export type Site = "instagram" | "shorts" | "x";
+/** Where a research searches (see research.SITES); "songs" with the youtube_songs feature. */
+export type Site = "instagram" | "shorts" | "x" | "songs";
 
 /** A question the researcher asks before searching, with suggested answers. */
 export type ResearchQuestion = { question: string; choices: string[] };

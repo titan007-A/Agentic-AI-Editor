@@ -99,7 +99,8 @@ def pdf(lines: list[str]) -> bytes:
 
 
 # The fields a rating always has, as the model leaves them when the caption doesn't say.
-NAMELESS = {"why": "", "song": "", "artist": "", "matches": "", "preset": "", "preset_why": ""}
+NAMELESS = {"why": "", "song": "", "artist": "", "matches": "", "preset": "", "preset_why": "",
+            "usable": True}  # fmt: skip
 QUESTIONS = [
     {"question": "Live or studio?", "choices": ["Live", "Studio", " live ", ""]},
     {"question": "Which era?", "choices": ["80s", "90s"]},
@@ -492,8 +493,9 @@ def test_the_chat_is_told_each_pick_with_its_reasoning():
     from types import SimpleNamespace
 
     item = SimpleNamespace(
-        rank=0, code="ADAMS1", handle="attic", account="Attic", song="Heaven - Bryan Adams",
-        relevance=0.9, why="live and loud", matches="live rock", preset="v", preset_why="vocals",
+        rank=0, code="ADAMS1", url="https://www.instagram.com/reel/ADAMS1/", handle="attic",
+        account="Attic", song="Heaven - Bryan Adams", relevance=0.9, why="live and loud",
+        matches="live rock", preset="v", preset_why="vocals",
         likes=900, comments=12, per_day=30.5, virality=0.8, score=0.81, caption="Heaven, live 1985",
     )  # fmt: skip
     found = SimpleNamespace(
@@ -1067,3 +1069,228 @@ def test_a_research_with_a_source_page_rates_20_of_its_reels_and_shows_6():
     assert result.considered == research.MAX_REELS == 50
     assert len(result.reels) == research.SHOWN == 15
     assert sum(r.source == "instagram:gira" for r in result.reels) == 6
+
+
+def song(vid, title, channel, duration=240, verified=True, **more):
+    """A video as YouTube's search lists it (yt-dlp, flat)."""
+    return {"id": vid, "url": f"https://www.youtube.com/watch?v={vid}", "title": title,
+            "channel": channel, "channel_is_verified": verified, "duration": duration,
+            "view_count": 1_000_000, **more}  # fmt: skip
+
+
+class SongPlanner(Planner):
+    """Rates as Planner does, and says a TV show's medley isn't a song's video to edit."""
+
+    def chat_json(self, messages, schema, **kwargs):
+        reply = super().chat_json(messages, schema, **kwargs)
+        if "ratings" in reply:
+            lines = [ln for ln in messages[-1]["content"].split("\n") if ln[:1].isdigit()]
+            for rating, line in zip(reply["ratings"], lines, strict=True):
+                rating["usable"] = "Late Late Show" not in line
+        return reply
+
+
+SONGS_FOUND = [
+    song("SONGOWN0001", "Bryan Adams - Summer Of 69 (Official Video)", "Bryan Adams"),
+    song("SONGLABEL01", "Bryan Adams Heaven Full Video Song", "T-Series"),
+    song("SONGVEVO001", "Run To You", "BryanAdamsVEVO", verified=None),
+    song("SONGTOPIC01", "Heaven", "Bryan Adams - Topic"),  # a still picture
+    song("SONGFAN0001", "Bryan Adams - Heaven", "Bryan Adams Fan", verified=None),
+    song("SONGJUKEBOX", "Bryan Adams Jukebox | Best Of", "T-Series", duration=3000),
+    song("SONGLYRICS1", "Bryan Adams - Heaven (Lyrics)", "Lyrics Hub"),
+    song("SONGLIVE001", "Bryan Adams live", "Bryan Adams", duration=None, live_status="is_live"),
+    song("SONGSHORTED", "Bryan Adams Heaven", "T-Series", duration=150),  # its page: a Short
+    song("SONGTVSHOW1", "Bryan Adams Medley | The Late Late Show", "The Late Late Show"),
+    {"id": "SHORT000009", "url": "https://www.youtube.com/shorts/SHORT000009",
+     "title": "Bryan Adams", "channel": "Bryan Adams", "channel_is_verified": True},
+]  # fmt: skip
+
+
+def song_info(url):
+    vid = url.rsplit("=", 1)[1]
+    listed = next(e for e in SONGS_FOUND if e["id"] == vid)
+    return {"channel": listed["channel"], "channel_is_verified": listed["channel_is_verified"],
+            "uploader_id": "@" + listed["channel"].replace(" ", ""), "title": listed["title"],
+            "description": "Bryan Adams", "duration": listed["duration"], "like_count": 5000,
+            "media_type": "short" if vid == "SONGSHORTED" else "video",
+            "formats": [{"width": 3840, "height": 2160, "tbr": 9000}]}  # fmt: skip
+
+
+def test_whole_songs_are_found_on_youtube_on_the_singers_or_a_labels_channel():
+    llm = SongPlanner()
+    asked = []
+
+    def songs(query, count):
+        asked.append((query, count))
+        return SONGS_FOUND
+
+    def find(query, count):
+        raise AssertionError("whole songs aren't searched with the engines")
+
+    result = research.run(
+        "Bryan Adams songs reels", lambda: nullcontext(llm), set(), set(), lambda *a: None,
+        find, song_info, 0, sites=("songs",), songs=songs,
+    )  # fmt: skip
+    assert sorted(r.code for r in result.reels) == ["yt:SONGLABEL01", "yt:SONGOWN0001",
+                                                     "yt:SONGVEVO001"]  # fmt: skip
+    assert result.left_out == {
+        "not a song's video": 4,  # the jukebox, the lyrics, the stream, the Short's page
+        "not the artist's or a label's channel": 2,  # the Topic one, the fan's
+        "not a song video to edit": 1,  # the model's word on the TV show's medley
+    }
+    assert asked == [("Bryan Adams live", 20), ("summerof69", 20)]  # YouTube's first page
+    first = next(r for r in result.reels if r.code == "yt:SONGOWN0001")
+    assert first.url == "https://www.youtube.com/watch?v=SONGOWN0001" and first.full
+    assert (first.kind, first.channel_kind, first.duration, first.quality) == (
+        "YouTube song (whole video)", "own", 240.0, "HD")  # fmt: skip
+    kinds = {r.code: r.channel_kind for r in result.reels}
+    assert kinds["yt:SONGLABEL01"] == "label" and kinds["yt:SONGVEVO001"] == "own"
+    rate_prompt = llm.asked[-1]
+    assert "YouTube song (whole video) | account: T-Series" in rate_prompt
+    assert "SONGJUKEBOX" not in str(llm.asked)  # never looked up nor rated
+
+
+def test_a_search_for_reels_is_asked_of_youtube_without_reel_words():
+    assert research.song_query("Arijit Singh viral reels live") == "Arijit Singh live"
+    assert research.song_query("instagram reels") == "instagram reels"  # nothing left: as it was
+
+
+@pytest.mark.parametrize(
+    ("channel", "verified", "title", "kind"),
+    [
+        ("Bryan Adams", True, "Bryan Adams - Heaven (Official Video)", "own"),
+        ("Ricchi e Poveri Official", True, "Ricchi E Poveri - Sarà perché ti amo", "own"),
+        ("SonyMusicIndiaVEVO", None, "Sitaare", "own"),
+        ("T-Series", True, "Tum Hi Ho Full Video", "label"),
+        ("Zee Music Company", True, "Qaafirana 8K Video", "label"),
+        ("The Late Late Show", True, "Bryan Adams Medley | The Late Late Show", ""),
+        ("Umberto Tozzi Official", True, "Gloria", ""),  # the model's artist tells
+        ("Bryan Adams - Topic", True, "Heaven", None),
+        ("ARIJIT SINGH JABRA FAN", None, "Arijit Singh - Kesariya", None),
+        ("", True, "Heaven", None),
+    ],
+)
+def test_a_songs_channel_is_known_by_its_name_badge_and_title(channel, verified, title, kind):
+    assert research.channel_kind(channel, verified, title) == kind
+
+
+@pytest.mark.parametrize(
+    ("title", "duration", "fit"),
+    [
+        ("BTS (방탄소년단) 'Dynamite' Official MV", 230, True),
+        ("Status Quo - Rockin' All Over The World", 220, True),
+        ("Kesariya - Full Video | Brahmāstra", 268, True),
+        ("Kesariya (Lyrical) | Brahmāstra", 268, False),
+        ("Kesariya Full Audio Song", 268, False),
+        ("Arijit Singh Jukebox", 3000, False),
+        ("Kesariya", 60, False),  # a clip
+        ("Kesariya (Slowed + Reverb)", 300, False),
+    ],
+)
+def test_only_a_songs_own_video_is_taken(title, duration, fit):
+    link = "https://www.youtube.com/watch?v=x"
+    assert (research.not_a_song(link, title, duration) == "") is fit
+
+
+def test_the_model_judges_a_verified_channel_it_doesnt_know_by_the_singer_it_names():
+    def reel(channel, artist, usable=True, kind=""):
+        return Reel("yt:" + channel[:11].ljust(11, "x"), "", "", account=channel, artist=artist,
+                    full=True, usable=usable, channel_kind=kind)  # fmt: skip
+
+    named = reel("Umberto Tozzi Official", "Umberto Tozzi")
+    trusted = reel("Jasleen Royal", "Arijit Singh")
+    trusted.title = "Heeriye (Official Video) Jasleen Royal ft Arijit Singh"
+    reupload = reel("Ivan Vasconcelos", "Laura Pausini")  # verified, and the model said yes
+    reupload.title = "DARE TO LIVE (VIVERE) - LAURA PAUSINI & ANDREA BOCELLI - (2009)"
+    refused = reel("Mirchi Plus", "Arijit Singh", usable=False, kind="label")
+    unjudged = reel("Some Channel", "", usable=None)
+    research.judge_songs([named, trusted, reupload, refused, unjudged])
+    assert (named.channel_kind, named.unfit) == ("own", "")
+    assert (trusted.channel_kind, trusted.unfit) == ("judged", "")
+    assert reupload.unfit == research.OFF_CHANNEL
+    assert refused.unfit == unjudged.unfit == research.NOT_USABLE
+
+
+def test_a_label_channel_gives_up_to_five_songs_and_a_singer_asked_for_all():
+    def songs(channel, artist=None):
+        return [Reel(f"yt:{channel[:3]}{n:08d}", "", "", account=channel, full=True,
+                     song=f"Song {n}", artist=artist or f"Singer {n}", score=1 - n / 100)
+                for n in range(8)]  # fmt: skip
+
+    picked, passed, _ = research.pick(songs("T-Series"), 30)
+    assert len(picked) == 5 and passed == {"same account": 3}
+    picked, passed, _ = research.pick(
+        songs("Arijit Singh", "Arijit Singh"), 30, asked="Arijit Singh ke gaane"
+    )
+    assert len(picked) == 8 and passed == {}
+    reels = [Reel(f"IG{n:06d}", "", "", account="page", score=1 - n / 100) for n in range(4)]
+    assert len(research.pick(reels, 30)[0]) == 2  # a page's reels still two at most
+    # Of one singer not asked for, on many channels: four songs, where reels have two.
+    eros = [Reel(f"yt:EROS{n:07d}", "", "", account=f"channel {n}", full=True, song=f"Song {n}",
+                 artist="Eros Ramazzotti", score=1 - n / 100) for n in range(6)]  # fmt: skip
+    picked, passed, _ = research.pick(eros, 30)
+    assert len(picked) == 4 and passed == {"same artist": 2}
+    for r in eros:
+        r.full, r.code = False, r.code[3:]
+    assert len(research.pick(eros, 30)[0]) == 2
+
+
+def test_with_whole_songs_more_are_rated_and_shown():
+    many = [song(f"MANY{n:07d}", f"Singer {n} - Song {n}", f"Singer {n}") for n in range(120)]
+    looked = []
+
+    def info(url):
+        looked.append(url)
+        n = int(url[-7:])
+        return {"channel": f"Singer {n}", "channel_is_verified": True,
+                "title": f"Singer {n} - Song {n}", "description": "Bryan Adams",
+                "duration": 240, "media_type": "video", "like_count": 1000 + n}  # fmt: skip
+
+    result = research.run(
+        "Bryan Adams", lambda: nullcontext(Planner()), set(), set(), lambda *a: None,
+        lambda q, c: [], info, 0, sites=("songs",), songs=lambda q, c: many,
+    )  # fmt: skip
+    assert len(looked) == research.SONGS_REELS == 90
+    assert len(result.reels) == research.SONGS_SHOWN == 30
+
+
+def test_a_source_channel_gives_its_whole_songs_when_they_are_searched_for():
+    asked = []
+
+    def channel(url, count):
+        asked.append(url)
+        if url.endswith("/videos"):
+            return [{"url": "https://www.youtube.com/watch?v=CHANSONG001", "title": "Heaven",
+                     "duration": 250},
+                    {"url": "https://www.youtube.com/watch?v=CHANSTREAM1", "title": "Live now",
+                     "duration": None, "live_status": "was_live"}]  # fmt: skip
+        return [{"url": "https://www.youtube.com/shorts/CHANSHORT01", "title": "Heaven"}]
+
+    found = research.from_sources(["youtube:@BryanAdams"], channel=channel, each=5, songs=True)
+    assert [(r.code, r.full, r.channel_kind, r.url) for r in found] == [
+        ("yt:CHANSHORT01", False, "", "https://www.youtube.com/shorts/CHANSHORT01"),
+        ("yt:CHANSONG001", True, "source", "https://www.youtube.com/watch?v=CHANSONG001"),
+    ]
+    assert asked == ["https://www.youtube.com/@BryanAdams/shorts",
+                     "https://www.youtube.com/@BryanAdams/videos"]  # fmt: skip
+    assert len(research.from_sources(["youtube:@BryanAdams"], channel=channel)) == 1
+
+
+def test_a_pdf_song_can_be_found_as_its_whole_video():
+    entries = [{"song": "Summer Of 69", "singer": "Bryan Adams"}]
+    given = research.run_pdf(
+        entries, lambda: nullcontext(SongPlanner()), set(), set(), lambda *a: None,
+        lambda q, c: [], song_info, 0, sites=("songs",), songs=lambda q, c: SONGS_FOUND,
+    )  # fmt: skip
+    codes = [r.code for _, r in given]
+    # Only the three a reel can be edited from, of the ten YouTube listed.
+    assert sorted(codes) == ["yt:SONGLABEL01", "yt:SONGOWN0001", "yt:SONGVEVO001"]
+    assert all(research.kind_of(c, f"https://www.youtube.com/watch?v={c[3:]}").startswith(
+        "YouTube song") for c in codes)  # fmt: skip
+
+
+def test_a_youtube_code_is_a_whole_song_by_its_link():
+    watch, short = "https://www.youtube.com/watch?v=abc", "https://www.youtube.com/shorts/abc"
+    assert research.kind_of("yt:abc", watch) == "YouTube song (whole video)"
+    assert research.kind_of("yt:abc", short) == research.kind_of("yt:abc") == "YouTube Short"
+    assert research.song_url("yt:abc") == watch

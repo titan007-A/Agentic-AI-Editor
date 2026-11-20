@@ -265,9 +265,10 @@ class ResearchRequest(BaseModel):
     account_id: str | None = None
     # Search at once, without the questions the researcher asks first.
     skip_questions: bool = False
-    # Where to search: Instagram reels, YouTube Shorts, posts on X with a video; any of them.
-    sites: list[Literal["instagram", "shorts", "x"]] = Field(
-        default=["instagram", "shorts"], min_length=1, max_length=3
+    # Where to search: Instagram reels, YouTube Shorts, posts on X with a video, whole songs'
+    # YouTube videos (for accounts with the youtube_songs feature); any of them.
+    sites: list[Literal["instagram", "shorts", "x", "songs"]] = Field(
+        default=["instagram", "shorts"], min_length=1, max_length=4
     )
 
 
@@ -1486,8 +1487,15 @@ def create_app(
         session.commit()
         return {"ok": True}
 
+    def allowed_sites(sites: list[str], account: Account, session: Session) -> list[str]:
+        """The sites asked for, each once; whole songs only for accounts that have them."""
+        if research.SONGS in sites and not features.enabled(account, "youtube_songs", session):
+            raise HTTPException(403, "whole YouTube songs aren't on for this account")
+        return list(dict.fromkeys(sites))
+
     @app.post("/api/research")
     def start_research(body: ResearchRequest, account: User, session: DB) -> ResearchView:
+        sites = allowed_sites(body.sites, account, session)
         description = body.description.strip()
         handle = ""
         if body.account_id:
@@ -1499,7 +1507,7 @@ def create_app(
             owner_id=account.id,
             account_id=body.account_id or None,
             handle=handle,
-            sites=list(dict.fromkeys(body.sites)),
+            sites=sites,
         )
         if not body.skip_questions:
             found.status, found.message = "asking", "thinking of a few questions"
@@ -1539,6 +1547,7 @@ def create_app(
         chosen = [s for s in dict.fromkeys(sites.split(",")) if s in research.SITES]
         if not chosen:
             raise HTTPException(422, "search Instagram, YouTube Shorts, X or more of them")
+        chosen = allowed_sites(chosen, account, session)
         text = await pdf_text(file)
         listing = [e.as_dict() for e in research.listed(text)]
         found = Research(

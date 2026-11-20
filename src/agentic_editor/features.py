@@ -12,11 +12,16 @@ from agentic_editor.db import User as Account
 # trial_reel: "Send as trial reel" in the Buffer dialog. fun: the leaderboard, badges and
 # the rest of the playful extras. niche_finder: the Accounts tab (niche.py). trim_choice:
 # starting an edit with a preset that isn't about a song asks whether to cut the video to
-# the preset's length or keep all of it (JobRequest.trim).
-FEATURES = ("trial_reel", "fun", "niche_finder", "trim_choice")
+# the preset's length or keep all of it (JobRequest.trim). youtube_songs: the Researcher
+# finds whole songs' YouTube videos on the singers' and labels' channels (research.SONGS).
+FEATURES = ("trial_reel", "fun", "niche_finder", "trim_choice", "youtube_songs")
 DEFAULT_USERS = ("siddhant",)
 # Features first tried by other accounts than DEFAULT_USERS.
-DEFAULTS = {"niche_finder": ("siddhant", "aman"), "trim_choice": ("aman",)}
+DEFAULTS = {
+    "niche_finder": ("siddhant", "aman"),
+    "trim_choice": ("aman",),
+    "youtube_songs": ("siddhant", "prajjwal"),
+}
 # In a feature's list: every account, now and later (new admins and employees too).
 EVERYONE = "*"
 

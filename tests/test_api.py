@@ -1449,9 +1449,9 @@ def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypa
     asked = []
     find = jobs.research.search
 
-    def search(queries, find_, pause=None, progress=None, sites=("instagram",)):
+    def search(queries, find_, pause=None, progress=None, sites=("instagram",), songs=None):
         asked.append(sites)
-        return find(queries, find_, pause, progress, sites)
+        return find(queries, find_, pause, progress, sites, lambda q, c: [])
 
     monkeypatch.setattr(jobs.research, "search", search)
     both = env.client.post("/api/research", json={"description": "Queen", "skip_questions": True})
@@ -1465,6 +1465,38 @@ def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypa
     for sites in ([], ["tiktok"]):
         body = {"description": "Queen", "sites": sites}
         assert env.client.post("/api/research", json=body).status_code == 422
+
+
+def test_whole_youtube_songs_are_searched_only_for_the_accounts_that_have_them(env, monkeypatch):
+    import json as json_
+
+    from agentic_editor.db import Setting
+
+    fake_research(monkeypatch, env)
+    asked = []
+    find = jobs.research.search
+
+    def search(queries, find_, pause=None, progress=None, sites=("instagram",), songs=None):
+        asked.append(sites)
+        return find(queries, find_, pause, progress, sites, lambda q, c: [])
+
+    monkeypatch.setattr(jobs.research, "search", search)
+    me = env.client.get("/api/me").json()
+    with env.sessions() as session:
+        session.merge(Setting(key="feature:youtube_songs", value=json_.dumps([me["user"]])))
+        session.commit()
+    assert "youtube_songs" in env.client.get("/api/me").json()["features"]
+    body = {"description": "Arijit Singh", "skip_questions": True, "sites": ["songs", "instagram"]}
+    found = env.client.post("/api/research", json=body).json()
+    assert found["sites"] == ["songs", "instagram"] and asked[-1] == ("songs", "instagram")
+    _, riya = employee(env, presets=[])
+    assert "youtube_songs" not in riya.get("/api/me").json()["features"]
+    refused = riya.post("/api/research", json=body)
+    assert refused.status_code == 403 and "songs" in refused.json()["detail"]
+    files = {"file": ("songs.pdf", b"%PDF-1.4", "application/pdf")}
+    assert riya.post("/api/research/pdf", files=files, data={"sites": "songs"}).status_code == 403
+    body["sites"] = ["instagram"]
+    assert riya.post("/api/research", json=body).status_code == 200
 
 
 def test_an_account_can_be_researched_for_every_morning(env, monkeypatch):
