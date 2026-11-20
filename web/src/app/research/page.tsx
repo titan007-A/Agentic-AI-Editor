@@ -322,11 +322,11 @@ function Researcher() {
         </p>
         {songsOn && (
           <p className="mt-1 text-sm text-muted-foreground">
-            YouTube full songs searches YouTube itself for whole songs on the singer&apos;s own
-            channel or an official label&apos;s (T-Series, Sony Music, VEVO...). The model looks at
-            every one and leaves out streams, interviews, medleys, lyric or audio-only videos and
-            fan uploads. It gives up to 30 (of up to 90 it rates), and each edit cuts the song to
-            its preset&apos;s length.
+            YouTube full songs searches YouTube itself, and the singers&apos; own channels it finds,
+            for whole songs on the singer&apos;s own channel or an official label&apos;s (T-Series,
+            Sony Music, VEVO...). The model looks at every one and leaves out streams, interviews,
+            medleys, covers, remixes, lyric or audio-only videos and fan uploads. It gives up to 30
+            (of up to 120 it rates), and each edit cuts the song to its preset&apos;s length.
           </p>
         )}
       </div>
