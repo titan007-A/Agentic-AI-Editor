@@ -821,6 +821,21 @@ def create_app(
         """The admin sees everything; an employee only their own."""
         return account.role == accounts.ADMIN or owner_id == account.id
 
+    def sees_every_render(account: Account, session: Session) -> bool:
+        """Only the primary account sees everyone's renders (jobs, videos, piles, feeds);
+        everyone else, the other admins too, sees their own."""
+        return accounts.is_primary(session, account)
+
+    def renders_of(account: Account, owner_id: str | None, session: Session) -> bool:
+        """Whether `account` may see a render of `owner_id`'s (None: from before accounts,
+        the primary account's)."""
+        return owner_id == account.id or sees_every_render(account, session)
+
+    def render_names(account: Account, session: Session) -> dict[str | None, str]:
+        """Who made each render, by owner id, for the primary account; nobody else sees
+        anyone else's, so theirs carry no name."""
+        return owners(session) if sees_every_render(account, session) else {}
+
     def owners(session: Session) -> dict[str | None, str]:
         names: dict[str | None, str] = {a.id: a.username for a in session.scalars(select(Account))}
         first = next((a for a in accounts.admins(session)), None)
@@ -850,7 +865,7 @@ def create_app(
         etas: dict[str, int] | None = None,
         posts: dict[int, list[dict]] | None = None,
     ) -> JobView:
-        """The job as its viewer sees it: the admin with who started it. A list passes
+        """The job as its viewer sees it: the primary account with who started it. A list passes
         `names`, `labels` (a cache), `etas` and its outputs' Buffer `posts` worked out once,
         so a long one doesn't look each owner up again."""
         shown = preset_labels(job.owner_id, session, labels)
@@ -861,20 +876,19 @@ def create_app(
             left = etas.get(job.id)
         if posts is None:
             posts = buffer_posts.for_outputs(session, [o.id for o in job.outputs])
-        if account.role != accounts.ADMIN:
-            return job_view(job, only, labels=shown, eta_seconds=left, posts=posts)
-        owner = (names or owners(session)).get(job.owner_id)
-        return job_view(job, only, owner, shown, left, posts)
+        if names is None:
+            names = render_names(account, session)
+        return job_view(job, only, names.get(job.owner_id), shown, left, posts)
 
     def find_job(job_id: str, session: Session, account: Account) -> Job:
         job = session.get(Job, job_id)
-        if job is None or not mine(account, job.owner_id):
+        if job is None or not renders_of(account, job.owner_id, session):
             raise HTTPException(404, "no such job")
         return job
 
     def find_output(output_id: int, session: Session, account: Account) -> Output:
         output = session.get(Output, output_id)
-        if output is None or not mine(account, output.job.owner_id):
+        if output is None or not renders_of(account, output.job.owner_id, session):
             raise HTTPException(404, "no such output")
         return output
 
@@ -1984,10 +1998,10 @@ def create_app(
     @app.get("/api/jobs")
     def list_jobs(account: User, session: DB) -> list[JobView]:
         query = select(Job).options(selectinload(Job.outputs))
-        if account.role != accounts.ADMIN:
+        if not sees_every_render(account, session):
             query = query.where(Job.owner_id == account.id)
         rows = session.scalars(query.order_by(Job.created_at.desc()).limit(200)).all()
-        names = owners(session) if account.role == accounts.ADMIN else None
+        names = render_names(account, session)
         labels: dict = {}
         etas = eta.estimates(session, settings.max_concurrent_jobs)
         posts = buffer_posts.for_outputs(session, [o.id for j in rows for o in j.outputs])
@@ -2010,10 +2024,10 @@ def create_app(
 
     @app.post("/api/jobs/clear")
     def clear_jobs(account: User, session: DB) -> dict:
-        """Every finished job the account sees (the admin: everyone's) with its videos;
-        ones still being edited stay."""
+        """Every finished job the account sees (the primary account: everyone's) with its
+        videos; ones still being edited stay."""
         query = select(Job).options(selectinload(Job.outputs))
-        if account.role != accounts.ADMIN:
+        if not sees_every_render(account, session):
             query = query.where(Job.owner_id == account.id)
         found = session.scalars(query.where(Job.status.in_(cleanup.FINISHED))).all()
         deleted, freed = cleanup.delete_jobs(session, found, settings.media_dir)
@@ -2862,7 +2876,7 @@ def create_app(
 
     def find_feed(feed_id: int, session: Session, account: Account) -> Feed:
         feed = session.get(Feed, feed_id)
-        if feed is None or not mine(account, feed.owner_id):
+        if feed is None or not renders_of(account, feed.owner_id, session):
             raise HTTPException(404, "no such feed")
         return feed
 
@@ -2893,7 +2907,7 @@ def create_app(
     @app.get("/api/feeds")
     def list_feeds(account: User, session: DB) -> list[FeedView]:
         feeds = select(Feed).options(selectinload(Feed.items).selectinload(FeedItem.job))
-        if account.role != accounts.ADMIN:
+        if not sees_every_render(account, session):
             feeds = feeds.where(Feed.owner_id == account.id)
         return [feed_view(f) for f in session.scalars(feeds.order_by(Feed.id))]
 
@@ -2946,7 +2960,7 @@ def create_app(
     def pile_counts(account: User, session: DB) -> dict[str, int]:
         counts = {"ready": 0, "look": 0}
         query = select(Output.pile, func.count()).join(Output.job)
-        if account.role != accounts.ADMIN:
+        if not sees_every_render(account, session):
             query = query.where(Job.owner_id == account.id)
         rows = session.execute(query.group_by(Output.pile))
         counts.update({pile: n for pile, n in rows if pile})
@@ -2956,14 +2970,14 @@ def create_app(
     def pile(pile: Literal["ready", "look"], account: User, session: DB) -> list[JobView]:
         """The outputs in a pile, newest first, each with its job."""
         query = select(Output).join(Output.job).where(Output.pile == pile)
-        if account.role != accounts.ADMIN:
+        if not sees_every_render(account, session):
             query = query.where(Job.owner_id == account.id)
         outputs = session.scalars(
             query.options(selectinload(Output.job).selectinload(Job.outputs))
             .order_by(Output.id.desc())
             .limit(PILE_LIMIT)
         ).all()
-        names = owners(session) if account.role == accounts.ADMIN else None
+        names = render_names(account, session)
         labels: dict = {}
         posts = buffer_posts.for_outputs(session, [o.id for o in outputs])
         return [
@@ -2978,7 +2992,7 @@ def create_app(
 
     def find_folder(folder_id: int, session: Session, account: Account) -> PileFolder:
         folder = session.get(PileFolder, folder_id)
-        if folder is None or not mine(account, folder.owner_id):
+        if folder is None or not renders_of(account, folder.owner_id, session):
             raise HTTPException(404, "no such folder")
         return folder
 
@@ -2993,16 +3007,16 @@ def create_app(
         query = select(PileFolder).where(PileFolder.preset == preset, beside)
         for other in session.scalars(query):
             same = other.name.casefold() == name.casefold()
-            if same and other.id != renaming and mine(account, other.owner_id):
+            if same and other.id != renaming and renders_of(account, other.owner_id, session):
                 raise HTTPException(409, f"there is already a folder called {other.name} here")
         return name
 
     @app.get("/api/pile-folders")
     def pile_folders(account: User, session: DB) -> list[PileFolderView]:
-        """The folders made inside presets' folders on the piles: the admin sees everyone's,
-        an employee their own."""
+        """The folders made inside presets' folders on the piles: the primary account sees
+        everyone's, everyone else their own."""
         query = select(PileFolder).order_by(PileFolder.name)
-        if account.role != accounts.ADMIN:
+        if not sees_every_render(account, session):
             query = query.where(PileFolder.owner_id == account.id)
         return [folder_view(f) for f in session.scalars(query)]
 
@@ -3076,7 +3090,7 @@ def create_app(
             for f in session.scalars(
                 select(PileFolder).where(PileFolder.preset == body.preset, beside)
             )
-            if f.id not in ids and mine(account, f.owner_id)
+            if f.id not in ids and renders_of(account, f.owner_id, session)
         }
         seen: set[str] = set()
         for folder in moving:

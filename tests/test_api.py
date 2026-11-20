@@ -2702,3 +2702,54 @@ def test_the_dm_queue_keeps_each_persons_message(env):
     # Emptied, it goes back to the first message rather than sending nothing.
     reset = env.client.put("/api/niche-message", json={"message": " "}).json()
     assert reset["message"] == "Are you interested in selling your page?"
+
+
+def test_only_the_primary_account_sees_everyones_renders(env, monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    boss = env.client
+    ask = {"username": "arham", "password": "arham-pass-1", "role": "admin"}
+    assert boss.post("/api/admin/users", json=ask | {"my_password": PASSWORD}).status_code == 200
+    arham = TestClient(boss.app)
+    login = {"username": "arham", "password": "arham-pass-1"}
+    assert arham.post("/api/login", json=login).status_code == 200
+    _, riya = employee(env)
+
+    bosses = start(boss)[0]["id"]
+    arhams = start(arham, sources=("https://x.test/a",))[0]["id"]
+    riyas = start(riya, sources=("https://x.test/r",))[0]["id"]
+
+    # Another admin sees only their own renders, like an employee, with no names on them.
+    assert [j["id"] for j in arham.get("/api/jobs").json()] == [arhams]
+    assert arham.get("/api/jobs").json()[0]["owner"] is None
+    for other in (bosses, riyas):
+        assert arham.get(f"/api/jobs/{other}").status_code == 404
+        assert arham.post(f"/api/jobs/{other}/retry").status_code == 404
+        output = boss.get(f"/api/jobs/{other}").json()["outputs"][0]["id"]
+        assert arham.get(f"/api/outputs/{output}/video").status_code == 404
+    assert [j["id"] for j in riya.get("/api/jobs").json()] == [riyas]
+
+    # The primary account sees everyone's, each with who made it.
+    seen = {j["id"]: j["owner"] for j in boss.get("/api/jobs").json()}
+    assert seen == {bosses: "admin", arhams: "arham", riyas: "riya"}
+    output = boss.get(f"/api/jobs/{arhams}").json()["outputs"][0]["id"]
+    assert boss.get(f"/api/outputs/{output}/video").status_code != 404
+
+    # The piles too: each their own, the primary account everyone's.
+    assert sum(boss.get("/api/piles").json().values()) == 3
+    assert sum(arham.get("/api/piles").json().values()) == 1
+    pile = next(p for p, n in arham.get("/api/piles").json().items() if n)
+    assert [j["id"] for j in arham.get(f"/api/piles/{pile}").json()] == [arhams]
+
+    # Folders on the piles and feeds, which make renders, follow the same rule.
+    folder = riya.post("/api/pile-folders", json={"preset": "square-1x1", "name": "Riya's"})
+    assert arham.get("/api/pile-folders").json() == []
+    assert arham.delete(f"/api/pile-folders/{folder.json()['id']}").status_code == 404
+    assert [f["name"] for f in boss.get("/api/pile-folders").json()] == ["Riya's"]
+    feed = add_folder_feed(env, tmp_path)
+    assert feed.status_code == 200, feed.text
+    assert arham.get("/api/feeds").json() == []
+    assert arham.delete(f"/api/feeds/{feed.json()['id']}").status_code == 404
+
+    # Clearing finished jobs clears only one's own, except for the primary account.
+    assert arham.post("/api/jobs/clear").json()["deleted"] == 1
+    assert {j["id"] for j in boss.get("/api/jobs").json()} >= {bosses, riyas}
