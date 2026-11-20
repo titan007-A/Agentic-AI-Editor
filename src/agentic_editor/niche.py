@@ -55,7 +55,9 @@ ANY = {"", "any", "all", "none", "-", "anywhere", "no", "n/a"}
 
 RUN_SIZE = 60  # a run goes on until it has kept this many (or its BUDGET is spent)
 PER_QUERY = 30  # results asked of the engines for each search
-ROUNDS = 12  # rounds of searches, each with new ones, while fewer than RUN_SIZE are found
+# Rounds of searches at most, each with new ones: enough that RUN_SIZE or BUDGET ends a run
+# (a live run kept 50 in twelve rounds, with half its time left).
+ROUNDS = 24
 QUERIES = 14  # searches the model writes a round
 KNOWN = 40  # accounts the model is asked to name a round
 LOOKUPS = 120  # handles without a follower count looked up by name, a round
@@ -773,8 +775,9 @@ def run(
         if round_ and clock() - began >= budget:
             ended = f"stopped after {round(budget / 60)} minutes"
             break
-        lo, hi = round_ / ROUNDS, (round_ + 1) / ROUNDS
-        span = hi - lo
+        # How far along it is: by rounds, time or accounts, whichever is furthest.
+        lo = min(0.95, max(round_ / ROUNDS, (clock() - began) / budget, len(kept) / size))
+        span = min(1 / ROUNDS, 1 - lo)
 
         def step(message: str, value: float) -> None:
             say(f"{len(kept)} found · {message}" if kept else message, value)
