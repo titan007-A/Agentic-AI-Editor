@@ -259,3 +259,25 @@ def test_instagrams_reason_is_read_from_its_api(tmp_path, monkeypatch):
     assert seen["url"].endswith("/media/4032410823334075860/info/")  # the reel's own number
     assert seen["cookies"]["sessionid"] == "123%3Aabc" and "SID" not in seen["cookies"]
     assert download.instagram_gate("https://kick.com/x", cookies) is None
+
+
+def test_a_busy_instagram_is_asked_once_more_after_a_pause(tmp_path, instagram, monkeypatch):
+    """A retried job failed on "HTTP Error 560" and downloaded a minute later."""
+    tries = []
+
+    class Busy(Restricted):
+        def extract_info(self, url, download=False):
+            if self.options.get("cookiefile"):
+                tries.append(download)
+                if len(tries) == 1:
+                    raise yt_dlp.utils.DownloadError(
+                        "ERROR: [Instagram] DdeOTl4M7tx: Video info extraction failed: HTTP Error "
+                        "560: - (caused by <HTTPError 560: ->)"
+                    )
+            return super().extract_info(url, download)
+
+    download.save_instagram_cookies(COOKIES)
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Busy)
+    monkeypatch.setattr(download, "INSTAGRAM_PAUSE", 0)
+    source = download.fetch("https://www.instagram.com/reel/DdeOTl4M7tx/", tmp_path / "sources")
+    assert source.path.read_text() == "video" and tries == [False, False, True]
