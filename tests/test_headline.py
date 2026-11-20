@@ -363,3 +363,21 @@ def test_a_coloured_headline_keeps_its_colour_however_it_wraps():
         tuple((w.words, w.color, w.occurrence) for w in filled.word_colors),
     )
     assert {color for line in colored for _, color in line} == {"#FFE000"}
+
+
+def test_a_headline_about_the_video_needs_no_song():
+    # A GTA 6 clip names no song: a song page's headline would give up, a video one doesn't.
+    source = download.Source(
+        path=ROOT, title="Video by gtacommunity", uploader="gtacommunity",
+        description="NEW GTA 6 GAMEPLAY FOOTAGE: custom cars in Vice City",
+    )  # fmt: skip
+    with pytest.raises(headline.NoHeadline):
+        headline.write(Writer("GTA 6 custom cars", song=""), source, preset())
+    llm = Writer("x" * 80, "NEW GTA 6 GAMEPLAY SHOWS OFF CUSTOM CARS", song="")
+    written = headline.write(llm, source, preset(about="video", max_chars=50))
+    assert written == "NEW GTA 6 GAMEPLAY SHOWS OFF CUSTOM CARS"
+    prompt = llm.asked[0][0]["content"]
+    assert "custom cars in Vice City" in prompt and "song" not in prompt.split("Reply")[0]
+    assert "at most 50" in llm.asked[1][-1]["content"]
+    with pytest.raises(headline.NoHeadline, match="headline: "):
+        headline.write(Writer(""), source, preset(about="video"))

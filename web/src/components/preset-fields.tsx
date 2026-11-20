@@ -309,6 +309,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
         label: "How to write {headline} (or give it in the notes as headline: ...)",
         kind: "textarea",
       },
+      {
+        path: "headline.about",
+        label: "About (song: a page of singers; video: anything else, never needs a song)",
+        kind: "select",
+        options: ["song", "video"],
+      },
       { path: "headline.max_chars", label: "Max letters", kind: "number" },
       { path: "headline.uppercase", label: "In capitals", kind: "switch" },
     ],

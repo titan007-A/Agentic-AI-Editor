@@ -130,6 +130,10 @@ class Headline(Strict):
     hint: str = Field(default="", description="how to write it, with examples")
     max_chars: int = Field(default=90, ge=10, le=300)
     uppercase: bool = False
+    # What it is about: the song the video is of (a page of singers: no song named, no
+    # headline), or whatever the video shows (game clips, news), from its title,
+    # description and what is said in it, never failing for want of a song.
+    about: Literal["song", "video"] = "song"
     # Watch and look up: written once the clip is heard, from what it says and what
     # Wikipedia says about the film (series, speech) it is from, not the title alone; what
     # the sources don't back is flagged for a look before posting.

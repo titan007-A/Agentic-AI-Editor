@@ -45,6 +45,24 @@ Reply with:
   song's name in quotes, saying nothing the title and description don't support."""
 
 
+# For a headline about whatever the video shows (Headline.about "video"): no song to name.
+VIDEO_PROMPT = """Write the headline of a short vertical video, shown in big letters above
+the picture.
+
+The video:
+Title: {title}
+Channel: {uploader}
+Description: {description}
+What is said in it: {said}
+
+Reply with:
+- song: ''
+- artist: ''
+- headline: {hint}
+  One sentence of at most {max_chars} characters, without hashtags or emoji, about what
+  this video shows, saying nothing the title, description and what is said don't support."""
+
+
 SAID_CHARS = 2500  # of what the clip says, for the model
 QUOTE = re.compile(r"[“\"]([^”\"]{3,})[”\"]")
 # A quoted line counts as said in the clip when this share of its words were heard.
@@ -116,8 +134,11 @@ def from_notes(notes: str | None) -> tuple[str | None, str | None]:
     return match.group(2).strip(), rest or None
 
 
-def write(llm, source: Source, preset: Preset) -> str:
-    """The planner's headline for the video, in the way the preset's hint asks."""
+def write(llm, source: Source, preset: Preset, said: str = "") -> str:
+    """The planner's headline for the video, in the way the preset's hint asks: of its song,
+    or (Headline.about "video") of whatever it shows, `said` in it included."""
+    if preset.headline.about == "video":
+        return _about_video(llm, source, preset, said)
     prompt = PROMPT.format(
         title=source.title,
         uploader=source.uploader or "(unknown)",
@@ -142,6 +163,30 @@ def write(llm, source: Source, preset: Preset) -> str:
             "headline in the notes as 'headline: ...'"
         )
     return quote(reply.headline, reply.song.strip())
+
+
+def _about_video(llm, source: Source, preset: Preset, said: str) -> str:
+    """A headline of what the video shows, from its title, description and what is said
+    in it: there is no song to find, so it doesn't fail for want of one."""
+    prompt = VIDEO_PROMPT.format(
+        title=source.title or "(none)",
+        uploader=source.uploader or "(unknown)",
+        description=source.description.strip()[:DESCRIPTION_CHARS] or "(none)",
+        said=" ".join(said.split())[:SAID_CHARS] or "(nothing)",
+        hint=preset.headline.hint or "Say plainly what the video shows.",
+        max_chars=preset.headline.max_chars,
+    )
+    messages = [{"role": "user", "content": prompt}]
+    reply = _ask(llm, messages)
+    if len(reply.headline) > preset.headline.max_chars:
+        messages += [
+            {"role": "assistant", "content": reply.model_dump_json()},
+            {"role": "user", "content": f"Shorter: at most {preset.headline.max_chars} letters."},
+        ]
+        reply = _ask(llm, messages)
+    if not reply.headline:
+        raise NoHeadline("no headline came back; write it in the notes as 'headline: ...'")
+    return reply.headline
 
 
 def write_researched(
