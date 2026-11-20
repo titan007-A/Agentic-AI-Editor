@@ -346,7 +346,7 @@ export default function PeoplePage() {
           </form>
           <p className="mt-3 text-xs text-muted-foreground">
             {adding === "admin"
-              ? "An admin sees everyone's jobs, uses the same presets as you, and manages employees, so type your own password to make one. You can change or remove them here later."
+              ? "An admin uses the same presets as you and manages employees, so type your own password to make one. Like everyone, they see only their own renders; only the primary account sees everyone's. You can change or remove them here later."
               : "They start with no presets: tick the ones they should use with Assign presets on their card below, or send one preset to several people from the Presets page."}
             {!primary &&
               ` Admins are made, changed and removed by the primary account${boss ? ` (${boss.username})` : ""}.`}
@@ -608,8 +608,8 @@ export default function PeoplePage() {
             </DialogTitle>
             <DialogDescription>
               {promoting?.role === "admin"
-                ? "They stop seeing everyone's jobs and People, and get a presets folder of their own (empty: assign presets after). They are logged out everywhere."
-                : "They see everyone's jobs, use the admins' presets and manage employees. They are logged out everywhere and log in again."}
+                ? "They stop seeing People and get a presets folder of their own (empty: assign presets after). They are logged out everywhere."
+                : "They use the admins' presets and manage employees, and still see only their own renders. They are logged out everywhere and log in again."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
