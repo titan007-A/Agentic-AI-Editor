@@ -470,6 +470,9 @@ def test_sources_come_from_wikipedia_and_the_web_except_for_lessons(monkeypatch,
     assert [f.url for f in found] == ["https://en.wikipedia.org/wiki/Ubar", "https://x.test/a"]
     assert len(found[0].text) == planner.SOURCE_CHARS
     assert planner.gather("patience", "lesson", tmp_path, search=lambda q, n: hits) == []
+    # A made-up story names no real subject: nothing to look up. A true one does.
+    assert planner.gather("a kind shoeshine boy", "story", tmp_path, search=lambda q, n: hits) == []
+    assert planner.gather("Ubar", "story", tmp_path, search=lambda q, n: hits, topic="Ubar")
     asked = []
     planner.gather(
         "a city that sank",

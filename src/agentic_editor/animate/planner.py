@@ -71,8 +71,9 @@ def gather(
     idea: str, kind: str, cache: Path, search=websearch.search, topic: str = "", query: str = ""
 ) -> list[Found]:
     """What the reel's facts are taken from: Wikipedia's article on its subject (`topic`,
-    else the idea) and the top web results. Lessons need none."""
-    if kind in ("lesson",):
+    else the idea) and the top web results. Lessons need none, nor a made-up story (one
+    whose idea names no real subject)."""
+    if kind == "lesson" or (kind == "story" and not topic):
         return []
     found: list[Found] = []
     try:
