@@ -51,10 +51,29 @@ TOPIC_FRAMES = 6  # frames the vision model sees of each video, spread over its 
 # hiccup clears by the next check, a reel Instagram won't give out doesn't.
 TOPIC_TRIES = 3
 _tries: dict[tuple[int, str], int] = {}
-TOPIC_SCHEMA = {
+# What the frames show, asked without the topic: asked "is this GTA 6?", the small vision
+# models leaned towards no, and asked about GTA 5 they called the same GTA 6 footage GTA 6.
+SEEN_SCHEMA = {
     "type": "object",
-    "properties": {"fits": {"type": "boolean"}, "why": {"type": "string"}},
-    "required": ["fits", "why"],
+    "properties": {
+        "game": {"type": "string"},
+        "shows": {"type": "string"},
+        "text": {"type": "string"},
+    },
+    "required": ["game", "shows", "text"],
+}
+# Small questions the code puts together (see fits): asked for one verdict, the small
+# model went by its own name for the game and passed over what the video said it was.
+FITS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "same_series": {"type": "boolean"},
+        "exact": {"type": "boolean"},
+        "named": {"type": "boolean"},
+        "named_other": {"type": "boolean"},
+        "why": {"type": "string"},
+    },
+    "required": ["same_series", "exact", "named", "named_other", "why"],
 }
 _checking: dict[int, threading.Lock] = {}
 _checking_lock = threading.Lock()
@@ -158,17 +177,44 @@ class Verdict:
     why: str
 
 
-def topic_prompt(topic: str, frames: int, caption: str) -> str:
-    said = " ".join(caption.split())[:400]
+def seen_prompt(frames: int) -> str:
     return (
-        f"These are {frames} frames, in order, from one short video"
-        + (f' whose caption says: "{said}"' if said else "")
-        + f". Is this video {topic} content? Say fits true only when the frames themselves "
-        f"show {topic}: for a game, its own footage on screen (beside a streamer's face or "
-        "under big captions still counts). Something that only looks alike (another game, "
-        "another part of the same series, real life) is not, and a caption that names it "
-        "is not enough when the frames don't show it. In why, say in one short sentence "
-        "what the frames show."
+        f"These are {frames} frames, in order, from one short video. What does it show? If "
+        "it shows a video game's footage (even beside a streamer's face, under captions, "
+        "modded, on a roleplay server, or in a trailer), name the game exactly, with its part "
+        "number; otherwise game is empty and say what it shows (real life, a film, a "
+        "cartoon...). In text, write the words written on screen (titles, captions, logos), "
+        "or nothing."
+    )
+
+
+def fits_prompt(topic: str, seen: dict, caption: str) -> str:
+    said = " ".join(caption.split())[:400]
+    game, shows = (" ".join(str(seen.get(k) or "").split()) for k in ("game", "shows"))
+    text = " ".join(str(seen.get("text") or "").split())[:300]
+    return (
+        f'Answer about one video and the topic "{topic}". A vision model looked at frames '
+        f'from it and saw: game "{game}"; shows "{shows}". The words in the video: its '
+        f'caption "{said}"; written on screen "{text}".\n'
+        f"- same_series: are the frames {topic}'s footage, or the same game series or "
+        "subject, whichever part or number?\n"
+        f"- exact: is what the frames show exactly {topic}, the same part if it has parts?\n"
+        f"- named: do the caption or the words on screen name {topic} itself (any spelling, "
+        "a hashtag too)?\n"
+        f"- named_other: do they name another part of the same series, and not {topic}?\n"
+        "- why: one short sentence saying what the frames show."
+    )
+
+
+def fits(answer: dict) -> bool:
+    """The video is the topic's when the frames show its series and the video names the
+    topic; or, with no other part of the series named, when the vision model saw the topic
+    itself. The video's own words decide the part: the small models call a game newer than
+    their training by an older part's name (GTA 6 footage "GTA V")."""
+    if answer.get("same_series") is not True:
+        return False
+    return answer.get("named") is True or (
+        answer.get("named_other") is not True and answer.get("exact") is True
     )
 
 
@@ -179,8 +225,12 @@ def _short(exc: Exception) -> str:
 def judge_topic(topic: str, found: list[Entry], settings=None, router=None) -> list[Verdict]:
     """Whether each video is about `topic`, by frames from it. Each is downloaded first (a
     job given it later finds the download there); a video that can't be opened gets a
-    Verdict of None. All are judged in one turn of the vision model, behind any job
-    waiting for the GPU. A model that can't be reached raises."""
+    Verdict of None. The vision model first says what the frames show without being told
+    the topic, then whether that, with the caption and the words on screen, is the topic:
+    the small models know no game newer than their training (GTA 6 footage they call GTA
+    V), so a newer part of a series is told apart by what the video says it is. All are
+    judged in one turn of the vision model, behind any job waiting for the GPU. A model
+    that can't be reached raises."""
     from agentic_editor import ffmpeg, pipeline, slots
     from agentic_editor.backends import get_backends
     from agentic_editor.review import sample_frames
@@ -206,15 +256,20 @@ def judge_topic(topic: str, found: list[Entry], settings=None, router=None) -> l
             router = router or ModelRouter(settings, get_backends())
             with slots.behind(), router.vision() as vision:
                 for i, frames, caption in shown:
-                    prompt = topic_prompt(topic, len(frames), caption)
-                    reply = vision.chat_json(
-                        [{"role": "user", "content": prompt}],
-                        TOPIC_SCHEMA,
+                    seen = vision.chat_json(
+                        [{"role": "user", "content": seen_prompt(len(frames))}],
+                        SEEN_SCHEMA,
                         images=frames,
                         temperature=0,
                     )
-                    why = " ".join(str(reply.get("why") or "").split())[:200]
-                    verdicts[i] = Verdict(reply.get("fits") is True, why)
+                    answer = vision.chat_json(
+                        [{"role": "user", "content": fits_prompt(topic, seen, caption)}],
+                        FITS_SCHEMA,
+                        temperature=0,
+                    )
+                    log.info("topic %r: saw %s, answered %s", topic, seen, answer)
+                    why = " ".join(str(answer.get("why") or "").split())[:200]
+                    verdicts[i] = Verdict(fits(answer), why)
     return [v for v in verdicts if v is not None]
 
 

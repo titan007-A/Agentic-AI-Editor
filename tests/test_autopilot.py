@@ -379,22 +379,46 @@ def test_judging_a_topic_shows_the_model_frames_from_each_downloaded_video(tmp_p
         def __exit__(self, *exc):
             return None
 
-        def chat_json(self, messages, schema, images, temperature):
-            asked.append((messages[0]["content"], len(images)))
-            fits = len(asked) == 1
-            return {"fits": fits, "why": " a car chase\n in Los Santos " if fits else "a quiz"}
+        def chat_json(self, messages, schema, images=None, temperature=0.3):
+            asked.append((messages[0]["content"], len(images or [])))
+            if images:  # what the frames show, asked without the topic
+                return {"game": "Grand Theft Auto V", "shows": "a car chase", "text": "GTA VI"}
+            first = len(asked) == 2
+            return {"same_series": first, "exact": False, "named": first, "named_other": False,
+                    "why": " a car chase\n in Vice City " if first else "a quiz"}  # fmt: skip
 
     router = SimpleNamespace(vision=lambda: Vision())
     found = [Entry("a", "a", "https://x.test/a"), Entry("gone", "g", "https://x.test/gone"),
              Entry("b", "b", "https://x.test/b")]  # fmt: skip
-    verdicts = autopilot.judge_topic("GTA 5", found, settings=object(), router=router)
+    verdicts = autopilot.judge_topic("GTA 6", found, settings=object(), router=router)
     assert verdicts == [
-        autopilot.Verdict(True, "a car chase in Los Santos"),
+        autopilot.Verdict(True, "a car chase in Vice City"),
         autopilot.Verdict(None, "couldn't download it: HTTP Error 404: Not Found"),
         autopilot.Verdict(False, "a quiz"),
     ]
-    assert len(asked) == 2 and all(n == autopilot.TOPIC_FRAMES for _, n in asked)
-    assert "Is this video GTA 5 content?" in asked[0][0] and "gta rp moments" in asked[0][0]
+    assert [n for _, n in asked] == [autopilot.TOPIC_FRAMES, 0] * 2
+    assert "GTA 6" not in asked[0][0]  # the frames are described before the topic is told
+    assert "GTA 6" in asked[1][0] and "gta rp moments" in asked[1][0] and "GTA VI" in asked[1][0]
+
+
+@pytest.mark.parametrize(
+    "answer, fitting",
+    [
+        # GTA 6 footage the model calls GTA V, in a video that says GTA 6
+        ({"same_series": True, "exact": False, "named": True, "named_other": False}, True),
+        # GTA 5 roleplay, asked about GTA 6
+        ({"same_series": True, "exact": False, "named": False, "named_other": True}, False),
+        # GTA 6 footage the model calls GTA V, asked about GTA 5: the video says GTA 6
+        ({"same_series": True, "exact": True, "named": False, "named_other": True}, False),
+        # the topic itself, with nothing said about it
+        ({"same_series": True, "exact": True, "named": False, "named_other": False}, True),
+        # real life under a caption that names the topic
+        ({"same_series": False, "exact": False, "named": True, "named_other": False}, False),
+        ({}, False),
+    ],
+)
+def test_the_videos_own_words_decide_which_part_of_a_series_it_is(answer, fitting):
+    assert autopilot.fits(answer) is fitting
 
 
 def test_a_feeds_finished_videos_go_in_its_folder_made_once(Session):
