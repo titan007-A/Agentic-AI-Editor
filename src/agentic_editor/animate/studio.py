@@ -29,7 +29,10 @@ log = logging.getLogger(__name__)
 SOURCE = "animation:"  # a Job's source for rendering an animation
 BUSY = ("drafting", "changing", "voicing")  # a task is working on it
 HISTORY = 20
-STYLE_NAMES = {"glow": "Neon Glow", "paper": "Clean Paper"}
+STYLE_NAMES = {
+    "glow": "Neon Glow", "paper": "Clean Paper", "story": "Character story",
+    "kinetic": "Bold kinetic text",
+}  # fmt: skip
 
 
 def label(preset: str) -> str:
@@ -107,6 +110,7 @@ def run_task(
     from agentic_editor.backends import get_backends
     from agentic_editor.router import ModelRouter
 
+    op = "draft"
     try:
         with Session() as db:
             a = db.get(Animation, animation_id)
@@ -117,10 +121,11 @@ def run_task(
             current = Plan.model_validate(a.plan) if a.plan else None
         op = task.get("op", "draft")
         notes: list[str] = []
+        doubts: list[str] = []
         plan = current
-        if op in ("draft", "change", "scene"):
+        if op in ("draft", "auto", "change", "scene"):
             router = router or ModelRouter(settings, get_backends(), lambda *args: None)
-            if op == "draft":
+            if op in ("draft", "auto"):
                 _set(
                     Session,
                     animation_id,
@@ -132,6 +137,9 @@ def run_task(
                 # again costs more than the searches it would wait through.
                 with router.planner() as llm:
                     planner.roomy(llm)
+                    if op == "auto" and not brief.idea:
+                        _set(Session, animation_id, message="choosing today's topic")
+                        brief.idea = _choose_topic(animation_id, Session, llm)
                     topic, query = (
                         ("", "") if brief.kind == "lesson" else planner.subject(llm, brief.idea)
                     )
@@ -145,6 +153,9 @@ def run_task(
                     )
                     _set(Session, animation_id, message=f"writing the reel ({len(found)} sources)")
                     plan, notes = planner.draft(llm, brief, found)
+                    if op == "auto":  # nobody reads it before it may post: check its facts
+                        _set(Session, animation_id, message="checking the facts")
+                        doubts = planner.fact_check(llm, plan, found)
             elif current is None:
                 raise planner.PlannerError("there is no draft to change yet")
             elif op == "change":
@@ -190,15 +201,49 @@ def run_task(
             else:
                 a.plan, a.notes = plan.model_dump(mode="json"), notes
             a.player, a.status, a.message, a.task, a.error = data, "ready", "ready", None, None
+            if op == "auto":
+                a.doubts = doubts
             db.commit()
+        if op == "auto":  # an autopilot's reel goes on to its render by itself
+            from agentic_editor.animate import schedule
+
+            schedule.render(animation_id, Session)
     except Exception as exc:
         log.exception("animation %s failed", animation_id)
+        if op == "auto":  # an autopilot's reel that never got made
+            _set(
+                Session,
+                animation_id,
+                post_status="failed",
+                post_error=f"{type(exc).__name__}: {exc}",
+            )
         _set(
             Session, animation_id, status="failed", task=None, message="failed",
             error=str(exc)
             if isinstance(exc, planner.PlannerError)
             else f"{type(exc).__name__}: {exc}",
         )  # fmt: skip
+
+
+def _choose_topic(animation_id: str, Session: sessionmaker, llm) -> str:
+    """Today's topic for an autopilot's reel that had none waiting in its list: a new one in
+    its niche, noted as made so it isn't chosen again."""
+    from agentic_editor.db import AnimationAutopilot
+
+    with Session() as db:
+        a = db.get(Animation, animation_id)
+        pilot = db.get(AnimationAutopilot, a.autopilot_id) if a and a.autopilot_id else None
+        if pilot is None or not pilot.niche.strip():
+            raise planner.PlannerError("the autopilot has no topics left and no niche to find more")
+        niche, used = pilot.niche, list(pilot.used or [])
+    topic = planner.next_topic(llm, niche, used)
+    with Session() as db:
+        a = db.get(Animation, animation_id)
+        a.idea = topic
+        pilot = db.get(AnimationAutopilot, a.autopilot_id)
+        pilot.used = [*(pilot.used or []), topic][-200:]
+        db.commit()
+    return topic
 
 
 def edited(a: Animation, plan: Plan) -> Plan:

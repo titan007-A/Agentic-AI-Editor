@@ -1,7 +1,15 @@
 "use client";
 
 import { Pause, Play, RotateCcw } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -24,8 +32,14 @@ export type PreviewHandle = { seek: (t: number, play?: boolean) => void };
  */
 export const AnimationPreview = forwardRef<
   PreviewHandle,
-  { data: AnimationPlayerData; soundUrl: string | null; onProblems?: (p: string[]) => void }
->(function AnimationPreview({ data, soundUrl, onProblems }, ref) {
+  {
+    data: AnimationPlayerData;
+    soundUrl: string | null;
+    onProblems?: (p: string[]) => void;
+    /** Kept at the preview's time, for a timeline's playhead. */
+    timeRef?: MutableRefObject<number>;
+  }
+>(function AnimationPreview({ data, soundUrl, onProblems, timeRef }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
   const [ready, setReady] = useState(false);
@@ -106,18 +120,20 @@ export const AnimationPreview = forwardRef<
         if (Math.abs(sound.currentTime - now) > 0.25) sound.currentTime = now;
       }
       setT(now);
+      if (timeRef) timeRef.current = now;
       post({ type: "seek", t: now });
       id = requestAnimationFrame(tick);
     };
     id = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(id);
-  }, [playing, duration, post, soundUrl]);
+  }, [playing, duration, post, soundUrl, timeRef]);
 
   const seek = useCallback(
     (to: number, play = false) => {
       const at = Math.min(Math.max(0, to), duration);
       fresh.current = false;
       setT(at);
+      if (timeRef) timeRef.current = at;
       post({ type: "seek", t: at });
       if (audio.current) audio.current.currentTime = at;
       started.current = { at: performance.now(), from: at };
@@ -126,7 +142,7 @@ export const AnimationPreview = forwardRef<
         void audio.current?.play().catch(() => undefined);
       }
     },
-    [duration, post],
+    [duration, post, timeRef],
   );
 
   useImperativeHandle(ref, () => ({ seek }), [seek]);

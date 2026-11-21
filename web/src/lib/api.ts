@@ -757,7 +757,19 @@ export type AnimationVisualKind =
   | "place"
   | "quote"
   | "reveal"
-  | "dots";
+  | "dots"
+  | "scene";
+
+/** A character in a scene: who (from the cast), what they do and feel, what they hold, a line. */
+export type AnimationActor = {
+  name: string;
+  action: string;
+  mood: string;
+  prop: string;
+  says: string;
+};
+
+export type AnimationCastMember = { name: string; look: string };
 
 export type AnimationVisual = {
   kind: AnimationVisualKind;
@@ -772,6 +784,9 @@ export type AnimationVisual = {
   answer: string;
   emoji: string;
   items: AnimationItem[];
+  /** Character scenes: where it happens and who acts. */
+  setting?: string;
+  actors?: AnimationActor[];
 };
 
 export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
@@ -781,10 +796,11 @@ export type AnimationPlan = {
   v: number;
   title: string;
   kind: "facts" | "lesson" | "story" | "news";
-  style: "glow" | "paper";
+  style: "glow" | "paper" | "story" | "kinetic";
   voice: string;
   mood: string;
   scenes: AnimationScene[];
+  cast?: AnimationCastMember[];
   cta: string;
   caption: string;
   sources: { title: string; url: string }[];
@@ -823,8 +839,37 @@ export type Animation = {
   created_at: string;
   updated_at: string;
   render: AnimationRender | null;
+  /** Made by the autopilot: what became of its post (null: made by hand). */
+  autopilot_id?: string | null;
+  post_status?:
+    "rendering" | "awaiting" | "posting" | "posted" | "approved" | "skipped" | "failed" | null;
+  post_error?: string | null;
+  post_id?: string | null;
+  /** Claims the fact check found no source for. */
+  doubts?: string[];
   plan?: AnimationPlan | null;
   player?: AnimationPlayerData | null;
+};
+
+export type AnimationAutopilot = {
+  exists: boolean;
+  active: boolean;
+  niche: string;
+  topics: string[];
+  hour: number;
+  per_day: number;
+  kind: string;
+  style: string;
+  voice: string;
+  length: string;
+  channel_id: string | null;
+  auto_post: boolean;
+  approved: number;
+  needs: number;
+  used: string[];
+  last_on: string | null;
+  waiting: number;
+  channels: { id: string; username: string }[];
 };
 
 export type AnimationVoice = { id: string; name: string; group: string; about: string };
@@ -856,6 +901,16 @@ export const api = {
   renderAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/render`),
   deleteAnimation: (id: string) => request<{ ok: boolean }>("DELETE", `/animations/${id}`),
   animationVoices: () => request<AnimationVoice[]>("GET", "/animation-voices"),
+  animationAutopilot: () => request<AnimationAutopilot>("GET", "/animation-autopilot"),
+  setAnimationAutopilot: (
+    body: Omit<
+      AnimationAutopilot,
+      "exists" | "approved" | "needs" | "used" | "last_on" | "waiting" | "channels"
+    >,
+  ) => request<AnimationAutopilot>("PUT", "/animation-autopilot", body),
+  animationAutopilotNow: () => request<Animation>("POST", "/animation-autopilot/now"),
+  approveAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/approve`),
+  skipAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/skip`),
   nicheSearches: () => request<NicheSearch[]>("GET", "/niche"),
   nicheSearch: (id: string) => request<NicheSearch>("GET", `/niche/${id}`),
   startNiche: (body: { niche: string } & NicheFilters) =>

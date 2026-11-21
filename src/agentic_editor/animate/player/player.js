@@ -52,6 +52,7 @@
       caption: "Montserrat-ExtraBold",
       quote: "SourceSerif4-Bold",
       glow: true,
+      palette: "glow",
     },
     paper: {
       bg: "#f5efe3",
@@ -68,6 +69,43 @@
       caption: "Rubik-ExtraBold",
       quote: "SourceSerif4-Bold",
       glow: false,
+      palette: "paper",
+    },
+    story: {
+      bg: "#FFF4E6",
+      text: "#2A2420",
+      muted: "rgba(42,36,32,0.72)",
+      accent: "#FF6B4A",
+      accent2: "#3D7BF2",
+      accent3: "#FFC93C",
+      card: "#ffffff",
+      ink: "#2A2420",
+      display: "Rubik-ExtraBold",
+      body: "Rubik-SemiBold",
+      number: "Rubik-ExtraBold",
+      caption: "Rubik-ExtraBold",
+      quote: "Rubik-Bold",
+      glow: false,
+      story: true,
+      palette: "story",
+    },
+    kinetic: {
+      bg: "#0A0A0A",
+      text: "#FFFFFF",
+      muted: "rgba(255,255,255,0.7)",
+      accent: "#FFE500",
+      accent2: "#FF3B30",
+      accent3: "#00E0FF",
+      card: "#161616",
+      ink: "#FFFFFF",
+      display: "Anton-Regular",
+      body: "Montserrat-Bold",
+      number: "Anton-Regular",
+      caption: "Montserrat-ExtraBold",
+      quote: "Anton-Regular",
+      glow: false,
+      kinetic: true,
+      palette: "glow",
     },
   };
 
@@ -215,6 +253,41 @@
     canvas.height = H;
     const ctx = canvas.getContext("2d");
     const r = rng(seed);
+    if (theme.kinetic) {
+      return (t) => {
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = theme.bg;
+        ctx.fillRect(0, 0, W, H);
+        const v = ctx.createRadialGradient(540, 860, 200, 540, 860, 1200);
+        v.addColorStop(0, "rgba(255,229,0,0.05)");
+        v.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = v;
+        ctx.fillRect(0, 0, W, H);
+      };
+    }
+    if (theme.story) {
+      const blobs = [
+        { c: theme.accent3, x: 160, y: 380, rad: 300, p: 0.6 },
+        { c: theme.accent2, x: 940, y: 1500, rad: 340, p: 2.2 },
+        { c: theme.accent, x: 900, y: 420, rad: 160, p: 4.1 },
+      ];
+      return (t) => {
+        ctx.globalAlpha = 1;
+        const g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, "#FFF4E6");
+        g.addColorStop(1, "#FFE3CC");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+        for (const b of blobs) {
+          ctx.globalAlpha = 0.16;
+          ctx.fillStyle = b.c;
+          ctx.beginPath();
+          ctx.arc(b.x + 40 * Math.sin(t * 0.2 + b.p), b.y + 30 * Math.cos(t * 0.17 + b.p), b.rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      };
+    }
     if (theme.glow) {
       const stars = Array.from({ length: 150 }, () => ({
         x: r() * W,
@@ -960,10 +1033,703 @@
     };
   };
 
+  // ---- characters -------------------------------------------------------------------
+  // A cartoon rig drawn in SVG, seen from the side: the body leans and bobs, limbs are two
+  // segments turned at the shoulder/elbow and hip/knee (angles from hanging straight down,
+  // positive towards where the character faces), the face shows a feeling. Every pose is a
+  // function of time, like everything else here.
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const FLOOR = 1180; // where feet stand in a scene
+  const BASE = 1.15; // an adult's size on the stage
+  const RIG = { hipY: -250, shoulderY: -418, headY: -515, headR: 72, thigh: 125, shin: 125, upper: 100, fore: 92 };
+  const SKINS = ["#F3CFAE", "#E6B48A", "#C98E62", "#8F5B3C", "#F7DCC3", "#D9A27A"];
+  const HAIRS = ["#2B1D14", "#4A2E1B", "#6B4226", "#161616", "#8A4B2A", "#C9973F"];
+  const SHIRTS = ["#FF7A59", "#4F86F7", "#2BB673", "#F7B500", "#9B5DE5", "#E84393", "#00A8A8"];
+  const PANTS = ["#2F3A56", "#3B3B3B", "#5B4B3A", "#1F4E79", "#4B3F72"];
+  // How long an entrance takes (timeline.py ENTRANCES) and how far off it starts.
+  const ENTRANCES = { walk_in: [1.6, 420, 0.9], run_in: [0.9, 560, 0.5] };
+  const WALK_OUT = 1.6;
+
+  function svg(tag, attrs, parent) {
+    const node = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) node.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(node);
+    return node;
+  }
+
+  function shade(hex, by) {
+    const n = parseInt(hex.slice(1), 16);
+    const f = (c) => Math.max(0, Math.min(255, Math.round(c * (1 - by))));
+    return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+  }
+
+  function lookOf(member, index) {
+    const h = hash(member.name || "someone");
+    const look = member.look || "man";
+    const old = look.startsWith("old");
+    const kid = look === "boy" || look === "girl";
+    const female = look === "woman" || look === "girl" || look === "old woman";
+    return {
+      skin: SKINS[h % SKINS.length],
+      hair: old ? "#D8D8D8" : HAIRS[(h >>> 3) % HAIRS.length],
+      shirt: SHIRTS[(index * 3 + (h >>> 5)) % SHIRTS.length],
+      pants: PANTS[(h >>> 7) % PANTS.length],
+      hairStyle: old && !female ? "bald" : female ? (kid ? "pigtails" : h & 1 ? "long" : "bun") : kid ? "spiky" : "short",
+      scale: kid ? 0.74 : old ? 0.95 : 1,
+      glasses: old,
+      skirt: female && !kid && (h & 2) === 0,
+      stoop: old ? 3 : 0,
+      blink: (h % 97) / 31,
+    };
+  }
+
+  const HAIR_PATHS = {
+    short: "M -72 6 C -84 -62 -30 -98 12 -94 C 58 -90 84 -58 70 -20 C 50 -42 18 -50 -12 -46 C -44 -42 -62 -22 -62 8 Z",
+    spiky: "M -72 6 C -80 -40 -64 -70 -44 -82 L -30 -104 L -12 -86 L 6 -108 L 22 -88 L 44 -100 L 52 -76 C 74 -66 84 -44 72 -20 C 50 -42 18 -50 -12 -46 C -44 -42 -62 -22 -62 8 Z",
+    long: "M -74 10 C -86 -64 -30 -100 14 -96 C 60 -92 86 -58 72 -18 C 52 -40 20 -48 -10 -44 C -40 -40 -58 -20 -60 10 Z",
+    bun: "M -72 8 C -84 -62 -30 -98 12 -94 C 58 -90 84 -58 70 -20 C 50 -42 18 -50 -12 -46 C -44 -42 -62 -22 -62 8 Z",
+    pigtails: "M -72 8 C -84 -62 -30 -98 12 -94 C 58 -90 84 -58 70 -20 C 50 -42 18 -50 -12 -46 C -44 -42 -62 -22 -62 8 Z",
+    bald: "M -70 -6 C -76 14 -70 34 -56 44 L -44 30 C -54 18 -56 4 -54 -12 Z",
+  };
+
+  function limb(x0, y0, a1, l1, a2, l2) {
+    const r1 = (a1 * Math.PI) / 180;
+    const r2 = ((a1 + a2) * Math.PI) / 180;
+    const x1 = x0 + l1 * Math.sin(r1);
+    const y1 = y0 + l1 * Math.cos(r1);
+    return [x1, y1, x1 + l2 * Math.sin(r2), y1 + l2 * Math.cos(r2)];
+  }
+
+  // The parts of one character, built once; draw(p) places them for pose p.
+  function makeCharacter(look, theme, parent) {
+    const root = svg("g", {}, parent);
+    const outline = theme.glow ? theme.accent : theme.ink;
+    const lineW = theme.story ? 0 : theme.glow ? 3 : 4;
+    const stroke = (el) => {
+      if (lineW) {
+        el.setAttribute("stroke", outline);
+        el.setAttribute("stroke-width", String(lineW));
+      }
+      return el;
+    };
+    const shadow = svg("ellipse", { cx: 0, cy: 6, rx: 80, ry: 14, fill: "rgba(0,0,0,0.16)" }, root);
+    const body = svg("g", {}, root);
+    const limbParts = (color, w, back) => {
+      const g = svg("g", {}, body);
+      const a = svg("line", { stroke: back ? shade(color, 0.18) : color, "stroke-width": w, "stroke-linecap": "round" }, g);
+      return { g, a };
+    };
+    // Back limbs first, then the body, then the front limbs.
+    const legB = { up: limbParts(look.pants, 38, true), low: limbParts(look.pants, 34, true) };
+    const shoeB = svg("ellipse", { rx: 28, ry: 13, fill: shade("#3a3a3a", 0.25) }, body);
+    const armB = { up: limbParts(look.shirt, 30, true), low: limbParts(look.skin, 25, true) };
+    const handB = svg("circle", { r: 15, fill: shade(look.skin, 0.12) }, body);
+    const longHair = look.hairStyle === "long" ? svg("ellipse", { rx: 70, ry: 98, fill: look.hair }, body) : null;
+    const torso = stroke(svg("rect", { x: -56, y: RIG.shoulderY - 28, width: 112, height: 214, rx: 48, fill: look.shirt }, body));
+    const skirt = look.skirt ? stroke(svg("path", { fill: shade(look.shirt, 0.15) }, body)) : null;
+    const legF = { up: limbParts(look.pants, 38, false), low: limbParts(look.pants, 34, false) };
+    const shoeF = svg("ellipse", { rx: 28, ry: 13, fill: "#3a3a3a" }, body);
+    const head = svg("g", {}, body);
+    const bun = look.hairStyle === "bun" ? svg("circle", { cx: -42, cy: -70, r: 30, fill: look.hair }, head) : null;
+    const tail = look.hairStyle === "pigtails" ? svg("ellipse", { cx: -74, cy: 14, rx: 22, ry: 30, fill: look.hair }, head) : null;
+    const skull = stroke(svg("circle", { cx: 0, cy: 0, r: RIG.headR, fill: look.skin }, head));
+    svg("circle", { cx: -38, cy: 4, r: 13, fill: shade(look.skin, 0.1) }, head); // ear
+    stroke(svg("path", { d: HAIR_PATHS[look.hairStyle] || HAIR_PATHS.short, fill: look.hair }, head));
+    const blush = svg("circle", { cx: 42, cy: 20, r: 13, fill: "#FF7F7F", opacity: 0 }, head);
+    const eyeB = svg("ellipse", { cx: 12, cy: -6, rx: 8, ry: 11, fill: "#1d1d1d" }, head);
+    const eyeF = svg("ellipse", { cx: 42, cy: -6, rx: 8.5, ry: 11.5, fill: "#1d1d1d" }, head);
+    const browB = svg("line", { x1: 2, y1: -26, x2: 22, y2: -26, stroke: shade(look.hair, 0.1), "stroke-width": 6, "stroke-linecap": "round" }, head);
+    const browF = svg("line", { x1: 32, y1: -27, x2: 54, y2: -27, stroke: shade(look.hair, 0.1), "stroke-width": 6, "stroke-linecap": "round" }, head);
+    svg("path", { d: "M 64 2 Q 74 10 63 16", fill: "none", stroke: shade(look.skin, 0.28), "stroke-width": 4, "stroke-linecap": "round" }, head); // nose
+    const mouth = svg("path", { fill: "none", stroke: "#5b2b22", "stroke-width": 5, "stroke-linecap": "round" }, head);
+    const mouthOpen = svg("ellipse", { cx: 32, cy: 32, rx: 11, ry: 4, fill: "#5b2b22" }, head);
+    if (look.glasses) {
+      for (const cx of [12, 42]) svg("circle", { cx, cy: -6, r: 15, fill: "none", stroke: "#333", "stroke-width": 4 }, head);
+    }
+    const tears = [0, 1].map(() => svg("ellipse", { rx: 5, ry: 8, fill: "#5DADEC", opacity: 0 }, head));
+    const sweat = svg("ellipse", { cx: 56, cy: -44, rx: 6, ry: 10, fill: "#7FC8F8", opacity: 0 }, head);
+    const armF = { up: limbParts(look.shirt, 30, false), low: limbParts(look.skin, 25, false) };
+    const handF = svg("circle", { r: 15, fill: look.skin }, body);
+
+    const setLine = (part, x1, y1, x2, y2) => {
+      part.a.setAttribute("x1", x1.toFixed(1));
+      part.a.setAttribute("y1", y1.toFixed(1));
+      part.a.setAttribute("x2", x2.toFixed(1));
+      part.a.setAttribute("y2", y2.toFixed(1));
+    };
+    const placeLimb = (parts, x0, y0, a1, l1, a2, l2) => {
+      const [x1, y1, x2, y2] = limb(x0, y0, a1, l1, a2, l2);
+      setLine(parts.up, x0, y0, x1, y1);
+      setLine(parts.low, x1, y1, x2, y2);
+      return [x2, y2];
+    };
+
+    const MOUTHS = {
+      happy: "M 18 26 Q 32 42 48 24",
+      sad: "M 20 36 Q 32 24 46 36",
+      angry: "M 20 34 Q 33 28 46 34",
+      neutral: "M 22 30 L 44 30",
+      thinking: "M 26 32 Q 36 30 46 26",
+      scared: "M 20 32 Q 26 26 32 32 Q 38 38 46 30",
+      surprised: "M 26 30 L 40 30",
+    };
+    const BROWS = {
+      // [back dy, back angle, front dy, front angle]
+      neutral: [0, 0, 0, 0],
+      happy: [-4, -6, -4, 6],
+      sad: [2, -16, 2, 16],
+      angry: [4, 18, 4, -18],
+      surprised: [-12, -4, -12, 4],
+      scared: [-8, -14, -8, 14],
+      thinking: [0, 0, -9, -10],
+    };
+
+    return {
+      root,
+      // p: {x, y, dir, scale, lean, bob, tilt, armF, armB, legF, legB, sitY, mood, open, blink, look, tear, sweat}
+      draw(p) {
+        root.setAttribute("transform", `translate(${p.x.toFixed(1)} ${(FLOOR + p.y).toFixed(1)}) scale(${(p.dir * p.scale).toFixed(4)} ${p.scale.toFixed(4)})`);
+        const lift = p.bob || 0;
+        const hipY = RIG.hipY + (p.sitY || 0) + lift;
+        shadow.setAttribute("rx", String(80 * Math.max(0.5, 1 + lift / 240)));
+        body.setAttribute("transform", `rotate(${(p.lean || 0).toFixed(2)} 0 ${hipY.toFixed(1)})`);
+        const fB = placeLimb(legB, -6, hipY, p.legB[0], RIG.thigh, -p.legB[1], RIG.shin);
+        const fF = placeLimb(legF, 8, hipY, p.legF[0], RIG.thigh, -p.legF[1], RIG.shin);
+        shoeB.setAttribute("cx", (fB[0] + 10).toFixed(1));
+        shoeB.setAttribute("cy", (fB[1] + 4).toFixed(1));
+        shoeF.setAttribute("cx", (fF[0] + 10).toFixed(1));
+        shoeF.setAttribute("cy", (fF[1] + 4).toFixed(1));
+        const shoulderY = RIG.shoulderY + (p.sitY || 0) + lift + (p.shrug || 0);
+        torso.setAttribute("y", String(RIG.shoulderY - 28 + (p.sitY || 0) + lift));
+        if (skirt) {
+          const y = hipY - 20;
+          skirt.setAttribute("d", `M -56 ${y} L 56 ${y} L 70 ${y + 90} L -70 ${y + 90} Z`);
+        }
+        const hB = placeLimb(armB, -6, shoulderY, p.armB[0], RIG.upper, p.armB[1], RIG.fore);
+        const hF = placeLimb(armF, 10, shoulderY, p.armF[0], RIG.upper, p.armF[1], RIG.fore);
+        handB.setAttribute("cx", hB[0].toFixed(1));
+        handB.setAttribute("cy", hB[1].toFixed(1));
+        handF.setAttribute("cx", hF[0].toFixed(1));
+        handF.setAttribute("cy", hF[1].toFixed(1));
+        const headY = RIG.headY + (p.sitY || 0) + lift + (p.shrug || 0) * 0.5;
+        head.setAttribute("transform", `translate(4 ${headY.toFixed(1)}) rotate(${(p.tilt || 0).toFixed(2)})`);
+        if (longHair) {
+          longHair.setAttribute("cx", "-22");
+          longHair.setAttribute("cy", String(headY + 40));
+        }
+        const mood = p.mood || "neutral";
+        const [bdy, ba, fdy, fa] = BROWS[mood] || BROWS.neutral;
+        browB.setAttribute("transform", `translate(0 ${bdy}) rotate(${ba} 12 -26)`);
+        browF.setAttribute("transform", `translate(0 ${fdy}) rotate(${fa} 43 -27)`);
+        const eyeRy = p.blink ? 1.6 : mood === "surprised" || mood === "scared" ? 13.5 : mood === "happy" ? 7 : 11;
+        const [lx, ly] = p.look || [0, 0];
+        eyeB.setAttribute("ry", String(eyeRy));
+        eyeF.setAttribute("ry", String(eyeRy + 0.5));
+        eyeB.setAttribute("cx", String(12 + lx));
+        eyeF.setAttribute("cx", String(42 + lx));
+        eyeB.setAttribute("cy", String(-6 + ly));
+        eyeF.setAttribute("cy", String(-6 + ly));
+        blush.setAttribute("opacity", mood === "happy" ? "0.35" : "0");
+        const open = p.open || (mood === "surprised" ? 0.8 : 0);
+        if (open > 0.05) {
+          mouth.setAttribute("d", "");
+          mouthOpen.setAttribute("ry", (3 + 11 * open).toFixed(1));
+          mouthOpen.setAttribute("opacity", "1");
+        } else {
+          mouth.setAttribute("d", MOUTHS[mood] || MOUTHS.neutral);
+          mouthOpen.setAttribute("opacity", "0");
+        }
+        tears.forEach((drop, i) => {
+          const phase = ((p.tear || 0) + i * 0.5) % 1;
+          drop.setAttribute("cx", String(40 + i * 4));
+          drop.setAttribute("cy", (6 + phase * 60).toFixed(1));
+          drop.setAttribute("opacity", p.tear ? (1 - phase).toFixed(2) : "0");
+        });
+        sweat.setAttribute("opacity", p.sweat ? "0.9" : "0");
+        // Where the hand and the head's top are once the body leans (it turns at the hip).
+        const a = ((p.lean || 0) * Math.PI) / 180;
+        const turn = ([x, y]) => [x * Math.cos(a) - (y - hipY) * Math.sin(a), hipY + x * Math.sin(a) + (y - hipY) * Math.cos(a)];
+        return { hand: turn(hF), backHand: turn(hB), headTop: turn([4, headY - RIG.headR])[1] };
+      },
+    };
+  }
+
+  // A pose at local time lt (seconds into the action): limb angles, lean, bob and face.
+  function pose(action, mood, lt, speaking, blinkAt) {
+    const p = { lean: 0, bob: 0, tilt: 0, armF: [6, 12], armB: [-6, 12], legF: [3, 2], legB: [-3, 2], mood, open: 0, look: [0, 0] };
+    const breathe = Math.sin((lt * 2 * Math.PI) / 3.2);
+    p.armF = [6 + 2 * breathe, 12];
+    p.armB = [-6 - 2 * breathe, 12];
+    p.bob = 1.5 * breathe;
+    const walk = (period, swing, knee, arm) => {
+      const ph = (lt * 2 * Math.PI) / period;
+      p.legF = [swing * Math.sin(ph), Math.max(0, knee * Math.sin(ph - 1.3))];
+      p.legB = [swing * Math.sin(ph + Math.PI), Math.max(0, knee * Math.sin(ph + Math.PI - 1.3))];
+      p.armF = [-arm * Math.sin(ph), 18 + 10 * Math.sin(ph)];
+      p.armB = [arm * Math.sin(ph), 18 - 10 * Math.sin(ph)];
+      p.bob = -5 * Math.abs(Math.cos(ph));
+    };
+    switch (action) {
+      case "walking":
+        walk(0.9, 24, 40, 22);
+        break;
+      case "running":
+        walk(0.5, 40, 75, 42);
+        p.armF[1] = 85;
+        p.armB[1] = 85;
+        p.lean = 9;
+        break;
+      case "wave": {
+        const w = Math.sin(lt * 2 * Math.PI * 2.6);
+        p.armF = [158, 28 + 24 * w];
+        p.mood = mood === "neutral" ? "happy" : mood;
+        break;
+      }
+      case "point":
+        p.armF = [88, 4];
+        p.look = [4, 0];
+        break;
+      case "think":
+        p.armF = [38, 128];
+        p.tilt = -7;
+        p.look = [2, -5];
+        p.mood = mood === "neutral" ? "thinking" : mood;
+        break;
+      case "celebrate": {
+        const j = Math.abs(Math.sin(lt * Math.PI * 1.7));
+        p.armF = [166 + 6 * Math.sin(lt * 9), 8];
+        p.armB = [-166 - 6 * Math.sin(lt * 9), -8];
+        p.bob = -58 * j;
+        p.legF = [10 * j, 30 * j];
+        p.legB = [-6 * j, 34 * j];
+        p.mood = "happy";
+        p.open = 0.7;
+        break;
+      }
+      case "sad":
+      case "cry":
+        p.lean = 3;
+        p.tilt = 14;
+        p.armF = [2, 4];
+        p.armB = [-2, 4];
+        p.look = [0, 4];
+        p.mood = "sad";
+        p.bob = 0.8 * breathe;
+        if (action === "cry") p.tear = (lt * 1.4) % 1;
+        break;
+      case "shocked": {
+        const kick = Math.max(0, 1 - lt / 0.35);
+        p.armF = [118, 40];
+        p.armB = [-112, -40];
+        p.lean = -7;
+        p.bob = -24 * Math.sin(Math.min(1, lt / 0.35) * Math.PI) * (kick > 0 ? 1 : 0);
+        p.mood = "surprised";
+        p.sweat = true;
+        break;
+      }
+      case "angry": {
+        p.armF = [16, 70];
+        p.armB = [-16, 70];
+        p.lean = 4;
+        p.mood = "angry";
+        p.bob = Math.sin(lt * 40) * 1.5;
+        break;
+      }
+      case "shrug":
+        p.armF = [22, 92];
+        p.armB = [-14, 92];
+        p.shrug = -10;
+        p.tilt = 6;
+        p.mood = mood === "neutral" ? "thinking" : mood;
+        break;
+      case "sit":
+        p.sitY = 100;
+        p.legF = [92, 92];
+        p.legB = [86, 90];
+        p.armF = [24, 58];
+        p.armB = [18, 58];
+        break;
+      case "read":
+        p.armF = [34, 96];
+        p.armB = [26, 96];
+        p.tilt = 12;
+        p.look = [2, 5];
+        break;
+      case "give":
+        p.armF = [82, 8];
+        p.look = [4, 0];
+        p.mood = mood === "neutral" ? "happy" : mood;
+        break;
+      case "talk": {
+        const g = Math.sin(lt * 2 * Math.PI * 0.9);
+        p.armF = [32 + 12 * g, 70 + 22 * g];
+        break;
+      }
+      default:
+        break;
+    }
+    if (speaking) p.open = Math.max(p.open, speaking);
+    // A blink every few seconds, each character on its own rhythm.
+    const cycle = (lt + blinkAt) % 3.4;
+    p.blink = cycle < 0.12 && action !== "celebrate";
+    return p;
+  }
+
+  // How open the mouth is while `words` are spoken (talking along with its own line).
+  function mouthAt(words, t) {
+    for (const w of words || []) {
+      if (t >= w.start && t < w.end) {
+        const k = (t - w.start) / Math.max(0.08, w.end - w.start);
+        return 0.25 + 0.55 * Math.abs(Math.sin(k * Math.PI * Math.max(1, Math.round((w.end - w.start) / 0.14))));
+      }
+    }
+    return 0;
+  }
+
+  // ---- settings (where a scene happens) ------------------------------------------------
+
+  const SCENE_PALETTES = {
+    story: { sky: "#BFE3FF", sky2: "#E6F4FF", wall: "#FCE6D2", floor: "#EAC9A6", line: null, wood: "#B9835A", leaf: "#59B36B", leaf2: "#3E9A55", glass: "#D7EEFF", building: ["#F6B8A0", "#A9C8F0", "#F7D488", "#B8E0C2", "#D6B8F0"], window: "#FFF6D6", night: "#1D2450", board: "#2F6B4F", curtain: "#C8283C", grass: "#8ED081", sun: "#FFD45C" },
+    paper: { sky: "#E9E4D8", sky2: "#F5EFE3", wall: "#F1EADB", floor: "#E2D6BF", line: "#1f1c18", wood: "#C9A27A", leaf: "#9DBF8C", leaf2: "#86AD76", glass: "#E6EEF0", building: ["#E8DCC6", "#D9E1E4", "#EADBB8", "#DCE5D3", "#E3D9E8"], window: "#FFFFFF", night: "#3A3F5C", board: "#5E7A64", curtain: "#B4534A", grass: "#C8D6A8", sun: "#F2C14E" },
+    glow: { sky: "#0B1033", sky2: "#141B4D", wall: "#121842", floor: "#0A0E2A", line: "#38e1ff", wood: "#2A2F6A", leaf: "#1E6F5C", leaf2: "#145244", glass: "#1C2A66", building: ["#1A2058", "#22296B", "#1B2560", "#252C70", "#1D2464"], window: "#38e1ff", night: "#070A22", board: "#13324A", curtain: "#5A1B4A", grass: "#103A3A", sun: "#ff4fd8" },
+  };
+
+  function setting(name, theme, parent, seed) {
+    const P = SCENE_PALETTES[theme.palette] || SCENE_PALETTES.story;
+    const g = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` }, parent);
+    g.style.position = "absolute";
+    g.style.left = "0";
+    g.style.top = "0";
+    const r = rng(seed);
+    const lineAttrs = P.line ? { stroke: P.line, "stroke-width": theme.glow ? 3 : 4, "stroke-opacity": theme.glow ? 0.7 : 1 } : {};
+    const rect = (x, y, w, h, fill, extra = {}) => svg("rect", { x, y, width: w, height: h, fill, ...lineAttrs, ...extra }, g);
+    const circle = (cx, cy, rad, fill, extra = {}) => svg("circle", { cx, cy, r: rad, fill, ...lineAttrs, ...extra }, g);
+    const sky = (top, bottom) => {
+      const id = `sky${seed}`;
+      const defs = svg("defs", {}, g);
+      const grad = svg("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+      svg("stop", { offset: "0", "stop-color": top }, grad);
+      svg("stop", { offset: "1", "stop-color": bottom }, grad);
+      svg("rect", { x: 0, y: 0, width: W, height: FLOOR, fill: `url(#${id})` }, g);
+    };
+    const floor = (color) => {
+      svg("rect", { x: 0, y: FLOOR, width: W, height: H - FLOOR, fill: color }, g);
+      if (P.line) svg("line", { x1: 0, y1: FLOOR, x2: W, y2: FLOOR, ...lineAttrs }, g);
+    };
+    const tree = (x, s) => {
+      rect(x - 14 * s, FLOOR - 230 * s, 28 * s, 230 * s, P.wood);
+      circle(x, FLOOR - 270 * s, 95 * s, P.leaf);
+      circle(x - 60 * s, FLOOR - 220 * s, 70 * s, P.leaf2);
+      circle(x + 62 * s, FLOOR - 228 * s, 66 * s, P.leaf2);
+    };
+    switch (name) {
+      case "street": {
+        sky(P.sky, P.sky2);
+        let x = -20;
+        let i = 0;
+        while (x < W) {
+          const w = 170 + r() * 90;
+          const h = 330 + r() * 260;
+          rect(x, FLOOR - h, w, h, P.building[i % P.building.length]);
+          for (let wy = FLOOR - h + 34; wy < FLOOR - 70; wy += 70) {
+            for (let wx = x + 24; wx < x + w - 40; wx += 52) rect(wx, wy, 28, 38, P.window, { opacity: theme.glow ? 0.5 : 0.95 });
+          }
+          x += w + 8;
+          i++;
+        }
+        floor(theme.glow ? "#0E1238" : "#C9C3BC");
+        rect(0, FLOOR + 90, W, 14, theme.glow ? "#38e1ff" : "#ffffff", { opacity: 0.5 });
+        break;
+      }
+      case "park":
+        sky(P.sky, P.sky2);
+        circle(860, 520, 70, P.sun, { opacity: 0.95 });
+        svg("ellipse", { cx: 250, cy: FLOOR + 30, rx: 520, ry: 210, fill: P.leaf2, opacity: 0.55 }, g);
+        svg("ellipse", { cx: 880, cy: FLOOR + 40, rx: 480, ry: 180, fill: P.leaf, opacity: 0.55 }, g);
+        tree(150, 1.0);
+        tree(960, 0.8);
+        floor(P.grass);
+        for (let i = 0; i < 26; i++) {
+          const gx = r() * W;
+          const gy = FLOOR + 40 + r() * 600;
+          svg("path", { d: `M ${gx} ${gy} l 8 -26 l 8 26 l 8 -18 l 6 18`, fill: P.leaf2, opacity: 0.5 }, g);
+        }
+        break;
+      case "office":
+        sky(P.wall, P.wall);
+        rect(620, 400, 330, 300, P.glass);
+        for (let y = 420; y < 700; y += 26) svg("line", { x1: 620, y1: y, x2: 950, y2: y, stroke: theme.glow ? "#38e1ff" : "#ffffff", "stroke-opacity": 0.35, "stroke-width": 3 }, g);
+        rect(560, FLOOR - 190, 440, 26, P.wood);
+        rect(590, FLOOR - 164, 22, 164, P.wood);
+        rect(950, FLOOR - 164, 22, 164, P.wood);
+        rect(700, FLOOR - 330, 190, 130, theme.glow ? "#05060f" : "#2b2b2b", { rx: 10 });
+        rect(712, FLOOR - 318, 166, 104, theme.glow ? "#38e1ff" : "#7FB3E6", { opacity: 0.6 });
+        floor(P.floor);
+        break;
+      case "night":
+        sky(P.night, theme.glow ? "#05060f" : "#2E3A6E");
+        for (let i = 0; i < 70; i++) circle(r() * W, r() * 760 + 240, 1.5 + r() * 2.5, "#FFFFFF", { opacity: 0.4 + r() * 0.6, stroke: "none" });
+        circle(820, 420, 70, "#FFF4C8", { stroke: "none" });
+        circle(848, 404, 62, P.night, { stroke: "none" });
+        for (const [x, w, h] of [[40, 240, 260], [300, 200, 200], [700, 300, 300]]) {
+          rect(x, FLOOR - h, w, h, theme.glow ? "#0B0F2E" : "#1A2045");
+          rect(x + 40, FLOOR - h + 60, 46, 56, "#FFD66B", { opacity: 0.9 });
+        }
+        floor(theme.glow ? "#05060f" : "#141936");
+        break;
+      case "school":
+        sky(P.wall, P.wall);
+        rect(160, 420, 760, 330, P.board, { rx: 12 });
+        for (let i = 0; i < 4; i++) svg("path", { d: `M ${220 + i * 160} ${500 + (i % 2) * 90} q 40 -30 80 0 t 80 0`, fill: "none", stroke: "#ffffff", "stroke-opacity": 0.6, "stroke-width": 5 }, g);
+        rect(140, 750, 800, 18, P.wood);
+        floor(P.floor);
+        break;
+      case "shop":
+        sky(P.wall, P.wall);
+        for (let row = 0; row < 3; row++) {
+          rect(80, 430 + row * 150, 920, 14, P.wood);
+          for (let b = 0; b < 9; b++) rect(100 + b * 100, 430 + row * 150 - 70, 70, 70, P.building[(b + row) % P.building.length], { rx: 8 });
+        }
+        rect(520, FLOOR - 200, 480, 200, P.wood, { rx: 10 });
+        floor(P.floor);
+        break;
+      case "stage":
+        sky(theme.glow ? "#05060f" : "#2A1E2E", theme.glow ? "#0B1033" : "#3B2A3F");
+        svg("path", { d: `M 0 220 L 220 220 Q 180 700 230 ${FLOOR} L 0 ${FLOOR} Z`, fill: P.curtain }, g);
+        svg("path", { d: `M ${W} 220 L ${W - 220} 220 Q ${W - 180} 700 ${W - 230} ${FLOOR} L ${W} ${FLOOR} Z`, fill: P.curtain }, g);
+        svg("polygon", { points: `460,220 620,220 900,${FLOOR} 180,${FLOOR}`, fill: "#FFF3C4", opacity: 0.18 }, g);
+        floor(theme.glow ? "#14102E" : "#6B4A35");
+        break;
+      case "plain":
+        sky(P.sky2, P.sky2);
+        floor(P.floor);
+        break;
+      default: {
+        // room
+        sky(P.wall, P.wall);
+        rect(640, 430, 270, 270, P.glass, { rx: 6 });
+        svg("line", { x1: 775, y1: 430, x2: 775, y2: 700, stroke: P.wood, "stroke-width": 10 }, g);
+        svg("line", { x1: 640, y1: 565, x2: 910, y2: 565, stroke: P.wood, "stroke-width": 10 }, g);
+        rect(170, 470, 190, 140, P.building[1], { rx: 6 });
+        svg("polygon", { points: "185,600 245,520 300,600", fill: P.leaf }, g);
+        circle(320, 505, 18, P.sun, { stroke: "none" });
+        rect(0, FLOOR - 30, W, 30, shade(P.wall.startsWith("#") ? P.wall : "#cccccc", 0.12));
+        rect(905, FLOOR - 110, 80, 110, P.building[0], { rx: 10 });
+        circle(945, FLOOR - 150, 46, P.leaf);
+        floor(P.floor);
+        svg("ellipse", { cx: 540, cy: FLOOR + 28, rx: 400, ry: 42, fill: P.building[4], opacity: 0.5 }, g);
+      }
+    }
+    return g;
+  }
+
+  // ---- the character scene -------------------------------------------------------------
+
+  SCENES.scene = (v, theme, root, scene, data) => {
+    const castList = (data && data.cast) || [];
+    const lookFor = (name) => {
+      const i = Math.max(0, castList.findIndex((c) => (c.name || "").toLowerCase() === (name || "").toLowerCase()));
+      return lookOf(castList[i] || { name, look: "man" }, i);
+    };
+    setting(v.setting || "room", theme, root, hash((v.setting || "room") + scene.start));
+    const actors = (v.actors || []).slice(0, 2);
+    if (!actors.length) actors.push({ name: "Sam", action: "idle", mood: "neutral" });
+    const beats = beatsOf(scene, actors.length + 1);
+    const stageSvg = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` }, root);
+    stageSvg.style.position = "absolute";
+    stageSvg.style.left = "0";
+    stageSvg.style.top = "0";
+    const homes = actors.length === 1 ? [540] : [330, 750];
+    const cast = actors.map((a, i) => {
+      const look = lookFor(a.name);
+      const chair = a.action === "sit" ? svg("g", {}, stageSvg) : null;
+      if (chair) {
+        const wood = (SCENE_PALETTES[theme.palette] || SCENE_PALETTES.story).wood;
+        svg("rect", { x: -70, y: -160, width: 150, height: 22, rx: 8, fill: wood }, chair);
+        svg("rect", { x: -64, y: -140, width: 16, height: 140, fill: shade(wood, 0.2) }, chair);
+        svg("rect", { x: 56, y: -140, width: 16, height: 140, fill: shade(wood, 0.2) }, chair);
+        svg("rect", { x: -78, y: -330, width: 20, height: 190, rx: 8, fill: wood }, chair);
+      }
+      const rig = makeCharacter(look, theme, stageSvg);
+      // Two face each other; one alone faces the way its name says (for variety).
+      const dir = actors.length === 2 ? (i === 0 ? 1 : -1) : hash(a.name || "x") % 2 ? 1 : -1;
+      const prop = a.prop ? emoji(root, a.prop, Math.round(100 * look.scale * BASE)) : null;
+      if (prop) prop.style.zIndex = "2";
+      const bubble = a.says ? place(el("div", "abs fit center", root), 0, 0, 400, 150) : null;
+      if (bubble) {
+        font(bubble, theme.body, 46, theme.story || !theme.glow ? "#1f1c18" : "#05060f");
+        bubble.textContent = a.says;
+        bubble.style.background = "#ffffff";
+        bubble.style.borderRadius = "40px";
+        bubble.style.padding = "14px 26px";
+        bubble.style.border = theme.story ? "none" : `4px solid ${theme.glow ? theme.accent : theme.ink}`;
+        bubble.style.boxShadow = theme.story ? "0 10px 0 rgba(0,0,0,0.12)" : theme.glow ? `0 0 30px ${theme.accent}88` : `8px 8px 0 ${theme.ink}`;
+        bubble._fit = [50, 28];
+        const tail = el("div", "abs", root);
+        bubble._tail = tail;
+        tail.style.width = "34px";
+        tail.style.height = "34px";
+        tail.style.background = "#ffffff";
+        tail.style.zIndex = "1";
+        tail.style.borderRight = bubble.style.border;
+        tail.style.borderBottom = bubble.style.border;
+      }
+      const thought = !a.says && a.action === "think" ? place(el("div", "abs center", root), 0, 0, 150, 90) : null;
+      if (thought) {
+        font(thought, theme.display, 54, "#1f1c18");
+        thought.textContent = "...";
+        thought.style.background = "#ffffff";
+        thought.style.borderRadius = "50px";
+        thought.style.boxShadow = "0 8px 0 rgba(0,0,0,0.12)";
+      }
+      return { a, look, rig, chair, dir, prop, bubble, thought, home: homes[i], at: beats[i] };
+    });
+    const bubbleAt = beats[actors.length];
+    const sceneEnd = scene.end;
+    // An optional caption ("Years later") as a pill under the title bar.
+    const caption = v.text ? textBox(theme, root, theme.body, 290, 352, 500, 64, v.text, 38, 24, theme.glow ? theme.ink : "#ffffff") : null;
+    if (caption) {
+      caption.style.background = theme.glow ? theme.accent : theme.ink;
+      caption.style.borderRadius = "34px";
+    }
+    const bubbleTop = caption ? 440 : 340;
+    return (t) => {
+      cast.forEach((c, i) => {
+        const lt = Math.max(0, t - c.at);
+        let x = c.home;
+        let action = c.a.action;
+        let alpha = ease.out(prog(t, c.at - 0.15, 0.3));
+        let dir = c.dir;
+        if (ENTRANCES[action]) {
+          const [len, far] = ENTRANCES[action];
+          const p = prog(t, c.at, len);
+          x = c.home - dir * far * (1 - ease.out(p));
+          action = p < 1 ? (action === "run_in" ? "running" : "walking") : "idle";
+          alpha = 1;
+        } else if (action === "walk_out") {
+          const p = prog(t, sceneEnd - WALK_OUT, WALK_OUT);
+          if (p > 0) {
+            dir = -c.dir;
+            x = c.home + dir * 520 * ease.inOut(p);
+            action = "walking";
+          } else {
+            action = "idle";
+          }
+        }
+        // The mouth moves with the voice while this character's line is being said.
+        const speaking = c.a.says && t >= bubbleAt ? mouthAt(scene.words, t) : action === "talk" ? mouthAt(scene.words, t) : 0;
+        const p = pose(action, c.a.mood || "neutral", lt, speaking, c.look.blink + i);
+        p.x = x;
+        p.y = 0;
+        p.dir = dir;
+        p.scale = c.look.scale * BASE;
+        p.lean = (p.lean || 0) + c.look.stoop;
+        const at = c.rig.draw(p);
+        c.rig.root.setAttribute("opacity", alpha.toFixed(3));
+        if (c.chair) c.chair.setAttribute("transform", `translate(${x} ${FLOOR}) scale(${dir * p.scale} ${p.scale})`);
+        const handX = x + dir * p.scale * (at.hand[0] + 4);
+        const handY = FLOOR + p.scale * at.hand[1];
+        const headTop = FLOOR + p.scale * at.headTop;
+        if (c.prop) {
+          // In hand only when the hands are low: up in the air it would cover the face.
+          const holds = !["celebrate", "wave", "shocked", "think", "cry"].includes(action);
+          c.prop.style.visibility = holds ? "visible" : "hidden";
+          const size = parseFloat(c.prop.style.fontSize);
+          place(c.prop, handX - size / 2, handY - size * 0.62, size, size);
+          show(c.prop, alpha, action === "celebrate" ? `rotate(${Math.sin(t * 8) * 10}deg)` : "none");
+        }
+        if (c.bubble) {
+          const bx = clamp(x - 200, 40, W - 440);
+          const by = Math.max(bubbleTop, headTop - 185);
+          place(c.bubble, bx, by, 400, 150);
+          const pb = ease.back(prog(t, bubbleAt, 0.35));
+          show(c.bubble, clamp(pb), `scale(${lerp(0.5, 1, pb)})`);
+          // The tail points down at the speaker's head, under the bubble.
+          place(c.bubble._tail, clamp(x - 17, bx + 30, bx + 336), by + 132, 34, 34);
+          show(c.bubble._tail, clamp(pb), `rotate(45deg) scale(${lerp(0.5, 1, pb)})`);
+        }
+        if (c.thought) {
+          // Beside the head, in front of the face.
+          place(c.thought, clamp(x + dir * 120 - 75, 40, W - 190), Math.max(bubbleTop, headTop - 40), 150, 90);
+          const pt = ease.back(prog(t, c.at + 0.4, 0.35));
+          show(c.thought, clamp(pt), `scale(${lerp(0.4, 1, pt)})`);
+        }
+      });
+      if (caption) arrive(caption, t, scene.start + 0.2);
+    };
+  };
+
+
+  // ---- Bold kinetic text: the narration itself, a few words at a time, slammed in -------
+
+  SCENES.kinetic = (v, theme, root, scene) => {
+    const flash = place(el("div", "abs", root), 0, 0, W, H);
+    flash.style.background = theme.accent;
+    const keys = new Set(
+      [v.text, v.highlight, v.value, v.answer, ...(v.items || []).map((i) => i.text)]
+        .join(" ")
+        .split(/\s+/)
+        .map(plain)
+        .filter((w) => w.length > 3),
+    );
+    const chunks = [];
+    let cur = [];
+    for (const w of scene.words || []) {
+      cur.push(w);
+      const chars = cur.reduce((n, x) => n + x.text.length, 0);
+      if (cur.length >= 3 || chars >= 13 || /[.!?,;:]$/.test(w.text)) {
+        chunks.push(cur);
+        cur = [];
+      }
+    }
+    if (cur.length) chunks.push(cur);
+    if (!chunks.length) chunks.push([{ text: v.text || v.value || "", start: scene.start, end: scene.end }]);
+    const colors = [theme.text, theme.accent, theme.text, theme.accent3];
+    const boxes = chunks.map((words, i) => {
+      const box = place(el("div", "abs fit center", root), BOX.x - 20, BOX.y + 40, BOX.w + 40, BOX.h);
+      font(box, theme.display, 230, colors[i % colors.length]);
+      box.style.flexWrap = "wrap";
+      box.style.lineHeight = "0.95";
+      box.style.textTransform = "uppercase";
+      const line = el("div", "line", box);
+      words.forEach((w, k) => {
+        if (k) line.appendChild(document.createTextNode(" "));
+        const span = el("span", "word", line, w.text.replace(/[,;:]$/, ""));
+        if (keys.has(plain(w.text))) {
+          span.style.color = theme.accent2;
+          span.style.textShadow = `0 0 40px ${theme.accent2}66`;
+        }
+      });
+      box._fit = [230, 90];
+      return { box, start: words[0].start, end: words[words.length - 1].end };
+    });
+    return (t) => {
+      let shown = -1;
+      boxes.forEach((b, i) => {
+        const next = boxes[i + 1];
+        const until = next ? next.start : scene.end + 0.3;
+        const on = t >= b.start - 0.04 && t < until;
+        b.box.style.display = on ? "flex" : "none";
+        if (!on) return;
+        shown = i;
+        const p = prog(t, b.start - 0.04, 0.14);
+        const e = ease.out(p);
+        const tilt = (i % 2 ? 1 : -1) * 2.5 * (1 - e);
+        show(b.box, clamp(p * 2), `scale(${lerp(1.45, 1, e)}) rotate(${tilt}deg)`);
+      });
+      const at = shown >= 0 ? boxes[shown].start : scene.start;
+      const f = prog(t, at - 0.04, 0.25);
+      show(flash, f < 1 ? 0.16 * (1 - f) : 0);
+    };
+  };
+
   // ---- subtitles and header -----------------------------------------------------------
 
   function subtitles(theme, stage, captions) {
     const layer = el("div", "layer", stage);
+    // Bold kinetic text: the words are the picture already.
+    if (theme.kinetic) return { chunks: [], update() {} };
     const chunks = captions.map((c) => {
       const box = place(el("div", "abs fit center", layer), (W - SUBS.w) / 2 - 20, SUBS.y, SUBS.w, SUBS.h);
       font(box, theme.caption, 78, theme.text);
@@ -974,11 +1740,23 @@
       const line = el("div", "line", box);
       // Room between words for the marker (paper) and the bigger spoken word (glow).
       line.style.wordSpacing = theme.glow ? "0.16em" : "0.22em";
+      if (theme.story) {
+        // A white card behind the words: readable on any of the scene's colours.
+        line.style.display = "inline-block";
+        line.style.width = "auto";
+        line.style.background = "#ffffff";
+        line.style.borderRadius = "28px";
+        line.style.padding = "10px 30px 14px";
+        line.style.boxShadow = "0 10px 0 rgba(0,0,0,0.12)";
+        line.style.wordSpacing = "0.14em";
+      }
       const spans = c.words.map((w, i) => {
         if (i) line.appendChild(document.createTextNode(" "));
         const s = el("span", "word", line, theme.glow ? w.text.toUpperCase() : w.text);
         if (theme.glow) {
           s.style.textShadow = "0 5px 0 rgba(0,0,0,0.55), 0 0 22px rgba(0,0,0,0.9)";
+        } else if (theme.story) {
+          s.style.color = theme.text;
         } else {
           s.style.textShadow = `3px 3px 0 ${theme.card}, -3px -3px 0 ${theme.card}, 3px -3px 0 ${theme.card}, -3px 3px 0 ${theme.card}`;
           // The marker is drawn around the word (a shadow), so it never takes the spaces.
@@ -1005,6 +1783,8 @@
             if (theme.glow) {
               s.style.color = active ? theme.accent3 : theme.text;
               s.style.transform = active ? "scale(1.08)" : "scale(1)";
+            } else if (theme.story) {
+              s.style.color = active ? theme.accent : theme.text;
             } else {
               s.style.background = active ? theme.accent3 : "transparent";
               s.style.boxShadow = active ? `0 0 0 6px ${theme.accent3}` : "none";
@@ -1017,6 +1797,7 @@
   }
 
   function header(theme, stage, data) {
+    if (theme.kinetic) return { fits: [], update() {} };
     const wrap = place(el("div", "abs", stage), 170, SAFE.top + 10, 740, 96);
     const pill = place(el("div", "abs fit center", wrap), 0, 0, 740, 72);
     font(pill, theme.body, 38, theme.text);
@@ -1080,9 +1861,10 @@
     const sceneLayer = el("div", "layer", stage);
     const scenes = data.scenes.map((scene) => {
       const root = el("div", "scene", sceneLayer);
-      const build = SCENES[scene.kind] || SCENES.title;
+      const kind = theme.kinetic && !["cta", "stat"].includes(scene.kind) ? "kinetic" : scene.kind;
+      const build = SCENES[kind] || SCENES.title;
       root.style.display = "block";
-      const update = build(scene.visual || {}, theme, root, scene);
+      const update = build(scene.visual || {}, theme, root, scene, data);
       return { scene, root, update };
     });
     const subs = subtitles(theme, stage, data.captions || []);

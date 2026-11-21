@@ -28,7 +28,7 @@ from agentic_editor import (
     slots,
     style,
 )
-from agentic_editor.animate import studio
+from agentic_editor.animate import schedule, studio
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
@@ -322,6 +322,13 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             db.commit()
             for output in captioned:
                 write_caption(output.id)
+        if animated is not None:  # an autopilot's reel posts now, or waits for approval
+            try:
+                schedule.after_render(
+                    source.removeprefix(studio.SOURCE), Session, settings, ok=True
+                )
+            except Exception:  # the video is made; only what follows it went wrong
+                log.exception("job %s: the autopilot's next step failed", job_id)
     except Exception as exc:
         log.exception("job %s failed", job_id)
         with Session() as db:
@@ -329,6 +336,12 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
             db.add(Event(job_id=job_id, stage="failed", message=job.error, progress=track.value))
             db.commit()
+            source = job.source
+        if source.startswith(studio.SOURCE):
+            schedule.after_render(
+                source.removeprefix(studio.SOURCE), Session, settings, ok=False,
+                error=f"the render failed: {exc}",
+            )  # fmt: skip
 
 
 def source_text(output_path: Path, media_dir: Path) -> tuple[str, str]:
@@ -1247,6 +1260,10 @@ def recover(Session: sessionmaker) -> None:
         busy = Animation.status.in_(studio.BUSY)
         for animated in db.scalars(select(Animation).where(busy)).all():
             animated.status, animated.error, animated.task = "failed", INTERRUPTED, None
+        # A post stopped halfway may or may not have gone out: a person looks.
+        posting = select(Animation).where(Animation.post_status == "posting")
+        for animated in db.scalars(posting).all():
+            animated.post_status, animated.post_error = "awaiting", INTERRUPTED
         lost_animations = [
             a
             for a in db.scalars(select(Animation.id).where(Animation.status == "queued"))

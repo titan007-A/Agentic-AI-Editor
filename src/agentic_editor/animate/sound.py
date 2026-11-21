@@ -296,6 +296,11 @@ def sfx(name: str, seed: int = 5) -> np.ndarray:
             part = _bell(2000 + rnd.random() * 4500, 0.4) * 0.3
             i = int(at * RATE)
             x[i : i + len(part)] += part[: len(x) - i]
+    elif name == "step":
+        t = _t(0.12)
+        thud = np.sin(2 * np.pi * 85 * t) * np.exp(-t / 0.03)
+        scuff = _lowpass(rnd.standard_normal(len(t)), 900) * np.exp(-t / 0.02) * 0.6
+        x = thud + scuff
     elif name == "chime":
         t = _t(1.8)
         x = np.zeros(len(t))

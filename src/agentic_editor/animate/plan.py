@@ -14,18 +14,38 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 KINDS = ("facts", "lesson", "story", "news")
-STYLES = ("glow", "paper")
+STYLES = ("glow", "paper", "story", "kinetic")
 MOODS = ("mysterious", "uplifting", "emotional", "tense", "curious")
 LENGTHS = ("auto", "short", "medium", "long")
 # Narration words a reel of each length runs to (Kokoro speaks about 2.6 words a second).
 WORDS = {"short": (50, 85), "medium": (90, 150), "long": (155, 230), "auto": (70, 130)}
 
 Kind = Literal["facts", "lesson", "story", "news"]
-Style = Literal["glow", "paper"]
+Style = Literal["glow", "paper", "story", "kinetic"]
 Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious"]
 VisualKind = Literal[
-    "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots"
+    "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots",
+    "scene",
 ]  # fmt: skip
+# Character scenes (player.js character rig): where, who looks like what, what they do.
+SETTINGS = ("room", "street", "park", "office", "night", "school", "shop", "stage", "plain")
+ACTIONS = (
+    "idle", "talk", "walk_in", "walk_out", "run_in", "wave", "point", "think", "celebrate",
+    "sad", "shocked", "angry", "shrug", "sit", "read", "give", "cry",
+)  # fmt: skip
+FEELINGS = ("neutral", "happy", "sad", "angry", "surprised", "scared", "thinking")
+LOOKS = ("man", "woman", "boy", "girl", "old man", "old woman")
+MAX_ACTORS = 2
+MAX_CAST = 4
+# Too big to hold: a character with one of these in hand looks wrong.
+BIG_PROPS = set("🪑🛋🛏🚪🏠🏡🏢🌳🌲🌴🚗🚌🚲✈🚀⛵🗻🏔🌋")
+# Words in a name that say how someone looks, overruling a look that disagrees.
+LOOK_HINTS = (
+    (("grandpa", "grandfather", "old man", "uncle"), "old man"),
+    (("grandma", "grandmother", "granny", "old woman", "auntie"), "old woman"),
+    (("mr", "sir", "dad", "father", "king", "mister", "uncle"), "man"),
+    (("mrs", "ms", "miss", "mom", "mum", "mother", "queen", "lady", "madam"), "woman"),
+)
 Motion = Literal[
     "pop", "float", "walk_left", "walk_right", "shake", "spin", "grow", "fall", "pulse"
 ]
@@ -68,6 +88,16 @@ CATALOGUE: dict[str, tuple[str, str]] = {
         "one short word or number drawn by glowing dots",
         "value (max 8 characters), text (max 8 words)",
     ),
+    "scene": (
+        "a moment of the story acted by characters from the cast, in a place",
+        "setting (one of " + ", ".join(SETTINGS) + "), actors: 1-2 of {name (from the "
+        "cast), action (one of "
+        + ", ".join(ACTIONS)
+        + "), mood (one of "
+        + ", ".join(FEELINGS)
+        + "), prop (one emoji they hold or use, or ''), says (a line in a speech bubble, max "
+        "6 words, or '')}, text (optional caption such as 'Years later', max 4 words)",
+    ),
 }
 
 MOTIONS = ("pop", "float", "walk_left", "walk_right", "shake", "spin", "grow", "fall", "pulse")
@@ -88,6 +118,22 @@ class Item(Loose):
     motion: str = "pop"
 
 
+class Actor(Loose):
+    """One character in a scene: who (a name from the cast), what they do and feel, what
+    they hold, and a short line in a bubble."""
+
+    name: str = ""
+    action: str = "idle"
+    mood: str = "neutral"
+    prop: str = ""
+    says: str = ""
+
+
+class CastMember(Loose):
+    name: str = ""
+    look: str = "man"
+
+
 class Visual(Loose):
     kind: VisualKind = "title"
     text: str = ""
@@ -101,6 +147,8 @@ class Visual(Loose):
     answer: str = ""
     emoji: str = ""
     items: list[Item] = Field(default_factory=list)
+    setting: str = ""
+    actors: list[Actor] = Field(default_factory=list)
 
 
 class Scene(Loose):
@@ -122,6 +170,7 @@ class Plan(Loose):
     voice: str = ""
     mood: Mood = "curious"
     scenes: list[Scene] = Field(default_factory=list, max_length=MAX_SCENES)
+    cast: list[CastMember] = Field(default_factory=list)
     cta: str = CTA
     caption: str = ""
     sources: list[Source] = Field(default_factory=list)
@@ -181,6 +230,16 @@ def tidy(plan: Plan) -> Plan:
             )
             for i in v.items[:cap]
         ]
+        actors = [
+            Actor(
+                name=_one_line(x.name, 24) or "Sam",
+                action=x.action if x.action in ACTIONS else "idle",
+                mood=x.mood if x.mood in FEELINGS else "neutral",
+                prop="" if _emoji(x.prop, "").rstrip("\ufe0f") in BIG_PROPS else _emoji(x.prop, ""),
+                says=_one_line(x.says, 48),
+            )
+            for x in v.actors[:MAX_ACTORS]
+        ]
         text = _one_line(v.text, 200 if v.kind == "quote" else 90)
         highlight = v.highlight.strip()
         if highlight and highlight.lower() not in text.lower():
@@ -198,6 +257,8 @@ def tidy(plan: Plan) -> Plan:
                 "answer": _one_line(v.answer, 50),
                 "emoji": _emoji(v.emoji, DEFAULT_EMOJI.get(v.kind, "")),
                 "items": items,
+                "setting": setting_of(v),
+                "actors": actors,
             }
         )
         narration = " ".join(scene.narration.split())
@@ -210,10 +271,46 @@ def tidy(plan: Plan) -> Plan:
         update={
             "title": _one_line(plan.title, 70),
             "scenes": scenes,
+            "cast": _cast(plan.cast, scenes),
             "cta": _one_line(plan.cta or CTA, 60),
             "caption": plan.caption.strip()[:2200],
         }
     )
+
+
+def setting_of(v: Visual) -> str:
+    if v.setting in SETTINGS:
+        return v.setting
+    return "room" if v.kind == "scene" else ""
+
+
+def _hinted(name: str, look: str) -> str:
+    """The look a name like "Grandpa Eli" or "Mrs Patel" says, when the writer's disagrees."""
+    words = set(re.findall(r"[a-z]+", name.lower()))
+    joined = " ".join(re.findall(r"[a-z]+", name.lower()))
+    for hints, hinted in LOOK_HINTS:
+        if any((h in joined) if " " in h else (h in words) for h in hints):
+            return hinted
+    return look
+
+
+def _cast(cast: list[CastMember], scenes: list[Scene]) -> list[CastMember]:
+    """Everyone who acts, once each, with a look: those the writer named first, then any
+    actor it forgot to cast (a man unless the name says nothing more)."""
+    out: list[CastMember] = []
+    seen: set[str] = set()
+    for member in cast:
+        name = _one_line(member.name, 24)
+        if name and name.lower() not in seen:
+            look = member.look if member.look in LOOKS else "man"
+            out.append(CastMember(name=name, look=_hinted(name, look)))
+            seen.add(name.lower())
+    for scene in scenes:
+        for actor in scene.visual.actors:
+            if actor.name.lower() not in seen:
+                out.append(CastMember(name=actor.name, look=_hinted(actor.name, "man")))
+                seen.add(actor.name.lower())
+    return out[:MAX_CAST]
 
 
 # ---- checking --------------------------------------------------------------------------
@@ -257,8 +354,8 @@ def problems(plan: Plan, length: str = "auto") -> list[str]:
         found.append(f"the narration is {total} words; this length needs {low}-{high}")
     elif total > high * 1.2:
         found.append(f"the narration is {total} words; this length allows {low}-{high}")
-    if plan.scenes and plan.scenes[0].visual.kind != "title":
-        found.append("scene 1 must be a title: the hook")
+    if plan.scenes and plan.scenes[0].visual.kind not in ("title", "scene"):
+        found.append("scene 1 must be the hook: a title, or a story's most striking moment")
     for n, scene in enumerate(plan.scenes, 1):
         v = scene.visual
         where = f"scene {n} ({v.kind})"
@@ -292,6 +389,8 @@ def problems(plan: Plan, length: str = "auto") -> list[str]:
             found.append(f"{where}: the headline is over 10 words")
         if v.kind == "dots" and len((v.value or v.text).replace("\n", "")) > 10:
             found.append(f"{where}: dots draw at most 10 characters")
+        if v.kind == "scene" and not v.actors:
+            found.append(f"{where}: needs at least one actor from the cast")
         lows = {"compare": 2, "list": 2, "timeline": 2, "icons": 1}
         if v.kind in lows and len(v.items) < lows[v.kind]:
             found.append(f"{where}: needs at least {lows[v.kind]} items")

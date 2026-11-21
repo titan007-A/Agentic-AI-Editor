@@ -275,8 +275,46 @@ class Animation(Base):
     player: Mapped[dict | None] = mapped_column(JSON)  # timeline.player_data
     notes: Mapped[list[str]] = mapped_column(JSON, default=list)
     job_id: Mapped[str | None] = mapped_column(String(12))  # its latest render
+    # Made by an autopilot (AnimationAutopilot): what became of its post. None: made by hand;
+    # rendering -> awaiting (a person approves) -> posting -> posted, or skipped / failed.
+    autopilot_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    post_status: Mapped[str | None] = mapped_column(String(16))
+    post_error: Mapped[str | None] = mapped_column(Text)
+    post_id: Mapped[str | None] = mapped_column(String(64))
+    # Claims the fact check found no source for; any of them keeps it from posting by itself.
+    doubts: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class AnimationAutopilot(Base):
+    """An account's daily animated reels (animate/schedule.py): topics from its list, else
+    new ones from its niche; each drafted, checked and rendered by itself, then posted once
+    a person approves, or by itself after `needs` approvals once auto_post is on."""
+
+    __tablename__ = "animation_autopilots"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True, unique=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    niche: Mapped[str] = mapped_column(Text, default="")
+    topics: Mapped[list[str]] = mapped_column(JSON, default=list)  # waiting, first goes next
+    used: Mapped[list[str]] = mapped_column(JSON, default=list)  # made already
+    hour: Mapped[int] = mapped_column(default=10)  # local time
+    per_day: Mapped[int] = mapped_column(default=1)
+    kind: Mapped[str] = mapped_column(String(16), default="auto")
+    style: Mapped[str] = mapped_column(String(16), default="auto")
+    voice: Mapped[str] = mapped_column(String(32), default="auto")
+    length: Mapped[str] = mapped_column(String(16), default="auto")
+    channel_id: Mapped[str | None] = mapped_column(String(32))  # InstagramChannel to post to
+    # The site's address as people reach it, for the link Instagram fetches the video from.
+    base_url: Mapped[str] = mapped_column(Text, default="")
+    auto_post: Mapped[bool] = mapped_column(default=False)
+    needs: Mapped[int] = mapped_column(default=10)  # approvals before auto_post may go on
+    approved: Mapped[int] = mapped_column(default=0)
+    last_on: Mapped[date | None]
+    made_on_last: Mapped[int] = mapped_column(default=0)  # reels started on last_on
+    created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
 class ResearchAccount(Base):
