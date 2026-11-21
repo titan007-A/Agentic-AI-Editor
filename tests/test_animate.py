@@ -722,6 +722,9 @@ class FakeProc:
     def wait(self, timeout=None):
         return 0
 
+    def kill(self):
+        self.returncode = -9
+
 
 def test_pictures_are_asked_for_by_what_they_show_and_kept(tmp_path):
     settings = Settings(cache_dir=tmp_path / "cache")

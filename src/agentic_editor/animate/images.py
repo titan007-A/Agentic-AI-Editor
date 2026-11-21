@@ -15,6 +15,7 @@ import logging
 import platform
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,7 +27,10 @@ log = logging.getLogger(__name__)
 RUNNER = Path(__file__).parent / "paint_runner.py"
 STEPS = 9
 SIZE = (720, 1280)  # 9:16, shown at 1080x1920 (the player scales it to cover)
-SECONDS_EACH = 240  # the most one picture may take before the painting is given up
+# The most the model may take to load, and then each picture, before the painting is given
+# up (the scenes are drawn instead): a stuck model never holds the GPU for long.
+LOAD_SECONDS = 150
+SECONDS_EACH = 90
 # What every picture of a style looks like, added to what the scene's picture shows.
 LOOKS = {
     "story": "soft anime watercolor storybook background painting, hand-painted, warm gentle "
@@ -119,6 +123,11 @@ def _run(request: dict, count: int, settings: Settings, progress, run) -> None:
 
 
 def _follow(proc, request: dict, count: int, progress) -> None:
+    # A watchdog: reading the runner's lines blocks, so a stuck runner is killed on time.
+    deadline = LOAD_SECONDS + SECONDS_EACH * count
+    watchdog = threading.Timer(deadline, proc.kill)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         proc.stdin.write(json.dumps(request))
         proc.stdin.close()
@@ -132,8 +141,11 @@ def _follow(proc, request: dict, count: int, progress) -> None:
                 log.info("picture %s of %s in %s s", said["done"], count, said.get("seconds"))
             elif "loaded" in said:
                 log.info("image model loaded in %s s", said["loaded"])
-        proc.wait(timeout=SECONDS_EACH * count)
+        proc.wait(timeout=deadline)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
-        log.warning("painting took too long; the rest is drawn without pictures")
+    finally:
+        if not watchdog.is_alive() and proc.returncode not in (0, None):
+            log.warning("painting took over %s s; the rest is drawn without pictures", deadline)
+        watchdog.cancel()
