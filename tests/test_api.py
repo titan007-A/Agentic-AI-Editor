@@ -331,6 +331,54 @@ def test_a_folder_feed_edits_what_it_holds_into_the_ready_pile(env, tmp_path):
     assert again["last_result"] == "started 0 new video(s)" and len(env.calls) == 2
 
 
+def test_a_topic_feed_edits_only_videos_about_it_into_its_folder(env, tmp_path, monkeypatch):
+    from agentic_editor import autopilot
+
+    folder = tmp_path / "clips"
+    folder.mkdir()
+    for name in ("gta-heist.mp4", "quiz.mp4"):
+        (folder / name).write_bytes(b"x")
+        os.utime(folder / name, (1000, 1000))
+
+    def judge(topic, found, settings=None, router=None):
+        assert topic == "GTA 5"
+        return [
+            autopilot.Verdict(True, "a heist") if "gta" in e.title else
+            autopilot.Verdict(False, "a quiz show")
+            for e in found
+        ]  # fmt: skip
+
+    monkeypatch.setattr(autopilot, "judge_topic", judge)
+    body = {"name": "GTA", "kind": "folder", "location": str(folder), "presets": ["square-1x1"]}
+    extra = {"include_existing": True, "topic": "  GTA   5 ", "folder": " GTA-kick "}
+    response = env.client.post("/api/feeds", json={**body, **extra})
+    assert response.status_code == 200, response.text
+    feed = response.json()
+    assert (feed["topic"], feed["folder"]) == ("GTA 5", "GTA-kick")
+    assert feed["last_result"] == "looking at the feed; this takes a few minutes"
+    for _ in range(100):  # looked at on its own, then the job runs
+        feed = env.client.get("/api/feeds").json()[0]
+        if feed["counts"].get("done"):
+            break
+        time.sleep(0.05)
+    assert feed["last_result"] == "started 1 new video(s) about GTA 5, passed over 1"
+    assert feed["counts"] == {"done": 1, "passed over": 1}
+    passed = next(i for i in feed["recent"] if i["status"] == "passed over")
+    assert passed["title"] == "quiz" and passed["reason"] == "not GTA 5: a quiz show"
+    assert [c["source"] for c in env.calls] == [str(folder / "gta-heist.mp4")]
+
+    folders = env.client.get("/api/pile-folders").json()
+    assert [(f["name"], f["preset"]) for f in folders] == [("GTA-kick", "square-1x1")]
+    ready = env.client.get("/api/piles/ready").json()
+    assert [o["folder_id"] for j in ready for o in j["outputs"]] == [folders[0]["id"]]
+
+    body = {**{k: feed[k] for k in ("name", "kind", "location", "presets")}, "folder": "a/b"}
+    refused = env.client.put(f"/api/feeds/{feed['id']}", json=body)
+    assert refused.status_code == 422 and "/" in refused.json()["detail"]
+    cleared = env.client.put(f"/api/feeds/{feed['id']}", json={**body, "folder": "  "}).json()
+    assert (cleared["topic"], cleared["folder"]) == (None, None)
+
+
 def test_a_feed_moved_somewhere_else_notes_what_is_already_there(env, tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"
     for folder in (first, second):

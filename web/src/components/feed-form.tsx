@@ -31,6 +31,8 @@ const BLANK: FeedFields = {
   active_to: null,
   batch: 3,
   include_existing: false,
+  topic: null,
+  folder: null,
 };
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -75,7 +77,13 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
     setBusy(true);
     try {
       if (batch === null) return;
-      const body = { ...fields, batch, notes: fields.notes?.trim() || null };
+      const body = {
+        ...fields,
+        batch,
+        notes: fields.notes?.trim() || null,
+        topic: fields.topic?.trim() || null,
+        folder: fields.folder?.trim() || null,
+      };
       const saved = feed ? await api.updateFeed(feed.id, body) : await api.createFeed(body);
       toast.success(feed ? "Feed saved" : `Feed added: ${saved.last_result ?? "checked"}`);
       onSaved(saved);
@@ -153,6 +161,36 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
           value={fields.notes ?? ""}
           onChange={(e) => set("notes", e.target.value)}
         />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="feed-topic">Only videos about (optional)</Label>
+        <Input
+          id="feed-topic"
+          value={fields.topic ?? ""}
+          maxLength={200}
+          placeholder="e.g. GTA 5"
+          onChange={(e) => set("topic", e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Each new video is downloaded and looked at first; the rest are passed over, with the
+          reason on the feed.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="feed-folder">Put its videos in a folder (optional)</Label>
+        <Input
+          id="feed-folder"
+          value={fields.folder ?? ""}
+          maxLength={80}
+          placeholder="e.g. GTA-kick"
+          onChange={(e) => set("folder", e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          A folder in the preset&apos;s folder on the piles, made the first time a video is
+          finished.
+        </p>
       </div>
 
       <div className="space-y-3 rounded-md border border-dashed p-3">
