@@ -11,6 +11,7 @@ from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.edl import EDL, Clip, CropMode, Shot
 from agentic_editor.ffmpeg import escape_filter_path
 from agentic_editor.presets import Preset
+from agentic_editor.render import split
 
 Anchor = Literal["top", "middle", "bottom"]
 
@@ -47,6 +48,10 @@ class Layers:
     # Smart framing: the picture's area without black bars, and a follow path per shot.
     content: tuple[int, int, int, int] | None = None
     shot_commands: dict[int, Path] = field(default_factory=dict)
+    # Instruments against vocals (render/split.py): seconds into the reel where the
+    # bottom panel takes over, and the input of the panels' labels.
+    split_at: float | None = None
+    split_labels: int | None = None
 
 
 # Blur boxes kept per mark. Each is an overlay of a whole frame on every frame, so a
@@ -597,7 +602,18 @@ def build_graph(
     joined = "".join(f"[v{i}]" for i in range(segments))
     parts.append(f"{joined}concat=n={segments}:v=1:a=0[base]")
     current = "base"
-    if layers.background_image is not None:
+    if layers.split_at is not None:
+        # Two panels cut from the picture's rows, laid on the background (still or colour).
+        if layers.background_image is not None:
+            parts.append(f"[{layers.background_image}:v]setsar=1,format=rgba[backdrop]")
+        else:
+            colour = ffmpeg_color(layers.background or preset.framing.background)
+            parts.append(f"color=c={colour}:s={width}x{height}:r={preset.fps}[backdrop]")
+        parts += split.graph_parts(
+            "base", "backdrop", preset.split, frame, layers.split_at, edl.duration
+        )
+        current = "split"
+    elif layers.background_image is not None:
         parts.append(f"[{layers.background_image}:v]setsar=1,format=rgba[backdrop]")
         parts.append("[backdrop][base]overlay=0:0:shortest=1[backed]")
         current = "backed"
@@ -608,7 +624,8 @@ def build_graph(
         current = label
 
     room = zoom_room(edl, preset, source, layers)
-    if (zoom := zoom_expression(edl, layers.pulses, layers.pulse_scale, room)) is not None:
+    zoom = zoom_expression(edl, layers.pulses, layers.pulse_scale, room)
+    if zoom is not None and layers.split_at is None:  # a zoom would push the panels about
         step(
             f"scale=w='trunc({width}*({zoom})/2)*2':h='trunc({height}*({zoom})/2)*2'"
             f":eval=frame:flags=bicubic,crop={width}:{height}",
@@ -623,6 +640,8 @@ def build_graph(
 
     if layers.text_overlay is not None:
         overlay(layers.text_overlay, "texted")
+    if layers.split_labels is not None:
+        overlay(layers.split_labels, "labelled")
     if layers.captions is not None:
         fonts = f":fontsdir='{escape_filter_path(layers.fonts_dir)}'" if layers.fonts_dir else ""
         step(f"subtitles=filename='{escape_filter_path(layers.captions)}'{fonts}", "captioned")

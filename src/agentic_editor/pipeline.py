@@ -817,7 +817,10 @@ def remux_audio(edl: EDL, preset: Preset, analysis: Analysis, dest: Path, work_d
     """Lay a new soundtrack under a reel already rendered, copying its picture as it is: a
     new loudness target needs no new encode of the video."""
     music = compose.asset_path(preset.music.file) if preset.music.file else None
-    track = audio.render_soundtrack(edl, preset, analysis.audio_path, music, work_dir)
+    if preset.split.enabled:  # the same moment the picture changes panels
+        _, track = compose.split_soundtrack(edl, preset, analysis, work_dir)
+    else:
+        track = audio.render_soundtrack(edl, preset, analysis.audio_path, music, work_dir)
     remuxed = dest.with_name(f".{dest.stem}.remux{dest.suffix}")
     ffmpeg.run([
         "-y", "-i", str(dest), "-i", str(track), "-map", "0:v", "-map", "1:a",

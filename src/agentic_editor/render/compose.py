@@ -17,7 +17,7 @@ from agentic_editor.backends import Backends, encoder_args
 from agentic_editor.edl import EDL, Clip, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
-from agentic_editor.render import audio, captions, fonts, grade, text
+from agentic_editor.render import audio, captions, fonts, grade, split, text
 from agentic_editor.render.mark import layer as watermark_layer
 from agentic_editor.render.video import (
     Anchor,
@@ -619,6 +619,16 @@ def clear_rows(
     ) + framing.box_rows(list(texts), clip, shots, picture, source, frame, window, band)
 
 
+def split_soundtrack(
+    edl: EDL, preset: Preset, analysis: Analysis, work_dir: Path
+) -> tuple[float, Path]:
+    """Where the vocals take over in a split preset's reel, and its soundtrack: the whole
+    sound until then, the vocals after."""
+    at = split.switch_time(edl.duration, preset.split, timeline_words(edl, analysis))
+    mix = analysis.mix_path or analysis.audio_path
+    return at, split.soundtrack(edl, preset, mix, analysis.audio_path, at, work_dir)
+
+
 def render(
     edl: EDL,
     preset: Preset,
@@ -636,12 +646,16 @@ def render(
     work_dir.mkdir(parents=True, exist_ok=True)
     frame = preset.size
     music = asset_path(preset.music.file) if preset.music.file else None
-    soundtrack = audio.render_soundtrack(edl, preset, analysis.audio_path, music, work_dir)
+    split_at = None
+    if preset.split.enabled:
+        split_at, soundtrack = split_soundtrack(edl, preset, analysis, work_dir)
+    else:
+        soundtrack = audio.render_soundtrack(edl, preset, analysis.audio_path, music, work_dir)
 
     inputs: list[str] = []
     for clip in edl.clips:
         inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video)]
-    layers = Layers()
+    layers = Layers(split_at=split_at)
     if preset.framing.background_image:
         still = backdrop(preset.framing.background_image, frame, work_dir / "background.png")
         # One still, repeated for as long as the reel runs.
@@ -718,6 +732,8 @@ def render(
             "none", shown_size, frame, preset.framing.picture_width, layers.picture_band,
             layers.picture_anchor, picture_shift(preset),
         )  # fmt: skip
+        if preset.split.enabled:  # the second panel is the picture too
+            picture_rows = (picture_rows[0], picture_rows[1] + preset.split.height)
 
     bars = layers.black_bars
     shown = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
@@ -767,6 +783,10 @@ def render(
     if placed or corners or pictures:
         overlay = text.draw(placed, frame, work_dir / "text.png", corners, pictures)
         layers.text_overlay = add_input(overlay)
+    if preset.split.enabled:
+        dest_labels = work_dir / "labels.png"
+        labels = split.labels_layer(preset.split, frame, settings.fonts_dir, dest_labels)
+        layers.split_labels = add_input(labels)
 
     if colour.look != "none" or colour.lut:
         lut = asset_path(colour.lut) if colour.lut else None

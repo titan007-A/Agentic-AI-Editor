@@ -33,6 +33,8 @@ class Analysis(BaseModel):
     fps: float
     audio_source: AudioSource
     audio_path: Path
+    # The whole sound, whichever audio_path is (a split preset plays both).
+    mix_path: Path | None = None
     instrument_free: bool = False
     transcript: Transcript
     scenes: list[float]
@@ -169,6 +171,7 @@ def analyze(
         fps=info.fps,
         audio_source=audio_source,
         audio_path=timeline_audio,
+        mix_path=original,
         instrument_free=instrument_free,
         transcript=transcript,
         scenes=cuts,
