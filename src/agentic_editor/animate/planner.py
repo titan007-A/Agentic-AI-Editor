@@ -162,6 +162,7 @@ _ITEM = {
 }
 _TEXT_FIELDS = (
     "text", "highlight", "kicker", "value", "prefix", "suffix", "detail", "by", "answer", "emoji",
+    "art",
 )  # fmt: skip
 _ACTOR = {
     "type": "object",
@@ -238,6 +239,9 @@ How to write:
 - caption: 2-3 sentences that make people watch, then 5-8 relevant hashtags.
 - title: the reel's subject in at most 6 words (shown small at the top).
 - emoji fields: exactly one emoji character. Unused fields: empty strings or [].
+- art: one sentence for the painting behind the scene: the place, the time of day, the
+  light and mood, a few objects (for a character scene: the setting only, empty of
+  people). Never a real person's name or face, never any writing.
 
 The shape of a good reel (another subject than yours; never copy its words or facts):
 {"title": "The Tower That Grows", "kind": "facts", "mood": "curious",

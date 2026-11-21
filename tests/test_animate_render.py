@@ -118,3 +118,24 @@ def test_a_whole_reel_has_picture_sound_and_a_thumbnail(tmp_path):
         "animation.mp4",
         "thumbnail.jpg",
     ]
+
+
+def test_a_painted_picture_is_behind_its_scene_in_the_video(tmp_path):
+    folder = tmp_path / "pictures"
+    folder.mkdir()
+    name = "a" * 24 + ".png"
+    Image.new("RGB", (720, 1280), (200, 30, 40)).save(folder / name)
+    scenes = [s.model_dump() for s in story_plan().scenes[1:3]]
+    scenes[0]["visual"]["image"] = name
+    plan = story_plan(scenes=scenes)
+    data = player_data(plan, build(plan, voices_for(plan)))
+    data["duration"] = 2.0
+    opts = render.options(ROOT / "fonts", ROOT / "models", folder)
+    shown = Image.open(render.frame(data, opts, 1.0, tmp_path / "shown.jpg")).convert("RGB")
+    r, g, b = shown.getpixel((40, 700))  # the painting, not the drawn street
+    assert r > 150 and g < 90 and b < 90, (r, g, b)
+    video = tmp_path / "picture.mp4"
+    assert render.frames_to_video(data, opts, video, fps=10) == []
+    made = frame_at(video, 1.0, tmp_path / "made.png")
+    diff = np.abs(np.asarray(shown, dtype=float) - np.asarray(made, dtype=float)).mean()
+    assert diff < 4.0

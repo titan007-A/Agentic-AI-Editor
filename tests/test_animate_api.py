@@ -34,7 +34,7 @@ def writer(env, monkeypatch):
         ),
     )
 
-    def draw(plan, tl, voices, out_dir, fonts_dir, models_dir, progress):
+    def draw(plan, tl, voices, out_dir, fonts_dir, models_dir, progress, **kwargs):
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "animation.mp4").write_bytes(b"fake video")
         return out_dir / "animation.mp4", None, []
@@ -200,3 +200,23 @@ def test_voices_are_listed_with_the_owners_three_kinds_first(env):
     } in voices
     bad = env.client.post("/api/animations", json={"idea": "x y z", "voice": "nobody"})
     assert bad.status_code == 422
+
+
+def test_painted_pictures_are_served_by_name_and_switched_per_reel(env, writer):
+    from agentic_editor.animate import images
+
+    folder = images.folder(env.settings)
+    folder.mkdir(parents=True)
+    name = "0123456789abcdef01234567.png"
+    (folder / name).write_bytes(b"\x89PNG fake")
+    got = env.client.get(f"/api/animation-images/{name}")
+    assert got.status_code == 200 and got.headers["content-type"] == "image/png"
+    assert "immutable" in got.headers["cache-control"]
+    assert env.client.get("/api/animation-images/..%2Fapp.png").status_code == 404
+    assert env.client.get("/api/animation-images/" + "f" * 24 + ".png").status_code == 404
+    made = env.client.post(
+        "/api/animations", json={"idea": "the lost city", "images": False}
+    ).json()
+    assert made["images"] is False
+    on = env.client.patch(f"/api/animations/{made['id']}", json={"images": True}).json()
+    assert on["images"] is True and on["status"] == "ready"

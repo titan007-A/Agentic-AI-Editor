@@ -49,13 +49,14 @@ def workers() -> int:
     return max(1, min(4, (os.cpu_count() or 2) // 3))
 
 
-def options(fonts_dir: Path, models_dir: Path) -> dict:
+def options(fonts_dir: Path, models_dir: Path, images_dir: Path | None = None) -> dict:
     """player.js load() options for a page opened from disk. The colour emoji font is the
     captions' (fetched the first time); without it the browser's own emoji are drawn."""
     found = fonts.colored(models_dir / "fonts")
     return {
         "fontBase": fonts_dir.resolve().as_uri() + "/",
         "emojiFont": found.resolve().as_uri() if found else None,
+        "imageBase": images_dir.resolve().as_uri() + "/" if images_dir else None,
     }
 
 
@@ -180,12 +181,13 @@ def render(
     fonts_dir: Path,
     models_dir: Path,
     progress=None,
+    images_dir: Path | None = None,
 ) -> tuple[Path, Path, list[str]]:
     """The finished reel (MP4), its thumbnail and any text that didn't fit."""
     progress = progress or (lambda *a: None)
     out_dir.mkdir(parents=True, exist_ok=True)
     data = player_data(plan, timeline)
-    opts = options(fonts_dir, models_dir)
+    opts = options(fonts_dir, models_dir, images_dir)
     progress("animate", "mixing the voice, music and sound effects")
     mixed = sound.mix(timeline, voices, plan.mood, out_dir / "sound.wav", seed=seed_of(plan.title))
     silent = out_dir / "picture.mp4"

@@ -153,6 +153,11 @@ class Visual(Loose):
     setting: str = ""
     actors: list[Actor] = Field(default_factory=list)
     crowd: int = 0  # extra people standing around in a character scene
+    # The painted picture behind the scene (animate/images.py): what it shows, as the
+    # writer put it; the picture's file once painted; a number to paint it again.
+    art: str = ""
+    image: str = ""
+    art_seed: int = 0
 
 
 class Scene(Loose):
@@ -181,6 +186,8 @@ class Plan(Loose):
 
 
 # ---- mending ---------------------------------------------------------------------------
+
+_PICTURE = re.compile(r"[0-9a-f]{24}\.png")  # images.name_of
 
 _ASKS_TO_FOLLOW = re.compile(r"\bfollow (for|us|me|the page)\b|\bsubscribe\b|\blike and\b", re.I)
 _STALE_OPENERS = re.compile(r"\b(did you know|in this video|today we)\b", re.I)
@@ -264,6 +271,9 @@ def tidy(plan: Plan) -> Plan:
                 "setting": setting_of(v),
                 "actors": actors,
                 "crowd": max(0, min(8, int(v.crowd or 0))) if v.kind == "scene" else 0,
+                "art": _one_line(v.art, 300),
+                "image": v.image if _PICTURE.fullmatch(v.image or "") else "",
+                "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
             }
         )
         narration = " ".join(scene.narration.split())

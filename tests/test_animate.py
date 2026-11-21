@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from agentic_editor.animate import planner, sound, studio, timeline, voice
-from agentic_editor.animate.plan import Plan, is_emoji, problems, tidy
+from agentic_editor.animate.plan import Plan, Scene, is_emoji, problems, tidy
 from agentic_editor.animate.timeline import Spoken, build, player_data
 from agentic_editor.db import Animation, make_sessionmaker
 from agentic_editor.settings import Settings
@@ -571,7 +571,7 @@ def test_a_render_is_a_video_with_the_plans_caption(tmp_path):
         db.commit()
     drawn = {}
 
-    def draw(plan, tl, voices, out_dir, fonts_dir, models_dir, progress):
+    def draw(plan, tl, voices, out_dir, fonts_dir, models_dir, progress, **kwargs):
         drawn["duration"] = tl.duration
         out_dir.mkdir(parents=True)
         return out_dir / "animation.mp4", out_dir / "thumbnail.jpg", ["subtitle: A WHOLE"]
@@ -687,3 +687,98 @@ def test_stick_figure_scenes_keep_their_title_note_object_and_crowd():
     )
     assert sample_plan(scenes=[scene("x", "title", text="Hi", crowd=5)]).scenes[0].visual.crowd == 0
     assert planner._style_for("stick", "facts") == "stick"
+
+
+# ---- painted pictures -----------------------------------------------------------------------
+
+from agentic_editor.animate import images  # noqa: E402
+
+
+class FakeProc:
+    """The image model's runner, without the model: paints each asked picture as a file."""
+
+    def __init__(self, args, stdin, stdout, stderr, text):
+        self.asked = None
+        self.returncode = 0
+        self.stdin = self
+        self._buf = ""
+        self.lines: list[str] = []
+
+    def write(self, data):
+        self._buf += data
+
+    def close(self):
+        request = json.loads(self._buf)
+        self.asked = request
+        FakeProc.last = request
+        for i, job in enumerate(request["jobs"], 1):
+            Path(job["dest"]).write_bytes(b"\x89PNG fake")
+            self.lines.append(json.dumps({"done": i, "seconds": 1.0}) + "\n")
+
+    @property
+    def stdout(self):
+        return iter(self.lines)
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_pictures_are_asked_for_by_what_they_show_and_kept(tmp_path):
+    settings = Settings(cache_dir=tmp_path / "cache")
+    shown = []
+    pics = [images.Picture("an empty dusty yard at sunset", 7, empty=True),
+            images.Picture("ruins of a desert city", 3), images.Picture("", 1)]  # fmt: skip
+    names = images.paint(pics, "story", settings, lambda s, m: shown.append(m), run=FakeProc)
+    assert names[0] and names[1] and names[2] == ""  # nothing asked, nothing painted
+    asked = FakeProc.last
+    assert (asked["width"], asked["height"], asked["steps"]) == (720, 1280, images.STEPS)
+    first = asked["jobs"][0]["prompt"]
+    assert (
+        "dusty yard" in first
+        and "watercolor" in first
+        and "no people" in first
+        and "no text" in first
+    )
+    assert "no people" not in asked["jobs"][1]["prompt"]
+    assert shown[-1] == "painted 2 of 2 pictures"
+    FakeProc.last = None
+    assert images.paint(pics, "story", settings, run=FakeProc) == names  # kept: nothing painted
+    assert FakeProc.last is None
+    assert images.name_of("x", 1, "m") != images.name_of("x", 2, "m")
+    assert not images.available(settings)  # not on this machine
+
+
+def test_a_reel_gets_its_pictures_and_drops_them_when_turned_off(tmp_path, monkeypatch):
+    settings, Session = studio_env(tmp_path)
+    plan = long_plan(style="story")
+    scenes = [s.model_dump() for s in plan.scenes]
+    scenes[0]["visual"]["art"] = "a city swallowed by golden dunes at dusk"
+    plan = plan.model_copy(update={"scenes": [Scene.model_validate(s) for s in scenes]})
+    painted = []
+
+    def paint(pictures, style, settings, progress):
+        painted.append((pictures, style))
+        return [images.name_of(p.prompt, p.seed, "m") for p in pictures]
+
+    with Session() as db:
+        db.add(Animation(id="a9", owner_id="u1", idea="x", plan=plan.model_dump(mode="json"),
+                         task={"op": "voice"}))  # fmt: skip
+        db.commit()
+    studio.run_task("a9", Session, settings, speak=fake_speak, paint=paint)
+    with Session() as db:
+        a = db.get(Animation, "a9")
+        assert a.status == "ready"
+        name = a.plan["scenes"][0]["visual"]["image"]
+        assert name.endswith(".png") and a.player["scenes"][0]["visual"]["image"] == name
+        ((pictures, style),) = painted
+        assert style == "story" and pictures[0].prompt.startswith("a city swallowed")
+        a.images, a.task = False, {"op": "voice"}
+        db.commit()
+    studio.run_task("a9", Session, settings, speak=fake_speak, paint=paint)
+    with Session() as db:
+        assert db.get(Animation, "a9").plan["scenes"][0]["visual"]["image"] == ""
+    # Styles drawn as themselves are never painted; without the model, a note says so.
+    stick = plan.model_copy(update={"style": "stick"})
+    assert studio.paint_plan(stick, "a9", Session, settings, paint)[0] == stick
+    _, notes = studio.paint_plan(plan, "a9", Session, settings)
+    assert notes == ["painted pictures need the image model (installed on the Mac)"]

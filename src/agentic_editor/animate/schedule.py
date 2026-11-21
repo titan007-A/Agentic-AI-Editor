@@ -46,7 +46,8 @@ def new_animation(db, pilot: AnimationAutopilot, today: date) -> Animation:
     pilot.last_on = today
     found = Animation(
         owner_id=pilot.owner_id, idea=idea, kind=pilot.kind, style=pilot.style,
-        voice=pilot.voice, length=pilot.length, autopilot_id=pilot.id, task={"op": "auto"},
+        voice=pilot.voice, length=pilot.length, images=pilot.images, autopilot_id=pilot.id,
+        task={"op": "auto"},
         status="queued", message="waiting for a free slot", doubts=[],
     )  # fmt: skip
     db.add(found)

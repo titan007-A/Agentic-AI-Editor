@@ -395,6 +395,36 @@ export function AnimationScenes({
                 )}
               </div>
             )}
+            <div className="flex items-start gap-3">
+              {v.image && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`/api/animation-images/${v.image}`}
+                  alt={`Scene ${i + 1}'s painting`}
+                  className="h-28 w-16 shrink-0 rounded border-[1.5px] border-foreground object-cover"
+                />
+              )}
+              <div className="min-w-0 flex-1 space-y-1">
+                <Label htmlFor={`art-${i}`}>Painting behind it (what the AI paints)</Label>
+                <Textarea
+                  id={`art-${i}`}
+                  rows={2}
+                  value={v.art ?? ""}
+                  onChange={(e) => setScene(i, { ...scene, visual: { ...v, art: e.target.value } })}
+                />
+                {v.art && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setScene(i, { ...scene, visual: { ...v, art_seed: (v.art_seed ?? 0) + 1 } })
+                    }
+                  >
+                    Paint it again
+                  </Button>
+                )}
+              </div>
+            </div>
             {v.kind === "scene" && (
               <ActorsEditor
                 index={i}

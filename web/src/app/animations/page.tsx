@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/hooks/use-me";
 import { api, errorText, type Animation, type AnimationPlan, type AnimationVoice } from "@/lib/api";
@@ -56,7 +57,7 @@ const GROUPS = [
   ["calm", "Calm"],
   ["energetic", "Energetic"],
 ] as const;
-const BUSY = ["queued", "drafting", "changing", "voicing"];
+const BUSY = ["queued", "drafting", "changing", "painting", "voicing"];
 const POSTED: Record<string, string> = {
   rendering: "rendering",
   awaiting: "waiting for your approval",
@@ -70,6 +71,7 @@ const STATUS: Record<Animation["status"], string> = {
   queued: "waiting",
   drafting: "writing",
   changing: "changing",
+  painting: "painting pictures",
   voicing: "recording voice",
   ready: "ready",
   failed: "failed",
@@ -119,6 +121,7 @@ export default function AnimationsPage() {
   const [style, setStyle] = useState("auto");
   const [voice, setVoice] = useState("auto");
   const [length, setLength] = useState("auto");
+  const [pictures, setPictures] = useState(true);
   const [request, setRequest] = useState("");
   const [sending, setSending] = useState(false);
   const [shrunk, setShrunk] = useState<string[]>([]);
@@ -211,7 +214,10 @@ export default function AnimationsPage() {
       toast.error("Write the idea in a few words first");
       return;
     }
-    await act(() => api.createAnimation({ idea, kind, style, voice, length }), "Writing the draft");
+    await act(
+      () => api.createAnimation({ idea, kind, style, voice, length, images: pictures }),
+      "Writing the draft",
+    );
     setIdea("");
   }
 
@@ -339,6 +345,20 @@ export default function AnimationsPage() {
                   Hear this voice
                 </Button>
               )}
+              <label className="flex items-center justify-between gap-2 text-sm">
+                <span>
+                  Painted pictures behind the scenes
+                  <span className="block text-xs text-muted-foreground">
+                    An AI paints each scene (a few minutes more). Not for Stick figure or Bold
+                    kinetic text.
+                  </span>
+                </span>
+                <Switch
+                  checked={pictures}
+                  onCheckedChange={(v) => setPictures(Boolean(v))}
+                  aria-label="Painted pictures"
+                />
+              </label>
               <Button className="w-full" onClick={create} disabled={sending}>
                 <Wand2 className="size-4" /> Write the draft
               </Button>
@@ -484,6 +504,19 @@ export default function AnimationsPage() {
                       </div>
                     </div>
                   </div>
+                )}
+                {current.plan && !["stick", "kinetic"].includes(current.plan.style) && (
+                  <label className="flex items-center justify-between gap-2 text-sm">
+                    <span>Painted pictures behind the scenes</span>
+                    <Switch
+                      checked={current.images ?? true}
+                      disabled={busy || dirty || sending}
+                      onCheckedChange={(v) =>
+                        act(() => api.setAnimation(current.id, { images: Boolean(v) }))
+                      }
+                      aria-label="Painted pictures for this reel"
+                    />
+                  </label>
                 )}
                 <div className="flex flex-wrap gap-2">
                   <Button
