@@ -5,11 +5,12 @@ one (a draft, a change, the voice) is queued (jobs.animate); while it runs the a
 can't be changed again. Rendering makes an ordinary Job.
 """
 
+import hashlib
 from datetime import datetime
 from typing import Literal
 
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -74,6 +75,21 @@ class AutopilotSettings(BaseModel):
     length: Literal["auto", "short", "medium", "long"] = "auto"
     channel_id: str | None = Field(default=None, max_length=32)
     auto_post: bool = False
+
+
+_versions: dict[str, tuple[float, int, str]] = {}
+
+
+def asset_version(name: str) -> str:
+    """A short hash of a player file's content, worked out again only when it changes."""
+    path = render.PLAYER / name
+    stat = path.stat()
+    known = _versions.get(name)
+    if known and known[:2] == (stat.st_mtime, stat.st_size):
+        return known[2]
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    _versions[name] = (stat.st_mtime, stat.st_size, digest)
+    return digest
 
 
 def install(
@@ -287,13 +303,24 @@ def install(
         )
 
     @app.get("/api/animation-player/{name}")
-    def player_file(name: str, account: User) -> FileResponse:
+    def player_file(name: str, account: User, v: str = "") -> Response:
+        """The player and its fonts. The page names its script and style with their
+        content's hash (?v=), so a new player is never taken from a cache: Cloudflare
+        gives static files four hours in the browser whatever the server says, and the
+        old player without the newer styles drew them all as Neon Glow."""
+        if name == "player.html":
+            html = (render.PLAYER / name).read_text(encoding="utf-8")
+            for asset in ("player.js", "player.css"):
+                html = html.replace(f'"{asset}"', f'"{asset}?v={asset_version(asset)}"')
+            headers = {"Cache-Control": "no-store", "Content-Security-Policy": PLAYER_CSP}
+            return Response(html, media_type="text/html", headers=headers)
         if name in PLAYER_FILES:
-            headers = {"Cache-Control": "no-cache"}
-            if name.endswith(".html"):
-                headers["Content-Security-Policy"] = PLAYER_CSP
+            current = v == asset_version(name)
+            cache = "private, max-age=31536000, immutable" if current else "no-store"
             return FileResponse(
-                render.PLAYER / name, media_type=PLAYER_FILES[name], headers=headers
+                render.PLAYER / name,
+                media_type=PLAYER_FILES[name],
+                headers={"Cache-Control": cache},
             )
         stem = name.removesuffix(".ttf")
         if name.endswith(".ttf") and stem in FONT_NAMES:

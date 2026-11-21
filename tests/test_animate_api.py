@@ -3,7 +3,7 @@ import json
 import pytest
 
 from agentic_editor import jobs
-from agentic_editor.animate import planner, studio
+from agentic_editor.animate import planner, routes, studio
 from agentic_editor.db import Animation, Setting
 from tests import test_api
 from tests.test_animate import Router, Writer, fake_speak, long_plan, reply_for
@@ -167,13 +167,19 @@ def test_a_restart_fails_work_in_progress_and_queues_lost_work_again(env, monkey
 
 def test_the_player_and_its_fonts_are_served_to_signed_in_people(env):
     page = env.client.get("/api/animation-player/player.html")
-    assert page.status_code == 200 and "player.js" in page.text
+    assert page.status_code == 200
     assert "script-src 'self'" in page.headers["content-security-policy"]
-    assert (
-        env.client.get("/api/animation-player/player.js")
-        .headers["content-type"]
-        .startswith("text/javascript")
-    )
+    assert page.headers["cache-control"] == "no-store"
+    # Its script and style are named by their content, so a cached old player (Cloudflare
+    # keeps static files four hours) can never draw a newer style as Neon Glow.
+    js, css = routes.asset_version("player.js"), routes.asset_version("player.css")
+    assert f'src="player.js?v={js}"' in page.text and f'href="player.css?v={css}"' in page.text
+    named = env.client.get(f"/api/animation-player/player.js?v={js}")
+    assert named.headers["content-type"].startswith("text/javascript")
+    assert "immutable" in named.headers["cache-control"]
+    stale = env.client.get("/api/animation-player/player.js?v=old")
+    assert stale.headers["cache-control"] == "no-store"
+    assert "story: {" in named.text and "kinetic: {" in named.text
     assert env.client.get("/api/animation-player/Inter-SemiBold.ttf").status_code == 200
     assert env.client.get("/api/animation-player/..%2Fapp.db").status_code == 404
     assert env.client.get("/api/animation-player/secret.ttf").status_code == 404

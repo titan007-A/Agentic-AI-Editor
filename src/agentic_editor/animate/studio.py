@@ -183,6 +183,9 @@ def run_task(
                     plan = planner.redo_scene(llm, current, index, task.get("request", ""))
         if plan is None:
             raise planner.PlannerError("there is no reel to voice")
+        # Mended again every time: a reel made before a mend (a name's look, a prop too big
+        # to hold) gets it when it is next voiced or restyled.
+        plan = tidy(plan)
         _set(Session, animation_id, status="voicing", message="recording the voice-over")
         timeline, _ = timeline_of(plan, settings, speak)
         data = player_data(plan, timeline)
