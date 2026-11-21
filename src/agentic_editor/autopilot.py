@@ -206,13 +206,24 @@ def fits_prompt(topic: str, seen: dict, caption: str) -> str:
     )
 
 
-def fits(answer: dict) -> bool:
-    """The video is the topic's when the frames show its series and the video names the
-    topic; or, with no other part of the series named, when the vision model saw the topic
-    itself. The video's own words decide the part: the small models call a game newer than
-    their training by an older part's name (GTA 6 footage "GTA V")."""
+# A part of a series named in a topic: "GTA 6", "GTA VI", "FIFA 24".
+PART = re.compile(r"(?<![\w])(\d+|[IVX]{1,4})(?![\w])")
+
+
+def names_a_part(topic: str) -> bool:
+    return PART.search(topic) is not None
+
+
+def fits(answer: dict, part: bool = True) -> bool:
+    """The video is the topic's when the frames show its series and, for a topic that names
+    a part of it (`part`), the video names the topic; or, with no other part of the series
+    named, the vision model saw the topic itself. The video's own words decide the part:
+    the small models call a game newer than their training by an older part's name (GTA 6
+    footage "GTA V"). A topic without a part ("GTA") is any part's footage."""
     if answer.get("same_series") is not True:
         return False
+    if not part:
+        return True
     return answer.get("named") is True or (
         answer.get("named_other") is not True and answer.get("exact") is True
     )
@@ -269,7 +280,7 @@ def judge_topic(topic: str, found: list[Entry], settings=None, router=None) -> l
                     )
                     log.info("topic %r: saw %s, answered %s", topic, seen, answer)
                     why = " ".join(str(answer.get("why") or "").split())[:200]
-                    verdicts[i] = Verdict(fits(answer), why)
+                    verdicts[i] = Verdict(fits(answer, names_a_part(topic)), why)
     return [v for v in verdicts if v is not None]
 
 

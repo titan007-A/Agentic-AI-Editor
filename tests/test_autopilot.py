@@ -452,3 +452,14 @@ def test_a_feed_without_a_folder_leaves_its_videos_in_the_presets_folder(Session
         db.flush()
         autopilot.file_outputs(db, job)
         assert job.outputs[0].folder_id is None
+
+
+def test_a_topic_without_a_part_takes_any_part_of_the_series():
+    # GTA 5 roleplay, the video saying "GTA V": not GTA 6, but GTA.
+    answer = {"same_series": True, "exact": False, "named": False, "named_other": True}
+    assert not autopilot.fits(answer, autopilot.names_a_part("GTA 6"))
+    assert autopilot.fits(answer, autopilot.names_a_part("GTA"))
+    assert not autopilot.fits({"same_series": False}, autopilot.names_a_part("GTA"))
+    assert [autopilot.names_a_part(t) for t in ("GTA VI", "FIFA 24", "GTA", "Minecraft")] == [
+        True, True, False, False,
+    ]  # fmt: skip
