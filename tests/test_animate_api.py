@@ -202,11 +202,14 @@ def test_voices_are_listed_with_the_owners_three_kinds_first(env):
     assert bad.status_code == 422
 
 
-def test_painted_pictures_are_served_by_name_and_switched_per_reel(env, writer):
+def test_painted_pictures_are_served_by_name_and_switched_per_reel(
+    env, writer, tmp_path, monkeypatch
+):
     from agentic_editor.animate import images
 
-    folder = images.folder(env.settings)
-    folder.mkdir(parents=True)
+    folder = tmp_path / "pictures"
+    folder.mkdir()
+    monkeypatch.setattr(images, "folder", lambda settings: folder)
     name = "0123456789abcdef01234567.png"
     (folder / name).write_bytes(b"\x89PNG fake")
     got = env.client.get(f"/api/animation-images/{name}")
