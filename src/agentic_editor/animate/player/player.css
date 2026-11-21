@@ -1,0 +1,75 @@
+/* The stage is always 1080x1920; the preview scales it to its window (player.js fit). */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}
+#frame {
+  position: relative;
+  width: 1080px;
+  height: 1920px;
+  transform-origin: 0 0;
+}
+#stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+#stage * {
+  box-sizing: border-box;
+}
+.layer {
+  position: absolute;
+  inset: 0;
+}
+.scene {
+  position: absolute;
+  inset: 0;
+  display: none;
+  will-change: opacity, transform;
+}
+.abs {
+  position: absolute;
+}
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.fit {
+  line-height: 1.08;
+  overflow-wrap: normal;
+}
+.line {
+  display: block;
+  width: 100%;
+}
+.word {
+  display: inline-block;
+  white-space: pre;
+  will-change: opacity, transform;
+}
+.emoji {
+  font-family: "NotoColorEmoji", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+    sans-serif;
+  line-height: 1;
+  display: inline-block;
+  will-change: transform, opacity;
+}
+.safe-guide {
+  position: absolute;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 60, 60, 0.18),
+    rgba(255, 60, 60, 0.18) 12px,
+    transparent 12px,
+    transparent 24px
+  );
+  pointer-events: none;
+  display: none;
+}

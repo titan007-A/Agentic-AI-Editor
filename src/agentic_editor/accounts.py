@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from agentic_editor.auth import hash_password, verify_password
 from agentic_editor.db import (
+    Animation,
     BufferKey,
     Feed,
     Job,
@@ -197,7 +198,7 @@ def remove(
         raise AccountError("this is the primary account; make another admin primary first")
     if user.role == ADMIN and len(admins(session)) <= 1:
         raise AccountError("this is the only admin; make another one first")
-    for kind in (Job, Feed, StyleDraft, Research):
+    for kind in (Job, Feed, StyleDraft, Research, Animation):
         for item in session.scalars(select(kind).where(kind.owner_id == user.id)):
             if keep_work_for is not None:
                 item.owner_id = keep_work_for.id

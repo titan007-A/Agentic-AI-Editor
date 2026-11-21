@@ -60,6 +60,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const extra = [
     ...(me?.features?.includes("fun") ? [{ href: "/team/", label: "Team" }] : []),
     ...(me?.features?.includes("niche_finder") ? [{ href: "/accounts/", label: "Accounts" }] : []),
+    ...(me?.features?.includes("animation_studio")
+      ? [{ href: "/animations/", label: "Animations" }]
+      : []),
   ];
   const failed = useFailedPosts(me);
   const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])].map((link) =>

@@ -1,0 +1,304 @@
+"""When everything happens: scenes, words, visual beats, subtitles and sound effects.
+
+The single source of timing. Each scene lasts its own voice plus a hold; a visual's
+items land on the words that name them when they are spoken (a stat on its digits, a
+timeline row on its year), else spread over the narration. The player and the sound
+both read the times worked out here, so picture, words and sound agree to the frame.
+"""
+
+import re
+from dataclasses import dataclass, field
+
+from agentic_editor.animate.plan import Plan, Scene
+from agentic_editor.transcript import Word
+
+LEAD = 0.18  # silence before each scene's voice
+FIRST_LEAD = 0.12
+TAIL = 0.7  # after the last scene
+# The least a visual needs on screen to play out, voice or not.
+MIN_SCENE = {"stat": 2.8, "reveal": 3.2, "dots": 3.0, "cta": 2.8, "timeline": 2.6, "compare": 2.8}
+CHUNK_WORDS = 3
+CHUNK_CHARS = 18
+COUNT = 1.3  # seconds a stat counts up (player.js stat)
+
+
+@dataclass
+class Spoken:
+    """One scene's voice: its file, length and words (times from its own start)."""
+
+    path: str
+    duration: float
+    words: list[Word]
+
+
+@dataclass
+class SceneTime:
+    kind: str
+    start: float
+    end: float
+    voice_start: float
+    voice_end: float
+    words: list[Word]  # absolute times
+    beats: list[float]
+
+
+@dataclass
+class Caption:
+    start: float
+    end: float
+    words: list[Word]
+
+
+@dataclass
+class Cue:
+    t: float
+    sound: str  # sound.SFX name
+    gain_db: float = -20.0
+
+
+@dataclass
+class Timeline:
+    scenes: list[SceneTime]
+    duration: float
+    captions: list[Caption] = field(default_factory=list)
+    cues: list[Cue] = field(default_factory=list)
+
+
+def plain(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _digits(text: str) -> str:
+    return re.sub(r"\D", "", text)
+
+
+def _find(words: list[Word], target: str, after: float = -1.0) -> float | None:
+    """When the first significant word of `target` is spoken (at or after `after`)."""
+    keys = [plain(w) for w in target.split() if len(plain(w)) > 2] or [
+        plain(w) for w in target.split() if plain(w)
+    ]
+    if not keys:
+        return None
+    for key in keys[:2]:
+        for w in words:
+            if w.start >= after and plain(w.text) == key:
+                return w.start
+        for w in words:  # "city's" for "city"
+            if w.start >= after and plain(w.text).startswith(key) and len(key) > 3:
+                return w.start
+    return None
+
+
+def _find_number(words: list[Word], value: str) -> float | None:
+    digits = _digits(value)
+    if not digits:
+        return None
+    for w in words:
+        if (
+            digits
+            and _digits(w.text)
+            and (_digits(w.text) == digits or digits.startswith(_digits(w.text)))
+        ):
+            return w.start
+    return None
+
+
+def _spread(n: int, a: float, b: float) -> list[float]:
+    if n <= 0:
+        return []
+    if n == 1:
+        return [a]
+    return [a + (b - a) * i / (n - 1) for i in range(n)]
+
+
+def _ordered(times: list[float | None], fallback: list[float], gap: float = 0.25) -> list[float]:
+    """Matched times where found, the fallback elsewhere; an unmatched item goes before the
+    next matched one rather than pushing it late, and each comes at least `gap` after the last."""
+    floor = (fallback[0] - 0.2) if fallback else 0.0
+    out: list[float] = []
+    for i, t in enumerate(times):
+        if t is None:
+            chosen = fallback[i]
+            later = next((x for x in times[i + 1 :] if x is not None), None)
+            if later is not None:
+                chosen = max(min(chosen, later - gap), floor)
+        else:
+            chosen = t
+        if out:
+            chosen = max(chosen, out[-1] + gap)
+        out.append(chosen)
+    return out
+
+
+def beats(
+    scene: Scene, start: float, voice_start: float, voice_end: float, words: list[Word]
+) -> list[float]:
+    """The times player.js uses for this scene's items (one list per kind, see SCENES)."""
+    v = scene.visual
+    span = max(0.6, voice_end - voice_start)
+    early = voice_start + 0.05
+    kind = v.kind
+    if kind == "title":
+        head = [plain(w) for w in v.text.split()]
+        times: list[float | None] = []
+        cursor = -1.0
+        for key in head:
+            hit = next((w.start for w in words if w.start > cursor and plain(w.text) == key), None)
+            if hit is not None:
+                cursor = hit
+            times.append(hit)
+        fallback = [start + 0.12 + i * 0.14 for i in range(len(head))]
+        # The hook is read, not waited for: every word is up within a beat of its turn.
+        return [
+            min(t, fallback[i] + 0.05) if t is not None else fallback[i]
+            for i, t in enumerate(times)
+        ]
+    if kind == "stat":
+        at = _find_number(words, v.value)
+        at = at - 0.1 if at is not None else voice_start + 0.25 * span
+        at = max(at, start + 0.2)
+        return [at, at + COUNT * 0.55]
+    if kind == "icons":
+        n = max(1, len(v.items))
+        items = [early + 0.45 * i for i in range(n)]
+        return [*items, items[-1] + 0.4]
+    if kind == "compare":
+        left = _find(words, v.items[0].text) if v.items else None
+        right = _find(words, v.items[1].text, (left or 0) + 0.1) if len(v.items) > 1 else None
+        return _ordered([left, right], [early, voice_start + span * 0.5], gap=0.6)
+    if kind == "list":
+        n = len(v.items)
+        found = [_find(words, i.text) for i in v.items]
+        fallback = _spread(n, voice_start + span * 0.15, voice_start + span * 0.8)
+        return [start + 0.05, *_ordered(found, fallback, gap=0.35)]
+    if kind == "timeline":
+        found = [_find_number(words, i.year) or _find(words, i.text) for i in v.items]
+        fallback = _spread(len(v.items), early, voice_start + span * 0.8)
+        return _ordered(found, fallback, gap=0.45)
+    if kind == "place":
+        name = _find(words, v.text)
+        drop = max(start + 0.15, (name - 0.6) if name is not None else early)
+        return [drop, max(name if name is not None else drop + 0.5, drop + 0.4)]
+    if kind == "reveal":
+        answer = _find(words, v.answer, voice_start + span * 0.25)
+        answer = answer if answer is not None else voice_start + span * 0.6
+        return [start + 0.1, max(answer, start + 0.9)]
+    if kind == "dots":
+        at = _find_number(words, v.value) or _find(words, v.value or v.text)
+        at = max(start + 0.15, (at - 0.3) if at is not None else early)
+        return [at, at + 1.0]
+    return []  # quote: words spread over the narration by the player
+
+
+def captions(scenes: list[SceneTime]) -> list[Caption]:
+    """Subtitles: up to three words at a time, broken after punctuation, each shown from
+    its first word until the next chunk (or a little after its last word in a pause)."""
+    out: list[Caption] = []
+    for scene in scenes:
+        chunk: list[Word] = []
+        chunks: list[list[Word]] = []
+        for w in scene.words:
+            chunk.append(w)
+            chars = sum(len(x.text) for x in chunk)
+            if len(chunk) >= CHUNK_WORDS or chars >= CHUNK_CHARS or re.search(r"[.!?,;:]$", w.text):
+                chunks.append(chunk)
+                chunk = []
+        if chunk:
+            chunks.append(chunk)
+        for i, c in enumerate(chunks):
+            start = max(scene.start, c[0].start - 0.05)
+            last = c[-1].end + 0.25
+            nxt = chunks[i + 1][0].start - 0.05 if i + 1 < len(chunks) else None
+            end = min(nxt, last + 0.4) if nxt is not None else min(last, scene.end)
+            out.append(Caption(start, max(end, start + 0.2), c))
+    return out
+
+
+def cues(plan: Plan, scenes: list[SceneTime]) -> list[Cue]:
+    """Sound effects on the same beats the picture uses."""
+    out: list[Cue] = [Cue(0.0, "boom", -20.0)]
+    for i, s in enumerate(scenes):
+        if i:
+            out.append(Cue(max(0.0, s.start - 0.14), "whoosh", -21.0))
+        b = s.beats
+        if s.kind == "stat" and b:
+            t, step = b[0], 0.05
+            while t < b[0] + COUNT:
+                out.append(Cue(t, "tick", -27.0))
+                step *= 1.18
+                t += step
+            out.append(Cue(b[0] + COUNT, "ding", -22.0))
+        elif s.kind in ("icons", "list", "compare", "timeline") and b:
+            items = b[1:] if s.kind == "list" else b[: len(b) - 1] if s.kind == "icons" else b
+            out += [Cue(t, "pop", -22.0) for t in items]
+        elif s.kind == "place" and b:
+            out.append(Cue(b[0] + 0.45, "drop", -18.0))
+        elif s.kind == "reveal" and len(b) > 1:
+            out.append(Cue(max(s.start, b[1] - 1.3), "riser", -22.0))
+            out.append(Cue(b[1], "boom", -19.0))
+        elif s.kind == "dots" and b:
+            out.append(Cue(b[0], "shimmer", -22.0))
+        elif s.kind == "cta" and b:
+            out.append(Cue(b[0], "chime", -18.0))
+    return sorted(out, key=lambda c: c.t)
+
+
+def build(plan: Plan, voices: list[Spoken]) -> Timeline:
+    """`voices`: one per scene, then one for the call to action at the end."""
+    scenes = [*plan.scenes, Scene(narration=plan.cta, visual={"kind": "title"})]
+    times: list[SceneTime] = []
+    at = 0.0
+    for i, (scene, spoken) in enumerate(zip(scenes, voices, strict=True)):
+        kind = "cta" if i == len(scenes) - 1 else scene.visual.kind
+        voice_start = at + (FIRST_LEAD if i == 0 else LEAD)
+        voice_end = voice_start + spoken.duration
+        end = max(voice_end + scene.hold, at + MIN_SCENE.get(kind, 1.6))
+        words = [
+            Word(text=w.text, start=voice_start + w.start, end=voice_start + w.end)
+            for w in spoken.words
+        ]
+        if kind == "cta":  # the Follow button is tapped as the voice ends
+            b = [max(at + 0.7, voice_end - 0.45)]
+        else:
+            b = beats(scene, at, voice_start, voice_end, words)
+        times.append(SceneTime(kind, at, end, voice_start, voice_end, words, b))
+        at = end
+    timeline = Timeline(times, at + TAIL)
+    timeline.captions = captions(times)
+    timeline.cues = cues(plan, times)
+    return timeline
+
+
+def player_data(plan: Plan, timeline: Timeline) -> dict:
+    """What player.js load() takes."""
+    visuals = [s.visual.model_dump() for s in plan.scenes] + [{"kind": "cta", "text": plan.cta}]
+    word = lambda w: {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}  # noqa: E731
+    return {
+        "style": plan.style,
+        "title": plan.title,
+        "duration": round(timeline.duration, 3),
+        "header": {
+            "start": round(timeline.scenes[1].start, 3) if len(timeline.scenes) > 2 else 9999
+        },
+        "scenes": [
+            {
+                "kind": s.kind,
+                "start": round(s.start, 3),
+                "end": round(s.end, 3),
+                "voiceStart": round(s.voice_start, 3),
+                "voiceEnd": round(s.voice_end, 3),
+                "beats": [round(b, 3) for b in s.beats],
+                "words": [word(w) for w in s.words],
+                "visual": visual,
+            }
+            for s, visual in zip(timeline.scenes, visuals, strict=True)
+        ],
+        "captions": [
+            {
+                "start": round(c.start, 3),
+                "end": round(c.end, 3),
+                "words": [word(w) for w in c.words],
+            }
+            for c in timeline.captions
+        ],
+    }

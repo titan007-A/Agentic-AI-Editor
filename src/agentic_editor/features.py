@@ -16,7 +16,12 @@ from agentic_editor.db import User as Account
 # finds whole songs' YouTube videos on the singers' and labels' channels (research.SONGS).
 # dm_queue: the Accounts tab's message queue: one saved message, copied as each found
 # account's Instagram chat opens, one after another (the person sends each one).
-FEATURES = ("trial_reel", "fun", "niche_finder", "trim_choice", "youtube_songs", "dm_queue")
+# animation_studio: the Animations tab, narrated animated reels written from one line
+# (animate/).
+FEATURES = (
+    "trial_reel", "fun", "niche_finder", "trim_choice", "youtube_songs", "dm_queue",
+    "animation_studio",
+)  # fmt: skip
 DEFAULT_USERS = ("siddhant",)
 # Features first tried by other accounts than DEFAULT_USERS.
 DEFAULTS = {
@@ -24,6 +29,7 @@ DEFAULTS = {
     "trim_choice": ("aman",),
     "youtube_songs": ("siddhant", "prajjwal"),
     "dm_queue": ("siddhant-content",),
+    "animation_studio": ("siddhant", "siddhant-content"),
 }
 # In a feature's list: every account, now and later (new admins and employees too).
 EVERYONE = "*"
