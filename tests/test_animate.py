@@ -60,6 +60,26 @@ def sample_plan(**changes) -> Plan:
     return tidy(Plan.model_validate(data))
 
 
+def story_plan(**changes) -> Plan:
+    """A short story acted by two characters."""
+    scenes = [
+        scene("Maya walks down her street every morning.", "scene", setting="street",
+              actors=[{"name": "Maya", "action": "walk_in", "mood": "neutral", "prop": "☕"}]),
+        scene("A little boy waves at her and shouts hello.", "scene", setting="street",
+              actors=[{"name": "Maya", "action": "idle", "mood": "surprised"},
+                      {"name": "Leo", "action": "wave", "mood": "happy", "says": "Hello there!"}]),
+        scene("She gives him a gift, and he jumps for joy.", "scene", setting="room",
+              actors=[{"name": "Maya", "action": "give", "mood": "happy", "prop": "🎁"},
+                      {"name": "Leo", "action": "celebrate", "mood": "happy"}]),
+    ]  # fmt: skip
+    cast = [{"name": "Maya", "look": "woman"}, {"name": "Leo", "look": "boy"}]
+    data = {"title": "The Gift", "kind": "story", "style": "story", "voice": "bm_fable",
+            "mood": "emotional", "scenes": scenes, "cast": cast,
+            "cta": "Follow for more stories.", "caption": "x"}  # fmt: skip
+    data.update(changes)
+    return tidy(Plan.model_validate(data))
+
+
 def spoken(text: str, rate: float = 0.38) -> Spoken:
     """Kokoro's answer without Kokoro: each word `rate` seconds, punctuation on its word."""
     words, t = [], 0.0
@@ -154,7 +174,7 @@ def test_what_is_shown_must_be_what_is_said_and_the_ending_is_the_systems():
         ),
     ]
     found = problems(sample_plan(scenes=scenes), "auto")
-    assert "scene 1 must be a title: the hook" in found
+    assert "scene 1 must be the hook: a title, or a story's most striking moment" in found
     assert "scene 1 (list): no 'Did you know' or 'In this video'" in found
     assert "scene 2 (stat): say the number 4,000 in the narration" in found
     assert "scene 3 (place): name Ubar in the narration" in found
@@ -235,7 +255,7 @@ def test_the_player_gets_every_scene_with_its_times():
 
 
 @pytest.mark.parametrize(
-    "name", ["whoosh", "pop", "tick", "ding", "drop", "boom", "riser", "shimmer", "chime"]
+    "name", ["whoosh", "pop", "tick", "ding", "drop", "boom", "riser", "shimmer", "chime", "step"]
 )
 def test_every_sound_effect_is_made_and_peaks_at_full_scale(name):
     x = sound.sfx(name)
@@ -350,6 +370,7 @@ def reply_for(plan: Plan, **changes) -> dict:
     data = {
         "title": plan.title, "kind": plan.kind, "mood": plan.mood, "voice_kind": "narrator",
         "scenes": [s.model_dump() for s in plan.scenes], "cta": plan.cta, "caption": plan.caption,
+        "cast": [c.model_dump() for c in plan.cast],
     }  # fmt: skip
     data.update(changes)
     return data
@@ -564,3 +585,84 @@ def test_a_render_is_a_video_with_the_plans_caption(tmp_path):
     assert used.caption == plan.caption and result.title == "The Lost City"
     assert ("title", "The Lost City") in events
     assert studio.label("animation-paper") == "Animation · Clean Paper"
+
+
+# ---- characters ---------------------------------------------------------------------------
+
+
+def test_character_scenes_are_mended_and_everyone_who_acts_is_cast():
+    plan = story_plan(
+        cast=[{"name": "Maya", "look": "lady"}],
+        scenes=[
+            scene("They meet.", "scene", setting="moon", actors=[
+                {"name": "Maya", "action": "moonwalk", "mood": "giddy", "prop": "gift"},
+                {"name": "Leo", "action": "wave"}, {"name": "Third", "action": "wave"},
+            ]),
+        ],
+    )  # fmt: skip
+    v = plan.scenes[0].visual
+    assert v.setting == "room"  # not one of the places drawn: a room
+    assert len(v.actors) == 2  # two at a time on the stage
+    maya = v.actors[0]
+    assert (maya.action, maya.mood, maya.prop) == ("idle", "neutral", "")
+    assert [(c.name, c.look) for c in plan.cast] == [("Maya", "man"), ("Leo", "man")]
+
+
+def test_a_scene_without_actors_must_be_fixed():
+    plan = story_plan(
+        scenes=[*[s.model_dump() for s in story_plan().scenes], scene("Empty.", "scene")]
+    )
+    assert "scene 4 (scene): needs at least one actor from the cast" in problems(plan, "short")
+
+
+def test_actors_come_on_in_turn_and_the_bubble_opens_as_the_line_is_said():
+    plan = story_plan()
+    tl = build(plan, voices_for(plan))
+    meet = tl.scenes[1]
+    assert meet.beats[0] == pytest.approx(meet.start + 0.1)
+    assert meet.beats[1] == pytest.approx(meet.start + 0.35)
+    said = next(w.start for w in meet.words if w.text.startswith("hello"))
+    assert meet.beats[2] == pytest.approx(max(meet.voice_start + 0.2, said - 0.1))
+    sounds = [c for c in tl.cues if c.sound == "step"]
+    walk = tl.scenes[0]
+    assert sounds and all(
+        walk.beats[0] < c.t < walk.beats[0] + timeline.ENTRANCES["walk_in"][0] for c in sounds
+    )
+    assert any(c.sound == "pop" and c.t == pytest.approx(meet.beats[2]) for c in tl.cues)
+    assert any(c.sound == "chime" for c in tl.cues if tl.scenes[2].start <= c.t < tl.scenes[2].end)
+    data = player_data(plan, tl)
+    assert data["cast"] == [{"name": "Maya", "look": "woman"}, {"name": "Leo", "look": "boy"}]
+
+
+def test_stories_told_with_characters_get_the_character_style():
+    story = story_plan()
+    writer = Writer(reply_for(story, kind="story"), reply_for(story, kind="story"))
+    plan, _ = planner.draft(
+        writer, planner.Brief("a kind stranger", kind="story", length="short"), []
+    )
+    assert plan.style == "story" and [c.name for c in plan.cast] == ["Maya", "Leo"]
+    assert plan.scenes[1].visual.actors[1].says == "Hello there!"
+    # Asked for: as asked. A story without character scenes: paper.
+    assert planner._style_for("kinetic", "story", acted=True) == "kinetic"
+    assert planner._style_for("auto", "story", acted=False) == "paper"
+    assert planner._style_for("auto", "facts", acted=True) == "glow"
+
+
+def test_names_overrule_a_look_that_disagrees_and_big_things_are_not_held():
+    plan = story_plan(
+        cast=[{"name": "Grandpa Eli", "look": "woman"}, {"name": "Mrs Patel", "look": "boy"},
+              {"name": "Lily", "look": "girl"}],
+        scenes=[scene("They meet.", "scene", actors=[
+            {"name": "Grandpa Eli", "action": "think", "prop": "🪑"},
+            {"name": "Uncle Raj", "action": "give", "prop": "🎁"},
+        ])],
+    )  # fmt: skip
+    looks = {c.name: c.look for c in plan.cast}
+    assert looks == {
+        "Grandpa Eli": "old man",
+        "Mrs Patel": "woman",
+        "Lily": "girl",
+        "Uncle Raj": "old man",
+    }
+    eli, raj = plan.scenes[0].visual.actors
+    assert eli.prop == "" and raj.prop == "🎁"

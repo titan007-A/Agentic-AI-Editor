@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type {
+  AnimationActor,
+  AnimationCastMember,
   AnimationItem,
   AnimationPlan,
   AnimationScene,
@@ -28,7 +30,38 @@ export const VISUALS: Record<AnimationVisualKind, string> = {
   quote: "Quote",
   reveal: "Mystery reveal",
   dots: "Glowing dots",
+  scene: "Characters acting",
 };
+
+const SETTINGS = ["room", "street", "park", "office", "night", "school", "shop", "stage", "plain"];
+const ACTIONS = [
+  "idle",
+  "talk",
+  "walk_in",
+  "walk_out",
+  "run_in",
+  "wave",
+  "point",
+  "think",
+  "celebrate",
+  "sad",
+  "shocked",
+  "angry",
+  "shrug",
+  "sit",
+  "read",
+  "give",
+  "cry",
+];
+const FEELINGS = ["neutral", "happy", "sad", "angry", "surprised", "scared", "thinking"];
+const LOOKS = ["man", "woman", "boy", "girl", "old man", "old woman"];
+const blankActor = (name: string): AnimationActor => ({
+  name,
+  action: "idle",
+  mood: "neutral",
+  prop: "",
+  says: "",
+});
 
 type Field = { key: keyof AnimationVisual; label: string; long?: boolean };
 
@@ -66,6 +99,7 @@ const FIELDS: Record<AnimationVisualKind, Field[]> = {
     { key: "value", label: "Word or number (max 8)" },
     { key: "text", label: "Caption" },
   ],
+  scene: [{ key: "text", label: "Caption on top (optional, e.g. Years later)" }],
 };
 
 const ITEMS: Partial<Record<AnimationVisualKind, { keys: (keyof AnimationItem)[]; max: number }>> =
@@ -179,6 +213,7 @@ export function AnimationScenes({
           />
         </div>
       </div>
+      <CastEditor cast={plan.cast ?? []} onChange={(cast) => onChange({ ...plan, cast })} />
       {plan.scenes.map((scene, i) => {
         const v = scene.visual;
         const items = ITEMS[v.kind];
@@ -356,6 +391,14 @@ export function AnimationScenes({
                 )}
               </div>
             )}
+            {v.kind === "scene" && (
+              <ActorsEditor
+                index={i}
+                visual={v}
+                cast={plan.cast ?? []}
+                onChange={(visual) => setScene(i, { ...scene, visual })}
+              />
+            )}
             <Button size="sm" variant="outline" disabled={busy} onClick={() => onRedo(i)}>
               <Sparkles className="size-3.5" /> Write this scene again
             </Button>
@@ -374,6 +417,179 @@ export function AnimationScenes({
           onChange={(e) => onChange({ ...plan, caption: e.target.value })}
         />
       </div>
+    </div>
+  );
+}
+
+/** The story's characters: a name and a look each; the same name looks the same all through. */
+function CastEditor({
+  cast,
+  onChange,
+}: {
+  cast: AnimationCastMember[];
+  onChange: (cast: AnimationCastMember[]) => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-lg border-[1.5px] border-dashed border-foreground/50 p-3">
+      <div className="font-hand text-xl font-bold">Characters</div>
+      {!cast.length && (
+        <p className="text-xs text-muted-foreground">
+          None: this reel has no characters. Add one to act in &quot;Characters acting&quot; scenes.
+        </p>
+      )}
+      {cast.map((member, k) => (
+        <div key={k} className="flex flex-wrap items-end gap-2">
+          <div className="min-w-32 flex-1 space-y-1">
+            <Label htmlFor={`cast-name-${k}`} className="text-xs">
+              Name
+            </Label>
+            <Input
+              id={`cast-name-${k}`}
+              value={member.name}
+              onChange={(e) =>
+                onChange(cast.map((c, j) => (j === k ? { ...c, name: e.target.value } : c)))
+              }
+            />
+          </div>
+          <div className="w-36 space-y-1">
+            <Label htmlFor={`cast-look-${k}`} className="text-xs">
+              Looks like
+            </Label>
+            <select
+              id={`cast-look-${k}`}
+              className={SELECT}
+              value={member.look}
+              onChange={(e) =>
+                onChange(cast.map((c, j) => (j === k ? { ...c, look: e.target.value } : c)))
+              }
+            >
+              {LOOKS.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onChange(cast.filter((_, j) => j !== k))}
+            aria-label={`Remove ${member.name || "character"}`}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      ))}
+      {cast.length < 4 && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onChange([...cast, { name: `Person ${cast.length + 1}`, look: "man" }])}
+        >
+          <Plus className="size-3.5" /> Add a character
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Who acts in a character scene, and where: 1-2 actors from the cast. */
+function ActorsEditor({
+  index,
+  visual,
+  cast,
+  onChange,
+}: {
+  index: number;
+  visual: AnimationVisual;
+  cast: AnimationCastMember[];
+  onChange: (visual: AnimationVisual) => void;
+}) {
+  const actors = visual.actors ?? [];
+  const names = cast.map((c) => c.name).filter(Boolean);
+  const set = (k: number, actor: AnimationActor) =>
+    onChange({ ...visual, actors: actors.map((a, j) => (j === k ? actor : a)) });
+  const choose = (
+    id: string,
+    label: string,
+    value: string,
+    options: string[],
+    pick: (v: string) => void,
+  ) => (
+    <div className="w-32 space-y-1">
+      <Label htmlFor={id} className="text-xs">
+        {label}
+      </Label>
+      <select id={id} className={SELECT} value={value} onChange={(e) => pick(e.target.value)}>
+        {(options.includes(value) ? options : [value, ...options]).map((o) => (
+          <option key={o} value={o}>
+            {o.replace("_", " ")}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+  return (
+    <div className="space-y-2">
+      {choose(`setting-${index}`, "Where", visual.setting || "room", SETTINGS, (setting) =>
+        onChange({ ...visual, setting }),
+      )}
+      {actors.map((actor, k) => (
+        <div key={k} className="flex flex-wrap items-end gap-2 rounded-md bg-[var(--field)] p-2">
+          {choose(`actor-${index}-${k}`, `Who ${k + 1}`, actor.name, names, (name) =>
+            set(k, { ...actor, name }),
+          )}
+          {choose(`action-${index}-${k}`, "Does", actor.action, ACTIONS, (action) =>
+            set(k, { ...actor, action }),
+          )}
+          {choose(`mood-${index}-${k}`, "Feels", actor.mood, FEELINGS, (mood) =>
+            set(k, { ...actor, mood }),
+          )}
+          <div className="w-20 space-y-1">
+            <Label htmlFor={`prop-${index}-${k}`} className="text-xs">
+              Holds
+            </Label>
+            <Input
+              id={`prop-${index}-${k}`}
+              value={actor.prop}
+              placeholder="🎁"
+              onChange={(e) => set(k, { ...actor, prop: e.target.value })}
+            />
+          </div>
+          <div className="min-w-40 flex-1 space-y-1">
+            <Label htmlFor={`says-${index}-${k}`} className="text-xs">
+              Says (bubble, optional)
+            </Label>
+            <Input
+              id={`says-${index}-${k}`}
+              value={actor.says}
+              onChange={(e) => set(k, { ...actor, says: e.target.value })}
+            />
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onChange({ ...visual, actors: actors.filter((_, j) => j !== k) })}
+            aria-label={`Remove actor ${k + 1}`}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      ))}
+      {actors.length < 2 && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            onChange({
+              ...visual,
+              actors: [...actors, blankActor(names[actors.length] ?? names[0] ?? "Sam")],
+            })
+          }
+        >
+          <Plus className="size-3.5" /> Add someone to this scene
+        </Button>
+      )}
     </div>
   );
 }

@@ -14,8 +14,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { AnimationAutopilotCard } from "@/components/animation-autopilot";
 import { AnimationPreview, type PreviewHandle } from "@/components/animation-preview";
 import { AnimationScenes } from "@/components/animation-scenes";
+import { AnimationTimeline } from "@/components/animation-timeline";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -38,6 +40,8 @@ const STYLES = [
   ["auto", "Auto: by the content"],
   ["glow", "Neon Glow"],
   ["paper", "Clean Paper"],
+  ["story", "Character story"],
+  ["kinetic", "Bold kinetic text"],
 ] as const;
 const LENGTHS = [
   ["auto", "Auto: AI decides"],
@@ -52,6 +56,15 @@ const GROUPS = [
   ["energetic", "Energetic"],
 ] as const;
 const BUSY = ["queued", "drafting", "changing", "voicing"];
+const POSTED: Record<string, string> = {
+  rendering: "rendering",
+  awaiting: "waiting for your approval",
+  posting: "posting",
+  posted: "posted",
+  approved: "approved",
+  skipped: "skipped",
+  failed: "failed",
+};
 const STATUS: Record<Animation["status"], string> = {
   queued: "waiting",
   drafting: "writing",
@@ -109,6 +122,7 @@ export default function AnimationsPage() {
   const [sending, setSending] = useState(false);
   const [shrunk, setShrunk] = useState<string[]>([]);
   const preview = useRef<PreviewHandle>(null);
+  const clock = useRef(0);
   const sample = useRef<HTMLAudioElement | null>(null);
 
   const loadList = useCallback(async () => {
@@ -155,7 +169,9 @@ export default function AnimationsPage() {
     (current &&
       (BUSY.includes(current.status) ||
         ["queued", "running"].includes(current.render?.status ?? ""))) ||
-    list.some((a) => BUSY.includes(a.status));
+    list.some(
+      (a) => BUSY.includes(a.status) || ["rendering", "posting"].includes(a.post_status ?? ""),
+    );
   useEffect(() => {
     if (!working) return;
     const every = window.setInterval(async () => {
@@ -353,6 +369,9 @@ export default function AnimationsPage() {
                       {a.duration ? ` · ${Math.round(a.duration)} s` : ""}
                       {a.scenes ? ` · ${a.scenes} scenes` : ""}
                       {a.render?.status === "done" ? " · rendered" : ""}
+                      {a.post_status
+                        ? ` · autopilot: ${POSTED[a.post_status] ?? a.post_status}`
+                        : ""}
                     </div>
                   </button>
                   {BUSY.includes(a.status) && <Loader2 className="size-4 animate-spin" />}
@@ -368,6 +387,17 @@ export default function AnimationsPage() {
               ))}
             </CardContent>
           </Card>
+
+          <AnimationAutopilotCard
+            voices={voices}
+            styles={STYLES}
+            kinds={KINDS}
+            lengths={LENGTHS}
+            onStarted={(a) => {
+              void loadList();
+              void open(a.id);
+            }}
+          />
         </div>
 
         {current ? (
@@ -399,6 +429,7 @@ export default function AnimationsPage() {
                 {current.player && (
                   <AnimationPreview
                     ref={preview}
+                    timeRef={clock}
                     data={current.player}
                     soundUrl={soundUrl}
                     onProblems={setShrunk}
@@ -418,8 +449,8 @@ export default function AnimationsPage() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
                       <Label>Style</Label>
-                      <div className="flex gap-2">
-                        {(["glow", "paper"] as const).map((s) => (
+                      <div className="flex flex-wrap gap-2">
+                        {STYLES.filter(([s]) => s !== "auto").map(([s, label]) => (
                           <Button
                             key={s}
                             size="sm"
@@ -427,7 +458,7 @@ export default function AnimationsPage() {
                             disabled={busy || dirty || current.plan?.style === s}
                             onClick={() => act(() => api.setAnimation(current.id, { style: s }))}
                           >
-                            {s === "glow" ? "Neon Glow" : "Clean Paper"}
+                            {label}
                           </Button>
                         ))}
                       </div>
@@ -470,6 +501,47 @@ export default function AnimationsPage() {
                     <Undo2 className="size-4" /> Undo last change
                   </Button>
                 </div>
+                {current.autopilot_id && (
+                  <div className="space-y-2 rounded-md border-[1.5px] border-foreground p-3 text-sm">
+                    <div className="font-semibold">
+                      Made by the autopilot ·{" "}
+                      {POSTED[current.post_status ?? ""] ?? current.post_status ?? "being made"}
+                    </div>
+                    {(current.doubts ?? []).length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold">
+                          The fact check found no source for:
+                        </div>
+                        <ul className="list-disc pl-5 text-xs">
+                          {(current.doubts ?? []).map((d) => (
+                            <li key={d}>{d}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {current.post_error && (
+                      <p className="text-xs text-destructive">{current.post_error}</p>
+                    )}
+                    {["awaiting", "failed"].includes(current.post_status ?? "") &&
+                      current.render?.status === "done" && (
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => act(() => api.approveAnimation(current.id), "Approved")}
+                          >
+                            Approve &amp; post
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => act(() => api.skipAnimation(current.id))}
+                          >
+                            Skip
+                          </Button>
+                        </div>
+                      )}
+                  </div>
+                )}
                 {current.render && (
                   <div className="space-y-2 rounded-md border-[1.5px] border-foreground/40 p-3 text-sm">
                     {rendering && (
@@ -560,6 +632,19 @@ export default function AnimationsPage() {
                         Discard
                       </Button>
                     </div>
+                  )}
+                  {current.player && (
+                    <AnimationTimeline
+                      plan={draft}
+                      saved={current.plan}
+                      player={current.player}
+                      clock={clock}
+                      onChange={(p) => {
+                        setDraft(p);
+                        setDirty(true);
+                      }}
+                      onSeek={(s) => preview.current?.seek(s)}
+                    />
                   )}
                   <AnimationScenes
                     plan={draft}

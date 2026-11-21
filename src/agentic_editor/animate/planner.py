@@ -15,11 +15,16 @@ from pathlib import Path
 from agentic_editor import caption, websearch
 from agentic_editor.animate import voice
 from agentic_editor.animate.plan import (
+    ACTIONS,
     CATALOGUE,
+    FEELINGS,
     KINDS,
+    LOOKS,
     MOODS,
     MOTIONS,
+    SETTINGS,
     WORDS,
+    CastMember,
     Plan,
     Scene,
     Source,
@@ -157,14 +162,32 @@ _ITEM = {
 _TEXT_FIELDS = (
     "text", "highlight", "kicker", "value", "prefix", "suffix", "detail", "by", "answer", "emoji",
 )  # fmt: skip
+_ACTOR = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "action": {"type": "string", "enum": list(ACTIONS)},
+        "mood": {"type": "string", "enum": list(FEELINGS)},
+        "prop": {"type": "string"},
+        "says": {"type": "string"},
+    },
+    "required": ["name", "action", "mood", "prop", "says"],
+}
 _VISUAL = {
     "type": "object",
     "properties": {
         "kind": {"type": "string", "enum": list(CATALOGUE)},
         **{f: {"type": "string"} for f in _TEXT_FIELDS},
         "items": {"type": "array", "items": _ITEM, "maxItems": 5},
+        "setting": {"type": "string", "enum": ["", *SETTINGS]},
+        "actors": {"type": "array", "items": _ACTOR, "maxItems": 2},
     },
-    "required": ["kind", *_TEXT_FIELDS, "items"],
+    "required": ["kind", *_TEXT_FIELDS, "items", "setting", "actors"],
+}
+_CAST = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "look": {"type": "string", "enum": list(LOOKS)}},
+    "required": ["name", "look"],
 }
 _SCENE = {
     "type": "object",
@@ -178,11 +201,12 @@ SCHEMA = {
         "kind": {"type": "string", "enum": list(KINDS)},
         "mood": {"type": "string", "enum": list(MOODS)},
         "voice_kind": {"type": "string", "enum": ["narrator", "calm", "energetic"]},
+        "cast": {"type": "array", "items": _CAST, "maxItems": 4},
         "scenes": {"type": "array", "items": _SCENE, "minItems": 3, "maxItems": 14},
         "cta": {"type": "string"},
         "caption": {"type": "string"},
     },
-    "required": ["title", "kind", "mood", "voice_kind", "scenes", "cta", "caption"],
+    "required": ["title", "kind", "mood", "voice_kind", "cast", "scenes", "cta", "caption"],
 }
 SCENE_SCHEMA = _SCENE
 
@@ -193,8 +217,9 @@ GUIDE = """You write short animated reels for Instagram: a voice tells it, each 
 animated visual. People decide in two seconds whether to keep watching.
 
 How to write:
-- Scene 1 is the hook: a "title" visual with a curiosity-gap headline (max 7 words) and a
-  narration that makes people need the answer. Never "In this video" or "Did you know".
+- Scene 1 is the hook: a "title" visual with a curiosity-gap headline (max 7 words), or in
+  a story its most striking moment as a "scene", and a narration that makes people need
+  the answer. Never "In this video" or "Did you know".
 - Every scene: 1-2 short spoken sentences (6-28 words), concrete and vivid, simple words.
   The visual shows the key idea of that narration; its words should appear in it.
 - Vary the visuals; never the same kind twice in a row. Use stat for a number that matters,
@@ -227,11 +252,24 @@ The shape of a good reel (another subject than yours; never copy its words or fa
    "emoji": "📡"}}],
  "cta": "Follow for more strange facts."}
 
+Stories and lessons are acted by characters:
+- cast: 1-3 characters with a name and a look; the same names act all through.
+- Most scenes are "scene" visuals: a setting and 1-2 actors from the cast, each with an
+  action that shows what happens (walk_in when someone arrives, think while deciding,
+  celebrate when it works, sad or cry when it hurts, shocked at the twist, give to hand
+  something over, read for a phone or a book) and a mood. A prop is one emoji they hold.
+  "says" is a short line in a bubble, only when someone speaks.
+- A title can open it; a quote or reveal can close it with the lesson or the twist.
+- Narration is told by a storyteller in present tense: "Maya opens the box."
+  Example scene: {"narration": "Leo finally opens the letter, and his hands start to shake.",
+  "visual": {"kind": "scene", "setting": "room", "actors": [{"name": "Leo",
+  "action": "read", "mood": "surprised", "prop": "✉️", "says": ""}]}}
+
 By kind:
-- facts: surprising, specific, numbers where they help.
-- lesson: a small story about one person (icons), a quiet turn, the lesson in the last scene.
+- facts: surprising, specific, numbers where they help. cast: [].
+- lesson: a small story about one or two people, a quiet turn, the lesson in the last scene.
 - story: beginning, tension, twist; present tense; 5-9 scenes.
-- news: what happened, why it matters, what happens next; say when.
+- news: what happened, why it matters, what happens next; say when. cast: [].
 """
 
 
@@ -259,7 +297,7 @@ def draft_prompt(brief: Brief, found: list[Found]) -> list[dict]:
 
 
 def _plan_json(plan: Plan) -> str:
-    keep = {"title", "kind", "mood", "scenes", "cta", "caption"}
+    keep = {"title", "kind", "mood", "cast", "scenes", "cta", "caption"}
     return json.dumps(plan.model_dump(include=keep), ensure_ascii=False)
 
 
@@ -298,23 +336,30 @@ def _voice_for(choice: str, voice_kind: str, kind: str, mood: str) -> str:
     return voice.recommend(kind, mood)
 
 
-def _style_for(choice: str, kind: str) -> str:
-    if choice in ("glow", "paper"):
+def _style_for(choice: str, kind: str, acted: bool = False) -> str:
+    """The style asked for, else by the content: characters for stories and lessons told
+    with them, Neon Glow for facts and news."""
+    if choice in ("glow", "paper", "story", "kinetic"):
         return choice
-    return "paper" if kind in ("lesson", "story") else "glow"
+    if kind in ("lesson", "story"):
+        return "story" if acted else "paper"
+    return "glow"
 
 
 def _from_reply(reply: dict, brief: Brief, found: list[Found]) -> Plan:
     kind = reply.get("kind") if brief.kind == "auto" else brief.kind
     kind = kind if kind in KINDS else "facts"
     mood = reply.get("mood") if reply.get("mood") in MOODS else "curious"
+    scenes = [Scene.model_validate(s) for s in reply.get("scenes", []) if isinstance(s, dict)]
+    acted = any(s.visual.kind == "scene" for s in scenes)
     plan = Plan(
         title=reply.get("title", ""),
         kind=kind,
-        style=_style_for(brief.style, kind),
+        style=_style_for(brief.style, kind, acted),
         voice=_voice_for(brief.voice, reply.get("voice_kind", ""), kind, mood),
         mood=mood,
-        scenes=[Scene.model_validate(s) for s in reply.get("scenes", []) if isinstance(s, dict)],
+        scenes=scenes,
+        cast=[CastMember.model_validate(c) for c in reply.get("cast", []) if isinstance(c, dict)],
         cta=reply.get("cta", ""),
         caption=reply.get("caption", ""),
         sources=[Source(title=f.title, url=f.url) for f in found if f.url],
@@ -382,3 +427,62 @@ def redo_scene(llm, plan: Plan, index: int, request: str = "") -> Plan:
 def words_note(plan: Plan, length: str) -> str:
     low, high = WORDS.get(length, WORDS["auto"])
     return f"{narration_words(plan)} words of narration (aim {low}-{high})"
+
+
+# ---- autopilot: new topics and a fact check -------------------------------------------
+
+TOPICS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "topics": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 8}
+    },
+    "required": ["topics"],
+}
+CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {"unsupported": {"type": "array", "items": {"type": "string"}, "maxItems": 8}},
+    "required": ["unsupported"],
+}
+
+
+def next_topic(llm, niche: str, used: list[str]) -> str:
+    """A topic for the page's next reel, in its niche and not one it has made."""
+    done = "\n".join(f"- {u}" for u in used[-40:]) or "(none yet)"
+    reply = llm.chat_json(
+        [{"role": "user", "content": (
+            f"An Instagram page posts short animated reels about: {niche}.\n"
+            f"Reels it has made already:\n{done}\n\n"
+            "Suggest 6 new reel topics in that niche that people would stop scrolling for: "
+            "each a specific, real story, fact or mystery in under 12 words, none like the "
+            "ones made already."
+        )}],
+        TOPICS_SCHEMA,
+        temperature=0.9,
+    )  # fmt: skip
+    made = {u.strip().lower() for u in used}
+    for topic in reply.get("topics", []):
+        topic = " ".join(str(topic).split())[:200]
+        if topic and topic.lower() not in made:
+            return topic
+    raise PlannerError(f"no new topic in {niche!r}")
+
+
+def fact_check(llm, plan: Plan, found: list[Found]) -> list[str]:
+    """Claims of the narration (names, numbers, dates, events) the sources don't support.
+    Stories and lessons are told, not reported: nothing to check. Facts without sources:
+    everything is in doubt."""
+    if plan.kind in ("story", "lesson"):
+        return []
+    if not any(f.text for f in found):
+        return ["no sources were found to check the facts against"]
+    narration = "\n".join(f"{i + 1}. {s.narration}" for i, s in enumerate(plan.scenes))
+    reply = llm.chat_json(
+        [{"role": "user", "content": (
+            f"Sources:\n{sources_text(found)}\n\nA reel's narration:\n{narration}\n\n"
+            "List every claim in the narration (a name, number, date or event) that the "
+            "sources do not support, quoting it briefly. Empty if all are supported."
+        )}],
+        CHECK_SCHEMA,
+        temperature=0.0,
+    )  # fmt: skip
+    return [" ".join(str(c).split())[:200] for c in reply.get("unsupported", []) if str(c).strip()]

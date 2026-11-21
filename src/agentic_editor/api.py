@@ -48,6 +48,7 @@ from agentic_editor import (
     songlist,
 )
 from agentic_editor.animate import routes as animate_routes
+from agentic_editor.animate import schedule as animate_schedule
 from agentic_editor.animate import studio
 from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
@@ -768,6 +769,10 @@ def create_app(
                 await asyncio.to_thread(jobs.start_niche_schedules, make_session)
             except Exception:
                 log.exception("starting the scheduled niche searches failed")
+            try:
+                await asyncio.to_thread(animate_schedule.start_due, make_session)
+            except Exception:
+                log.exception("starting the animation autopilots failed")
             try:
                 await asyncio.to_thread(jobs.start_comment_turns, make_session)
             except Exception:
@@ -3407,7 +3412,7 @@ def create_app(
 
     animate_routes.install(
         app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,
-        enqueue=enqueue, settings=settings,
+        enqueue=enqueue, settings=settings, public_base=public_base,
     )  # fmt: skip
 
     if settings.web_dir.is_dir():

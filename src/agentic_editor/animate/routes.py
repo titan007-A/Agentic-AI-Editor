@@ -5,18 +5,19 @@ one (a draft, a change, the voice) is queued (jobs.animate); while it runs the a
 can't be changed again. Rendering makes an ordinary Job.
 """
 
+from datetime import datetime
 from typing import Literal
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agentic_editor import features, jobs
-from agentic_editor.animate import render, studio, voice
+from agentic_editor import features, instagram, jobs
+from agentic_editor.animate import render, schedule, studio, voice
 from agentic_editor.animate.plan import Plan
-from agentic_editor.db import Animation, Job, Output
+from agentic_editor.db import Animation, AnimationAutopilot, InstagramChannel, Job, Output
 from agentic_editor.render import fonts
 
 FEATURE = "animation_studio"
@@ -40,7 +41,7 @@ PLAYER_CSP = (
 class AnimationRequest(BaseModel):
     idea: str = Field(min_length=3, max_length=300)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
 
@@ -57,11 +58,27 @@ class ChangeRequest(BaseModel):
 class StudioChoice(BaseModel):
     """Changes the studio's own controls make at once (no writing): style and voice."""
 
-    style: Literal["glow", "paper"] | None = None
+    style: Literal["glow", "paper", "story", "kinetic"] | None = None
     voice: str | None = Field(default=None, max_length=32)
 
 
-def install(app, *, User, DB, renders_of, sees_every_render, enqueue, settings) -> None:
+class AutopilotSettings(BaseModel):
+    active: bool = True
+    niche: str = Field(default="", max_length=300)
+    topics: list[str] = Field(default_factory=list, max_length=200)
+    hour: int = Field(default=10, ge=0, le=23)
+    per_day: int = Field(default=1, ge=1, le=3)
+    kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic"] = "auto"
+    voice: str = Field(default="auto", max_length=32)
+    length: Literal["auto", "short", "medium", "long"] = "auto"
+    channel_id: str | None = Field(default=None, max_length=32)
+    auto_post: bool = False
+
+
+def install(
+    app, *, User, DB, renders_of, sees_every_render, enqueue, settings, public_base
+) -> None:
     def studio_user(account, session: Session) -> None:
         if not features.enabled(account, FEATURE, session):
             raise HTTPException(403, "the animation studio isn't on for this account yet")
@@ -101,6 +118,8 @@ def install(app, *, User, DB, renders_of, sees_every_render, enqueue, settings) 
             "duration": (found.player or {}).get("duration"), "can_undo": bool(found.history),
             "created_at": found.created_at, "updated_at": found.updated_at,
             "render": render_of(found, session),
+            "autopilot_id": found.autopilot_id, "post_status": found.post_status,
+            "post_error": found.post_error, "post_id": found.post_id, "doubts": found.doubts or [],
         }  # fmt: skip
         if full:
             out["plan"] = found.plan
@@ -288,3 +307,105 @@ def install(app, *, User, DB, renders_of, sees_every_render, enqueue, settings) 
         return FileResponse(
             path, media_type="font/ttf", headers={"Cache-Control": "private, max-age=604800"}
         )
+
+    # ---- the autopilot -------------------------------------------------------------------
+
+    def pilot_view(pilot: AnimationAutopilot | None, account, session: Session) -> dict:
+        channels = session.scalars(
+            select(InstagramChannel).where(InstagramChannel.owner_id == account.id)
+        ).all()
+        base = AutopilotSettings().model_dump()
+        if pilot is not None:
+            base |= {k: getattr(pilot, k) for k in AutopilotSettings.model_fields}
+        waiting = 0
+        if pilot is not None:
+            waiting = len(session.scalars(
+                select(Animation.id).where(
+                    Animation.autopilot_id == pilot.id, Animation.post_status == "awaiting"
+                )
+            ).all())  # fmt: skip
+        return base | {
+            "exists": pilot is not None,
+            "approved": pilot.approved if pilot else 0,
+            "needs": pilot.needs if pilot else 10,
+            "used": (pilot.used or [])[-20:] if pilot else [],
+            "last_on": pilot.last_on if pilot else None,
+            "waiting": waiting,
+            "channels": [{"id": c.id, "username": c.username} for c in channels],
+        }
+
+    def pilot_of(account, session: Session) -> AnimationAutopilot | None:
+        return session.scalar(
+            select(AnimationAutopilot).where(AnimationAutopilot.owner_id == account.id)
+        )
+
+    @app.get("/api/animation-autopilot")
+    def get_autopilot(account: User, session: DB) -> dict:
+        studio_user(account, session)
+        return pilot_view(pilot_of(account, session), account, session)
+
+    @app.put("/api/animation-autopilot")
+    def set_autopilot(
+        body: AutopilotSettings, account: User, session: DB, request: Request
+    ) -> dict:
+        studio_user(account, session)
+        if body.voice not in ("auto", *voice.GROUPS, *voice.BY_ID):
+            raise HTTPException(422, f"no voice {body.voice!r}")
+        if body.channel_id:
+            channel = session.get(InstagramChannel, body.channel_id)
+            if channel is None or channel.owner_id != account.id:
+                raise HTTPException(404, "that Instagram page isn't connected to this account")
+        pilot = pilot_of(account, session)
+        if pilot is None:
+            pilot = AnimationAutopilot(owner_id=account.id)
+            session.add(pilot)
+        if body.auto_post and not pilot.auto_post and (pilot.approved or 0) < (pilot.needs or 10):
+            raise HTTPException(
+                409,
+                f"approve {pilot.needs or 10} of its reels first ({pilot.approved or 0} so far)",
+            )
+        for key, value in body.model_dump().items():
+            setattr(pilot, key, value)
+        pilot.topics = [" ".join(t.split())[:200] for t in body.topics if t.strip()]
+        pilot.niche = " ".join(body.niche.split())
+        pilot.base_url = public_base(request)
+        session.commit()
+        return pilot_view(pilot, account, session)
+
+    @app.post("/api/animation-autopilot/now")
+    def autopilot_now(account: User, session: DB) -> dict:
+        """One of the autopilot's reels now, whatever the hour."""
+        studio_user(account, session)
+        pilot = pilot_of(account, session)
+        if pilot is None or (not pilot.topics and not pilot.niche.strip()):
+            raise HTTPException(409, "give the autopilot a niche or some topics first")
+        found = schedule.new_animation(session, pilot, datetime.now().date())
+        session.commit()
+        jobs.animate(found.id)
+        session.refresh(found)
+        return view(found, session, full=True)
+
+    @app.post("/api/animations/{animation_id}/approve")
+    def approve_animation(animation_id: str, account: User, session: DB, request: Request) -> dict:
+        found = find(animation_id, session, account)
+        if found.post_status not in ("awaiting", "failed") or not found.job_id:
+            raise HTTPException(409, "it isn't waiting for approval")
+        try:
+            schedule.approve(session, found, public_base(request), settings)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except instagram.InstagramError as exc:
+            found.post_error = str(exc)
+            session.commit()
+            raise HTTPException(502, str(exc)) from exc
+        session.commit()
+        return view(found, session, full=True)
+
+    @app.post("/api/animations/{animation_id}/skip")
+    def skip_animation(animation_id: str, account: User, session: DB) -> dict:
+        found = find(animation_id, session, account)
+        if found.post_status not in ("awaiting", "failed"):
+            raise HTTPException(409, "it isn't waiting for approval")
+        found.post_status = "skipped"
+        session.commit()
+        return view(found, session, full=True)

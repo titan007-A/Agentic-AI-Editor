@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from agentic_editor.auth import hash_password, verify_password
 from agentic_editor.db import (
     Animation,
+    AnimationAutopilot,
     BufferKey,
     Feed,
     Job,
@@ -204,6 +205,11 @@ def remove(
                 item.owner_id = keep_work_for.id
             else:
                 session.delete(item)
+    # Its autopilot is its own (one per account): it goes with it.
+    for item in session.scalars(
+        select(AnimationAutopilot).where(AnimationAutopilot.owner_id == user.id)
+    ):
+        session.delete(item)
     # Its Instagram accounts go with it: they name its presets, which go too. Researches
     # made for them keep the account's name.
     for item in session.scalars(select(ResearchAccount).where(ResearchAccount.owner_id == user.id)):

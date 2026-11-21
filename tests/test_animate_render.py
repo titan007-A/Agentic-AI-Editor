@@ -14,7 +14,7 @@ from PIL import Image
 from agentic_editor.animate import render
 from agentic_editor.animate.timeline import build, player_data
 from agentic_editor.settings import ROOT
-from tests.test_animate import sample_plan, tone_wav, voices_for
+from tests.test_animate import sample_plan, story_plan, tone_wav, voices_for
 
 
 def _browser_works() -> bool:
@@ -71,9 +71,12 @@ def frame_at(video: Path, t: float, dest: Path) -> Image.Image:
     return Image.open(dest).convert("RGB")
 
 
-@pytest.mark.parametrize("style", ["glow", "paper"])
+@pytest.mark.parametrize("style", ["glow", "paper", "story", "kinetic"])
 def test_the_video_is_the_preview_frame_for_frame(tmp_path, style):
-    plan = sample_plan(style=style, scenes=[s.model_dump() for s in sample_plan().scenes[:2]])
+    if style == "story":  # characters acting
+        plan = story_plan(scenes=[s.model_dump() for s in story_plan().scenes[1:3]])
+    else:
+        plan = sample_plan(style=style, scenes=[s.model_dump() for s in sample_plan().scenes[:2]])
     data = player_data(plan, build(plan, voices_for(plan)))
     data["duration"] = 3.0  # the first scenes are enough
     opts = render.options(ROOT / "fonts", ROOT / "models")

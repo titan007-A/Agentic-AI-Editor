@@ -181,11 +181,44 @@ Subtitles sit at y 1180-1420; visuals in y 250-1120.
 | Render time | parallel pages; 30 fps |
 | Copyright | everything generated; fonts OFL; voices Apache-2.0; emoji Noto (OFL) |
 
+## Phase 2: characters, kinetic text, timeline
+
+- **Character story** (style `story`) and a new visual, `scene`: a setting (room, street,
+  park, office, night, school, shop, stage, plain) and 1-2 actors from the Plan's `cast`
+  (name + look: man, woman, boy, girl, old man, old woman). Each actor has an action
+  (idle, talk, walk_in, walk_out, run_in, wave, point, think, celebrate, sad, shocked,
+  angry, shrug, sit, read, give, cry), a mood (face), a prop (one emoji in hand) and a
+  line in a speech bubble. The rig (player.js "characters") is SVG seen from the side:
+  limbs of two segments turned at the joints, poses as functions of time, blinking,
+  mouths moving with the voice when they speak. Looks come from the name (colours,
+  hair) so a character looks the same all through; a name like "Grandpa Eli" overrules
+  a look that disagrees. Steps are heard as characters walk on; a bubble pops.
+- Stories and lessons are written with characters (the planner's guide, a scene
+  example); the style follows: Character story when acted, Neon Glow for facts.
+- **Bold kinetic text** (style `kinetic`): the narration itself, a few words at a time,
+  slammed in on black, key words in colour; numbers keep their counter.
+- **Timeline editor**: the reel as a strip of scenes as long as they play; drag a right
+  edge to hold a scene longer after its voice (0-3 s), drag a scene onto another to move
+  it, tap to play from it; the preview's time moves along it.
+
+## Phase 3: autopilot
+
+- One autopilot per account (`animation_autopilots`): niche, topics (one per line, first
+  goes next), hour, reels a day (a few hours apart), content, style, voice, length, the
+  Instagram page, auto-post.
+- Each due reel: the next topic, else a new one from the niche (the model suggests,
+  avoiding those made); drafted; its facts checked against its sources (stories and
+  lessons are not checked; facts with no sources are in doubt); rendered; then it waits
+  for approval ("Approve & post" posts it to the page; "Skip").
+- Auto-post can be switched on after 10 approved reels; even then a reel with a doubtful
+  fact, or one whose post fails, waits for a person. Posting uses a public link to a
+  copy of the video, as Post Reel does; the site's address is kept from the last time
+  the autopilot was saved.
+
 ## Status
 
 Phase 1 built (branch animation-studio, 2026-11-21): everything above, both styles, ten
 visuals, three voice kinds and every Kokoro English voice, the studio page (new reel,
 reels, live preview with sound, Instagram-area guides, play from a scene, scene editor,
 change in words, write a scene again, style and voice switches, undo, render, the video
-and its job). Next: phase 2 (Character story, Bold kinetic text, timeline editor), then
-phase 3 (autopilot).
+and its job). Phases 2 and 3 built the same day (branch studio-characters): see above.

@@ -16,7 +16,13 @@ LEAD = 0.18  # silence before each scene's voice
 FIRST_LEAD = 0.12
 TAIL = 0.7  # after the last scene
 # The least a visual needs on screen to play out, voice or not.
-MIN_SCENE = {"stat": 2.8, "reveal": 3.2, "dots": 3.0, "cta": 2.8, "timeline": 2.6, "compare": 2.8}
+MIN_SCENE = {
+    "stat": 2.8, "reveal": 3.2, "dots": 3.0, "cta": 2.8, "timeline": 2.6, "compare": 2.8,
+    "scene": 2.6,
+}  # fmt: skip
+# How long a character takes to come on (player.js ENTRANCES); its steps are heard meanwhile.
+ENTRANCES = {"walk_in": (1.6, 0.42), "run_in": (0.9, 0.24)}  # (seconds, a step every)
+WALK_OUT = 1.6
 CHUNK_WORDS = 3
 CHUNK_CHARS = 18
 COUNT = 1.3  # seconds a stat counts up (player.js stat)
@@ -187,6 +193,13 @@ def beats(
         at = _find_number(words, v.value) or _find(words, v.value or v.text)
         at = max(start + 0.15, (at - 0.3) if at is not None else early)
         return [at, at + 1.0]
+    if kind == "scene":
+        # Each actor comes on in turn; the bubble opens as its line is said (or the voice starts).
+        starts = [start + 0.1 + 0.25 * i for i in range(max(1, len(v.actors)))]
+        line = next((a.says for a in v.actors if a.says), "")
+        said = _find(words, line) if line else None
+        bubble = max(voice_start + 0.2, said - 0.1) if said is not None else voice_start + 0.2
+        return [*starts, bubble]
     return []  # quote: words spread over the narration by the player
 
 
@@ -214,10 +227,35 @@ def captions(scenes: list[SceneTime]) -> list[Caption]:
     return out
 
 
+def _scene_cues(s: SceneTime, visual) -> list[Cue]:
+    out: list[Cue] = []
+    for actor, at in zip(visual.actors, s.beats, strict=False):
+        if actor.action in ENTRANCES:
+            length, every = ENTRANCES[actor.action]
+            t = at + 0.1
+            while t < at + length:
+                out.append(Cue(t, "step", -27.0))
+                t += every
+        elif actor.action == "walk_out":
+            t = max(at, s.end - WALK_OUT)
+            while t < s.end:
+                out.append(Cue(t, "step", -29.0))
+                t += 0.42
+        elif actor.action == "celebrate":
+            out.append(Cue(at + 0.3, "chime", -26.0))
+        elif actor.action == "shocked":
+            out.append(Cue(at + 0.15, "pop", -20.0))
+    if any(a.says for a in visual.actors):
+        out.append(Cue(s.beats[-1], "pop", -23.0))
+    return out
+
+
 def cues(plan: Plan, scenes: list[SceneTime]) -> list[Cue]:
     """Sound effects on the same beats the picture uses."""
     out: list[Cue] = [Cue(0.0, "boom", -20.0)]
+    visuals = [sc.visual for sc in plan.scenes]
     for i, s in enumerate(scenes):
+        visual = visuals[i] if i < len(visuals) else None
         if i:
             out.append(Cue(max(0.0, s.start - 0.14), "whoosh", -21.0))
         b = s.beats
@@ -240,6 +278,8 @@ def cues(plan: Plan, scenes: list[SceneTime]) -> list[Cue]:
             out.append(Cue(b[0], "shimmer", -22.0))
         elif s.kind == "cta" and b:
             out.append(Cue(b[0], "chime", -18.0))
+        elif s.kind == "scene" and b and visual is not None:
+            out += _scene_cues(s, visual)
     return sorted(out, key=lambda c: c.t)
 
 
@@ -272,6 +312,7 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
 def player_data(plan: Plan, timeline: Timeline) -> dict:
     """What player.js load() takes."""
     visuals = [s.visual.model_dump() for s in plan.scenes] + [{"kind": "cta", "text": plan.cta}]
+    cast = [c.model_dump() for c in plan.cast]
     word = lambda w: {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}  # noqa: E731
     return {
         "style": plan.style,
@@ -280,6 +321,7 @@ def player_data(plan: Plan, timeline: Timeline) -> dict:
         "header": {
             "start": round(timeline.scenes[1].start, 3) if len(timeline.scenes) > 2 else 9999
         },
+        "cast": cast,
         "scenes": [
             {
                 "kind": s.kind,
