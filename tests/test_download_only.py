@@ -75,3 +75,12 @@ def test_a_download_only_preset_writes_the_post_caption_unless_told_not_to():
     assert not off.post_caption.enabled  # said so: stays off
     edited = Preset(name="y", label="y", min_duration=1, max_duration=60)
     assert not edited.post_caption.enabled  # other presets: as before
+
+
+def test_a_caption_about_the_original_is_copied_and_others_are_written():
+    copied = Preset(name="g", label="g", min_duration=1, max_duration=60, download_only=True,
+                    post_caption={"enabled": True, "about": "original"})  # fmt: skip
+    assert copied.post_caption.copies
+    assert not only_download().post_caption.copies  # about the video: written
+    off = copied.post_caption.model_copy(update={"enabled": False})
+    assert not off.copies  # off: nothing after a render, copied or not
