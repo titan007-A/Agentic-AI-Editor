@@ -785,3 +785,21 @@ def test_a_reel_gets_its_pictures_and_drops_them_when_turned_off(tmp_path, monke
     assert studio.paint_plan(stick, "a9", Session, settings, paint)[0] == stick
     _, notes = studio.paint_plan(plan, "a9", Session, settings)
     assert notes == ["painted pictures need the image model (installed on the Mac)"]
+
+
+def test_a_note_with_two_actors_and_a_line_shows_first_and_the_line_waits():
+    actors = [{"name": "Maya", "action": "idle", "mood": "neutral", "says": "Look!"},
+              {"name": "Leo", "action": "idle", "mood": "happy"}]  # fmt: skip
+    plan = story_plan(scenes=[
+        scene("Maya finds the old map in the attic and shows it to Leo.", "scene",
+              setting="room", detail="The old map", actors=actors),
+        scene("Maya reads it out loud.", "scene", setting="room", detail="Trembling hands",
+              actors=actors[:1]),
+    ])  # fmt: skip
+    tl = build(plan, voices_for(plan))
+    two, one = tl.scenes[0], tl.scenes[1]
+    assert two.talk_from == pytest.approx(two.start + timeline.NOTE_FIRST)
+    assert one.talk_from is None  # one actor: room beside it
+    pops = [c.t for c in tl.cues if c.sound == "pop" and two.start <= c.t < two.end]
+    assert pops == [pytest.approx(max(two.beats[-1], two.talk_from))]
+    assert player_data(plan, tl)["scenes"][0]["talkFrom"] == pytest.approx(two.talk_from, abs=1e-3)

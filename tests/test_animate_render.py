@@ -14,7 +14,7 @@ from PIL import Image
 from agentic_editor.animate import render
 from agentic_editor.animate.timeline import build, player_data
 from agentic_editor.settings import ROOT
-from tests.test_animate import sample_plan, story_plan, tone_wav, voices_for
+from tests.test_animate import sample_plan, scene, story_plan, tone_wav, voices_for
 
 
 def _browser_works() -> bool:
@@ -139,3 +139,69 @@ def test_a_painted_picture_is_behind_its_scene_in_the_video(tmp_path):
     made = frame_at(video, 1.0, tmp_path / "made.png")
     diff = np.abs(np.asarray(shown, dtype=float) - np.asarray(made, dtype=float)).mean()
     assert diff < 4.0
+
+
+def boxes_at(data: dict, opts: dict, t: float, texts: list[str]) -> dict:
+    """Where each of `texts` is drawn at `t` (its box and opacity), from the player itself."""
+
+    async def look() -> dict:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(executable_path=render.chromium())
+            page = await browser.new_page(viewport={"width": 1080, "height": 1920})
+            await page.goto((render.PLAYER / "player.html").as_uri())
+            await page.evaluate("([d, o]) => window.Player.load(d, o)", [data, opts])
+            await page.evaluate("t => window.Player.seek(t)", t)
+            found = await page.evaluate(
+                """texts => Object.fromEntries(texts.map((text) => {
+                    const node = [...document.querySelectorAll("div")].find(
+                        (n) => n.textContent === text && n.children.length === 0);
+                    if (!node) return [text, null];
+                    const r = node.getBoundingClientRect();
+                    return [text, { x: r.x, y: r.y, w: r.width, h: r.height,
+                                    o: Number(getComputedStyle(node).opacity) }];
+                }))""",
+                texts,
+            )
+            await browser.close()
+            return found
+
+    return asyncio.run(look())
+
+
+def overlap(a: dict, b: dict) -> bool:
+    return a["x"] < b["x"] + b["w"] and b["x"] < a["x"] + a["w"] and \
+        a["y"] < b["y"] + b["h"] and b["y"] < a["y"] + a["h"]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "actors",
+    [
+        [{"name": "Elias", "action": "shocked", "mood": "surprised", "says": "It's a map!"}],
+        [{"name": "Elias", "action": "idle", "mood": "neutral", "says": "It's a map!"},
+         {"name": "Leo", "action": "idle", "mood": "happy"}],
+        [{"name": "Elias", "action": "idle", "mood": "neutral"},
+         {"name": "Leo", "action": "wave", "mood": "happy", "says": "It's a map!"}],
+    ],
+    ids=["alone", "speaks-beside-another", "the-other-speaks"],
+)  # fmt: skip
+def test_a_scene_note_never_sits_on_a_speech_bubble(actors):
+    plan = story_plan(scenes=[
+        scene("Elias opens the bottle with trembling hands and reads the note inside.", "scene",
+              setting="room", text="The Discovery", detail="Trembling hands", actors=actors),
+    ])  # fmt: skip
+    data = player_data(plan, build(plan, voices_for(plan)))
+    opts = render.options(ROOT / "fonts", ROOT / "models")
+    first = data["scenes"][0]
+    late = boxes_at(data, opts, first["end"] - 0.1, ["Trembling hands", "It's a map!"])
+    note, bubble = late["Trembling hands"], late["It's a map!"]
+    assert bubble["o"] > 0.9
+    if len(actors) == 1:  # one actor always leaves room beside it: both shown, apart
+        assert first["talkFrom"] is None and note["o"] > 0.9
+        assert not overlap(note, bubble), (note, bubble)
+    else:  # two: the note first, the line after it
+        assert first["talkFrom"] == pytest.approx(first["start"] + 2.0, abs=0.01)
+        assert note["o"] < 0.05
+        early = boxes_at(data, opts, first["start"] + 1.2, ["Trembling hands", "It's a map!"])
+        assert early["Trembling hands"]["o"] > 0.9 and early["It's a map!"]["o"] < 0.05
