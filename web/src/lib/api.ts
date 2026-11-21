@@ -738,11 +738,124 @@ export type NicheSchedule = {
   created_at: string;
 };
 
+/** One item of a scene's visual (a list row, a timeline date, an icon, a side of a compare). */
+export type AnimationItem = {
+  emoji: string;
+  text: string;
+  year: string;
+  value: string;
+  motion: string;
+};
+
+export type AnimationVisualKind =
+  | "title"
+  | "stat"
+  | "icons"
+  | "compare"
+  | "list"
+  | "timeline"
+  | "place"
+  | "quote"
+  | "reveal"
+  | "dots";
+
+export type AnimationVisual = {
+  kind: AnimationVisualKind;
+  text: string;
+  highlight: string;
+  kicker: string;
+  value: string;
+  prefix: string;
+  suffix: string;
+  detail: string;
+  by: string;
+  answer: string;
+  emoji: string;
+  items: AnimationItem[];
+};
+
+export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
+
+/** What the reel says and shows (animate/plan.py). */
+export type AnimationPlan = {
+  v: number;
+  title: string;
+  kind: "facts" | "lesson" | "story" | "news";
+  style: "glow" | "paper";
+  voice: string;
+  mood: string;
+  scenes: AnimationScene[];
+  cta: string;
+  caption: string;
+  sources: { title: string; url: string }[];
+};
+
+/** player.js load() data, scenes with their times (animate/timeline.py player_data). */
+export type AnimationPlayerData = {
+  duration: number;
+  scenes: { kind: string; start: number; end: number }[];
+} & Record<string, unknown>;
+
+export type AnimationRender = {
+  job_id: string;
+  status: "queued" | "running" | "done" | "failed";
+  stage: string;
+  progress: number;
+  error: string | null;
+  output_id: number | null;
+};
+
+export type Animation = {
+  id: string;
+  idea: string;
+  kind: string;
+  style: string;
+  voice: string;
+  length: string;
+  status: "queued" | "drafting" | "changing" | "voicing" | "ready" | "failed";
+  message: string;
+  error: string | null;
+  notes: string[];
+  title: string;
+  scenes: number;
+  duration: number | null;
+  can_undo: boolean;
+  created_at: string;
+  updated_at: string;
+  render: AnimationRender | null;
+  plan?: AnimationPlan | null;
+  player?: AnimationPlayerData | null;
+};
+
+export type AnimationVoice = { id: string; name: string; group: string; about: string };
+
+export type AnimationBrief = {
+  idea: string;
+  kind: string;
+  style: string;
+  voice: string;
+  length: string;
+};
+
 export const api = {
   login: (username: string, password: string) => request("POST", "/login", { username, password }),
   logout: () => request("POST", "/logout"),
   me: () => request<Me>("GET", "/me"),
   fun: () => request<FunStats>("GET", "/fun"),
+  animations: () => request<Animation[]>("GET", "/animations"),
+  animation: (id: string) => request<Animation>("GET", `/animations/${id}`),
+  createAnimation: (body: AnimationBrief) => request<Animation>("POST", "/animations", body),
+  editAnimation: (id: string, plan: AnimationPlan) =>
+    request<Animation>("PUT", `/animations/${id}`, { plan }),
+  setAnimation: (id: string, body: { style?: string; voice?: string }) =>
+    request<Animation>("PATCH", `/animations/${id}`, body),
+  changeAnimation: (id: string, body: { request: string; scene?: number }) =>
+    request<Animation>("POST", `/animations/${id}/change`, body),
+  retryAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/retry`),
+  undoAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/undo`),
+  renderAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/render`),
+  deleteAnimation: (id: string) => request<{ ok: boolean }>("DELETE", `/animations/${id}`),
+  animationVoices: () => request<AnimationVoice[]>("GET", "/animation-voices"),
   nicheSearches: () => request<NicheSearch[]>("GET", "/niche"),
   nicheSearch: (id: string) => request<NicheSearch>("GET", `/niche/${id}`),
   startNiche: (body: { niche: string } & NicheFilters) =>

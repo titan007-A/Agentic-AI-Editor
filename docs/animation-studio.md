@@ -1,0 +1,191 @@
+# Animation Studio: design
+
+Animated, narrated reels made from one line ("the lost city of Ubar"), written, voiced,
+scored and rendered on our own machine. First for siddhant-content (feature
+`animation_studio`); a prototype, built in phases, to become a full system if it works.
+
+## Requirements (from the owner, 2026-11-21)
+
+| Area | Decision |
+|---|---|
+| Content | facts/explainers, life lessons, stories, news explainers |
+| Language | English |
+| Sound | AI voice-over (Kokoro, local) + generated music and sound effects |
+| Voices | deep narrator, calm female, energetic young; any can be chosen, the AI recommends one |
+| Subtitles | word by word, the spoken word highlighted, in sync with the voice |
+| Styles | Neon Glow and Clean Paper in phase 1; Character story and Bold kinetic text in phase 2 |
+| Flow | one line -> draft (script + scenes) -> live preview and edits in the browser -> render |
+| Editing | scene by scene, changes asked in plain words, one scene made again, undo; timeline editor in phase 2 |
+| Length | chosen per reel (auto, 20-35 s, 35-60 s, 60-90 s) |
+| Writing model | hybrid: the local planner (gemma4 26B on the Mac) writes, grounded in Wikipedia and web sources; Claude API checks facts for autopilot posts (phase 3) |
+| Output | 1080x1920, 30 fps, H.264 + AAC |
+| Branding | an animated "Follow for more" ending |
+| Autopilot (phase 3) | 1 reel a day per page, topics from the owner's list and from the page's niche (History & mysteries); the first 10-15 approved by hand, then a switch turns on posting by itself |
+| Page | a new Instagram page, connected to siddhant-content |
+| Success | the reels look professional enough to post as they are; the new page gets views |
+
+## Phases
+
+1. **Engine and studio** (this build): scene player, two styles, Kokoro voices, word
+   subtitles, generated music and sound effects, renderer, planner (draft, change in
+   words, make one scene again, undo), the Animations tab, render to an ordinary
+   video (Post Reel, Buffer, caption, download all work on it).
+2. Character story and Bold kinetic text styles; timeline editor (drag scene lengths).
+3. Autopilot: topic list + niche topics, 1 a day, approval queue then auto-post, fact
+   check before posting, learning from views.
+
+## Architecture
+
+```
+one line ──> planner ──> Plan (scenes: narration + visual) ──> voice (Kokoro, per scene)
+                │                                                  │ word timings
+          sources (Wikipedia, web)                                 v
+                                                 timeline (scene starts, word times, beats)
+                                                   │                      │
+                                  player.html (browser preview)     sound: music + SFX + voice
+                                                   │                      │
+                                  renderer: headless Chromium frames ─> ffmpeg ─> MP4 ─> Output
+```
+
+### Why a browser player
+
+The picture is drawn by one HTML/JS player (`animate/player/`), a pure function of time:
+`seek(t)` sets every element for time t (no CSS animations or transitions, seeded
+randomness). The studio page plays it live in an iframe; the renderer loads the same file
+in headless Chromium and captures each frame. So the preview is the render, frame for
+frame. A browser gives proper text shaping, SVG, filters, emoji and fonts for free.
+Remotion was the obvious alternative; its free licence stops at small companies, and we
+need none of React for this.
+
+Frames: Playwright screenshots of a 1080x1920 page as JPEG at quality 95 (half the time
+of PNG, nothing lost that the H.264 encode keeps), four pages at once over frame ranges,
+each range encoded to its own file and joined. A 40 s reel renders in about 75 s on the PC
+(software drawing in WSL).
+
+### Plan (the document everything else reads)
+
+```
+Plan
+  v: 1
+  title, kind (facts|lesson|story|news), style (glow|paper), voice, mood
+  scenes: [Scene]
+    narration: what the voice says (1-2 sentences)
+    visual: one of the catalogue, with its fields
+    hold: extra seconds after the narration (default 0.3)
+  caption: the post's caption with hashtags
+  sources: [{title, url}]
+```
+
+Visual catalogue (phase 1), drawn by every style in its own look:
+
+| kind | for | fields |
+|---|---|---|
+| title | the hook | text, highlight |
+| stat | a number that matters | value, prefix, suffix, label |
+| icons | an actor or object doing something | items [{emoji, motion}], label |
+| compare | A against B | left {emoji, label, value}, right {...} |
+| list | 2-5 points | title, items |
+| timeline | dates and events | items [{year, text}] |
+| place | where it happened | name, detail |
+| quote | a line someone said | text, by |
+| reveal | the answer to a mystery | question, answer, emoji |
+| dots | a word or number drawn by glowing dots | text, label |
+
+The CTA ending is added by the system, never written by the model.
+
+### Timing
+
+Each scene's voice is synthesized on its own; the scene lasts its voice plus `hold`.
+Kokoro gives each word's start and end. The timeline holds scene starts and every word's
+time; visual beats (an item appearing, a counter starting) land on the word they belong to
+when it is spoken (a number on its digits), else spread over the narration. Subtitles
+show 1-4 words at a time, the spoken one highlighted. Sound effects are placed from the
+same timeline, so picture, words and sound always agree.
+
+### Sound
+
+- Voice: Kokoro-82M (Apache-2.0) on the Mac's CPU/GPU, 24 kHz, voices mapped to the
+  owner's three kinds (and every other Kokoro English voice selectable).
+- Music: generated per reel from a mood (mysterious, uplifting, emotional, tense, curious):
+  chords, pad, plucks and a bass drawn with numpy, reverb by convolution. No library,
+  nothing to clear.
+- Sound effects: whoosh on scene changes, pop on items, ticks on counters, a riser before
+  reveals, an impact on the hook, a chime on the ending.
+- Mix: the voice compressed (3.5:1 above -24 dBFS, as narration is mastered), music
+  ducked under it, the whole brought to the presets' loudness (-14 LUFS, -1.5 dBTP).
+
+### Planner
+
+1. Subject and sources: the model names the idea's Wikipedia subject and a short search
+   ("the lost city that vanished" finds no article as it is), then Wikipedia (the caption
+   code's `gather_topic`) and a web search; none for lessons. One model session for all
+   of it (closing it unloads the model), with room for 12k tokens.
+2. Draft: the planner model writes the Plan as JSON held to a schema, told the catalogue,
+   the length, the safe areas and the sources; it recommends a voice and a mood.
+3. Checks: lengths, catalogue fields, the hook first, no "follow"/"Did you know", and what
+   is shown is what is said (a stat's number, a place's name, a reveal's answer in the
+   narration); a failed check is sent back once with what failed. A scene that only asks
+   people to follow is dropped (the system's ending does that).
+4. Change in words: the current Plan + the request -> a new Plan (same schema); one scene
+   made again: that scene only, the rest given as context. Every change keeps the old
+   Plan for undo (20 kept).
+
+### Data and jobs
+
+- `animations` table: id, owner, idea, kind, style, voice, length, status
+  (drafting|voicing|ready|failed), message, error, plan (JSON), history (JSON), job_id,
+  times.
+- Drafting, changes and voicing run on the shared queue (the GPU and CPU are taken in
+  turns, like research).
+- Rendering is an ordinary Job (`source = "animation:<id>"`); `run_job` hands it to the
+  renderer. The Output is a normal video: Jobs list, Post Reel, Buffer, download, delete;
+  its caption is the Plan's, written at once.
+
+### API (feature `animation_studio`, owner's own; the primary account sees all)
+
+```
+GET    /api/animations                   list
+POST   /api/animations                   {idea, kind, style, voice, length} -> drafting
+GET    /api/animations/{id}              plan, timeline, status, render
+PUT    /api/animations/{id}              {plan} edited by hand -> voicing -> ready
+POST   /api/animations/{id}/change       {request, scene?} -> drafting -> ready
+POST   /api/animations/{id}/undo
+POST   /api/animations/{id}/render       -> job
+DELETE /api/animations/{id}
+GET    /api/animations/{id}/sound        the preview's mixed sound (WAV)
+GET    /api/animation-voices             voices with samples
+GET    /api/animation-player/{file}      the player and its fonts
+```
+
+### Safe areas (Instagram's buttons and caption)
+
+Top 220 px, bottom 420 px, right 150 px are kept clear of anything that must be read.
+Subtitles sit at y 1180-1420; visuals in y 250-1120.
+
+### Quality gates
+
+- Unit tests: plan schema and checks, timeline, sound (length, loudness), subtitles,
+  API rules (feature, ownership, undo, render job), run_job branch.
+- Browser tests (skipped without Chromium): a two-scene render matches the player at the
+  same times; no text overflows its box at any beat.
+- Real runs on the PC and the Mac before calling it done; a person looks at frames.
+
+### Risks
+
+| Risk | Mitigation |
+|---|---|
+| Local model writes weak or wrong scenes | schema, catalogue, examples, checks with one retry; sources in the prompt; edits and change-in-words |
+| Wrong facts | sources; the Plan lists them; autopilot fact check (phase 3) |
+| Text overflow | the player fits each text to its box (font size search) |
+| Chromium missing (CI, a new machine) | `playwright install chromium` in setup; browser tests skip without it |
+| Render time | parallel pages; 30 fps |
+| Copyright | everything generated; fonts OFL; voices Apache-2.0; emoji Noto (OFL) |
+
+## Status
+
+Phase 1 built (branch animation-studio, 2026-11-21): everything above, both styles, ten
+visuals, three voice kinds and every Kokoro English voice, the studio page (new reel,
+reels, live preview with sound, Instagram-area guides, play from a scene, scene editor,
+change in words, write a scene again, style and voice switches, undo, render, the video
+and its job). Next: phase 2 (Character story, Bold kinetic text, timeline editor), then
+phase 3 (autopilot).

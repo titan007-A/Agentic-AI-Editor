@@ -31,6 +31,8 @@ fi
 sed -i "s|^FFMPEG_BIN=.*|FFMPEG_BIN=$FFMPEG_DIR/bin/ffmpeg|; s|^FFPROBE_BIN=.*|FFPROBE_BIN=$FFMPEG_DIR/bin/ffprobe|" .env
 
 uv sync --extra ml
+# The animation studio draws its frames in Chromium (animate/render.py).
+uv run playwright install --with-deps chromium-headless-shell
 
 set -a; source .env; set +a
 ollama pull "${LLM_MODEL:-qwen3.5:9b-q4_K_M}"

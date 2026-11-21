@@ -250,6 +250,35 @@ class StyleDraft(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class Animation(Base):
+    """An animated, narrated reel being written in the studio (animate/): its brief, its
+    Plan as it stands, earlier Plans for undo and what the player needs to show it."""
+
+    __tablename__ = "animations"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    idea: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16), default="auto")
+    style: Mapped[str] = mapped_column(String(16), default="auto")
+    voice: Mapped[str] = mapped_column(String(32), default="auto")
+    length: Mapped[str] = mapped_column(String(16), default="auto")
+    # queued -> drafting / changing / voicing -> ready, or failed.
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
+    error: Mapped[str | None] = mapped_column(Text)
+    # What the queued task does: {"op": "draft"}, {"op": "change", "request", "scene"},
+    # {"op": "voice"}.
+    task: Mapped[dict | None] = mapped_column(JSON)
+    plan: Mapped[dict | None] = mapped_column(JSON)
+    history: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    player: Mapped[dict | None] = mapped_column(JSON)  # timeline.player_data
+    notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    job_id: Mapped[str | None] = mapped_column(String(12))  # its latest render
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class ResearchAccount(Base):
     """An Instagram account a person runs, and the presets they edit its reels with: the
     researcher learns what it posts and finds reels like its best ones (see research.py)."""

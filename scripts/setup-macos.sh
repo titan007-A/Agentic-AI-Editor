@@ -26,6 +26,8 @@ prefix="$(brew --prefix ffmpeg-full)"
 sed -i '' "s|^FFMPEG_BIN=.*|FFMPEG_BIN=$prefix/bin/ffmpeg|; s|^FFPROBE_BIN=.*|FFPROBE_BIN=$prefix/bin/ffprobe|" .env
 
 uv sync --extra ml
+# The animation studio draws its frames in Chromium (animate/render.py).
+uv run playwright install chromium-headless-shell
 
 for _ in $(seq 30); do
     curl -fs http://127.0.0.1:11434/api/version >/dev/null && break

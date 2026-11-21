@@ -28,9 +28,11 @@ from agentic_editor import (
     slots,
     style,
 )
+from agentic_editor.animate import studio
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
     AccountSnapshot,
+    Animation,
     Event,
     FeedItem,
     HiddenAccount,
@@ -62,7 +64,8 @@ STAGE_PROGRESS = {
     "plan": 0.45,
 }
 RENDER_START = 0.55
-UPSCALED = re.compile(r"upscaled (\d+) of (\d+) frames")  # upscale.upscale's progress
+# upscale.upscale's and animate.render's progress
+UPSCALED = re.compile(r"(?:upscaled|drew) (\d+) of (\d+) frames")
 RELEARN_DAYS = 7  # a research learns its account again when it was learned longer ago
 SNAPSHOTS = 30  # an account's latest snapshots kept (see learn_account)
 TASTE = 12  # reels of each kind (liked, not wanted) a research is told of
@@ -107,7 +110,7 @@ class Tracker:
             value = RENDER_START + share * self.finished
         elif stage in ("render", "review"):
             value = RENDER_START + share * (self.finished + (0.3 if stage == "render" else 0.7))
-        elif stage == "upscale" and (counted := UPSCALED.search(message)):
+        elif stage in ("upscale", "animate") and (counted := UPSCALED.search(message)):
             # An upscale is one long render: its share fills as its frames are drawn.
             done, total = map(int, counted.groups())
             value = RENDER_START + share * (self.finished + 0.95 * done / max(total, 1))
@@ -260,7 +263,13 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
         if not trim:  # the person chose to keep the whole video
             presets = [p.model_copy(update={"trim": False}) for p in presets]
         track.outputs = max(1, sum(p.hook.variants for p in presets))
-        result = run(source, presets, settings, get_backends(), notes, track, run_id=job_id)
+        animated = None  # the Plan an animation's render was made from (animate/studio.py)
+        if source.startswith(studio.SOURCE):
+            result, animated = studio.render_job(
+                source.removeprefix(studio.SOURCE), Session, settings, track, job_id
+            )
+        else:
+            result = run(source, presets, settings, get_backends(), notes, track, run_id=job_id)
 
         with Session() as db:
             job = db.get(Job, job_id)
@@ -294,10 +303,19 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             job.error = "; ".join(result.failures) or None
             message = "all presets rendered" if not result.failures else "rendered, with failures"
             db.add(Event(job_id=job_id, stage="finished", message=message, progress=1.0))
-            captioned = [o for o in job.outputs if available[o.preset].post_caption.enabled]
-            for output in [o for o in captioned if available[o.preset].post_caption.copies]:
+            wanted = {
+                o.id: available[o.preset].post_caption for o in job.outputs if o.preset in available
+            }
+            captioned = [o for o in job.outputs if o.id in wanted and wanted[o.id].enabled]
+            for output in [o for o in captioned if wanted[o.id].copies]:
                 copy_caption(db, output, settings.media_dir)
-            captioned = [o for o in captioned if not available[o.preset].post_caption.copies]
+            captioned = [o for o in captioned if not wanted[o.id].copies]
+            if animated is not None:  # its caption was written with it
+                for output in job.outputs:
+                    output.caption, output.caption_status = animated.caption, "done"
+                    output.caption_sources = [s.model_dump() for s in animated.sources]
+                    output.caption_notes = []
+                    fun.mark(db, output.id, captioned=True)
             for output in captioned:
                 output.caption_status = "queued"
                 output.caption_queued_at = datetime.now(UTC)
@@ -555,7 +573,9 @@ def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, ro
                     output.caption_song, output.caption_artist = song, artist
                     db.commit()
 
-        if wanted.about == "original" and not topic and not named[0]:
+        if source_ref.startswith(studio.SOURCE):  # an animation's caption is its Plan's
+            written = studio.caption_of(source_ref.removeprefix(studio.SOURCE), Session)
+        elif wanted.about == "original" and not topic and not named[0]:
             written = original_caption(description, source_ref)
         elif wanted.about == "video" and not topic and not named[0]:
             # A post about what the video shows (unless a person named a song or topic).
@@ -1094,6 +1114,12 @@ def learn_style(draft_id: str) -> None:
 
 
 @huey.task()
+def animate(animation_id: str) -> None:
+    """An animation's queued operation: a draft, a change or its voice (animate/studio.py)."""
+    studio.run_task(animation_id, sessions(), get_settings())
+
+
+@huey.task()
 def write_caption(output_id: int) -> None:
     """One queued caption's turn, shared with the jobs (see take_turn)."""
     take_turn(("caption", output_id))
@@ -1191,6 +1217,7 @@ PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
 CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__name__
 ACCOUNT, QUESTIONS = read_account.task_class.__name__, ask_questions.task_class.__name__
 CHAT = answer_chat.task_class.__name__
+ANIMATE = animate.task_class.__name__
 READ = read_pdf_list.task_class.__name__
 
 
@@ -1217,6 +1244,14 @@ def recover(Session: sessionmaker) -> None:
             account.learn_status, account.learn_error = "failed", INTERRUPTED
         for output in db.scalars(select(Output).where(Output.caption_status == "writing")).all():
             output.caption_status, output.caption_notes = "failed", [INTERRUPTED]
+        busy = Animation.status.in_(studio.BUSY)
+        for animated in db.scalars(select(Animation).where(busy)).all():
+            animated.status, animated.error, animated.task = "failed", INTERRUPTED, None
+        lost_animations = [
+            a
+            for a in db.scalars(select(Animation.id).where(Animation.status == "queued"))
+            if (ANIMATE, a) not in pending
+        ]
         # A turn runs whichever job or caption is due, so what counts is a turn for each.
         turns = sum(1 for name, _ in pending if name in (PROCESS, CAPTION))
         queued_jobs = list(db.scalars(select(Job.id).where(Job.status == "queued")))
@@ -1263,6 +1298,9 @@ def recover(Session: sessionmaker) -> None:
     for draft_id in lost_drafts:
         log.info("queueing style draft %s again", draft_id)
         learn_style(draft_id)
+    for animation_id in lost_animations:
+        log.info("queueing animation %s again", animation_id)
+        animate(animation_id)
     for output_id in lost_captions:
         log.info("queueing the caption of output %s again", output_id)
         write_caption(output_id)

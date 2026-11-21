@@ -47,6 +47,8 @@ from agentic_editor import (
     research,
     songlist,
 )
+from agentic_editor.animate import routes as animate_routes
+from agentic_editor.animate import studio
 from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
 from agentic_editor.db import (
@@ -667,7 +669,7 @@ def job_view(
         OutputView(
             id=o.id,
             preset=o.preset,
-            preset_label=(labels or {}).get(o.preset, o.preset),
+            preset_label=(labels or {}).get(o.preset) or studio.label(o.preset),
             duration=o.duration,
             title=o.title,
             planner=o.planner,
@@ -3402,6 +3404,11 @@ def create_app(
         keeper = None if delete_work else session.get(Account, me.id)
         accounts.remove(session, target, settings.presets_dir, keep_work_for=keeper)
         return {"ok": True}
+
+    animate_routes.install(
+        app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,
+        enqueue=enqueue, settings=settings,
+    )  # fmt: skip
 
     if settings.web_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")
