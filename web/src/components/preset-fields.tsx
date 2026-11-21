@@ -227,6 +227,34 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
     ],
   },
   {
+    title: "Instruments vs vocals",
+    fields: [
+      {
+        path: "split.enabled",
+        label:
+          "Two panels: the first part with instruments on top, the rest as vocals only below (sets the video's place and the vocals)",
+        kind: "switch",
+      },
+      {
+        path: "split.switch",
+        label: "Share heard with instruments (moved to the nearest pause in the singing)",
+        kind: "number",
+        step: 0.05,
+      },
+      { path: "split.top", label: "Top panel starts at (px)", kind: "number" },
+      { path: "split.height", label: "Each panel's height (px)", kind: "number" },
+      { path: "split.first_label", label: "Top panel's label", kind: "text" },
+      { path: "split.second_label", label: "Bottom panel's label", kind: "text" },
+      { path: "split.font", label: "Label font", kind: "font" },
+      { path: "split.size", label: "Label size", kind: "number" },
+      { path: "split.color", label: "Label color", kind: "color" },
+      { path: "split.outline", label: "Label outline width", kind: "number", step: 0.5 },
+      { path: "split.outline_color", label: "Label outline color", kind: "color" },
+      { path: "split.label_x", label: "Label from the panel's left (px)", kind: "number" },
+      { path: "split.label_y", label: "Label from the panel's top (px)", kind: "number" },
+    ],
+  },
+  {
     title: "Colour",
     fields: [
       { path: "grade.auto", label: "Correct colour automatically", kind: "switch" },

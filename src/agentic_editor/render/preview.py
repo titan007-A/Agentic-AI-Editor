@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from agentic_editor import subtitles
 from agentic_editor.edl import Cue
 from agentic_editor.presets import Preset
-from agentic_editor.render import compose, mark, text
+from agentic_editor.render import compose, mark, split, text
 from agentic_editor.render.video import Cut, picture_cut, picture_shift
 from agentic_editor.settings import Settings
 
@@ -242,7 +242,14 @@ def render_checked(
         # Moved into the text: scaled whole, then the rows a render cuts off are cut here.
         whole = picture.resize((cut.width, cut.full), Image.Resampling.LANCZOS)
         picture = whole.crop((0, cut.cut_top, cut.width, cut.cut_top + cut.height))
-    image.paste(picture.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS), (x0, y0))
+    shown_picture = picture.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+    image.paste(shown_picture, (x0, y0))
+    # Rows the picture covers, which text keeps off: both panels of a split preset.
+    covered = (y0, y1)
+    if preset.split.enabled:
+        # The second panel shows the same rows, held where the first one ends.
+        image.paste(shown_picture, (x0, y0 + preset.split.height))
+        covered = (y0, y1 + preset.split.height)
 
     placed = []
     if shown.text_blocks:
@@ -269,10 +276,9 @@ def render_checked(
                 "video. Lower the gap or move the text nearer the edge."
             )
         top, bottom = p.band
-        if preset.framing.mode == "none" and min(bottom, y1) - max(top, y0) > 2:
-            notes.append(
-                f"Text {i} runs over the video by {round(min(bottom, y1) - max(top, y0))} px."
-            )
+        over = min(bottom, covered[1]) - max(top, covered[0])
+        if preset.framing.mode == "none" and over > 2:
+            notes.append(f"Text {i} runs over the video by {round(over)} px.")
         for j in range(i, len(inks)):
             other = inks[j]
             if min(bottom, other[1]) - max(top, other[0]) > 2:
@@ -303,6 +309,9 @@ def render_checked(
                     notes.append(f"Picture {n} covers part of text {k}.")
         if placed or corners or pictures:
             _lay(image, text.draw(placed, frame, work / "text.png", corners, pictures))
+        if preset.split.enabled:
+            _lay(image, split.labels_layer(preset.split, frame, settings.fonts_dir,
+                                           work / "labels.png"))  # fmt: skip
         if preset.title_overlay.enabled:
             t = preset.title_overlay
             font = face(t.font, TITLE)
@@ -316,7 +325,7 @@ def render_checked(
             words = " ".join(LINE.split()[: o.max_words])
             font = face(o.font, words)
             # Laid out as a render lays it out: kept off the picture shown whole.
-            off = (y0, y1) if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]) else None
+            off = covered if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]) else None
             wrapped, size, offset = compose.off_picture(
                 words, font, o.size, o.box_color, frame, o.position, o.offset, off
             )
@@ -350,7 +359,7 @@ def render_checked(
                 ink for b, ink in zip(shown.text_blocks, inks, strict=True) if b.text.strip()
             ]
             if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]):
-                keep_off.append((y0, y1))
+                keep_off.append(covered)
         _caption(canvas, preset, settings, face, keep_off)
 
     if preset.logo.file and not _logo(image, preset):

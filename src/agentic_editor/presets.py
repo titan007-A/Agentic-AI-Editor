@@ -336,6 +336,35 @@ class Upscale(Strict):
     codec: Literal["hevc10", "h264"] = "hevc10"
 
 
+class Split(Strict):
+    """Instruments against vocals: the reel's one stretch in two panels of one size, one
+    above the other, each cut to fill the frame's width. The first part plays in the top
+    panel with the whole sound, the rest in the bottom panel with the vocals only; the
+    panel not playing holds its frame (the bottom one the first of its part, the top one
+    the last of its), so the two meet where the sound changes. Each panel has its label."""
+
+    enabled: bool = False
+    # Share of the reel heard with the instruments; moved to the nearest pause in the
+    # singing, so no word is cut in two.
+    switch: float = Field(default=0.35, ge=0.1, le=0.9)
+    top: int = Field(default=440, ge=0, le=4000, description="px, where the top panel starts")
+    height: int = Field(default=740, ge=100, le=4000, description="px, each panel's")
+    first_label: str = Field(default="100% instruments", max_length=80)
+    second_label: str = Field(default="0% instruments", max_length=80)
+    font: FontName = "Rubik-Bold"
+    size: int = Field(default=48, ge=8, le=300)
+    color: Color = "#81FCE5"
+    outline: float = Field(default=4, ge=0, le=20)
+    outline_color: Color = "#000000"
+    label_x: int = Field(default=106, ge=0, le=4000, description="px from the panel's left")
+    label_y: int = Field(default=42, ge=0, le=4000, description="px from the panel's top")
+
+    @property
+    def rows(self) -> tuple[int, int]:
+        """The top panel's rows; the bottom panel's follow straight on."""
+        return self.top, self.top + self.height
+
+
 class Preset(Strict):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     label: str
@@ -381,6 +410,7 @@ class Preset(Strict):
     bitrate_mbps: float = Field(default=12.0, gt=0, le=100)
     style_notes: str = ""
     upscale: Upscale = Upscale()
+    split: Split = Split()
 
     @model_validator(mode="before")
     @classmethod
@@ -398,6 +428,19 @@ class Preset(Strict):
             # unless it says otherwise: the video comes as it was, ready to post with one.
             if data.get("download_only") is True and "post_caption" not in data:
                 data["post_caption"] = DOWNLOAD_CAPTION.model_dump()
+            # Two panels need the picture shown whole in the top one's rows, and the vocals
+            # separated from the whole sound.
+            split = data.get("split")
+            if isinstance(split, dict) and split.get("enabled") is True:
+                top = split.get("top", Split().top)
+                height = split.get("height", Split().height)
+                framing = data.get("framing") if isinstance(data.get("framing"), dict) else {}
+                data["framing"] = {
+                    **framing, "mode": "none", "picture_rows": [top, top + height],
+                    "picture_center": False, "picture_x": 0, "picture_y": 0,
+                }  # fmt: skip
+                sound = data.get("audio") if isinstance(data.get("audio"), dict) else {}
+                data["audio"] = {**sound, "source": "vocals"}
         return data
 
     @field_validator("random_fields")
@@ -436,6 +479,11 @@ class Preset(Strict):
         num, _, den = self.aspect_ratio.partition(":")
         if abs(w / h - float(num) / float(den)) > 0.01:
             raise ValueError(f"resolution {self.resolution} does not match {self.aspect_ratio}")
+        if self.split.enabled and self.split.top + 2 * self.split.height > h:
+            raise ValueError(
+                f"split: two panels {self.split.height} px tall from row {self.split.top} "
+                f"run off the {h} px frame"
+            )
         captions = self.captions
         if captions.position != "middle" and captions.margin + captions.size > h:
             raise ValueError(f"captions.margin {captions.margin} puts the captions off the frame")
