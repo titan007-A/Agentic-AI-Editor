@@ -86,6 +86,9 @@ def gather(
         if len(found) >= SOURCES:
             break
         body = " ".join(str(hit.get("body", "")).split())
+        href = str(hit.get("href", ""))
+        if any(_same_page(href, f.url) for f in found):
+            continue  # the Wikipedia article again, found by the search too
         if len(body) > 60:
             found.append(
                 Found(str(hit.get("title", ""))[:120], str(hit.get("href", "")), body[:800])
@@ -125,6 +128,17 @@ def roomy(llm) -> None:
         llm.context = max(llm.context or 0, CONTEXT)
     if hasattr(llm, "max_reply"):
         llm.max_reply = max(llm.max_reply or 0, REPLY)
+
+
+def _same_page(a: str, b: str) -> bool:
+    """Two links to one page (http or https, a trailing slash or a #part aside)."""
+
+    def key(url: str) -> str:
+        return (
+            url.split("#")[0].removeprefix("https://").removeprefix("http://").rstrip("/").lower()
+        )
+
+    return bool(a) and key(a) == key(b)
 
 
 # ---- the schema the model answers to ---------------------------------------------------
