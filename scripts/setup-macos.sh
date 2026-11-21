@@ -28,6 +28,11 @@ sed -i '' "s|^FFMPEG_BIN=.*|FFMPEG_BIN=$prefix/bin/ffmpeg|; s|^FFPROBE_BIN=.*|FF
 uv sync --extra ml
 # The animation studio draws its frames in Chromium (animate/render.py).
 uv run playwright install chromium-headless-shell
+# Its painted pictures: an image model (mflux, Z-Image-Turbo 4-bit) in its own environment,
+# so mflux's pinned packages stay out of the app's (animate/images.py).
+uv venv -q models/image-venv --python 3.12
+uv pip install -q --python models/image-venv/bin/python "mflux==0.24.0"
+models/image-venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('filipstrand/Z-Image-Turbo-mflux-4bit')"
 
 for _ in $(seq 30); do
     curl -fs http://127.0.0.1:11434/api/version >/dev/null && break

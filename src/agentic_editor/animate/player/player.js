@@ -70,6 +70,7 @@
       caption: "Rubik-ExtraBold",
       quote: "SourceSerif4-Bold",
       glow: false,
+      paper: true,
       palette: "paper",
     },
     story: {
@@ -1661,7 +1662,8 @@
       const i = Math.max(0, castList.findIndex((c) => (c.name || "").toLowerCase() === (name || "").toLowerCase()));
       return lookOf(castList[i] || { name, look: "man" }, i);
     };
-    setting(v.setting || "room", theme, root, hash((v.setting || "room") + scene.start));
+    // A painted picture is the place itself; otherwise the place is drawn.
+    if (!scene._picture) setting(v.setting || "room", theme, root, hash((v.setting || "room") + scene.start));
     const actors = (v.actors || []).slice(0, 2);
     if (!actors.length) actors.push({ name: "Sam", action: "idle", mood: "neutral" });
     const beats = beatsOf(scene, actors.length + 1);
@@ -2019,6 +2021,41 @@
     };
   }
 
+  // ---- painted pictures -----------------------------------------------------------------
+
+  // The scene's painting, cover-fitted, with a veil that keeps each style's text readable;
+  // its loading is added to `pending`. None for styles drawn as themselves.
+  function paintedLayer(scene, theme, root, base, pending) {
+    const name = scene.visual && scene.visual.image;
+    if (!name || !base || theme.stick || theme.kinetic) return null;
+    const box = el("div", "abs", root);
+    place(box, 0, 0, W, H);
+    box.style.overflow = "hidden";
+    const img = el("img", "abs", box);
+    place(img, 0, 0, W, H);
+    img.style.objectFit = "cover";
+    img.style.transformOrigin = "50% 45%";
+    if (theme.paper) img.style.filter = "sepia(0.35) saturate(0.8)";
+    img.alt = "";
+    pending.push(
+      new Promise((resolve) => {
+        img.onload = img.onerror = () => resolve();
+        img.src = base + name;
+      }).then(() => img.decode && img.decode().catch(() => undefined)),
+    );
+    const veil = el("div", "abs", box);
+    place(veil, 0, 0, W, H);
+    const acted = scene.kind === "scene";
+    veil.style.background = theme.glow
+      ? "linear-gradient(rgba(5,6,15,0.45), rgba(5,6,15,0.62) 55%, rgba(5,6,15,0.85))"
+      : theme.story
+        ? acted
+          ? "linear-gradient(rgba(0,0,0,0) 70%, rgba(0,0,0,0.18))"
+          : "rgba(255,244,230,0.38)"
+        : "rgba(245,239,227,0.5)";
+    return img;
+  }
+
   // ---- the player ---------------------------------------------------------------------
 
   let state = null;
@@ -2047,14 +2084,20 @@
     const seed = hash(data.title || "reel");
     const drawBg = background(theme, stage, seed);
     const sceneLayer = el("div", "layer", stage);
+    const pending = [];
     const scenes = data.scenes.map((scene) => {
       const root = el("div", "scene", sceneLayer);
       const kind = theme.kinetic && !["cta", "stat"].includes(scene.kind) ? "kinetic" : scene.kind;
       const build = SCENES[kind] || SCENES.title;
       root.style.display = "block";
+      // A painted picture behind it (animate/images.py), under everything the scene draws.
+      const picture = paintedLayer(scene, theme, root, options.imageBase, pending);
+      scene._picture = Boolean(picture);
       const update = build(scene.visual || {}, theme, root, scene, data);
-      return { scene, root, update };
+      return { scene, root, update, picture };
     });
+    // Every picture is in before a frame is drawn: the first frames of a render too.
+    await Promise.all(pending);
     const subs = subtitles(theme, stage, data.captions || []);
     const head = header(theme, stage, data);
     const guides = [
@@ -2099,6 +2142,11 @@
       // A slow push-in keeps a long scene alive.
       const push = 0.025 * prog(t, start, Math.max(1, end - start));
       show(s.root, enter * (1 - pout), `translateY(${((1 - enter) * 50 - pout * 60).toFixed(1)}px) scale(${(lerp(0.97, 1, enter) + pout * 0.03 + push).toFixed(4)})`);
+      if (s.picture) {
+        // A slow push and drift across the painting while the scene lasts.
+        const k = prog(t, start, Math.max(1, end - start + EXIT));
+        s.picture.style.transform = `scale(${(1.04 + 0.07 * k).toFixed(4)}) translate(${(-14 * k).toFixed(1)}px, ${(-10 * k).toFixed(1)}px)`;
+      }
       s.update(t);
     }
     state.subs.update(t);
@@ -2124,7 +2172,7 @@
       if (event.origin !== location.origin || !event.data || typeof event.data !== "object") return;
       const msg = event.data;
       if (msg.type === "load") {
-        const info = await load(msg.data, { fontBase: msg.fontBase, emojiFont: msg.emojiFont });
+        const info = await load(msg.data, { fontBase: msg.fontBase, emojiFont: msg.emojiFont, imageBase: msg.imageBase });
         seek(msg.t || 0);
         window.parent.postMessage({ type: "ready", duration: info.duration, problems: info.problems }, location.origin);
       } else if (msg.type === "seek") {

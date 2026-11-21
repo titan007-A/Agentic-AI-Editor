@@ -6,6 +6,7 @@ can't be changed again. Rendering makes an ordinary Job.
 """
 
 import hashlib
+import re
 from datetime import datetime
 from typing import Literal
 
@@ -16,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentic_editor import features, instagram, jobs
-from agentic_editor.animate import render, schedule, studio, voice
+from agentic_editor.animate import images, render, schedule, studio, voice
 from agentic_editor.animate.plan import Plan
 from agentic_editor.db import Animation, AnimationAutopilot, InstagramChannel, Job, Output
 from agentic_editor.render import fonts
@@ -45,6 +46,7 @@ class AnimationRequest(BaseModel):
     style: Literal["auto", "glow", "paper", "story", "kinetic", "stick"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
+    images: bool = True  # painted pictures behind the scenes
 
 
 class PlanEdit(BaseModel):
@@ -61,6 +63,7 @@ class StudioChoice(BaseModel):
 
     style: Literal["glow", "paper", "story", "kinetic", "stick"] | None = None
     voice: str | None = Field(default=None, max_length=32)
+    images: bool | None = None
 
 
 class AutopilotSettings(BaseModel):
@@ -75,6 +78,7 @@ class AutopilotSettings(BaseModel):
     length: Literal["auto", "short", "medium", "long"] = "auto"
     channel_id: str | None = Field(default=None, max_length=32)
     auto_post: bool = False
+    images: bool = True
 
 
 _versions: dict[str, tuple[float, int, str]] = {}
@@ -128,7 +132,8 @@ def install(
         plan = found.plan or {}
         out = {
             "id": found.id, "idea": found.idea, "kind": found.kind, "style": found.style,
-            "voice": found.voice, "length": found.length, "status": found.status,
+            "voice": found.voice, "length": found.length, "images": found.images,
+            "status": found.status,
             "message": found.message, "error": found.error, "notes": found.notes or [],
             "title": plan.get("title") or found.idea, "scenes": len(plan.get("scenes", [])),
             "duration": (found.player or {}).get("duration"), "can_undo": bool(found.history),
@@ -163,7 +168,7 @@ def install(
             raise HTTPException(422, f"no voice {body.voice!r}")
         found = Animation(
             owner_id=account.id, idea=" ".join(body.idea.split()), kind=body.kind,
-            style=body.style, voice=body.voice, length=body.length,
+            style=body.style, voice=body.voice, length=body.length, images=body.images,
         )  # fmt: skip
         session.add(found)
         session.flush()
@@ -203,7 +208,10 @@ def install(
                 raise HTTPException(422, f"no voice {body.voice!r}")
             update["voice"] = voice.resolve(body.voice, plan.kind, plan.mood)
             found.voice = body.voice
-        if not update:
+        changed_pictures = body.images is not None and body.images != found.images
+        if changed_pictures:
+            found.images = body.images
+        if not update and not changed_pictures:
             return view(found, session, full=True)
         found.history = [found.plan, *(found.history or [])][: studio.HISTORY]
         found.plan = plan.model_copy(update=update).model_dump(mode="json")
@@ -436,3 +444,15 @@ def install(
         found.post_status = "skipped"
         session.commit()
         return view(found, session, full=True)
+
+    @app.get("/api/animation-images/{name}")
+    def animation_image(name: str, account: User, session: DB) -> FileResponse:
+        """A painted picture (images.name_of: named by what it shows, so kept for good)."""
+        studio_user(account, session)
+        if not re.fullmatch(r"[0-9a-f]{24}\.png", name):
+            raise HTTPException(404, "no such picture")
+        path = images.folder(settings) / name
+        if not path.is_file():
+            raise HTTPException(404, "no such picture")
+        kept = {"Cache-Control": "private, max-age=31536000, immutable"}
+        return FileResponse(path, media_type="image/png", headers=kept)

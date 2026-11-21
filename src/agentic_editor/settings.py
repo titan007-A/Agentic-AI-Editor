@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # hold to a JSON schema, and every answer here is one.
     llm_model: str = "qwen3.5:9b-q4_K_M"
     vision_model: str = "qwen3.5:4b-q4_K_M"
+    # The animation studio's painted backgrounds (animate/images.py): an image model run by
+    # mflux in its own environment (models/image-venv unless named here), on Apple Silicon.
+    image_python: Path | None = None
+    image_model: str = "filipstrand/Z-Image-Turbo-mflux-4bit"
     # Model layers Ollama puts on the GPU (99: all). Unset, Ollama decides and on an 8 GB
     # card runs part of the 9b planner on the CPU at about two thirds the speed.
     llm_gpu_layers: int | None = Field(default=None, ge=0)

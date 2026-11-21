@@ -213,6 +213,22 @@ Subtitles sit at y 1180-1420; visuals in y 250-1120.
   ("83 days"); its `emoji` a big object standing beside them; `crowd` 0-8 more people
   standing around.
 
+## Painted pictures (image model)
+
+- Z-Image-Turbo (Tongyi-MAI, Apache-2.0, 6B), 4-bit (filipstrand/Z-Image-Turbo-mflux-4bit,
+  about 5 GB), 9 steps, 720x1280, run by mflux 0.24 on Apple Silicon in its own
+  environment (models/image-venv) through animate/paint_runner.py: the model loads once
+  per reel, holding the GPU slot like every model. Pictures are kept by what they show.
+- The planner writes each scene's `art` (the place, time, light, mood; for a character
+  scene the setting empty of people; never names or writing). The style adds its look
+  (Character story: anime watercolour storybook; Neon Glow: cinematic dark blue; Clean
+  Paper: vintage editorial); "no text" always.
+- The player puts the picture behind the scene with a slow push and a veil that keeps the
+  style's text readable; in Character story it replaces the drawn place, the characters
+  acting in front. Stick figure and Bold kinetic text are never painted.
+- A switch per reel and per autopilot (on by default); "Paint it again" in the editor; where
+  the model isn't installed the reel is drawn as before, with a note.
+
 ## Phase 3: autopilot
 
 - One autopilot per account (`animation_autopilots`): niche, topics (one per line, first

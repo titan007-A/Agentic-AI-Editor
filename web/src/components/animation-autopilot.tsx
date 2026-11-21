@@ -77,6 +77,7 @@ export function AnimationAutopilotCard({
         length: pilot.length,
         channel_id: pilot.channel_id,
         auto_post: pilot.auto_post,
+        images: pilot.images,
       });
       setPilot(saved);
       setTopics(saved.topics.join("\n"));
@@ -257,6 +258,14 @@ export function AnimationAutopilotCard({
             </p>
           )}
         </div>
+        <label className="flex items-center justify-between gap-2 text-sm">
+          <span>Painted pictures behind the scenes (AI, a few minutes more)</span>
+          <Switch
+            checked={pilot.images}
+            onCheckedChange={(v) => set({ images: Boolean(v) })}
+            aria-label="Painted pictures"
+          />
+        </label>
         <label className="flex items-center justify-between gap-2 text-sm">
           <span>
             Post by itself

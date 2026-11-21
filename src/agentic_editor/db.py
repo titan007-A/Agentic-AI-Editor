@@ -263,7 +263,8 @@ class Animation(Base):
     style: Mapped[str] = mapped_column(String(16), default="auto")
     voice: Mapped[str] = mapped_column(String(32), default="auto")
     length: Mapped[str] = mapped_column(String(16), default="auto")
-    # queued -> drafting / changing / voicing -> ready, or failed.
+    images: Mapped[bool] = mapped_column(default=True)  # painted pictures (animate/images.py)
+    # queued -> drafting / changing / painting / voicing -> ready, or failed.
     status: Mapped[str] = mapped_column(String(16), default="queued")
     message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
     error: Mapped[str | None] = mapped_column(Text)
@@ -306,6 +307,7 @@ class AnimationAutopilot(Base):
     style: Mapped[str] = mapped_column(String(16), default="auto")
     voice: Mapped[str] = mapped_column(String(32), default="auto")
     length: Mapped[str] = mapped_column(String(16), default="auto")
+    images: Mapped[bool] = mapped_column(default=True)
     channel_id: Mapped[str | None] = mapped_column(String(32))  # InstagramChannel to post to
     # The site's address as people reach it, for the link Instagram fetches the video from.
     base_url: Mapped[str] = mapped_column(Text, default="")

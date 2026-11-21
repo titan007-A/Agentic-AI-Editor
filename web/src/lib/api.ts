@@ -789,6 +789,11 @@ export type AnimationVisual = {
   actors?: AnimationActor[];
   /** People standing around in a character scene (0-8). */
   crowd?: number;
+  /** The painted picture behind the scene: what it shows, its file once painted, a number
+   * changed to paint it again. */
+  art?: string;
+  image?: string;
+  art_seed?: number;
 };
 
 export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
@@ -830,7 +835,9 @@ export type Animation = {
   style: string;
   voice: string;
   length: string;
-  status: "queued" | "drafting" | "changing" | "voicing" | "ready" | "failed";
+  /** Painted pictures behind the scenes. */
+  images?: boolean;
+  status: "queued" | "drafting" | "changing" | "painting" | "voicing" | "ready" | "failed";
   message: string;
   error: string | null;
   notes: string[];
@@ -866,6 +873,7 @@ export type AnimationAutopilot = {
   length: string;
   channel_id: string | null;
   auto_post: boolean;
+  images: boolean;
   approved: number;
   needs: number;
   used: string[];
@@ -882,6 +890,7 @@ export type AnimationBrief = {
   style: string;
   voice: string;
   length: string;
+  images: boolean;
 };
 
 export const api = {
@@ -894,7 +903,7 @@ export const api = {
   createAnimation: (body: AnimationBrief) => request<Animation>("POST", "/animations", body),
   editAnimation: (id: string, plan: AnimationPlan) =>
     request<Animation>("PUT", `/animations/${id}`, { plan }),
-  setAnimation: (id: string, body: { style?: string; voice?: string }) =>
+  setAnimation: (id: string, body: { style?: string; voice?: string; images?: boolean }) =>
     request<Animation>("PATCH", `/animations/${id}`, body),
   changeAnimation: (id: string, body: { request: string; scene?: number }) =>
     request<Animation>("POST", `/animations/${id}/change`, body),

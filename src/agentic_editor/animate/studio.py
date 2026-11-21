@@ -16,7 +16,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor.animate import planner, voice
+from agentic_editor.animate import images, planner, voice
 from agentic_editor.animate.plan import Plan, tidy
 from agentic_editor.animate.render import render
 from agentic_editor.animate.timeline import Spoken, Timeline, build, player_data
@@ -27,7 +27,7 @@ from agentic_editor.settings import Settings
 log = logging.getLogger(__name__)
 
 SOURCE = "animation:"  # a Job's source for rendering an animation
-BUSY = ("drafting", "changing", "voicing")  # a task is working on it
+BUSY = ("drafting", "changing", "painting", "voicing")  # a task is working on it
 HISTORY = 20
 STYLE_NAMES = {
     "glow": "Neon Glow", "paper": "Clean Paper", "story": "Character story",
@@ -102,9 +102,53 @@ def _set(Session: sessionmaker, animation_id: str, **values) -> Animation | None
         return a
 
 
+def paint_plan(
+    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint=None
+) -> tuple[Plan, list[str]]:
+    """`plan` with each scene's picture painted (kept ones reused): the writer's `art`
+    for it, nobody in it behind characters; a style drawn as itself gets none."""
+    paint = paint or images.paint
+    if plan.style in images.UNPAINTED:
+        return plan, []
+    wanted = [(i, s) for i, s in enumerate(plan.scenes) if s.visual.art.strip()]
+    if not wanted:
+        return plan, []
+    if paint is images.paint and not images.available(settings):
+        return plan, ["painted pictures need the image model (installed on the Mac)"]
+    pictures = [
+        images.Picture(
+            s.visual.art, _seed_of(s.visual.art, s.visual.art_seed), s.visual.kind == "scene"
+        )
+        for _, s in wanted
+    ]
+    progress = lambda stage, message: _set(Session, animation_id, message=message)  # noqa: E731
+    names = paint(pictures, plan.style, settings, progress)
+    scenes = list(plan.scenes)
+    for (i, scene), name in zip(wanted, names, strict=True):
+        scenes[i] = scene.model_copy(
+            update={"visual": scene.visual.model_copy(update={"image": name})}
+        )
+    missing = sum(1 for n in names if not n)
+    note = [f"{missing} of {len(names)} pictures couldn't be painted"] if missing else []
+    return plan.model_copy(update={"scenes": scenes}), note
+
+
+def without_pictures(plan: Plan) -> Plan:
+    scenes = [
+        s.model_copy(update={"visual": s.visual.model_copy(update={"image": ""})})
+        for s in plan.scenes
+    ]
+    return plan.model_copy(update={"scenes": scenes})
+
+
+def _seed_of(art: str, again: int) -> int:
+    return (int(hashlib.sha256(art.encode()).hexdigest()[:8], 16) + 7919 * again) % 2**31
+
+
 def run_task(
-    animation_id: str, Session: sessionmaker, settings: Settings, router=None, speak=voice.speak
-) -> None:
+    animation_id: str, Session: sessionmaker, settings: Settings, router=None, speak=voice.speak,
+    paint=None,
+) -> None:  # fmt: skip
     """The animation's queued operation (Animation.task). Like a job, it never stays
     busy: whatever happens is stored."""
     from agentic_editor.backends import get_backends
@@ -118,6 +162,7 @@ def run_task(
                 return
             task = dict(a.task or {"op": "draft"})
             brief = brief_of(a)
+            wants_pictures = bool(a.images)
             current = Plan.model_validate(a.plan) if a.plan else None
         op = task.get("op", "draft")
         notes: list[str] = []
@@ -186,6 +231,12 @@ def run_task(
         # Mended again every time: a reel made before a mend (a name's look, a prop too big
         # to hold) gets it when it is next voiced or restyled.
         plan = tidy(plan)
+        if wants_pictures:
+            _set(Session, animation_id, status="painting", message="painting the pictures")
+            plan, painted = paint_plan(plan, animation_id, Session, settings, paint)
+            notes = [*notes, *painted]
+        else:  # pictures off: the scenes are drawn
+            plan = without_pictures(plan)
         _set(Session, animation_id, status="voicing", message="recording the voice-over")
         timeline, _ = timeline_of(plan, settings, speak)
         data = player_data(plan, timeline)
@@ -295,6 +346,7 @@ def render_job(
         settings.fonts_dir,
         settings.models_dir,
         progress,
+        images_dir=images.folder(settings),
     )
     edl = EDL(
         clips=[Clip(start=0, end=round(timeline.duration, 3))],
