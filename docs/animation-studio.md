@@ -228,6 +228,8 @@ Subtitles sit at y 1180-1420; visuals in y 250-1120.
   acting in front. Stick figure and Bold kinetic text are never painted.
 - A switch per reel and per autopilot (on by default); "Paint it again" in the editor; where
   the model isn't installed the reel is drawn as before, with a note.
+- Measured on the M5 Mac: the model loads in 5 s, then 24-27 s a picture; a 6-scene reel
+  paints in about 2.5 minutes before its voice is recorded.
 
 ## Phase 3: autopilot
 
