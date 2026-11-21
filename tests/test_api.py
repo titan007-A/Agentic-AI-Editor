@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -340,8 +341,11 @@ def test_a_topic_feed_edits_only_videos_about_it_into_its_folder(env, tmp_path, 
         (folder / name).write_bytes(b"x")
         os.utime(folder / name, (1000, 1000))
 
+    gate = threading.Event()
+
     def judge(topic, found, settings=None, router=None):
         assert topic == "GTA 5"
+        gate.wait(5)  # still looking when the page has its answer
         return [
             autopilot.Verdict(True, "a heist") if "gta" in e.title else
             autopilot.Verdict(False, "a quiz show")
@@ -355,7 +359,12 @@ def test_a_topic_feed_edits_only_videos_about_it_into_its_folder(env, tmp_path, 
     assert response.status_code == 200, response.text
     feed = response.json()
     assert (feed["topic"], feed["folder"]) == ("GTA 5", "GTA-kick")
-    assert feed["last_result"] == "looking at the feed; this takes a few minutes"
+    # The page's answer, or the check's own word once it has listed the folder.
+    assert feed["last_result"] in (
+        "looking at the feed; this takes a few minutes",
+        "looking at the new videos for GTA 5; this takes a few minutes",
+    )
+    gate.set()
     for _ in range(100):  # looked at on its own, then the job runs
         feed = env.client.get("/api/feeds").json()[0]
         if feed["counts"].get("done"):
@@ -2852,3 +2861,39 @@ def test_a_download_only_preset_gets_its_post_caption_after_every_download(env, 
     output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
     assert output["caption_status"] == "done" and output["caption"] == "A Kick clip 🎮"
     assert watched  # written from what the video shows
+
+
+def test_a_reel_goes_to_instagram_as_a_link_anyone_can_open(env, monkeypatch, caplog):
+    from agentic_editor import instagram
+    from agentic_editor.db import InstagramChannel, User
+
+    job_id = start(env.client)[0]["id"]
+    output = env.client.get(f"/api/jobs/{job_id}").json()["outputs"][0]
+    with env.sessions() as db:
+        me = db.query(User).filter_by(role="admin").first()
+        db.add(InstagramChannel(id="1784", owner_id=me.id, username="vocals", access_token="t"))
+        db.commit()
+    sent = []
+
+    def post_reel(channel, video_url, caption, share_to_feed):
+        sent.append(video_url)
+        return "post-1"
+
+    monkeypatch.setattr(instagram, "post_reel", post_reel)
+    body = {"channel_id": "1784", "caption": "Hi", "share_to_feed": True}
+    answer = env.client.post(f"/api/outputs/{output['id']}/instagram", json=body)
+    assert answer.json() == {"post_id": "post-1", "channel": "vocals"}
+    path = sent[0].split("://", 1)[1].split("/", 1)[1]
+    assert re.fullmatch(r"api/pub/[\w-]{32}\.mp4", path)
+    env.client.post("/api/logout")
+    fetched = env.client.get("/" + path)  # what Instagram's servers do, without a login
+    assert fetched.status_code == 200 and fetched.content == b"fake video"
+    login(env.client)
+
+    def refused(channel, video_url, caption, share_to_feed):
+        raise instagram.InstagramError("Instagram rejected the video: ERROR")
+
+    monkeypatch.setattr(instagram, "post_reel", refused)
+    answer = env.client.post(f"/api/outputs/{output['id']}/instagram", json=body)
+    assert answer.status_code == 502 and "rejected" in answer.json()["detail"]
+    assert "posting output" in caplog.text and "rejected" in caplog.text

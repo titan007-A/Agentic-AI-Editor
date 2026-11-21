@@ -2856,15 +2856,12 @@ def create_app(
         ch = session.get(InstagramChannel, body.channel_id)
         if ch is None or ch.owner_id != account.id:
             raise HTTPException(404, "Instagram channel not found")
-        # Build public video URL
-        base = (
-            settings.public_url.rstrip("/")
-            if settings.public_url
-            else str(request.base_url).rstrip("/")
-        )
-        vid_path = Path(output.path)
-        vid_rel = vid_path.relative_to(settings.media_dir)
-        video_url = f"{base}/media/{vid_rel.as_posix()}"
+        if not Path(output.path).is_file():
+            raise HTTPException(404, "the video file is gone; render it again")
+        # Instagram downloads the video itself, from a link open to anyone (a copy in
+        # media/pub, as for Buffer): the reel's own file is behind the login.
+        pub = await asyncio.to_thread(prepared_pub, output)
+        video_url = f"{public_base(request)}/api/pub/{pub}"
         chan = instagram.Channel(
             id=ch.id,
             username=ch.username,
@@ -2877,6 +2874,9 @@ def create_app(
                 lambda: instagram.post_reel(chan, video_url, body.caption, body.share_to_feed),
             )
         except instagram.InstagramError as exc:
+            log.warning(
+                "instagram: posting output %s to @%s failed: %s", output_id, ch.username, exc
+            )
             raise HTTPException(502, str(exc)) from exc
         ch.last_post_at = datetime.now(UTC).replace(tzinfo=None)
         session.commit()
