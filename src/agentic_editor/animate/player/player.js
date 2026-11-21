@@ -1656,6 +1656,54 @@
 
   // ---- the character scene -------------------------------------------------------------
 
+  // Where the red note goes, pointing at the first actor: above its head, or beside it, never
+  // over a speech bubble, a thought, another actor or the big object. A lone speaker's bubble
+  // leans the way it looks to leave the other side free. Two actors with a line have no room
+  // for both: the timeline then has the note shown first and the lines wait (talkFrom).
+  function noteSpot(cast, piece, count, top, bubbleTop, scene) {
+    const c = cast[0];
+    const headTop = (a) => FLOOR - BASE * a.look.scale * 590;
+    if (c.bubble && cast.length === 1) c.lean = c.dir * 140;
+    const hx = c.home;
+    const ht = headTop(c);
+    const blocked = [];
+    const first = scene.talkFrom != null;
+    cast.forEach((a) => {
+      if (first) {
+        // shown before any line: nothing to keep clear of but the people
+      } else if (a.bubble) {
+        blocked.push({ x: clamp(a.home - 200 + (a.lean || 0), 40, W - 440), y: Math.max(bubbleTop, headTop(a) - 185), w: 400, h: 184 });
+      } else if (a.thought) {
+        blocked.push({ x: clamp(a.home + a.dir * 120 - 75, 40, W - 190), y: Math.max(bubbleTop, headTop(a) - 40), w: 150, h: 90 });
+      }
+      if (a !== c) blocked.push({ x: a.home - 110, y: headTop(a) - 10, w: 220, h: FLOOR - headTop(a) + 10 });
+    });
+    if (piece) blocked.push({ x: 790 + (count === 1 ? 0 : 80), y: FLOOR - 236, w: 230, h: 240 });
+    const y = Math.max(top, ht - 150);
+    const aboveRight = { x: clamp(hx - 40, 30, W - 450), y, w: 420, h: 84 };
+    aboveRight.from = [clamp(hx + 150, aboveRight.x + 60, aboveRight.x + 400), y + 86];
+    aboveRight.to = [hx + 52, ht + 14];
+    aboveRight.mid = [aboveRight.from[0] + 10, (aboveRight.from[1] + aboveRight.to[1]) / 2 + 10];
+    const aboveLeft = { x: clamp(hx - 380, 30, W - 450), y, w: 420, h: 84 };
+    aboveLeft.from = [clamp(hx - 150, aboveLeft.x + 20, aboveLeft.x + 360), y + 86];
+    aboveLeft.to = [hx - 52, ht + 14];
+    aboveLeft.mid = [aboveLeft.from[0] - 10, (aboveLeft.from[1] + aboveLeft.to[1]) / 2 + 10];
+    const side = (dir) => {
+      const sy = Math.max(top, ht - 30);
+      const w = Math.min(420, dir < 0 ? hx - 140 - 30 : W - 30 - (hx + 140));
+      const r = { x: dir < 0 ? 30 : hx + 140, y: sy, w, h: 130 };
+      if (dir < 0) r.x = hx - 140 - w;
+      r.from = [dir < 0 ? r.x + w + 8 : r.x - 8, sy + 72];
+      r.to = [hx + dir * 66, ht + 70];
+      r.mid = [(r.from[0] + r.to[0]) / 2, Math.min(r.from[1], r.to[1]) - 24];
+      return r;
+    };
+    const hits = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    const free = (r) => r.w >= 220 && !blocked.some((b) => hits(r, b));
+    const found = [aboveRight, aboveLeft, side(-c.dir), side(c.dir)].find(free) || aboveRight;
+    return { ...found, until: first ? scene.talkFrom : Infinity };
+  }
+
   SCENES.scene = (v, theme, root, scene, data) => {
     const castList = (data && data.cast) || [];
     const lookFor = (name) => {
@@ -1724,14 +1772,17 @@
     const sceneEnd = scene.end;
     // An optional caption ("Years later") as a pill under the title bar.
     const caption = v.text && !theme.stick ? textBox(theme, root, theme.body, 290, 352, 500, 64, v.text, 38, 24, theme.glow ? theme.ink : "#ffffff") : null;
-    // A red note with an arrow at the first actor ("40 days", "Skin peeling off").
-    const note = v.detail ? textBox(theme, root, theme.stick ? theme.display : theme.body, 0, 0, 420, 84, v.detail, 64, 32, theme.stick ? "#E53935" : theme.accent) : null;
-    const arrow = note ? svg("path", { fill: "none", stroke: theme.stick ? "#E53935" : theme.accent, "stroke-width": 6, "stroke-linecap": "round", "stroke-linejoin": "round" }, stageSvg) : null;
     if (caption) {
       caption.style.background = theme.glow ? theme.accent : theme.ink;
       caption.style.borderRadius = "34px";
     }
     const bubbleTop = caption ? 440 : 340;
+    // A red note with an arrow at the first actor ("40 days", "Skin peeling off").
+    const spot = v.detail && cast[0] ? noteSpot(cast, piece, actors.length, caption ? 440 : 344, bubbleTop, scene) : null;
+    // Lines wait for a note shown first (the timeline's call: no room for both).
+    const talkFrom = scene.talkFrom != null ? scene.talkFrom : -Infinity;
+    const note = spot ? textBox(theme, root, theme.stick ? theme.display : theme.body, spot.x, spot.y, spot.w, spot.h, v.detail, 64, 32, theme.stick ? "#E53935" : theme.accent) : null;
+    const arrow = note ? svg("path", { fill: "none", stroke: theme.stick ? "#E53935" : theme.accent, "stroke-width": 6, "stroke-linecap": "round", "stroke-linejoin": "round" }, stageSvg) : null;
     return (t) => {
       cast.forEach((c, i) => {
         const lt = Math.max(0, t - c.at);
@@ -1756,7 +1807,7 @@
           }
         }
         // The mouth moves with the voice while this character's line is being said.
-        const speaking = c.a.says && t >= bubbleAt ? mouthAt(scene.words, t) : action === "talk" ? mouthAt(scene.words, t) : 0;
+        const speaking = c.a.says && t >= Math.max(bubbleAt, talkFrom) ? mouthAt(scene.words, t) : action === "talk" ? mouthAt(scene.words, t) : 0;
         const p = pose(action, c.a.mood || "neutral", lt, speaking, c.look.blink + i);
         p.x = x;
         p.y = 0;
@@ -1778,10 +1829,10 @@
           show(c.prop, alpha, action === "celebrate" ? `rotate(${Math.sin(t * 8) * 10}deg)` : "none");
         }
         if (c.bubble) {
-          const bx = clamp(x - 200, 40, W - 440);
+          const bx = clamp(x - 200 + (c.lean || 0), 40, W - 440);
           const by = Math.max(bubbleTop, headTop - 185);
           place(c.bubble, bx, by, 400, 150);
-          const pb = ease.back(prog(t, bubbleAt, 0.35));
+          const pb = ease.back(prog(t, Math.max(bubbleAt, talkFrom), 0.35));
           show(c.bubble, clamp(pb), `scale(${lerp(0.5, 1, pb)})`);
           // The tail points down at the speaker's head, under the bubble.
           place(c.bubble._tail, clamp(x - 17, bx + 30, bx + 336), by + 132, 34, 34);
@@ -1790,7 +1841,7 @@
         if (c.thought) {
           // Beside the head, in front of the face.
           place(c.thought, clamp(x + dir * 120 - 75, 40, W - 190), Math.max(bubbleTop, headTop - 40), 150, 90);
-          const pt = ease.back(prog(t, c.at + 0.4, 0.35));
+          const pt = ease.back(prog(t, Math.max(c.at + 0.4, talkFrom), 0.35));
           show(c.thought, clamp(pt), `scale(${lerp(0.4, 1, pt)})`);
         }
       });
@@ -1804,21 +1855,15 @@
         x.rig.root.setAttribute("opacity", ease.out(prog(t, scene.start + 0.05 * i, 0.3)).toFixed(3));
       });
       if (piece) arrive(piece, t, scene.start + 0.3, 0, 60);
-      if (note && cast[0]) {
-        // Above the first actor's head, the arrow coming down to it from the side.
-        const c = cast[0];
-        const headX = c.home;
-        const headTop = FLOOR - BASE * c.look.scale * 590;
-        const nx = clamp(headX - 40, 30, W - 450);
-        const ny = Math.max(caption ? 440 : 344, headTop - 150);
-        place(note, nx, ny, 420, 84);
-        const from = [clamp(headX + 150, nx + 60, nx + 400), ny + 86];
-        const to = [headX + 52, headTop + 14];
-        const mid = [from[0] + 10, (from[1] + to[1]) / 2 + 10];
+      if (note) {
+        const { from, mid, to } = spot;
         const tip = Math.atan2(to[1] - mid[1], to[0] - mid[0]);
         const wing = (a) => `${(to[0] - 26 * Math.cos(tip + a)).toFixed(1)} ${(to[1] - 26 * Math.sin(tip + a)).toFixed(1)}`;
         arrow.setAttribute("d", `M ${from[0]} ${from[1]} Q ${mid[0]} ${mid[1]} ${to[0]} ${to[1]} M ${wing(0.5)} L ${to[0]} ${to[1]} L ${wing(-0.5)}`);
-        const pn = ease.out(prog(t, Math.max(scene.start + 0.6, bubbleAt), 0.35));
+        // With nowhere free it shows first and makes way when the line starts.
+        const pn = spot.until < Infinity
+          ? ease.out(prog(t, scene.start + 0.3, 0.35)) * (1 - ease.out(prog(t, spot.until - 0.25, 0.25)))
+          : ease.out(prog(t, Math.max(scene.start + 0.6, bubbleAt), 0.35));
         show(note, pn, `translateY(${(1 - pn) * 20}px)`);
         arrow.setAttribute("opacity", pn.toFixed(3));
       }

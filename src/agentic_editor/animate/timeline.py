@@ -23,6 +23,7 @@ MIN_SCENE = {
 # How long a character takes to come on (player.js ENTRANCES); its steps are heard meanwhile.
 ENTRANCES = {"walk_in": (1.6, 0.42), "run_in": (0.9, 0.24)}  # (seconds, a step every)
 WALK_OUT = 1.6
+NOTE_FIRST = 2.0  # how long a note shows before the lines it has no room beside
 CHUNK_WORDS = 3
 CHUNK_CHARS = 18
 COUNT = 1.3  # seconds a stat counts up (player.js stat)
@@ -46,6 +47,9 @@ class SceneTime:
     voice_end: float
     words: list[Word]  # absolute times
     beats: list[float]
+    # Two actors with a note and a line: no room for both over their heads, so the note shows
+    # first and the lines (bubble, thought, their pop) wait until here.
+    talk_from: float | None = None
 
 
 @dataclass
@@ -246,7 +250,7 @@ def _scene_cues(s: SceneTime, visual) -> list[Cue]:
         elif actor.action == "shocked":
             out.append(Cue(at + 0.15, "pop", -20.0))
     if any(a.says for a in visual.actors):
-        out.append(Cue(s.beats[-1], "pop", -23.0))
+        out.append(Cue(max(s.beats[-1], s.talk_from or 0.0), "pop", -23.0))
     return out
 
 
@@ -301,7 +305,16 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
             b = [max(at + 0.7, voice_end - 0.45)]
         else:
             b = beats(scene, at, voice_start, voice_end, words)
-        times.append(SceneTime(kind, at, end, voice_start, voice_end, words, b))
+        talk_from = None
+        v = scene.visual
+        if (
+            kind == "scene"
+            and v.detail
+            and len(v.actors) >= 2
+            and any(a.says or a.action == "think" for a in v.actors[:2])
+        ):
+            talk_from = min(at + NOTE_FIRST, end - 1.2)
+        times.append(SceneTime(kind, at, end, voice_start, voice_end, words, b, talk_from))
         at = end
     timeline = Timeline(times, at + TAIL)
     timeline.captions = captions(times)
@@ -330,6 +343,7 @@ def player_data(plan: Plan, timeline: Timeline) -> dict:
                 "voiceStart": round(s.voice_start, 3),
                 "voiceEnd": round(s.voice_end, 3),
                 "beats": [round(b, 3) for b in s.beats],
+                "talkFrom": round(s.talk_from, 3) if s.talk_from is not None else None,
                 "words": [word(w) for w in s.words],
                 "visual": visual,
             }
