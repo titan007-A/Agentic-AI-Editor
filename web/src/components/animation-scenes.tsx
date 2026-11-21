@@ -99,7 +99,11 @@ const FIELDS: Record<AnimationVisualKind, Field[]> = {
     { key: "value", label: "Word or number (max 8)" },
     { key: "text", label: "Caption" },
   ],
-  scene: [{ key: "text", label: "Caption on top (optional, e.g. Years later)" }],
+  scene: [
+    { key: "text", label: "Title of this part (a name, a place, Years later...)" },
+    { key: "detail", label: "Red note with an arrow at the first person (optional)" },
+    { key: "emoji", label: "Big object beside them (one emoji, optional)" },
+  ],
 };
 
 const ITEMS: Partial<Record<AnimationVisualKind, { keys: (keyof AnimationItem)[]; max: number }>> =
@@ -531,9 +535,18 @@ function ActorsEditor({
   );
   return (
     <div className="space-y-2">
-      {choose(`setting-${index}`, "Where", visual.setting || "room", SETTINGS, (setting) =>
-        onChange({ ...visual, setting }),
-      )}
+      <div className="flex flex-wrap gap-2">
+        {choose(`setting-${index}`, "Where", visual.setting || "room", SETTINGS, (setting) =>
+          onChange({ ...visual, setting }),
+        )}
+        {choose(
+          `crowd-${index}`,
+          "People around",
+          String(visual.crowd ?? 0),
+          ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+          (crowd) => onChange({ ...visual, crowd: Number(crowd) }),
+        )}
+      </div>
       {actors.map((actor, k) => (
         <div key={k} className="flex flex-wrap items-end gap-2 rounded-md bg-[var(--field)] p-2">
           {choose(`actor-${index}-${k}`, `Who ${k + 1}`, actor.name, names, (name) =>

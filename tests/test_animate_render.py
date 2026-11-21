@@ -71,10 +71,17 @@ def frame_at(video: Path, t: float, dest: Path) -> Image.Image:
     return Image.open(dest).convert("RGB")
 
 
-@pytest.mark.parametrize("style", ["glow", "paper", "story", "kinetic"])
+@pytest.mark.parametrize("style", ["glow", "paper", "story", "kinetic", "stick"])
 def test_the_video_is_the_preview_frame_for_frame(tmp_path, style):
-    if style == "story":  # characters acting
-        plan = story_plan(scenes=[s.model_dump() for s in story_plan().scenes[1:3]])
+    if style in ("story", "stick"):  # characters acting
+        scenes = [s.model_dump() for s in story_plan().scenes[1:3]]
+        scenes[0]["visual"] |= {
+            "text": "Hisashi Ouchi",
+            "detail": "83 days",
+            "crowd": 3,
+            "emoji": "☢️",
+        }
+        plan = story_plan(style=style, scenes=scenes)
     else:
         plan = sample_plan(style=style, scenes=[s.model_dump() for s in sample_plan().scenes[:2]])
     data = player_data(plan, build(plan, voices_for(plan)))

@@ -201,6 +201,18 @@ Subtitles sit at y 1180-1420; visuals in y 250-1120.
   edge to hold a scene longer after its voice (0-3 s), drag a scene onto another to move
   it, tap to play from it; the preview's time moves along it.
 
+## Stick figure style (owner's reference, 2026-11-21)
+
+- Style `stick`: the stick-figure explainer look (a white page, black line people with a
+  round white head and a face turned to the front, hair only where it says who someone
+  is, the face red when angry and blue when sad or scared; a brown or grey floor band,
+  side walls, a few black outlines; a hand-written font, Patrick Hand, OFL).
+- Each part's title big on top: the scene's `text` (a person's name, a place), else the
+  reel's title.
+- For every style: a scene's `detail` is a red note with an arrow at the first actor
+  ("83 days"); its `emoji` a big object standing beside them; `crowd` 0-8 more people
+  standing around.
+
 ## Phase 3: autopilot
 
 - One autopilot per account (`animation_autopilots`): niche, topics (one per line, first

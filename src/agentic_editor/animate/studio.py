@@ -31,7 +31,7 @@ BUSY = ("drafting", "changing", "voicing")  # a task is working on it
 HISTORY = 20
 STYLE_NAMES = {
     "glow": "Neon Glow", "paper": "Clean Paper", "story": "Character story",
-    "kinetic": "Bold kinetic text",
+    "kinetic": "Bold kinetic text", "stick": "Stick figure",
 }  # fmt: skip
 
 

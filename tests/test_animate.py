@@ -669,3 +669,21 @@ def test_names_overrule_a_look_that_disagrees_and_big_things_are_not_held():
     }
     eli, raj = plan.scenes[0].visual.actors
     assert eli.prop == "" and raj.prop == "🎁"
+
+
+def test_stick_figure_scenes_keep_their_title_note_object_and_crowd():
+    plan = story_plan(
+        style="stick",
+        scenes=[scene("Hisashi worked at a nuclear plant in 1999.", "scene", text="Hisashi Ouchi",
+                      detail="83 days", emoji="☢️", crowd=12,
+                      actors=[{"name": "Maya", "action": "sad", "mood": "sad"}])],
+    )  # fmt: skip
+    v = plan.scenes[0].visual
+    assert plan.style == "stick" and (v.text, v.detail, v.emoji, v.crowd) == (
+        "Hisashi Ouchi",
+        "83 days",
+        "☢️",
+        8,
+    )
+    assert sample_plan(scenes=[scene("x", "title", text="Hi", crowd=5)]).scenes[0].visual.crowd == 0
+    assert planner._style_for("stick", "facts") == "stick"

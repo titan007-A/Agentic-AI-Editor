@@ -30,7 +30,7 @@ PLAYER_FILES = {
 FONT_NAMES = {
     "Montserrat-ExtraBold", "Montserrat-Bold", "Inter-SemiBold", "Inter-Bold", "Inter-Medium",
     "Anton-Regular", "SourceSerif4-Bold", "SourceSerif4-Semibold", "Rubik-ExtraBold",
-    "Rubik-Bold", "Rubik-SemiBold",
+    "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular",
 }  # fmt: skip
 # The player page only runs its own script and shows what it is sent as text.
 PLAYER_CSP = (
@@ -42,7 +42,7 @@ PLAYER_CSP = (
 class AnimationRequest(BaseModel):
     idea: str = Field(min_length=3, max_length=300)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper", "story", "kinetic"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
 
@@ -59,7 +59,7 @@ class ChangeRequest(BaseModel):
 class StudioChoice(BaseModel):
     """Changes the studio's own controls make at once (no writing): style and voice."""
 
-    style: Literal["glow", "paper", "story", "kinetic"] | None = None
+    style: Literal["glow", "paper", "story", "kinetic", "stick"] | None = None
     voice: str | None = Field(default=None, max_length=32)
 
 
@@ -70,7 +70,7 @@ class AutopilotSettings(BaseModel):
     hour: int = Field(default=10, ge=0, le=23)
     per_day: int = Field(default=1, ge=1, le=3)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper", "story", "kinetic"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
     channel_id: str | None = Field(default=None, max_length=32)
