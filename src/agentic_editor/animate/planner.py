@@ -182,8 +182,9 @@ _VISUAL = {
         "items": {"type": "array", "items": _ITEM, "maxItems": 5},
         "setting": {"type": "string", "enum": ["", *SETTINGS]},
         "actors": {"type": "array", "items": _ACTOR, "maxItems": 2},
+        "crowd": {"type": "integer", "minimum": 0, "maximum": 8},
     },
-    "required": ["kind", *_TEXT_FIELDS, "items", "setting", "actors"],
+    "required": ["kind", *_TEXT_FIELDS, "items", "setting", "actors", "crowd"],
 }
 _CAST = {
     "type": "object",
@@ -259,7 +260,11 @@ Stories and lessons are acted by characters:
   action that shows what happens (walk_in when someone arrives, think while deciding,
   celebrate when it works, sad or cry when it hurts, shocked at the twist, give to hand
   something over, read for a phone or a book) and a mood. A prop is one emoji they hold.
-  "says" is a short line in a bubble, only when someone speaks.
+  "says" is a short line in a bubble, only when someone speaks. A scene's text titles it
+  (who or where this part is about), detail is a short red note pointing at the first
+  actor ("40 days", "Skin peeling off"), emoji a big object beside them, crowd the people
+  around (a mob, a class, a jury).
+- True stories from history are told the same way: the real people as the cast.
 - A title can open it; a quote or reveal can close it with the lesson or the twist.
 - Narration is told by a storyteller in present tense: "Maya opens the box."
   Example scene: {"narration": "Leo finally opens the letter, and his hands start to shake.",
@@ -340,7 +345,7 @@ def _voice_for(choice: str, voice_kind: str, kind: str, mood: str) -> str:
 def _style_for(choice: str, kind: str, acted: bool = False) -> str:
     """The style asked for, else by the content: characters for stories and lessons told
     with them, Neon Glow for facts and news."""
-    if choice in ("glow", "paper", "story", "kinetic"):
+    if choice in ("glow", "paper", "story", "kinetic", "stick"):
         return choice
     if kind in ("lesson", "story"):
         return "story" if acted else "paper"

@@ -42,6 +42,7 @@ const STYLES = [
   ["paper", "Clean Paper"],
   ["story", "Character story"],
   ["kinetic", "Bold kinetic text"],
+  ["stick", "Stick figure"],
 ] as const;
 const LENGTHS = [
   ["auto", "Auto: AI decides"],

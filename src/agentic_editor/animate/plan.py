@@ -14,14 +14,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 KINDS = ("facts", "lesson", "story", "news")
-STYLES = ("glow", "paper", "story", "kinetic")
+STYLES = ("glow", "paper", "story", "kinetic", "stick")
 MOODS = ("mysterious", "uplifting", "emotional", "tense", "curious")
 LENGTHS = ("auto", "short", "medium", "long")
 # Narration words a reel of each length runs to (Kokoro speaks about 2.6 words a second).
 WORDS = {"short": (50, 85), "medium": (90, 150), "long": (155, 230), "auto": (70, 130)}
 
 Kind = Literal["facts", "lesson", "story", "news"]
-Style = Literal["glow", "paper", "story", "kinetic"]
+Style = Literal["glow", "paper", "story", "kinetic", "stick"]
 Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious"]
 VisualKind = Literal[
     "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots",
@@ -96,7 +96,10 @@ CATALOGUE: dict[str, tuple[str, str]] = {
         + "), mood (one of "
         + ", ".join(FEELINGS)
         + "), prop (one emoji they hold or use, or ''), says (a line in a speech bubble, max "
-        "6 words, or '')}, text (optional caption such as 'Years later', max 4 words)",
+        "6 words, or '')}, text (the scene's title, e.g. a person's name or 'Years later', max 4 "
+        "words), detail (a red note with an arrow at the first actor, e.g. '40 days', max 4 "
+        "words, or ''), emoji (one big object standing beside them, e.g. a barrel, or ''), crowd "
+        "(0-8 more people standing around)",
     ),
 }
 
@@ -149,6 +152,7 @@ class Visual(Loose):
     items: list[Item] = Field(default_factory=list)
     setting: str = ""
     actors: list[Actor] = Field(default_factory=list)
+    crowd: int = 0  # extra people standing around in a character scene
 
 
 class Scene(Loose):
@@ -259,6 +263,7 @@ def tidy(plan: Plan) -> Plan:
                 "items": items,
                 "setting": setting_of(v),
                 "actors": actors,
+                "crowd": max(0, min(8, int(v.crowd or 0))) if v.kind == "scene" else 0,
             }
         )
         narration = " ".join(scene.narration.split())

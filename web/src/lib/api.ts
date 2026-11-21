@@ -787,6 +787,8 @@ export type AnimationVisual = {
   /** Character scenes: where it happens and who acts. */
   setting?: string;
   actors?: AnimationActor[];
+  /** People standing around in a character scene (0-8). */
+  crowd?: number;
 };
 
 export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
@@ -796,7 +798,7 @@ export type AnimationPlan = {
   v: number;
   title: string;
   kind: "facts" | "lesson" | "story" | "news";
-  style: "glow" | "paper" | "story" | "kinetic";
+  style: "glow" | "paper" | "story" | "kinetic" | "stick";
   voice: string;
   mood: string;
   scenes: AnimationScene[];

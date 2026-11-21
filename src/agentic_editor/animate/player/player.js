@@ -34,6 +34,7 @@
     "Rubik-ExtraBold",
     "Rubik-Bold",
     "Rubik-SemiBold",
+    "PatrickHand-Regular",
   ];
 
   const THEMES = {
@@ -88,6 +89,24 @@
       glow: false,
       story: true,
       palette: "story",
+    },
+    stick: {
+      bg: "#FFFFFF",
+      text: "#111111",
+      muted: "rgba(17,17,17,0.72)",
+      accent: "#E53935",
+      accent2: "#1E88E5",
+      accent3: "#FFD54F",
+      card: "#ffffff",
+      ink: "#111111",
+      display: "PatrickHand-Regular",
+      body: "PatrickHand-Regular",
+      number: "PatrickHand-Regular",
+      caption: "PatrickHand-Regular",
+      quote: "PatrickHand-Regular",
+      glow: false,
+      stick: true,
+      palette: "stick",
     },
     kinetic: {
       bg: "#0A0A0A",
@@ -253,6 +272,13 @@
     canvas.height = H;
     const ctx = canvas.getContext("2d");
     const r = rng(seed);
+    if (theme.stick) {
+      return () => {
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = theme.bg;
+        ctx.fillRect(0, 0, W, H);
+      };
+    }
     if (theme.kinetic) {
       return (t) => {
         ctx.globalAlpha = 1;
@@ -1103,6 +1129,10 @@
 
   // The parts of one character, built once; draw(p) places them for pose p.
   function makeCharacter(look, theme, parent) {
+    // Stick figure style: black lines, a white round head with the face to the front, hair
+    // only where it says who someone is; the face colours with the mood.
+    const stick = Boolean(theme.stick);
+    if (stick) look = { ...look, shirt: "#111111", pants: "#111111", skin: "#111111", hair: "#111111" };
     const root = svg("g", {}, parent);
     const outline = theme.glow ? theme.accent : theme.ink;
     const lineW = theme.story ? 0 : theme.glow ? 3 : 4;
@@ -1113,42 +1143,51 @@
       }
       return el;
     };
-    const shadow = svg("ellipse", { cx: 0, cy: 6, rx: 80, ry: 14, fill: "rgba(0,0,0,0.16)" }, root);
+    const shadow = svg("ellipse", { cx: 0, cy: 6, rx: 80, ry: 14, fill: stick ? "rgba(0,0,0,0)" : "rgba(0,0,0,0.16)" }, root);
     const body = svg("g", {}, root);
     const limbParts = (color, w, back) => {
       const g = svg("g", {}, body);
-      const a = svg("line", { stroke: back ? shade(color, 0.18) : color, "stroke-width": w, "stroke-linecap": "round" }, g);
+      const a = svg("line", { stroke: stick ? (back ? "#2b2b2b" : "#111111") : back ? shade(color, 0.18) : color, "stroke-width": stick ? 7 : w, "stroke-linecap": "round" }, g);
       return { g, a };
     };
     // Back limbs first, then the body, then the front limbs.
     const legB = { up: limbParts(look.pants, 38, true), low: limbParts(look.pants, 34, true) };
-    const shoeB = svg("ellipse", { rx: 28, ry: 13, fill: shade("#3a3a3a", 0.25) }, body);
+    const shoeB = svg("ellipse", { rx: stick ? 0 : 28, ry: stick ? 0 : 13, fill: shade("#3a3a3a", 0.25) }, body);
     const armB = { up: limbParts(look.shirt, 30, true), low: limbParts(look.skin, 25, true) };
-    const handB = svg("circle", { r: 15, fill: shade(look.skin, 0.12) }, body);
+    const handB = svg("circle", { r: stick ? 0 : 15, fill: shade(look.skin, 0.12) }, body);
     const longHair = look.hairStyle === "long" ? svg("ellipse", { rx: 70, ry: 98, fill: look.hair }, body) : null;
-    const torso = stroke(svg("rect", { x: -56, y: RIG.shoulderY - 28, width: 112, height: 214, rx: 48, fill: look.shirt }, body));
-    const skirt = look.skirt ? stroke(svg("path", { fill: shade(look.shirt, 0.15) }, body)) : null;
+    const torso = stick
+      ? svg("rect", { x: -3.5, y: RIG.shoulderY - 28, width: 7, height: 200, rx: 3.5, fill: "#111111" }, body)
+      : stroke(svg("rect", { x: -56, y: RIG.shoulderY - 28, width: 112, height: 214, rx: 48, fill: look.shirt }, body));
+    const skirt = look.skirt && !stick ? stroke(svg("path", { fill: shade(look.shirt, 0.15) }, body)) : null;
     const legF = { up: limbParts(look.pants, 38, false), low: limbParts(look.pants, 34, false) };
-    const shoeF = svg("ellipse", { rx: 28, ry: 13, fill: "#3a3a3a" }, body);
+    const shoeF = svg("ellipse", { rx: stick ? 0 : 28, ry: stick ? 0 : 13, fill: "#3a3a3a" }, body);
     const head = svg("g", {}, body);
     const bun = look.hairStyle === "bun" ? svg("circle", { cx: -42, cy: -70, r: 30, fill: look.hair }, head) : null;
     const tail = look.hairStyle === "pigtails" ? svg("ellipse", { cx: -74, cy: 14, rx: 22, ry: 30, fill: look.hair }, head) : null;
-    const skull = stroke(svg("circle", { cx: 0, cy: 0, r: RIG.headR, fill: look.skin }, head));
-    svg("circle", { cx: -38, cy: 4, r: 13, fill: shade(look.skin, 0.1) }, head); // ear
-    stroke(svg("path", { d: HAIR_PATHS[look.hairStyle] || HAIR_PATHS.short, fill: look.hair }, head));
-    const blush = svg("circle", { cx: 42, cy: 20, r: 13, fill: "#FF7F7F", opacity: 0 }, head);
-    const eyeB = svg("ellipse", { cx: 12, cy: -6, rx: 8, ry: 11, fill: "#1d1d1d" }, head);
-    const eyeF = svg("ellipse", { cx: 42, cy: -6, rx: 8.5, ry: 11.5, fill: "#1d1d1d" }, head);
-    const browB = svg("line", { x1: 2, y1: -26, x2: 22, y2: -26, stroke: shade(look.hair, 0.1), "stroke-width": 6, "stroke-linecap": "round" }, head);
-    const browF = svg("line", { x1: 32, y1: -27, x2: 54, y2: -27, stroke: shade(look.hair, 0.1), "stroke-width": 6, "stroke-linecap": "round" }, head);
-    svg("path", { d: "M 64 2 Q 74 10 63 16", fill: "none", stroke: shade(look.skin, 0.28), "stroke-width": 4, "stroke-linecap": "round" }, head); // nose
-    const mouth = svg("path", { fill: "none", stroke: "#5b2b22", "stroke-width": 5, "stroke-linecap": "round" }, head);
-    const mouthOpen = svg("ellipse", { cx: 32, cy: 32, rx: 11, ry: 4, fill: "#5b2b22" }, head);
+    const skull = stick
+      ? svg("circle", { cx: 0, cy: 0, r: RIG.headR, fill: "#ffffff", stroke: "#111111", "stroke-width": 6 }, head)
+      : stroke(svg("circle", { cx: 0, cy: 0, r: RIG.headR, fill: look.skin }, head));
+    if (!stick) svg("circle", { cx: -38, cy: 4, r: 13, fill: shade(look.skin, 0.1) }, head); // ear
+    const hasHair = !stick || ["long", "bun", "pigtails"].includes(look.hairStyle);
+    if (hasHair) stroke(svg("path", { d: HAIR_PATHS[look.hairStyle] || HAIR_PATHS.short, fill: look.hair }, head));
+    // The face, turned to the front for stick figures.
+    const face = svg("g", stick ? { transform: "translate(-27 2)" } : {}, head);
+    const ink = stick ? "#111111" : "#1d1d1d";
+    const blush = svg("circle", { cx: 42, cy: 20, r: 13, fill: "#FF7F7F", opacity: 0 }, face);
+    const eyeB = svg("ellipse", { cx: 12, cy: -6, rx: 8, ry: 11, fill: ink }, face);
+    const eyeF = svg("ellipse", { cx: 42, cy: -6, rx: 8.5, ry: 11.5, fill: ink }, face);
+    const browB = svg("line", { x1: 2, y1: -26, x2: 22, y2: -26, stroke: stick ? ink : shade(look.hair, 0.1), "stroke-width": 6, "stroke-linecap": "round" }, face);
+    const browF = svg("line", { x1: 32, y1: -27, x2: 54, y2: -27, stroke: stick ? ink : shade(look.hair, 0.1), "stroke-width": 6, "stroke-linecap": "round" }, face);
+    if (!stick) svg("path", { d: "M 64 2 Q 74 10 63 16", fill: "none", stroke: shade(look.skin, 0.28), "stroke-width": 4, "stroke-linecap": "round" }, head); // nose
+    const mouth = svg("path", { fill: "none", stroke: stick ? ink : "#5b2b22", "stroke-width": 5, "stroke-linecap": "round" }, face);
+    const mouthOpen = svg("ellipse", { cx: 32, cy: 32, rx: 11, ry: 4, fill: stick ? ink : "#5b2b22" }, face);
     if (look.glasses) {
-      for (const cx of [12, 42]) svg("circle", { cx, cy: -6, r: 15, fill: "none", stroke: "#333", "stroke-width": 4 }, head);
+      for (const cx of [12, 42]) svg("circle", { cx, cy: -6, r: 15, fill: "none", stroke: "#333", "stroke-width": 4 }, face);
     }
-    const tears = [0, 1].map(() => svg("ellipse", { rx: 5, ry: 8, fill: "#5DADEC", opacity: 0 }, head));
-    const sweat = svg("ellipse", { cx: 56, cy: -44, rx: 6, ry: 10, fill: "#7FC8F8", opacity: 0 }, head);
+    const tears = [0, 1].map(() => svg("ellipse", { rx: 5, ry: 8, fill: "#5DADEC", opacity: 0 }, face));
+    const sweat = svg("ellipse", { cx: 56, cy: -44, rx: 6, ry: 10, fill: "#7FC8F8", opacity: 0 }, face);
+    const TINTS = { angry: "#F28B82", sad: "#9ED8F5", scared: "#9ED8F5" };
     const armF = { up: limbParts(look.shirt, 30, false), low: limbParts(look.skin, 25, false) };
     const handF = svg("circle", { r: 15, fill: look.skin }, body);
 
@@ -1230,7 +1269,8 @@
         eyeF.setAttribute("cx", String(42 + lx));
         eyeB.setAttribute("cy", String(-6 + ly));
         eyeF.setAttribute("cy", String(-6 + ly));
-        blush.setAttribute("opacity", mood === "happy" ? "0.35" : "0");
+        blush.setAttribute("opacity", mood === "happy" && !stick ? "0.35" : "0");
+        if (stick) skull.setAttribute("fill", TINTS[mood] || "#ffffff");
         const open = p.open || (mood === "surprised" ? 0.8 : 0);
         if (open > 0.05) {
           mouth.setAttribute("d", "");
@@ -1392,6 +1432,7 @@
   const SCENE_PALETTES = {
     story: { sky: "#BFE3FF", sky2: "#E6F4FF", wall: "#FCE6D2", floor: "#EAC9A6", line: null, wood: "#B9835A", leaf: "#59B36B", leaf2: "#3E9A55", glass: "#D7EEFF", building: ["#F6B8A0", "#A9C8F0", "#F7D488", "#B8E0C2", "#D6B8F0"], window: "#FFF6D6", night: "#1D2450", board: "#2F6B4F", curtain: "#C8283C", grass: "#8ED081", sun: "#FFD45C" },
     paper: { sky: "#E9E4D8", sky2: "#F5EFE3", wall: "#F1EADB", floor: "#E2D6BF", line: "#1f1c18", wood: "#C9A27A", leaf: "#9DBF8C", leaf2: "#86AD76", glass: "#E6EEF0", building: ["#E8DCC6", "#D9E1E4", "#EADBB8", "#DCE5D3", "#E3D9E8"], window: "#FFFFFF", night: "#3A3F5C", board: "#5E7A64", curtain: "#B4534A", grass: "#C8D6A8", sun: "#F2C14E" },
+    stick: { sky: "#FFFFFF", sky2: "#FFFFFF", wall: "#FFFFFF", floor: "#EFEBE9", line: "#111111", wood: "#8D6E63", leaf: "#FFFFFF", leaf2: "#FFFFFF", glass: "#FFFFFF", building: ["#FFFFFF"], window: "#FFFFFF", night: "#FFFFFF", board: "#2E4D3A", curtain: "#8D6E63", grass: "#FFFFFF", sun: "#FFFFFF" },
     glow: { sky: "#0B1033", sky2: "#141B4D", wall: "#121842", floor: "#0A0E2A", line: "#38e1ff", wood: "#2A2F6A", leaf: "#1E6F5C", leaf2: "#145244", glass: "#1C2A66", building: ["#1A2058", "#22296B", "#1B2560", "#252C70", "#1D2464"], window: "#38e1ff", night: "#070A22", board: "#13324A", curtain: "#5A1B4A", grass: "#103A3A", sun: "#ff4fd8" },
   };
 
@@ -1423,6 +1464,10 @@
       circle(x - 60 * s, FLOOR - 220 * s, 70 * s, P.leaf2);
       circle(x + 62 * s, FLOOR - 228 * s, 66 * s, P.leaf2);
     };
+    if (theme.stick) {
+      stickSetting(name, g, r);
+      return g;
+    }
     switch (name) {
       case "street": {
         sky(P.sky, P.sky2);
@@ -1524,6 +1569,90 @@
     return g;
   }
 
+  // Stick figure style: a white page, a floor and a few black outlines; the people tell it.
+  function stickSetting(name, g, r) {
+    const line = { stroke: "#111111", "stroke-width": 5, "stroke-linejoin": "round", fill: "none" };
+    const band = (color, h) => {
+      svg("rect", { x: 0, y: FLOOR, width: W, height: h, fill: color }, g);
+      svg("rect", { x: 0, y: FLOOR + h, width: W, height: H - FLOOR - h, fill: "#FFFFFF" }, g);
+      svg("line", { x1: 0, y1: FLOOR, x2: W, y2: FLOOR, stroke: "#111111", "stroke-width": 4 }, g);
+    };
+    const walls = () => {
+      svg("rect", { x: 0, y: 220, width: 46, height: FLOOR - 220, fill: "#6E5D55" }, g);
+      svg("rect", { x: W - 46, y: 220, width: 46, height: FLOOR - 220, fill: "#6E5D55" }, g);
+    };
+    const tree = (x, s) => {
+      svg("line", { x1: x, y1: FLOOR, x2: x, y2: FLOOR - 200 * s, ...line }, g);
+      svg("circle", { cx: x, cy: FLOOR - 270 * s, r: 85 * s, ...line, fill: "#FFFFFF" }, g);
+    };
+    svg("rect", { x: 0, y: 0, width: W, height: FLOOR, fill: "#FFFFFF" }, g);
+    switch (name) {
+      case "street":
+        for (const [x, w, h] of [[60, 200, 420], [300, 160, 300], [780, 220, 460]]) {
+          svg("rect", { x, y: FLOOR - h, width: w, height: h, ...line, fill: "#FFFFFF" }, g);
+          for (let wy = FLOOR - h + 40; wy < FLOOR - 80; wy += 90) svg("rect", { x: x + 34, y: wy, width: 40, height: 50, ...line, "stroke-width": 3 }, g);
+        }
+        band("#5B5B5B", 70);
+        break;
+      case "park":
+        tree(170, 1);
+        tree(930, 0.8);
+        band("#8BC34A", 40);
+        break;
+      case "night":
+        svg("circle", { cx: 840, cy: 430, r: 60, ...line }, g);
+        for (let i = 0; i < 9; i++) svg("text", { x: 120 + r() * 840, y: 330 + r() * 300, "font-size": 34, fill: "#111111" }, g).textContent = "*";
+        band("#3E3E3E", 40);
+        break;
+      case "office":
+        svg("rect", { x: 600, y: FLOOR - 190, width: 380, height: 20, ...line, fill: "#A1887F" }, g);
+        svg("line", { x1: 630, y1: FLOOR - 170, x2: 630, y2: FLOOR, ...line }, g);
+        svg("line", { x1: 950, y1: FLOOR - 170, x2: 950, y2: FLOOR, ...line }, g);
+        svg("rect", { x: 720, y: FLOOR - 320, width: 160, height: 120, ...line, fill: "#B0BEC5" }, g);
+        walls();
+        band("#8D6E63", 36);
+        break;
+      case "school":
+        svg("rect", { x: 200, y: 440, width: 680, height: 300, ...line, fill: "#2E4D3A" }, g);
+        walls();
+        band("#8D6E63", 36);
+        break;
+      case "shop":
+        svg("rect", { x: 560, y: FLOOR - 210, width: 420, height: 210, ...line, fill: "#BCAAA4" }, g);
+        walls();
+        band("#8D6E63", 36);
+        break;
+      case "stage":
+        svg("rect", { x: 300, y: FLOOR - 160, width: 480, height: 160, ...line, fill: "#8D6E63" }, g);
+        band("#6D4C41", 40);
+        break;
+      case "plain":
+        band("#9E9E9E", 30);
+        break;
+      default:
+        walls();
+        band("#8D6E63", 36);
+    }
+  }
+
+  // People standing around (scene.crowd): smaller, idle, behind the actors.
+  function crowdOf(n, theme, parent, avoid, seed) {
+    const r = rng(seed);
+    const spots = [];
+    for (let x = 90; x <= W - 90; x += 115) {
+      if (avoid.every((a) => Math.abs(a - x) > 150)) spots.push(x);
+    }
+    const out = [];
+    const count = Math.min(n, spots.length);
+    for (let i = 0; i < count; i++) {
+      const pick = spots.splice(Math.floor(r() * spots.length), 1)[0];
+      const look = lookOf({ name: `extra${seed}-${i}`, look: ["man", "woman", "boy", "girl"][Math.floor(r() * 4)] }, i + 3);
+      const rig = makeCharacter(look, theme, parent);
+      out.push({ rig, x: pick, look, dir: pick < 540 ? 1 : -1, phase: r() * 3 });
+    }
+    return out;
+  }
+
   // ---- the character scene -------------------------------------------------------------
 
   SCENES.scene = (v, theme, root, scene, data) => {
@@ -1540,7 +1669,11 @@
     stageSvg.style.position = "absolute";
     stageSvg.style.left = "0";
     stageSvg.style.top = "0";
-    const homes = actors.length === 1 ? [540] : [330, 750];
+    // A big object beside them (v.emoji) moves them over to make room.
+    const piece = v.emoji ? emoji(root, v.emoji, 230) : null;
+    const homes = piece ? (actors.length === 1 ? [400] : [250, 630]) : actors.length === 1 ? [540] : [330, 750];
+    if (piece) place(piece, 790 + (actors.length === 1 ? 0 : 80), FLOOR - 236, 230, 240);
+    const extras = v.crowd ? crowdOf(v.crowd, theme, stageSvg, piece ? [...homes, 905] : homes, hash(v.text + scene.start)) : [];
     const cast = actors.map((a, i) => {
       const look = lookFor(a.name);
       const chair = a.action === "sit" ? svg("g", {}, stageSvg) : null;
@@ -1588,7 +1721,10 @@
     const bubbleAt = beats[actors.length];
     const sceneEnd = scene.end;
     // An optional caption ("Years later") as a pill under the title bar.
-    const caption = v.text ? textBox(theme, root, theme.body, 290, 352, 500, 64, v.text, 38, 24, theme.glow ? theme.ink : "#ffffff") : null;
+    const caption = v.text && !theme.stick ? textBox(theme, root, theme.body, 290, 352, 500, 64, v.text, 38, 24, theme.glow ? theme.ink : "#ffffff") : null;
+    // A red note with an arrow at the first actor ("40 days", "Skin peeling off").
+    const note = v.detail ? textBox(theme, root, theme.stick ? theme.display : theme.body, 0, 0, 420, 84, v.detail, 64, 32, theme.stick ? "#E53935" : theme.accent) : null;
+    const arrow = note ? svg("path", { fill: "none", stroke: theme.stick ? "#E53935" : theme.accent, "stroke-width": 6, "stroke-linecap": "round", "stroke-linejoin": "round" }, stageSvg) : null;
     if (caption) {
       caption.style.background = theme.glow ? theme.accent : theme.ink;
       caption.style.borderRadius = "34px";
@@ -1656,6 +1792,34 @@
           show(c.thought, clamp(pt), `scale(${lerp(0.4, 1, pt)})`);
         }
       });
+      extras.forEach((x, i) => {
+        const p = pose("idle", "neutral", t - scene.start + x.phase, 0, x.look.blink + i);
+        p.x = x.x;
+        p.y = theme.stick ? 0 : -40; // a line for a floor: everyone stands on it
+        p.dir = x.dir;
+        p.scale = x.look.scale * BASE * 0.78;
+        x.rig.draw(p);
+        x.rig.root.setAttribute("opacity", ease.out(prog(t, scene.start + 0.05 * i, 0.3)).toFixed(3));
+      });
+      if (piece) arrive(piece, t, scene.start + 0.3, 0, 60);
+      if (note && cast[0]) {
+        // Above the first actor's head, the arrow coming down to it from the side.
+        const c = cast[0];
+        const headX = c.home;
+        const headTop = FLOOR - BASE * c.look.scale * 590;
+        const nx = clamp(headX - 40, 30, W - 450);
+        const ny = Math.max(caption ? 440 : 344, headTop - 150);
+        place(note, nx, ny, 420, 84);
+        const from = [clamp(headX + 150, nx + 60, nx + 400), ny + 86];
+        const to = [headX + 52, headTop + 14];
+        const mid = [from[0] + 10, (from[1] + to[1]) / 2 + 10];
+        const tip = Math.atan2(to[1] - mid[1], to[0] - mid[0]);
+        const wing = (a) => `${(to[0] - 26 * Math.cos(tip + a)).toFixed(1)} ${(to[1] - 26 * Math.sin(tip + a)).toFixed(1)}`;
+        arrow.setAttribute("d", `M ${from[0]} ${from[1]} Q ${mid[0]} ${mid[1]} ${to[0]} ${to[1]} M ${wing(0.5)} L ${to[0]} ${to[1]} L ${wing(-0.5)}`);
+        const pn = ease.out(prog(t, Math.max(scene.start + 0.6, bubbleAt), 0.35));
+        show(note, pn, `translateY(${(1 - pn) * 20}px)`);
+        arrow.setAttribute("opacity", pn.toFixed(3));
+      }
       if (caption) arrive(caption, t, scene.start + 0.2);
     };
   };
@@ -1798,6 +1962,30 @@
 
   function header(theme, stage, data) {
     if (theme.kinetic) return { fits: [], update() {} };
+    if (theme.stick) {
+      // A big title on top for each part: the scene's own (who or where), else the reel's.
+      const titles = new Map();
+      const boxFor = (text) => {
+        if (!titles.has(text)) {
+          const box = place(el("div", "abs fit center", stage), 90, SAFE.top + 6, 900, 104);
+          font(box, theme.display, 84, theme.ink);
+          box.textContent = text.toUpperCase();
+          box.style.letterSpacing = "0.02em";
+          box._fit = [84, 40];
+          titles.set(text, box);
+        }
+        return titles.get(text);
+      };
+      const per = data.scenes.map((sc) => boxFor((sc.kind === "scene" && sc.visual && sc.visual.text) || data.title || ""));
+      return {
+        fits: [...titles.values()],
+        update(t) {
+          let i = data.scenes.findIndex((sc) => t >= sc.start && t < sc.end);
+          if (i < 0) i = data.scenes.length - 1;
+          for (const box of titles.values()) box.style.display = box === per[i] ? "flex" : "none";
+        },
+      };
+    }
     const wrap = place(el("div", "abs", stage), 170, SAFE.top + 10, 740, 96);
     const pill = place(el("div", "abs fit center", wrap), 0, 0, 740, 72);
     font(pill, theme.body, 38, theme.text);
