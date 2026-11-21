@@ -972,17 +972,17 @@
       box.style.display = "none";
       box.style.lineHeight = "1.12";
       const line = el("div", "line", box);
+      // Room between words for the marker (paper) and the bigger spoken word (glow).
+      line.style.wordSpacing = theme.glow ? "0.16em" : "0.22em";
       const spans = c.words.map((w, i) => {
         if (i) line.appendChild(document.createTextNode(" "));
         const s = el("span", "word", line, theme.glow ? w.text.toUpperCase() : w.text);
         if (theme.glow) {
           s.style.textShadow = "0 5px 0 rgba(0,0,0,0.55), 0 0 22px rgba(0,0,0,0.9)";
         } else {
-          s.style.webkitTextStroke = `0px`;
           s.style.textShadow = `3px 3px 0 ${theme.card}, -3px -3px 0 ${theme.card}, 3px -3px 0 ${theme.card}, -3px 3px 0 ${theme.card}`;
-          s.style.padding = "0 8px";
-          s.style.margin = "0 -5px";
-          s.style.borderRadius = "14px";
+          // The marker is drawn around the word (a shadow), so it never takes the spaces.
+          s.style.borderRadius = "8px";
         }
         return s;
       });
@@ -1007,7 +1007,8 @@
               s.style.transform = active ? "scale(1.08)" : "scale(1)";
             } else {
               s.style.background = active ? theme.accent3 : "transparent";
-              s.style.transform = active ? "scale(1.06) rotate(-1deg)" : "scale(1)";
+              s.style.boxShadow = active ? `0 0 0 6px ${theme.accent3}` : "none";
+              s.style.transform = active ? "rotate(-1.5deg)" : "none";
             }
           });
         }

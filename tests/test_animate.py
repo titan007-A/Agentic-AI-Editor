@@ -441,7 +441,9 @@ def test_sources_come_from_wikipedia_and_the_web_except_for_lessons(monkeypatch,
     article = caption.Article("Ubar", "https://en.wikipedia.org/wiki/Ubar", "Ubar text " * 900)
     monkeypatch.setattr(caption, "gather_topic", lambda *a, **k: caption.Sources([article]))
     body = "Archaeologists in 1992 found " * 5
-    hits = [{"title": "Lost city found", "href": "https://x.test/a", "body": body},
+    wiki = "https://en.wikipedia.org/wiki/Ubar#History"
+    hits = [{"title": "Ubar - Wikipedia", "href": wiki, "body": body},
+            {"title": "Lost city found", "href": "https://x.test/a", "body": body},
             {"title": "too short", "href": "https://x.test/b", "body": "tiny"}]  # fmt: skip
     found = planner.gather("Ubar", "facts", tmp_path, search=lambda q, n: hits)
     assert [f.url for f in found] == ["https://en.wikipedia.org/wiki/Ubar", "https://x.test/a"]
