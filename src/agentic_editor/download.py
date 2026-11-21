@@ -57,6 +57,10 @@ def signed_in(options: dict) -> Iterator[dict]:
         yield signed
 
 
+# A post's description is kept whole up to the most Instagram allows in a caption, so a
+# preset that posts it again (PostCaption.about "original") has all of it.
+CAPTION_LIMIT = 2200
+
 # --- Instagram reels shown only to people signed in ---------------------------------------
 
 # What Instagram (through yt-dlp) says of a reel it shows only to people signed in: one
@@ -357,7 +361,7 @@ def fetch(url: str, sources_dir: Path) -> Source:
                 title=info.get("title") or key,
                 uploader=info.get("uploader") or "",
                 url=url,
-                description=(info.get("description") or "")[:1000],
+                description=(info.get("description") or "")[:CAPTION_LIMIT],
             )
             meta = json.dumps({**asdict(source), "path": str(path)})
             (dest / "source.json").write_text(meta, encoding="utf-8")

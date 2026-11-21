@@ -295,6 +295,9 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
             message = "all presets rendered" if not result.failures else "rendered, with failures"
             db.add(Event(job_id=job_id, stage="finished", message=message, progress=1.0))
             captioned = [o for o in job.outputs if available[o.preset].post_caption.enabled]
+            for output in [o for o in captioned if available[o.preset].post_caption.copies]:
+                copy_caption(db, output, settings.media_dir)
+            captioned = [o for o in captioned if not available[o.preset].post_caption.copies]
             for output in captioned:
                 output.caption_status = "queued"
                 output.caption_queued_at = datetime.now(UTC)
@@ -322,6 +325,32 @@ def source_text(output_path: Path, media_dir: Path) -> tuple[str, str]:
                 meta = {**found, **{k: v for k, v in meta.items() if v}}
                 break
     return meta.get("title", ""), meta.get("description", "")
+
+
+NO_DESCRIPTION = "the original post has no description to copy"
+
+
+def original_caption(description: str, source_ref: str) -> caption.Written:
+    """The original post's own description, word for word (PostCaption.about "original"):
+    no model writes it, so it is ready the moment the video is."""
+    if not description.strip():
+        raise caption.CaptionError(NO_DESCRIPTION)
+    linked = [{"title": caption.POSTED, "url": source_ref}] if "://" in source_ref else []
+    return caption.Written(description.strip(), linked, [])
+
+
+def copy_caption(db, output: Output, media_dir: Path) -> None:
+    """Give an output its original post's description as its caption at once, instead of
+    queueing a caption that waits behind videos for a turn it doesn't need."""
+    _, description = source_text(Path(output.path), media_dir)
+    try:
+        written = original_caption(description, output.job.source)
+    except caption.CaptionError as exc:
+        output.caption_status, output.caption_notes = "failed", [str(exc)]
+        return
+    output.caption, output.caption_sources = written.text, written.sources
+    output.caption_notes, output.caption_status = written.notes, "done"
+    fun.mark(db, output.id, captioned=True)
 
 
 WATCHED_FRAMES = 6
@@ -526,7 +555,9 @@ def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, ro
                     output.caption_song, output.caption_artist = song, artist
                     db.commit()
 
-        if wanted.about == "video" and not topic and not named[0]:
+        if wanted.about == "original" and not topic and not named[0]:
+            written = original_caption(description, source_ref)
+        elif wanted.about == "video" and not topic and not named[0]:
             # A post about what the video shows (unless a person named a song or topic).
             written = caption_from_video(
                 router, settings, source_ref, edl, path, description, headline, wanted

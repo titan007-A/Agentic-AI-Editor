@@ -2863,6 +2863,51 @@ def test_a_download_only_preset_gets_its_post_caption_after_every_download(env, 
     assert watched  # written from what the video shows
 
 
+def test_a_download_only_preset_can_post_the_original_description_word_for_word(env, monkeypatch):
+    def never(*args, **kwargs):
+        raise AssertionError("copying the description needs no model")
+
+    monkeypatch.setattr(jobs, "write_caption", never)
+    monkeypatch.setattr(jobs, "caption_from_video", never)
+    posted = "GTA 6 leak 😳🔥\n\nFollow for more\n#gta6 #gaming"
+    plain = env.run
+
+    def with_description(source, presets, settings, *rest, **kwargs):
+        result = plain(source, presets, settings, *rest, **kwargs)
+        meta = {"title": "t", "url": source, "description": posted if "/v" in source else ""}
+        (settings.media_dir / "source.json").write_text(json.dumps(meta))
+        return result
+
+    env.run = with_description
+    square = {p["name"]: p for p in env.client.get("/api/presets").json()}["square-1x1"]
+    body = {k: v for k, v in square.items() if k != "post_caption"}
+    body |= {"name": "download-gta", "label": "download gta", "download_only": True,
+             "post_caption": {"enabled": True, "about": "original"}}  # fmt: skip
+    saved = env.client.put("/api/presets/download-gta", json=body)
+    assert saved.status_code == 200, saved.text
+    (job,) = start(env.client, presets=("download-gta",))
+    output = env.client.get(f"/api/jobs/{job['id']}").json()["outputs"][0]
+    # Ready with the video, not queued behind other videos for a turn.
+    assert output["caption_status"] == "done" and output["caption"] == posted
+    assert output["caption_sources"] == [{"title": "The post's own description",
+                                          "url": "https://x.test/v"}]  # fmt: skip
+    # A post without a description says so instead of making one up.
+    (bare,) = start(env.client, sources=("https://x.test/nothing",), presets=("download-gta",))
+    output = env.client.get(f"/api/jobs/{bare['id']}").json()["outputs"][0]
+    assert output["caption_status"] == "failed" and output["caption"] in (None, "")
+    assert output["caption_notes"] == ["the original post has no description to copy"]
+    # Asked for again from the card, it copies again.
+    monkeypatch.setattr(
+        jobs,
+        "write_caption",
+        lambda output_id: jobs.run_caption(output_id, env.sessions, env.settings, CaptionRouter()),
+    )
+    (env.settings.media_dir / "source.json").write_text(json.dumps({"description": "now there"}))
+    assert env.client.post(f"/api/outputs/{output['id']}/caption").status_code == 200
+    output = env.client.get(f"/api/jobs/{bare['id']}").json()["outputs"][0]
+    assert output["caption_status"] == "done" and output["caption"] == "now there"
+
+
 def test_a_reel_goes_to_instagram_as_a_link_anyone_can_open(env, monkeypatch, caplog):
     from agentic_editor import instagram
     from agentic_editor.db import InstagramChannel, User

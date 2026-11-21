@@ -143,15 +143,21 @@ class Headline(Strict):
 
 class PostCaption(Strict):
     """The post's caption, written after every render when enabled, or when asked for from
-    the video's card: about the song (from Wikipedia and Wikidata), or about what the video
-    shows (from watching it, what is said in it, its post's description and Wikipedia)."""
+    the video's card: about the song (from Wikipedia and Wikidata), about what the video
+    shows (from watching it, what is said in it, its post's description and Wikipedia), or
+    the original post's own description word for word ("original": no model writes it)."""
 
     enabled: bool = False
-    about: Literal["song", "video"] = "song"
+    about: Literal["song", "video", "original"] = "song"
     language: str = Field(default="en", pattern=r"^[a-z]{2}$")
     style: str = Field(default="", description="how to write it; empty for the default")
     min_words: int = Field(default=150, ge=10, le=1000)
     max_words: int = Field(default=220, ge=10, le=1000)
+
+    @property
+    def copies(self) -> bool:
+        """Written after every render as the original post's description, word for word."""
+        return self.enabled and self.about == "original"
 
 
 # The post caption a download-only preset writes unless it says otherwise.
