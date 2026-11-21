@@ -16,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import (
     accounts,
+    autopilot,
     caption,
     comments,
     features,
@@ -284,6 +285,10 @@ def run_job(job_id: str, Session: sessionmaker, settings: Settings, run=pipeline
                 )
             job.status, job.stage, job.progress = "done", "done", 1.0
             db.flush()
+            try:
+                autopilot.file_outputs(db, job)
+            except Exception:  # the videos are made; only their folder is missing
+                log.exception("job %s: couldn't put its videos in the feed's folder", job_id)
             fun.record(db, list(job.outputs), job.owner_id)
             # Some versions made and some not is still a finished job; the rest is in its error.
             job.error = "; ".join(result.failures) or None

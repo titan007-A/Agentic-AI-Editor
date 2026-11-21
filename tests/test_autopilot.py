@@ -15,6 +15,11 @@ def Session(tmp_path):
     return make_sessionmaker(tmp_path / "app.db")
 
 
+@pytest.fixture(autouse=True)
+def no_tries_left_over():
+    autopilot._tries.clear()  # feed ids start again at 1 in each test's database
+
+
 def add_feed(Session, **fields) -> int:
     with Session() as db:
         feed = Feed(name="f", kind="folder", location="/x", presets=["p"], **fields)
@@ -231,3 +236,195 @@ def test_one_feed_failing_doesnt_stop_the_others_being_checked(Session):
     autopilot.check_all(Session, start, lister=lambda f: entries(f"v{f.id}"), now=NIGHT)
     with Session() as db:
         assert all(db.get(Feed, i).last_result for i in feeds)
+
+
+def judge_by_name(calls=None):
+    """Says a video is about the topic when its name starts with "gta"; one named "gone"
+    couldn't be downloaded."""
+
+    def judge(topic, found):
+        if calls is not None:
+            calls.append([e.key for e in found])
+        verdicts = []
+        for e in found:
+            if e.key.startswith("gone"):
+                verdicts.append(autopilot.Verdict(None, "couldn't download it: HTTP Error 404"))
+            else:
+                verdicts.append(autopilot.Verdict(e.key.startswith("gta"), "shows a street race"))
+        return verdicts
+
+    return judge
+
+
+def test_a_topic_feed_edits_only_videos_about_it_and_never_looks_twice(Session):
+    feed_id = add_feed(Session, include_existing=True, topic="GTA 5", batch=3)
+    found = lambda f: entries("gta1", "minecraft", "gone", "gta2")  # noqa: E731
+    started, calls = [], []
+    result = check(feed_id, Session, started.append, found, NIGHT, judge_by_name(calls))
+    assert result == (
+        "started 2 new video(s) about GTA 5, passed over 1, 1 couldn't be downloaded (tried "
+        "again next check)"
+    )
+    with Session() as db:
+        items = {i.key: i for i in db.query(FeedItem)}
+        jobs = db.query(Job).all()
+        assert sorted(j.source for j in jobs) == ["/videos/gta1.mp4", "/videos/gta2.mp4"]
+        assert items["minecraft"].skipped and items["minecraft"].job_id is None
+        assert items["minecraft"].reason == "not GTA 5: shows a street race"
+        assert "gone" not in items
+        assert db.get(Feed, feed_id).last_result == result
+    # 3 at a time: the first look took 3, then 1 more for the place left.
+    assert calls == [["gta1", "minecraft", "gone"], ["gta2"]]
+    # Only the one that couldn't be downloaded is tried again, and passed over at the
+    # last try; nothing is started twice.
+    for _ in range(autopilot.TOPIC_TRIES - 1):
+        check(feed_id, Session, started.append, found, NIGHT, judge_by_name(calls))
+    assert calls[2:] == [["gone"]] * (autopilot.TOPIC_TRIES - 1) and len(started) == 2
+    with Session() as db:
+        gone = db.query(FeedItem).filter_by(key="gone").one()
+        assert gone.reason == "couldn't download it: HTTP Error 404"
+    check(feed_id, Session, started.append, found, NIGHT, judge_by_name(calls))
+    assert len(calls) == autopilot.TOPIC_TRIES + 1  # nothing left to look at
+
+
+def test_a_topic_feed_looks_at_a_few_videos_a_check_and_only_while_there_is_room(Session):
+    feed_id = add_feed(Session, include_existing=True, topic="GTA 5", batch=2)
+    names = [f"other{i}" for i in range(10)] + ["gta1", "gta2", "gta3"]
+    found = lambda f: entries(*names)  # noqa: E731
+    started, calls = [], []
+    result = check(feed_id, Session, started.append, found, NIGHT, judge_by_name(calls))
+    assert sum(map(len, calls)) == autopilot.TOPIC_LOOKS
+    assert result == f"started 0 new video(s) about GTA 5, passed over 8, {13 - 8} waiting"
+    check(feed_id, Session, started.append, found, NIGHT, judge_by_name(calls))
+    assert len(started) == 2
+    # Both places are taken: the third isn't even downloaded until one finishes.
+    looked = sum(map(len, calls))
+    assert check(feed_id, Session, started.append, found, NIGHT, judge_by_name(calls)) == (
+        "started 0 new video(s), 1 waiting"
+    )
+    assert sum(map(len, calls)) == looked
+
+
+def test_a_topic_feed_whose_model_cant_be_reached_tries_again_next_time(Session):
+    feed_id = add_feed(Session, include_existing=True, topic="GTA 5")
+
+    def down(topic, found):
+        raise RuntimeError("qwen3.5:4b could not be reached")
+
+    started = []
+    result = check(feed_id, Session, started.append, lambda f: entries("gta1"), NIGHT, down)
+    assert result.endswith("couldn't look at the rest (qwen3.5:4b could not be reached), the "
+                           "next check tries again")  # fmt: skip
+    with Session() as db:
+        assert db.query(FeedItem).count() == 0
+    check(feed_id, Session, started.append, lambda f: entries("gta1"), NIGHT, judge_by_name())
+    assert len(started) == 1
+
+
+def test_a_topic_feeds_first_look_still_only_notes_what_is_there(Session):
+    feed_id = add_feed(Session, topic="GTA 5")
+    calls = []
+    result = check(feed_id, Session, print, lambda f: entries("gta1"), NIGHT, judge_by_name(calls))
+    assert result.startswith("1 video(s) already there") and calls == []
+
+
+def test_the_scan_checks_topic_feeds_on_their_own_thread_and_never_twice_at_once(Session):
+    plain = add_feed(Session, include_existing=True)
+    topical = add_feed(Session, include_existing=True, topic="GTA 5")
+    gate, looking = threading.Event(), threading.Event()
+
+    def judge(topic, found):
+        looking.set()
+        gate.wait(5)  # waiting for the GPU behind a job
+        return judge_by_name()(topic, found)
+
+    started = []
+    lister = lambda f: entries(f"gta{f.id}")  # noqa: E731
+    threads = autopilot.check_all(Session, started.append, lister=lister, now=NIGHT, judge=judge)
+    assert len(threads) == 1 and looking.wait(5)
+    with Session() as db:  # the plain feed didn't wait for it
+        assert db.get(Feed, plain).last_result == "started 1 new video(s)"
+    # The next scan finds that feed's check still going and leaves it be.
+    assert autopilot.check_all(Session, started.append, lister=lister, now=NIGHT) == []
+    gate.set()
+    threads[0].join(5)
+    with Session() as db:
+        assert db.get(Feed, topical).last_result == "started 1 new video(s) about GTA 5"
+    assert len(started) == 2
+
+
+def test_judging_a_topic_shows_the_model_frames_from_each_downloaded_video(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from agentic_editor import download, ffmpeg, pipeline, review
+
+    def resolve(source, settings):
+        if "gone" in source:
+            raise RuntimeError("HTTP Error 404: Not Found")
+        return download.Source(path=tmp_path / "v.mp4", title="t", description="gta rp moments")
+
+    def sample(video, duration, dest, count):
+        assert duration == 30.0 and count == autopilot.TOPIC_FRAMES
+        return [dest / f"frame-{i}.jpg" for i in range(count)]
+
+    monkeypatch.setattr(pipeline, "resolve_source", resolve)
+    monkeypatch.setattr(ffmpeg, "probe", lambda path: SimpleNamespace(duration=30.0))
+    monkeypatch.setattr(review, "sample_frames", sample)
+    asked = []
+
+    class Vision:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def chat_json(self, messages, schema, images, temperature):
+            asked.append((messages[0]["content"], len(images)))
+            fits = len(asked) == 1
+            return {"fits": fits, "why": " a car chase\n in Los Santos " if fits else "a quiz"}
+
+    router = SimpleNamespace(vision=lambda: Vision())
+    found = [Entry("a", "a", "https://x.test/a"), Entry("gone", "g", "https://x.test/gone"),
+             Entry("b", "b", "https://x.test/b")]  # fmt: skip
+    verdicts = autopilot.judge_topic("GTA 5", found, settings=object(), router=router)
+    assert verdicts == [
+        autopilot.Verdict(True, "a car chase in Los Santos"),
+        autopilot.Verdict(None, "couldn't download it: HTTP Error 404: Not Found"),
+        autopilot.Verdict(False, "a quiz"),
+    ]
+    assert len(asked) == 2 and all(n == autopilot.TOPIC_FRAMES for _, n in asked)
+    assert "Is this video GTA 5 content?" in asked[0][0] and "gta rp moments" in asked[0][0]
+
+
+def test_a_feeds_finished_videos_go_in_its_folder_made_once(Session):
+    from agentic_editor.db import Output, PileFolder
+
+    feed_id = add_feed(Session, include_existing=True, folder="GTA-kick", owner_id="emp1")
+    check(feed_id, Session, print, lambda f: entries("a", "b"), NIGHT)
+    with Session() as db:
+        # Someone else's folder of that name, and one in another preset's folder, don't count.
+        db.add_all([PileFolder(owner_id="other", preset="p", name="GTA-kick"),
+                    PileFolder(owner_id="emp1", preset="q", name="GTA-kick")])  # fmt: skip
+        db.commit()
+        for job in db.query(Job).all():
+            job.outputs.append(Output(preset="p", path="/o.mp4", duration=10, planner="m", edl={}))
+            db.flush()
+            autopilot.file_outputs(db, job)
+        db.commit()
+        mine = db.query(PileFolder).filter_by(owner_id="emp1", preset="p").all()
+        assert [f.name for f in mine] == ["GTA-kick"]
+        assert {o.folder_id for o in db.query(Output)} == {mine[0].id}
+
+
+def test_a_feed_without_a_folder_leaves_its_videos_in_the_presets_folder(Session):
+    from agentic_editor.db import Output
+
+    feed_id = add_feed(Session, include_existing=True)
+    check(feed_id, Session, print, lambda f: entries("a"), NIGHT)
+    with Session() as db:
+        job = db.query(Job).one()
+        job.outputs.append(Output(preset="p", path="/o.mp4", duration=10, planner="m", edl={}))
+        db.flush()
+        autopilot.file_outputs(db, job)
+        assert job.outputs[0].folder_id is None

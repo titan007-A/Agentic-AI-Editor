@@ -519,14 +519,19 @@ class FeedRequest(BaseModel):
     active_to: int | None = Field(default=None, ge=0, le=23)
     batch: int = Field(default=3, ge=1, le=20)
     include_existing: bool = False
+    # Only videos about this are edited ("GTA 5"); None: every video.
+    topic: str | None = Field(default=None, max_length=200)
+    # The folder on the piles its videos go in; None: straight in the preset's folder.
+    folder: str | None = Field(default=None, max_length=80)
 
 
 class FeedItemView(BaseModel):
     title: str
     source: str
     job_id: str | None
-    status: str  # the job's, or skipped
+    status: str  # the job's, skipped, or passed over
     created_at: datetime
+    reason: str | None = None  # why it was passed over
 
 
 class FeedView(FeedRequest):
@@ -710,6 +715,8 @@ def job_view(
 
 def feed_view(feed: Feed) -> FeedView:
     def status(item: FeedItem) -> str:
+        if item.reason:
+            return "passed over"
         if item.skipped:
             return "skipped"
         return item.job.status if item.job else "removed"
@@ -724,9 +731,10 @@ def feed_view(feed: Feed) -> FeedView:
             job_id=i.job_id,
             status=status(i),
             created_at=i.created_at,
+            reason=i.reason,
         )
         for i in feed.items
-        if not i.skipped
+        if not i.skipped or i.reason
     ][:10]
     fields = FeedRequest.model_fields.keys()
     return FeedView(
@@ -2938,7 +2946,12 @@ def create_app(
                 422, "the hours start and end at the same time; leave both out for any time"
             )
         notes = body.notes.strip() if body.notes else None
-        return body.model_copy(update={"location": location, "notes": notes or None})
+        topic = " ".join((body.topic or "").split())
+        folder = " ".join((body.folder or "").split())
+        if "/" in folder:
+            raise HTTPException(422, "a folder name can't have a /; name one folder")
+        update = {"location": location, "notes": notes or None, "topic": topic or None}
+        return body.model_copy(update={**update, "folder": folder or None})
 
     @app.get("/api/feeds")
     def list_feeds(account: User, session: DB) -> list[FeedView]:
@@ -2949,9 +2962,15 @@ def create_app(
 
     def look_now(feed: Feed, session: Session) -> None:
         """Check a feed now. An Instagram account takes a minute to look through (see
-        autopilot.instagram_entries), so its check runs on its own while the page polls."""
-        if feed.kind == "link" and autopilot.instagram_handle(feed.location):
-            feed.last_result = "looking for the account's reels; this takes a minute"
+        autopilot.instagram_entries), and a topic feed downloads and looks at its new
+        videos, so their checks run on their own while the page polls."""
+        instagram = feed.kind == "link" and autopilot.instagram_handle(feed.location)
+        if instagram or feed.topic:
+            feed.last_result = (
+                "looking for the account's reels; this takes a minute"
+                if instagram
+                else "looking at the feed; this takes a few minutes"
+            )
             session.commit()
             threading.Thread(
                 target=autopilot.check, args=(feed.id, make_session, jobs.process), daemon=True

@@ -62,6 +62,10 @@ export type FeedFields = {
   active_to: number | null;
   batch: number;
   include_existing: boolean;
+  /** Only videos about this are edited ("GTA 5"); null: every video. */
+  topic: string | null;
+  /** The folder on the piles its videos go in; null: straight in the preset's folder. */
+  folder: string | null;
 };
 
 export type FeedItem = {
@@ -70,6 +74,8 @@ export type FeedItem = {
   job_id: string | null;
   status: string;
   created_at: string;
+  /** Why it was passed over (status "passed over"). */
+  reason?: string | null;
 };
 
 export type Feed = FeedFields & {

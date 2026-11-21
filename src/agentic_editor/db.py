@@ -192,6 +192,12 @@ class Feed(Base):
     batch: Mapped[int] = mapped_column(default=3)  # videos in progress at once, at most
     owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
     include_existing: Mapped[bool] = mapped_column(default=False)
+    # Only videos about this are edited ("GTA 5"); the vision model looks at each new one
+    # first, and passes over the rest (see autopilot.judge_topic). None: every video.
+    topic: Mapped[str | None] = mapped_column(Text)
+    # The folder its finished videos go in, inside their preset's folder on the piles
+    # (PileFolder, made the first time); None: straight in the preset's folder.
+    folder: Mapped[str | None] = mapped_column(Text)
     # Whether the first look, which notes what is already there, has been made. A new feed
     # starts without it; feeds saved before this column existed had made it, so the column
     # is added to them as true.
@@ -218,6 +224,9 @@ class FeedItem(Base):
     source: Mapped[str] = mapped_column(Text)
     job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
     skipped: Mapped[bool] = mapped_column(default=False)  # already there when the feed began
+    # Why it was passed over without being edited: not about the feed's topic, or it couldn't
+    # be looked at. Such an item is skipped too.
+    reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
     feed: Mapped[Feed] = relationship(back_populates="items")

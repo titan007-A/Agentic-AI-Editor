@@ -87,6 +87,12 @@ export function FeedCard({
           ))}
           <Badge variant="outline">{hours}</Badge>
           <Badge variant="outline">{feed.batch} at a time</Badge>
+          {feed.topic && <Badge variant="outline">only {feed.topic}</Badge>}
+          {feed.folder && (
+            <Badge variant="outline">
+              <Folder /> {feed.folder}
+            </Badge>
+          )}
         </div>
         {feed.notes && <p className="text-xs text-muted-foreground">“{feed.notes}”</p>}
         <p className="text-xs text-muted-foreground">
@@ -106,15 +112,25 @@ export function FeedCard({
         {feed.recent.length > 0 && (
           <ul className="space-y-1 text-xs">
             {feed.recent.map((item) => (
-              <li key={`${item.source}-${item.created_at}`} className="flex justify-between gap-2">
-                {item.job_id ? (
-                  <Link href={`/job/?id=${item.job_id}`} className="truncate underline">
-                    {item.title}
-                  </Link>
-                ) : (
-                  <span className="truncate">{item.title}</span>
-                )}
-                <span className="shrink-0 text-muted-foreground">{item.status}</span>
+              <li key={`${item.source}-${item.created_at}`}>
+                <div className="flex justify-between gap-2">
+                  {item.job_id ? (
+                    <Link href={`/job/?id=${item.job_id}`} className="truncate underline">
+                      {item.title}
+                    </Link>
+                  ) : (
+                    <a
+                      href={item.source.startsWith("http") ? item.source : undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="truncate"
+                    >
+                      {item.title}
+                    </a>
+                  )}
+                  <span className="shrink-0 text-muted-foreground">{item.status}</span>
+                </div>
+                {item.reason && <p className="line-clamp-2 text-muted-foreground">{item.reason}</p>}
               </li>
             ))}
           </ul>
