@@ -2,9 +2,10 @@
 cut from the stream and made into a Job (kept whole: the preset only dresses it); and
 followed streamers clipped while they are live (check_live), one stretch at a time.
 
-A hunt reads the chat across its stretch (every few seconds of a short one, sampled over
-a long one), the clips viewers made live, and, for a stretch up to an hour, the sound of
-the stream's lightest quality. Only the moments' clips are taken in full quality, so a
+A hunt reads the chat across its stretch (every few seconds of a short one; a long one is
+sampled, then read again in full around its likely moments), the clips viewers made live,
+and the sound of the stream's lightest quality (all of a stretch up to an hour, else
+around the likely moments). Only the moments' clips are taken in full quality, so a
 six-hour stream costs minutes of video, not hours.
 """
 
@@ -36,7 +37,9 @@ LENGTH = (moments.SHORTEST, moments.LONGEST)  # every clip's length, seconds
 SHORTEST_STRETCH = 20  # seconds; a stretch shorter has no room for a clip
 CHAT_READS = 600  # chat reads a hunt makes at most
 READERS = 4  # chat reads at once
-LOUD_MOST = 3600  # a longer stretch isn't listened to (its sound would be a big download)
+LOUD_MOST = 3600  # a longer stretch is listened to only around its likely moments
+CHAT_AFTER = 15  # the chat is read this far past the stretch: it answers late
+CLOSER = (90, 60)  # around a likely moment of a long stretch, read again: before, after
 FULL_QUALITY = 1080
 LIVE_STRETCH = 600  # a live stream is clipped ten minutes at a time
 LIVE_LAG = 45  # its newest seconds wait: Kick's video of it is a little behind
@@ -153,19 +156,31 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
     def told(message: str) -> None:
         _set(Session, hunt_id, message=message)
 
-    lines, read = read_chat(client, channel_id, light, start, end, told)
+    reach = min(end + CHAT_AFTER, light.duration)
+    lines, read = read_chat(client, channel_id, light, start, reach, told)
     try:
         clips = [(light.time_of(c.made), c.duration, c.views) for c in client.clips(slug, stream)]
     except kick.KickError as exc:
         log.info("hunt %s: viewers' clips unread: %s", hunt_id, exc)
         clips = []
-    loudness = None
-    if end - start <= LOUD_MOST:
-        _set(Session, hunt_id, status="listening", message="listening to the stream")
-        try:
-            loudness = listen(light, start, end)
-        except (OSError, RuntimeError) as exc:
-            log.warning("hunt %s: the stream's sound couldn't be read: %s", hunt_id, exc)
+    sampled = (reach - start) / CHAT_READS > kick.CHAT_SPAN
+    regions = []
+    if sampled or end - start > LOUD_MOST:
+        rough = moments.find(start, end, count * 3, lines, read, None, clips)
+        regions = regions_of(rough, start, end)
+    if sampled and regions:
+        told("reading the chat around the likely moments")
+        for a, b in regions:
+            dense, dense_read = read_chat(client, channel_id, light, a, b, told)
+            upto = max((r[1] for r in dense_read), default=b)
+            read = [r for r in read if not a <= r[0] < upto] + dense_read
+            lines = [x for x in lines if not a <= x[0] < upto] + dense
+    _set(Session, hunt_id, status="listening", message="listening to the stream")
+    try:
+        loudness = listen_over(light, start, end, regions)
+    except (OSError, RuntimeError) as exc:
+        log.warning("hunt %s: the stream's sound couldn't be read: %s", hunt_id, exc)
+        loudness = None
     least = moments.STRONG if live else 0.0
     found = moments.find(start, end, count, lines, read, loudness, clips, least=least)
     if not found:
@@ -232,6 +247,33 @@ def read_chat(client, channel_id: int, light: kick.Playlist, start: float, end: 
                 lines += answer[0]
                 read.append(answer[1])
     return lines, read
+
+
+def regions_of(found: list[moments.Moment], start: float, end: float) -> list[tuple]:
+    """The stretches around likely moments, read again in full (joined where they meet)."""
+    spans = sorted((max(start, m.peak - CLOSER[0]), min(end, m.peak + CLOSER[1])) for m in found)
+    joined: list[tuple[float, float]] = []
+    for a, b in spans:
+        if joined and a <= joined[-1][1]:
+            joined[-1] = (joined[-1][0], max(b, joined[-1][1]))
+        else:
+            joined.append((a, b))
+    return joined
+
+
+def listen_over(light: kick.Playlist, start: float, end: float, regions: list[tuple]):
+    """The loudness of the stretch, one value a second: all of it up to LOUD_MOST long,
+    else only `regions` (NaN elsewhere)."""
+    if end - start <= LOUD_MOST:
+        return listen(light, start, end)
+    if not regions:
+        return None
+    found = np.full(math.ceil(end - start), np.nan)
+    for a, b in regions:
+        heard = listen(light, a, b)
+        at = int(a - start)
+        found[at : at + heard.size] = heard[: max(0, found.size - at)]
+    return found
 
 
 def _local_playlist(pieces: list[kick.Piece], folder: Path) -> Path:
@@ -309,6 +351,17 @@ def notes_for(moment: moments.Moment) -> str:
     return " ".join(parts)
 
 
+def about(name: str, stream_title: str, moment: moments.Moment) -> str:
+    """The clip's description, for its post caption: whose stream, its title (which names
+    the game: a vision model may not know a new one) and what the chat said."""
+    text = f"A moment from {name}'s Kick live stream"
+    text += f' "{stream_title}".' if stream_title else "."
+    said = [w for w in moment.why if w.startswith('"')]
+    if said:
+        text += " The chat reacted with " + ", ".join(said) + "."
+    return text
+
+
 def make_job(
     hunt_id: str,
     index: int,
@@ -334,7 +387,10 @@ def make_job(
         else (f"https://kick.com/{slug}/")
     )
     title = f"{name} · {stream_title[:60]} · {clock(moment.peak)}".strip()
-    meta = {"path": str(dest), "title": title, "uploader": name, "url": link, "description": ""}
+    meta = {
+        "path": str(dest), "title": title, "uploader": name, "url": link,
+        "description": about(name, stream_title, moment),
+    }  # fmt: skip
     (folder / "source.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     with Session() as db:
         job = Job(
@@ -425,7 +481,11 @@ def _check_one(db, streamer: KickStreamer, client) -> str | None:
     if stream is None:
         return _stream_over(db, streamer, client)
     if not stream.source:
-        streamer.last_result = "live; Kick hasn't made the stream's video yet"
+        streamer.last_result = (
+            "live, but their stream videos (VODs) are off on Kick: nothing to clip from"
+            if not channel.vods
+            else "live; Kick hasn't made the stream's video yet"
+        )
         return None
     if streamer.stream_id and streamer.stream_id != stream.id:
         # A new stream began before the last one's end was clipped: that first.

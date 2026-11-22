@@ -279,6 +279,10 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
             return c.channel(slug), stream
 
         channel, stream = ask_kick(read)
+        if not stream.source and not channel.vods:
+            raise HTTPException(
+                422, f"{channel.username} has Kick's stream videos (VODs) off: nothing to clip from"
+            )
         if not stream.source:
             raise HTTPException(422, "Kick hasn't made this stream's video yet")
         streamer = session.scalar(

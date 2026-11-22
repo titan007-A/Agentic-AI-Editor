@@ -178,6 +178,9 @@ def test_kick_refusing_is_asked_again_then_told():
     gone = kick.Client(httpx.MockTransport(lambda r: httpx.Response(404)), pause=0)
     with pytest.raises(kick.KickError, match="404"):
         gone.channel("nobody")
+    locked = kick.Client(httpx.MockTransport(lambda r: httpx.Response(403)), pause=0)
+    with pytest.raises(kick.KickError, match="subscribers-only stream needs a signed-in"):
+        locked.playlist("https://stream.kick.com/x/160p30/playlist.m3u8")
 
 
 def test_a_playlist_places_the_chat_s_clock_times_in_the_stream():
@@ -273,6 +276,15 @@ def test_sound_and_viewers_clips_find_moments_without_chat():
     assert 225 <= found[0].peak <= 253 and "viewers clipped it" in found[0].why
 
 
+def test_seconds_not_heard_count_as_usual():
+    loud = np.full(600, np.nan)
+    loud[300:420] = -40.0
+    loud[350:356] = -20.0
+    (m,) = moments.find(0, 600, 1, loudness=loud)
+    assert 345 <= m.peak <= 362 and "loud" in m.why
+    assert moments.find(0, 600, 1, loudness=np.full(600, np.nan))[0].why == ["weak moment"]
+
+
 def test_gaps_in_the_chat_read_are_filled_between_reads():
     weights, known = moments.chat_signal(30, 0, [(0, 5), (20, 25)], [(1, "a"), (21, "a")] * 2)
     assert known[:5].all() and not known[5:20].any()
@@ -334,24 +346,43 @@ def test_a_hunt_cuts_its_moments_and_queues_15_to_30_second_jobs(world):
         assert "into this video" in job.notes and job.title.startswith("xQc · GTA 6")
         for m in found.moments:
             assert 15 <= m["end"] - m["start"] <= 30
-    assert client.chat_reads == 36  # the whole 3 minutes, five seconds at a time
+    # The whole 3 minutes and 15 s past them (the chat answers late), five seconds a read.
+    assert client.chat_reads == (180 + hunt.CHAT_AFTER) // 5
     assert world.cuts[0][2].endswith("/1080p60/0.ts")  # cut in full quality
     source = pipeline.resolve_source(f"kick:kick-{hunt_id}-0", world.settings)
     assert source.uploader == "xQc" and source.path.read_bytes() == b"window"
+    # The post caption is told whose stream and its title (which names the game).
+    assert source.description.startswith("A moment from xQc's Kick live stream \"GTA 6")
+    assert '"kekw" ×' in source.description
     assert source.url == f"https://kick.com/xqc/videos/{UUID}?t={int(first['start'])}"
 
 
-def test_a_long_stream_s_chat_is_sampled_and_not_listened_to(world, monkeypatch):
+def test_a_long_stream_is_sampled_then_read_again_around_its_likely_moments(world, monkeypatch):
     heard = []
-    monkeypatch.setattr(hunt, "listen", lambda *a: heard.append(a) or np.zeros(0))
-    client = FakeKick(seconds=6 * 3600, burst=(9000, 9030))
+
+    def listen(light, a, b):
+        heard.append((a, b))
+        return np.full(int(b - a), -40.0)
+
+    monkeypatch.setattr(hunt, "listen", listen)
+    client = FakeKick(seconds=6 * 3600, burst=(9010, 9050))  # between two samples' starts
     hunt_id = add_hunt(world, client, count=2)
     hunt.run(hunt_id, world.Session, world.settings, client=client, queue=lambda j: None)
     with world.Session() as db:
         found = db.get(KickHunt, hunt_id)
         assert found.status == "done" and found.end == 6 * 3600
-        assert any(m["start"] <= 9000 <= m["end"] for m in found.moments)
-    assert client.chat_reads <= hunt.CHAT_READS and heard == []
+        best = found.moments[0]
+        assert best["start"] <= 9010 <= best["end"]
+        assert 9000 <= best["peak"] <= 9020  # placed by the full read, not the samples
+    # Sampled (one read every 36 s), then in full around the likely moments.
+    assert hunt.CHAT_READS < client.chat_reads < hunt.CHAT_READS + 6 * 150 // 5 + 10
+    assert heard and sum(b - a for a, b in heard) <= 6 * sum(hunt.CLOSER)
+    assert any(a <= 9010 < b for a, b in heard)  # heard only around the likely moments
+
+
+def test_regions_around_likely_moments_join_where_they_meet():
+    near = [moments.Moment(0, 0, peak, 1.0) for peak in (500, 600, 2000)]
+    assert hunt.regions_of(near, 0, 2030) == [(410, 660), (1910, 2030)]
 
 
 def test_a_hunt_that_cant_be_done_says_why(world):

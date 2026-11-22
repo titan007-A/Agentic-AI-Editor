@@ -122,6 +122,15 @@ def test_a_live_streamer_s_hunt_reads_what_was_streamed_so_far(env, kicked):
     assert found["status"] == "done" and found["end"] == 900 and found["stream_id"] == 999
 
 
+def test_a_streamer_without_stream_videos_is_told_so(env, kicked, monkeypatch):
+    kicked.live_for = 900
+    live = kicked.channel("xqc")
+    live.live.source, live.vods = "", False
+    monkeypatch.setattr(kicked, "channel", lambda slug: live)
+    answer = env.client.post("/api/kick/hunts", json={"link": "kick.com/xqc"})
+    assert answer.status_code == 422 and "VODs) off" in answer.text
+
+
 def test_a_failed_hunt_is_tried_again(env, kicked, monkeypatch):
     def broken(source):
         raise kick.KickError("Kick answered 503; try again later")

@@ -27,7 +27,8 @@ it (a busy chat or a loud streamer is not a moment; a jump is):
   `LMAO`, `💀`...), "clip it" three times. Chat answers a few seconds after what happened, so
   it is moved back 6 s.
 - **sound**: loudness above the usual (shouting, laughing, a blast in the game), read from
-  the stream's lightest quality (160p) for a stretch up to an hour.
+  the stream's lightest quality (160p): all of a stretch up to an hour, else only around its
+  likely moments (seconds not heard count as usual).
 - **viewers' clips** made live: the seconds before each one's end (a clip made later from
   the video can't be placed, so it isn't used).
 
@@ -46,7 +47,12 @@ Kick's site API is public but undocumented, so answers are read loosely:
 - `GET kick.com/api/v1/video/<uuid>`: one stream by its video's id.
 - `GET kick.com/api/v2/channels/<id>/messages?start_time=<ISO>`: the chat of the 5 s from
   that moment (first page only on a very busy second: then only up to its last message
-  counts as read). A short stretch is read whole, a long one sampled (600 reads at most).
+  counts as read). The chat is read 15 s past the stretch (it answers late). A stretch up to
+  about 50 minutes is read whole; a longer one is sampled (600 reads), and the likely
+  moments the samples show (three times the clips asked for) are read again in full, 90 s
+  before to 60 s after each. A short burst between two samples can still be missed on a
+  very long stream: give a stretch, or follow the streamer live (live stretches are read
+  whole).
 - `GET kick.com/api/v2/channels/<slug>/clips?sort=view&time=month` and `sort=date&time=day`:
   viewers' clips; Kick's paging repeats pages, so only first pages are read.
 - The stream's playlists are 10 s pieces, each with the wall-clock time it was filmed
@@ -54,8 +60,15 @@ Kick's site API is public but undocumented, so answers are read loosely:
   Only the clips' pieces are fetched in full quality (1080p60), and encoded again so a clip
   starts on the second asked.
 
-Kick answers only browser-like requests (a browser User-Agent is sent); 403/429/5xx are asked
-again twice. If Kick changes these routes, the hunt fails with what Kick answered.
+Kick answers only browser-like requests (a browser User-Agent is sent); 403/429/5xx from the
+API are asked again twice. A 401/403 from the video itself is a subscribers-only stream (it
+would need a signed-in Kick account, not built). A streamer with stream videos (VODs) off
+has nothing to clip from: the hunt and the live check say so. If Kick changes these routes,
+the hunt fails with what Kick answered.
+
+Each clip's `source.json` description names the streamer, the stream's title and what the
+chat said: the post caption reads it, so a new game the vision model doesn't know (it called
+GTA 6 "GTA V") is named from the title.
 
 ## Where things live
 
@@ -66,7 +79,12 @@ again twice. If Kick changes these routes, the hunt fails with what Kick answere
   `kick:kick-<hunt>-<n>`, kept by cleanup while its job is.
 - Live clipping: `hunt.check_live`, every 2 minutes from the server's loop.
 
-## Measured (PC, 2026-11-22)
+## Measured
+
+Live Mac (2026-11-22, employee's account, folder "Kick test"): the same 3-minute stretch, hunt
+and three clips (29, 29, 28 s) done in about 3.5 minutes.
+
+PC (2026-11-22):
 
 A 3-minute stretch of a 13.6-hour xQc stream: chat read in 8 s (36 reads), sound in 8 s,
 three moments found ("EZ" ×14 / "KEKW" / "LOL" with the streamer loud), each clip cut in
