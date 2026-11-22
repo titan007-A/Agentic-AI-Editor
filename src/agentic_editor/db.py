@@ -319,6 +319,63 @@ class AnimationAutopilot(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class KickStreamer(Base):
+    """A Kick streamer an account clips (clipper/), with the preset and folder its clips
+    get; with `live` on it is clipped while it streams, one stretch at a time."""
+
+    __tablename__ = "kick_streamers"
+    __table_args__ = (UniqueConstraint("owner_id", "slug"),)
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    slug: Mapped[str] = mapped_column(String(64))
+    username: Mapped[str] = mapped_column(Text, default="")
+    channel_id: Mapped[int] = mapped_column(default=0)
+    avatar: Mapped[str] = mapped_column(Text, default="")
+    live: Mapped[bool] = mapped_column(default=False)  # clip it while it streams
+    preset: Mapped[str] = mapped_column(String(64), default="")
+    per_hour: Mapped[int] = mapped_column(default=4)  # clips an hour of live stream, at most
+    folder: Mapped[str] = mapped_column(Text, default="")  # on the piles; "" is "Kick <name>"
+    # The live stream being clipped, and how far into it the clipping has got (seconds).
+    stream_id: Mapped[int | None]
+    done_until: Mapped[float] = mapped_column(default=0.0)
+    is_live: Mapped[bool] = mapped_column(default=False)  # when last looked at
+    last_checked: Mapped[datetime | None]
+    last_result: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class KickHunt(Base):
+    """One look for clips in a stretch of a Kick stream (clipper/hunt.py): the moments it
+    found, each made into a Job."""
+
+    __tablename__ = "kick_hunts"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    streamer_id: Mapped[str | None] = mapped_column(String(12), index=True)  # a live stretch's
+    slug: Mapped[str] = mapped_column(String(64))
+    username: Mapped[str] = mapped_column(Text, default="")
+    channel_id: Mapped[int] = mapped_column(default=0)
+    stream_id: Mapped[int] = mapped_column(default=0)
+    uuid: Mapped[str] = mapped_column(String(64), default="")  # the stream's video id
+    title: Mapped[str] = mapped_column(Text, default="")
+    started: Mapped[datetime | None]  # when the stream began (UTC)
+    source: Mapped[str] = mapped_column(Text, default="")  # its HLS master playlist
+    start: Mapped[float] = mapped_column(default=0.0)  # the stretch, seconds into the stream
+    end: Mapped[float] = mapped_column(default=0.0)  # 0: to the end
+    count: Mapped[int] = mapped_column(default=5)  # clips wanted, at most
+    preset: Mapped[str] = mapped_column(String(64), default="")
+    live: Mapped[bool] = mapped_column(default=False)  # a live stretch: strong moments only
+    folder: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="waiting for a free slot")
+    error: Mapped[str | None] = mapped_column(Text)
+    moments: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class ResearchAccount(Base):
     """An Instagram account a person runs, and the presets they edit its reels with: the
     researcher learns what it posts and finds reels like its best ones (see research.py)."""

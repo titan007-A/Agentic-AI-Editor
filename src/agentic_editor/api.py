@@ -52,6 +52,8 @@ from agentic_editor.animate import schedule as animate_schedule
 from agentic_editor.animate import studio
 from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
+from agentic_editor.clipper import hunt as kick_hunt
+from agentic_editor.clipper import routes as kick_routes
 from agentic_editor.db import (
     AccountSnapshot,
     Event,
@@ -109,6 +111,7 @@ NOTICE_KEY = "usage_notice_accepted"
 ORIGINAL_NAME = ".name"  # next to an upload: the file name it was sent with
 UPLOAD_REF = re.compile(r"[0-9a-f]{20}/\w[\w-]*\.[a-z0-9]+")
 SCAN_SECONDS = 300  # how often the autopilot looks at its feeds
+KICK_LIVE_SECONDS = 120  # how often followed Kick streamers are looked at (clipper/)
 PDF_BYTES = 10 * 1024 * 1024  # the largest PDF of songs a research takes
 # How long a shutdown waits for running jobs; any still running are failed at the next start.
 SHUTDOWN_SECONDS = 30
@@ -787,6 +790,14 @@ def create_app(
                 log.exception("following the Buffer posts failed")
             await asyncio.sleep(SCAN_SECONDS)
 
+    async def clip_live() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(kick_hunt.check_live, make_session)
+            except Exception:
+                log.exception("clipping the live Kick streams failed")
+            await asyncio.sleep(KICK_LIVE_SECONDS)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         consumer = None
@@ -807,9 +818,11 @@ def create_app(
                 signal.signal(sig, handler)
             log.info("job worker started with %d slot(s)", settings.max_concurrent_jobs)
             scanner = asyncio.create_task(scan_feeds())
+            live_clipper = asyncio.create_task(clip_live())
         yield
         if consumer is not None:
             scanner.cancel()
+            live_clipper.cancel()
             consumer.stop(graceful=True)
 
     app = FastAPI(title="Agentic AI Editor", lifespan=lifespan)
@@ -3413,6 +3426,10 @@ def create_app(
     animate_routes.install(
         app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,
         enqueue=enqueue, settings=settings, public_base=public_base,
+    )  # fmt: skip
+    kick_routes.install(
+        app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,
+        presets_of=presets,
     )  # fmt: skip
 
     if settings.web_dir.is_dir():

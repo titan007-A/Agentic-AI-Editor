@@ -136,6 +136,8 @@ def sweep(Session: sessionmaker, settings: Settings, now: datetime | None = None
     wanted_folders = {
         sources / link.read_text(encoding="utf-8").strip() for link in wanted_links if link.exists()
     }
+    # A Kick clipper moment's video is its job's source (clipper/hunt.py).
+    wanted_folders |= {sources / s.removeprefix("kick:") for s in kept if s.startswith("kick:")}
     count = 0
     if links.is_dir():
         for link in links.glob("*.txt"):
