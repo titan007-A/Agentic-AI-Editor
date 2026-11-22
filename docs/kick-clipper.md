@@ -18,6 +18,33 @@ moments that made the chat react, and makes each one with a preset like any othe
   <streamer>" unless another is named), and get the preset's text, captions and post caption.
   A download-only preset isn't offered (a clip is cut).
 
+## Facecam layout (presets.Facecam, the "Kick clips (facecam on top)" preset)
+
+The streamer's camera in a panel at the top (760 px), the game under it, both the frame's
+width; the one-liner sits where they meet. Per clip:
+
+- **The camera** (analysis/facecam.py): 36 frames read at 960 px; the streamer is the face
+  (YuNet) in one place in at least half of them (faces in a game move and come and go).
+  The camera box is the rectangle round it whose sides are lasting straight edges (the
+  overlay's border, or the step from the camera to what is beside it: other colours or other
+  motion) or the frame's own edge, scored together with how a webcam frames a face. When in
+  doubt a line inside the room wins over the frame's edge: the panel then shows less of the
+  room, never part of the game. A set `facecam.box` (shares of the picture) is used instead.
+- **No box**: a face that fills much of the picture is a stream that is all camera (just
+  chatting, IRL), and with no face at all there is no camera; both follow the face across the
+  whole frame (framing mode face), the text staying where the preset puts it. No camera found
+  is noted as a doubt on the video.
+- **The cuts** (render/facecam.py): the camera panel shows as much of the box as its shape
+  holds, round the face; a camera far narrower or wider than the panel (filling it would cut
+  away more than 30%) is shown whole over a blurred copy of itself. The game panel takes the
+  picture's whole height across the middle (`facecam.focus`), moved off the camera.
+- Text over the video can have an outline (`text_blocks[].outline`). The preview draws a
+  webcam and a game stand-in in the same rows and says when text covers where the face is.
+
+Measured on six Kick streams (xQc, Adin Ross, Westcol, Sneako, IcePoseidon, Amouranth): the
+camera found in all five streams that have one (Westcol's box a little inside its border), Amouranth's IRL
+stream followed as all camera; finding it takes about 4 s a clip on the PC.
+
 ## How a moment is found (clipper/moments.py)
 
 Second by second over the stretch, each signal against what is usual in the 5 minutes around

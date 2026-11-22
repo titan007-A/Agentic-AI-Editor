@@ -18,6 +18,7 @@ from agentic_editor.edl import EDL, Clip, Cue
 from agentic_editor.planner import voiced_regions
 from agentic_editor.presets import CaptionStyle, Preset
 from agentic_editor.render import audio, captions, fonts, grade, split, text
+from agentic_editor.render import facecam as panels
 from agentic_editor.render.mark import layer as watermark_layer
 from agentic_editor.render.video import (
     Anchor,
@@ -655,7 +656,7 @@ def render(
     inputs: list[str] = []
     for clip in edl.clips:
         inputs += ["-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video)]
-    layers = Layers(split_at=split_at)
+    layers = Layers(split_at=split_at, facecam=edl.facecam)
     if preset.framing.background_image:
         still = backdrop(preset.framing.background_image, frame, work_dir / "background.png")
         # One still, repeated for as long as the reel runs.
@@ -737,11 +738,17 @@ def render(
 
     bars = layers.black_bars
     shown = (bars[2], bars[3], bars[0], bars[1]) if bars else layers.content
-    rows = (
-        clear_rows(edl, analysis, preset, shown, faces or [], texts or [], layers.picture_band)
-        if faces or texts
-        else []
-    )
+    if edl.facecam is not None:
+        # The streamer's face sits still in the camera panel.
+        face_band = panels.face_rows(edl.facecam, preset)
+        steps = range(int(edl.duration * 2) + 1)
+        rows = [(k * 0.5, [face_band]) for k in steps] if face_band else []
+    elif faces or texts:
+        rows = clear_rows(
+            edl, analysis, preset, shown, faces or [], texts or [], layers.picture_band
+        )
+    else:
+        rows = []
     if rows and edl.crop_mode == "none" and any(picture_shift(preset)):
         # Faces and burnt-in text move with the picture the preset moves.
         shown_size = source

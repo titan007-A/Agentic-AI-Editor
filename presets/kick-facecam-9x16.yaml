@@ -1,0 +1,72 @@
+name: kick-facecam-9x16
+label: Kick clips (facecam on top)
+platform: instagram_reels
+aspect_ratio: '9:16'
+resolution: 1080x1920
+fps: 30
+min_duration: 12.0
+max_duration: 45.0
+captions:
+  enabled: false
+hook:
+  enabled: false
+  overlay: false
+  optimize: false
+title_overlay:
+  enabled: false
+one_liner:
+  enabled: true
+  font: Inter-SemiBold
+  size: 44
+  color: '#000000'
+  box_color: '#FFFFFF'
+  position: top
+  offset: 712
+  max_words: 14
+  hint: >-
+    Like a Kick streamer clips page: say the funny or wild moment in a few words (a name
+    only when it is written on screen or said in the clip, never a guessed one; else "this
+    streamer", "she", "the chat") with one to three words in CAPITALS for the punch
+    ("Amanda's sleepover livestream gets CHAOTIC after they start playing Twister"), and end
+    with one or two fitting emoji such as 😭 😂 👀 💀 🔥. No hashtags, no quotation marks.
+  fixed: true
+  language: en
+text_blocks:
+- text: KICK       KICK.COM/{CHANNEL}
+  font: Anton-Regular
+  size: 44
+  min_size: 24
+  color: '#FFFFFF'
+  anchor: bottom
+  offset: 430
+  max_width: 1000
+  outline: 4
+  outline_color: '#000000'
+  word_colors:
+  - words: KICK
+    color: '#53FC18'
+    occurrence: 0
+auto_name: false
+post_caption:
+  enabled: true
+  about: video
+  language: en
+  style: >-
+    Like a Kick clips page: start with an emoji, then say what happened on the stream in a
+    few punchy lines with the streamer's name, and end with a question for the comments.
+  min_words: 40
+  max_words: 90
+facecam:
+  enabled: true
+  top: 0
+  camera: 760
+  gap: 0
+  focus: 0.5
+framing:
+  mode: face
+  background: '#000000'
+watermarks:
+  blur: true
+audio:
+  source: original
+  loudness_lufs: -14.0

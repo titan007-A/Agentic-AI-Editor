@@ -80,9 +80,12 @@ class Face:
         )
 
     def draw(self, canvas: ImageDraw.ImageDraw, at: tuple[float, float], text: str, size: int,
-             fill: str) -> None:  # fmt: skip
+             fill: str, outline: int = 0) -> None:  # fmt: skip
+        """The text at `at`; with `outline`, its letters `outline` px fatter in `fill`
+        instead (drawn first, under the letters), colour emoji left out."""
+        stroke = {"stroke_width": outline, "stroke_fill": fill} if outline else {}
         if len(self.chain) == 1:
-            canvas.text(at, text, font=_font(self.path, size), fill=fill)
+            canvas.text(at, text, font=_font(self.path, size), fill=fill, **stroke)
             return
         x, y = at
         baseline = y + self.metrics(size)[0]
@@ -90,9 +93,11 @@ class Face:
             font = _font(path, size)
             color = path.with_name(fonts.COLOR_EMOJI)
             if path.stem.startswith("NotoEmoji") and color.exists() and piece.strip():
-                _color_emoji(canvas, color, font.getbbox(piece, anchor="ls"), x, baseline, piece)
+                if not outline:
+                    box = font.getbbox(piece, anchor="ls")
+                    _color_emoji(canvas, color, box, x, baseline, piece)
             else:
-                canvas.text((x, baseline), piece, font=font, fill=fill, anchor="ls")
+                canvas.text((x, baseline), piece, font=font, fill=fill, anchor="ls", **stroke)
             x += font.getlength(piece)
 
 
@@ -132,6 +137,8 @@ class Placed:
     line_height: float
     # (words, colour, which place or None for all) in their own colour; see colored_lines.
     word_colors: tuple[tuple[str, str, int | None], ...] = ()
+    outline: float = 0.0  # px round the letters, in outline_color
+    outline_color: str = "#000000"
 
     @property
     def band(self) -> tuple[float, float]:
@@ -217,6 +224,7 @@ def place(
     return Placed(
         lines, face, size, top, block.color, line_height(face, size, block.line_spacing),
         tuple((w.words, w.color, w.occurrence) for w in block.word_colors),
+        block.outline, block.outline_color,
     )  # fmt: skip
 
 
@@ -296,12 +304,17 @@ def draw(
     canvas = ImageDraw.Draw(image)
     for block in placed:
         colored = colored_lines(block.lines, block.color, block.word_colors)
-        for i, (line, pieces) in enumerate(zip(block.lines, colored, strict=True)):
-            x = (width - block.font.length(line, block.size)) / 2
-            y = block.top + i * block.line_height
-            for piece, color in pieces:
-                block.font.draw(canvas, (x, y), piece, block.size, color)
-                x += block.font.length(piece, block.size)
+        # The outline goes under every letter first, so no piece's outline covers the
+        # letters of the piece before it.
+        passes = [round(block.outline), 0] if round(block.outline) else [0]
+        for outline in passes:
+            for i, (line, pieces) in enumerate(zip(block.lines, colored, strict=True)):
+                x = (width - block.font.length(line, block.size)) / 2
+                y = block.top + i * block.line_height
+                for piece, color in pieces:
+                    ink = block.outline_color if outline else color
+                    block.font.draw(canvas, (x, y), piece, block.size, ink, outline)
+                    x += block.font.length(piece, block.size)
     image.save(dest)
     return dest
 

@@ -97,18 +97,21 @@ def model_dir(models_dir: Path) -> Path:
     return models_dir / "upscale"
 
 
-def fetch_models(models_dir: Path) -> Path:
-    """Download the models not yet here, each checked against its known hash."""
+def fetch_models(models_dir: Path, names: tuple[str, ...] = ()) -> Path:
+    """Download the models not yet here (`names` only, when given), each checked against
+    its known hash."""
     import hashlib
     import urllib.request
 
     folder = model_dir(models_dir)
     folder.mkdir(parents=True, exist_ok=True)
     for name, (url, digest) in MODELS.items():
+        if names and name not in names:
+            continue
         path = folder / name
         if path.exists():
             continue
-        with logs.download_progress(f"the upscaling model {name}", folder):
+        with logs.download_progress(f"the model {name}", folder):
             partial = path.with_suffix(".part")
             urllib.request.urlretrieve(url, partial)
             found = hashlib.sha256(partial.read_bytes()).hexdigest()

@@ -78,6 +78,22 @@ class CaptionOverrides(BaseModel):
     highlight_color: Color | None = None
 
 
+class Facecam(BaseModel):
+    """The facecam layout of one reel (presets.Facecam): the parts of the source cut into
+    the camera panel and the game panel, x, y, width, height in source pixels, each in its
+    panel's shape, and the streamer's face in the source (captions and banners keep off
+    it)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    camera: tuple[int, int, int, int]
+    game: tuple[int, int, int, int]
+    face: tuple[int, int, int, int] | None = None
+    # The camera shown whole in its panel over a blurred copy of itself, when filling the
+    # panel would cut away too much of it (a camera far narrower or wider than the panel).
+    fit: bool = False
+
+
 class EDL(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +109,8 @@ class EDL(BaseModel):
     shots: list[Shot] = []
     # The picture's area in the source, black bars excluded: x, y, width, height.
     picture: tuple[int, int, int, int] | None = None
+    # Streamer clips: the camera and the game in two panels (presets.Facecam).
+    facecam: Facecam | None = None
     # Captions the models wrote (translated or from the visuals) and a one-line overlay;
     # speech and lyrics captions are built from the transcript at render time instead.
     cues: list[Cue] = []
