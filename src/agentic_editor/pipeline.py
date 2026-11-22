@@ -861,8 +861,9 @@ def facecam_cuts(
         camera = camera_finder.Camera(face, box, 1.0)
     if camera is None:
         return edl.noted(
-            "Facecam: no streamer camera found in the picture, so the face is followed "
-            "across the whole frame instead",
+            "Facecam: no camera box found round a streamer's face (no camera in the "
+            "picture, or a stream all camera with the face small), so the face is followed "
+            "across the whole frame",
             doubt=True,
         )
     if camera.full:
