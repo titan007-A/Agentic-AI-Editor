@@ -822,10 +822,21 @@ WATCH_PROMPT = (
 )
 
 
-def watch(vision, frames: list[Path]) -> str:
-    """What the vision model sees in the video's frames, in plain sentences."""
+# Told to the vision model with what is known of a video for sure (a Kick stream's title):
+# a small model names a new game after an older one it knows ("GTA 6" as "GTA V").
+KNOWN_PROMPT = (
+    "\n\nKnown for sure about this video: {known}\nWhen this names the game, show, "
+    "person or place on screen, use that name, even where the picture looks like an older "
+    "one of the same series."
+)
+
+
+def watch(vision, frames: list[Path], known: str = "") -> str:
+    """What the vision model sees in the video's frames, in plain sentences; `known` is
+    what is known of the video for sure, whose names it uses."""
+    prompt = WATCH_PROMPT + (KNOWN_PROMPT.format(known=known) if known else "")
     reply = vision.chat_json(
-        [{"role": "user", "content": WATCH_PROMPT}],
+        [{"role": "user", "content": prompt}],
         _Seen.model_json_schema(),
         images=frames,
         temperature=0.0,

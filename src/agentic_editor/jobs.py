@@ -428,8 +428,10 @@ def caption_from_video(
             heard.text_between(start, end) if end > start else " ".join(w.text for w in heard.words)
         )
         break
+    # A Kick clip's description is the clipper's own (the stream's title), so it is sure.
+    known = description if source_ref.startswith(kick_hunt.SOURCE) else ""
     with router.vision() as vision:
-        seen = caption.watch(vision, frames)
+        seen = caption.watch(vision, frames, known)
     one_liner = edl.get("one_liner") or ""
     words = (wanted.min_words, wanted.max_words)
     with router.planner() as llm:

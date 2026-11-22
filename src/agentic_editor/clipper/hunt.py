@@ -12,6 +12,7 @@ six-hour stream costs minutes of video, not hours.
 import json
 import logging
 import math
+import re
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -351,11 +352,19 @@ def notes_for(moment: moments.Moment) -> str:
     return " ".join(parts)
 
 
+def plain_title(title: str) -> str:
+    """A stream's title without its emoji and symbol runs ("🥥60 FPS GTA 6🥥LIVE" is
+    "60 FPS GTA 6 · LIVE")."""
+    parts = re.split(r"[^\w\s'&:!?.,#+()/-]+", title)
+    return " · ".join(" ".join(p.split()) for p in parts if p.strip())
+
+
 def about(name: str, stream_title: str, moment: moments.Moment) -> str:
     """The clip's description, for its post caption: whose stream, its title (which names
     the game: a vision model may not know a new one) and what the chat said."""
     text = f"A moment from {name}'s Kick live stream"
-    text += f' "{stream_title}".' if stream_title else "."
+    title = plain_title(stream_title)
+    text += f' titled "{title}".' if title else "."
     said = [w for w in moment.why if w.startswith('"')]
     if said:
         text += " The chat reacted with " + ", ".join(said) + "."
