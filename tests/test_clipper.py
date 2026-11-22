@@ -352,7 +352,7 @@ def test_a_hunt_cuts_its_moments_and_queues_15_to_30_second_jobs(world):
     source = pipeline.resolve_source(f"kick:kick-{hunt_id}-0", world.settings)
     assert source.uploader == "xQc" and source.path.read_bytes() == b"window"
     # The post caption is told whose stream and its title (which names the game).
-    assert source.description.startswith("A moment from xQc's Kick live stream \"GTA 6")
+    assert source.description.startswith("A moment from xQc's Kick live stream titled \"GTA 6")
     assert '"kekw" ×' in source.description
     assert source.url == f"https://kick.com/xqc/videos/{UUID}?t={int(first['start'])}"
 
@@ -526,3 +526,60 @@ def test_the_moment_link_and_clock():
     assert hunt.hunt_of_source("kick:kick-abc123-2") == "abc123"
     assert hunt.hunt_of_source("https://kick.com/x") is None
     assert json.loads(json.dumps(hunt.LENGTH)) == [15, 30]  # owner: 15-30 s clips
+
+
+def test_the_vision_step_is_told_a_kick_clip_s_stream_title():
+    asked = []
+
+    class Vision:
+        def chat_json(self, messages, schema, **kwargs):
+            asked.append(messages[0]["content"])
+            return {"description": "a car on a road"}
+
+    from agentic_editor import caption
+
+    assert caption.watch(Vision(), []) == "a car on a road"
+    assert asked[-1] == caption.WATCH_PROMPT
+    caption.watch(Vision(), [], 'xQc\'s stream titled "60 FPS GTA 6"')
+    assert asked[-1].startswith(caption.WATCH_PROMPT)
+    assert 'Known for sure about this video: xQc\'s stream titled "60 FPS GTA 6"' in asked[-1]
+    assert "older one of the same series" in asked[-1]
+
+
+@pytest.mark.parametrize("source, told", [("kick:kick-abc-0", True), ("https://x.test/r", False)])
+def test_only_a_kick_clip_s_description_is_taken_as_sure(tmp_path, monkeypatch, source, told):
+    from contextlib import contextmanager
+
+    from agentic_editor import caption, download
+    from agentic_editor.analysis import subjects
+    from agentic_editor.presets import PostCaption
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"v")
+    monkeypatch.setattr(pipeline, "resolve_source", lambda ref, s: download.Source(video, "t"))
+    monkeypatch.setattr(subjects, "grab", lambda src, at, dest, ffmpeg: dest)
+    seen = {}
+    monkeypatch.setattr(caption, "watch", lambda v, frames, known="": seen.update(known=known))
+    monkeypatch.setattr(caption, "video_subject", lambda *a: ("cars", [], []))
+    monkeypatch.setattr(caption, "video_sources", lambda *a: caption.Sources())
+    monkeypatch.setattr(caption, "write", lambda *a, **k: "written")
+
+    @contextmanager
+    def model():
+        yield SimpleNamespace(context=None)
+
+    router = SimpleNamespace(vision=model, planner=model)
+    settings = Settings(media_dir=tmp_path / "media", cache_dir=tmp_path / "cache")
+    out = tmp_path / "out" / "clip.mp4"
+    out.parent.mkdir()
+    about = 'A moment from xQc\'s Kick live stream titled "60 FPS GTA 6".'
+    edl = {"clips": [{"start": 0, "end": 20}]}
+    jobs.caption_from_video(router, settings, source, edl, out, about, "", PostCaption())
+    assert seen["known"] == (about if told else "")
+
+
+def test_a_stream_title_loses_its_emoji_for_the_description():
+    raw = "🥥60 FPS GTA 6🥥LIVE🥥FINISHING PLAYTHROUGH🥥"
+    assert hunt.plain_title(raw) == "60 FPS GTA 6 · LIVE · FINISHING PLAYTHROUGH"
+    assert hunt.plain_title("Late night chill w/ chat! #ad") == "Late night chill w/ chat! #ad"
+    assert hunt.plain_title("🫂🫂") == ""

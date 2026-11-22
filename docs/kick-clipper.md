@@ -66,9 +66,11 @@ would need a signed-in Kick account, not built). A streamer with stream videos (
 has nothing to clip from: the hunt and the live check say so. If Kick changes these routes,
 the hunt fails with what Kick answered.
 
-Each clip's `source.json` description names the streamer, the stream's title and what the
-chat said: the post caption reads it, so a new game the vision model doesn't know (it called
-GTA 6 "GTA V") is named from the title.
+Each clip's `source.json` description names the streamer, the stream's title (emoji taken
+out) and what the chat said. The post caption reads it, and for a Kick clip the vision model
+is told it too as known for sure (caption.watch `known`): small vision models name a new game
+after an older one ("GTA V" for GTA 6), and the live Mac's writer (gemma4) kept the vision
+model's name over the title until the vision model was told.
 
 ## Where things live
 
