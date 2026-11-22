@@ -92,6 +92,7 @@ class Channel:
     avatar: str = ""
     live: Stream | None = None
     chatroom: int = 0
+    vods: bool = True  # whether Kick keeps videos of its streams
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,12 @@ class Client:
             else:
                 if answer.status_code == 404:
                     raise KickError("Kick doesn't know that (404)")
+                if answer.status_code in (401, 403) and "/api/" not in url:
+                    # The video itself refused (its playlists and pieces), not the site API.
+                    raise KickError(
+                        f"Kick refuses this stream's video ({answer.status_code}): a "
+                        "subscribers-only stream needs a signed-in Kick account"
+                    )
                 if answer.status_code < 400:
                     return answer.text
                 if answer.status_code not in (403, 429) and answer.status_code < 500:
@@ -251,6 +258,7 @@ class Client:
             avatar=str(user.get("profile_pic") or ""),
             live=stream,
             chatroom=_int((data.get("chatroom") or {}).get("id")),
+            vods=data.get("vod_enabled") is not False,
         )
 
     def streams(self, slug: str) -> list[Stream]:

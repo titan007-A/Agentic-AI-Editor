@@ -155,8 +155,11 @@ def find(
     chat = chat_burst(weights)[CHAT_LAG:] if has_chat else np.zeros(length)
     loud = np.zeros(length)
     db = None
-    if loudness is not None and loudness.size:
-        db = np.resize(loudness.astype(float), length)
+    if loudness is not None and loudness.size and not np.isnan(loudness).all():
+        # Seconds not heard (a long stretch is heard only in places) count as usual.
+        db = np.full(length, np.nan)
+        db[: min(length, loudness.size)] = loudness[:length]
+        db = np.where(np.isnan(db), np.nanmedian(db), db)
         loud = loud_burst(db)
     cover = clip_cover(length, start, list(clips))
     score = smooth(chat + 0.6 * loud + cover, 5)
