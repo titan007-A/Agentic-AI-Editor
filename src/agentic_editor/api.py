@@ -533,6 +533,10 @@ class FeedRequest(BaseModel):
     active_to: int | None = Field(default=None, ge=0, le=23)
     batch: int = Field(default=3, ge=1, le=20)
     include_existing: bool = False
+    # Start from the latest videos already there, newest first, after passing over the
+    # `skip_newest` newest (autopilot: Feed.from_latest).
+    from_latest: bool = False
+    skip_newest: int = Field(default=0, ge=0, le=1000)
     # Only videos about this are edited ("GTA 5"); None: every video.
     topic: str | None = Field(default=None, max_length=200)
     # The folder on the piles its videos go in; None: straight in the preset's folder.
@@ -3047,6 +3051,13 @@ def create_app(
         updated = checked_feed(body, owner)
         if (updated.kind, updated.location) != (feed.kind, feed.location):
             feed.looked = False  # somewhere new: what is already there is noted first
+        if updated.from_latest and (
+            not feed.from_latest or updated.skip_newest != feed.skip_newest
+        ):
+            feed.restart = True  # start again from the latest, as now set
+        elif feed.from_latest and not updated.from_latest:
+            # Back to new videos only: what is there now is noted again, not edited.
+            feed.looked, feed.restart = updated.include_existing, False
         for key, value in updated.model_dump().items():
             setattr(feed, key, value)
         session.commit()

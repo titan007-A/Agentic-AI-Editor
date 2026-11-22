@@ -322,6 +322,12 @@ The Autopilot page in the web app watches feeds and edits each new video once:
 - Feeds are checked every five minutes, and on demand. A new feed notes what is already
   there and edits only what arrives later, unless told to edit that too. Files still
   being copied into a folder are left until they stop changing.
+- "Start from the latest videos" (on a new feed or later) edits the videos already there
+  too, newest first (a folder by file time, a channel or Instagram account as it lists
+  them; a playlist keeps its own order), new arrivals always first; "Skip the newest"
+  passes over that many of the newest when it starts, so it begins that many videos after
+  the latest. Changing the number reads what is left again (videos edited stay edited);
+  turning it off goes back to new videos only.
 - Every video a feed starts or passes over is remembered, so none is edited twice. Each
   is an ordinary job: one that fails is marked failed and the rest carry on, a few at a
   time per feed.

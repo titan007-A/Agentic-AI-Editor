@@ -206,6 +206,13 @@ class Feed(Base):
     batch: Mapped[int] = mapped_column(default=3)  # videos in progress at once, at most
     owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # None: the admin's
     include_existing: Mapped[bool] = mapped_column(default=False)
+    # Start from the latest videos: those already there are edited too, newest first, the
+    # `skip_newest` newest of them passed over (start that many videos after the latest);
+    # new ones still come first as they arrive. `restart` asks the next check to read what
+    # is already there again (the setting was just turned on or changed).
+    from_latest: Mapped[bool] = mapped_column(default=False)
+    skip_newest: Mapped[int] = mapped_column(default=0)
+    restart: Mapped[bool] = mapped_column(default=False)
     # Only videos about this are edited ("GTA 5"); the vision model looks at each new one
     # first, and passes over the rest (see autopilot.judge_topic). None: every video.
     topic: Mapped[str | None] = mapped_column(Text)

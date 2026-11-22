@@ -70,6 +70,10 @@ export type FeedFields = {
   active_to: number | null;
   batch: number;
   include_existing: boolean;
+  /** Start from the latest videos already there, newest first, after skipping the
+   * `skip_newest` newest; new ones still go first as they come. */
+  from_latest: boolean;
+  skip_newest: number;
   /** Only videos about this are edited ("GTA 5"); null: every video. */
   topic: string | null;
   /** The folder on the piles its videos go in; null: straight in the preset's folder. */
