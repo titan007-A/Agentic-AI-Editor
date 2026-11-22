@@ -34,6 +34,7 @@ from agentic_editor import (
     trim,
 )
 from agentic_editor.agent import LANGUAGES
+from agentic_editor.analysis import facecam as camera_finder
 from agentic_editor.analysis import faces, ocr, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
@@ -46,6 +47,7 @@ from agentic_editor.llm import LLMError, OllamaClient
 from agentic_editor.planner import overlap, pick_emphasis, plan_variants, plan_whole
 from agentic_editor.presets import Preset
 from agentic_editor.render import audio, compose
+from agentic_editor.render import facecam as panels
 from agentic_editor.render.audio import measure_loudness
 from agentic_editor.render.video import crop_size
 from agentic_editor.router import ModelRouter
@@ -833,6 +835,50 @@ def remux_audio(edl: EDL, preset: Preset, analysis: Analysis, dest: Path, work_d
     remuxed.replace(dest)
 
 
+def facecam_cuts(
+    edl: EDL, preset: Preset, analysis: Analysis, video: Path, settings: Settings
+) -> EDL:
+    """Streamer clips (presets.Facecam): the camera and the game cut into their panels,
+    from the camera found in the picture or the box the preset sets. Without a camera box
+    (a picture that is all camera, or none found) the EDL is left to follow the face across
+    the whole frame, as the preset's framing says."""
+    if not preset.facecam.enabled or edl.facecam is not None:
+        return edl
+    clip = edl.clips[0]
+    source = (analysis.width, analysis.height)
+    try:
+        camera = camera_finder.find(
+            video, clip.start, clip.end, source, settings.models_dir, settings.ffmpeg_bin
+        )
+    except Exception as exc:  # the face follow still makes a reel
+        log.warning("facecam: looking for the camera failed: %s", exc)
+        camera = None
+    if preset.facecam.box is not None:
+        left, top, wide, tall = preset.facecam.box
+        box = (round(left * source[0]), round(top * source[1]), round(wide * source[0]),
+               round(tall * source[1]))  # fmt: skip
+        face = camera.face if camera and camera_finder.inside(camera.face, box) else None
+        camera = camera_finder.Camera(face, box, 1.0)
+    if camera is None:
+        return edl.noted(
+            "Facecam: no camera box found round a streamer's face (no camera in the "
+            "picture, or a stream all camera with the face small), so the face is followed "
+            "across the whole frame",
+            doubt=True,
+        )
+    if camera.full:
+        return edl.noted(
+            "Facecam: the picture is all camera, so the streamer's face is followed across "
+            "the whole frame"
+        )
+    cuts = panels.layout(camera, source, preset)
+    x, y, w, h = camera.box
+    whole = " (shown whole: its shape is far from the panel's)" if cuts.fit else ""
+    return edl.model_copy(update={"facecam": cuts}).noted(
+        f"Facecam: the camera is the {w}x{h} box at {x},{y} of the picture{whole}"
+    )
+
+
 def produce(
     edl: EDL,
     preset: Preset,
@@ -855,10 +901,13 @@ def produce(
     renders = 1
     remux = False
     edl = crop_or_whole(edl, preset, analysis, video, settings, work_dir, vision)
-    centre = edl.crop_mode == "none" and preset.framing.picture_center
+    edl = facecam_cuts(edl, preset, analysis, video, settings)
+    centre = edl.crop_mode == "none" and preset.framing.picture_center and not edl.facecam
     while True:
         if not remux:
-            if edl.crop_mode == "smart":
+            if edl.facecam is not None:
+                commands = {}  # the panels are cut as the facecam layout says
+            elif edl.crop_mode == "smart":
                 edl, commands = smart_framing(
                     edl, target, analysis, video, settings, work_dir, detections, vision
                 )
@@ -877,10 +926,17 @@ def produce(
                 )
             clip = edl.clips[0]
             key = (clip.start, clip.end)
-            if target.captions.enabled and target.captions.avoid_faces and key not in detections:
+            avoid = target.captions.enabled and target.captions.avoid_faces
+            if avoid and edl.facecam is None and key not in detections:
                 detections[key] = faces.detect(video, clip.start, clip.end, settings.models_dir)
             face_samples = [(clip.start + t, found) for t, found in detections.get(key, [])]
-            texts = onscreen_text(edl, target, analysis, video, settings, work_dir, vision, tracked)
+            texts = (
+                []  # text over a game and a camera: the face is what to keep off
+                if edl.facecam is not None
+                else onscreen_text(
+                    edl, target, analysis, video, settings, work_dir, vision, tracked
+                )
+            )
         with slots.encoding(vision, progress=progress):
             if remux:
                 remux_audio(edl, target, analysis, dest, work_dir)

@@ -99,6 +99,57 @@ def stand_in(size: tuple[int, int]) -> Image.Image:
     return image
 
 
+def game_stand_in(size: tuple[int, int]) -> Image.Image:
+    """A driving game filling `size`: sky, a road to the horizon, a car and a minimap, so
+    the facecam layout's game panel reads as the game."""
+    w, h = size
+    image = Image.new("RGB", size)
+    canvas = ImageDraw.Draw(image)
+    horizon = h * 0.42
+    for y in range(h):
+        if y < horizon:
+            t = y / horizon
+            colour = (round(120 + 80 * t), round(170 + 50 * t), round(230 - 10 * t))
+        else:
+            t = (y - horizon) / max(1, h - horizon)
+            colour = (round(70 + 30 * t), round(110 + 20 * t), round(60 + 10 * t))
+        canvas.line([(0, y), (w, y)], fill=colour)
+    canvas.polygon([(w * 0.08, h), (w * 0.92, h), (w * 0.53, horizon), (w * 0.47, horizon)],
+                   fill=(78, 78, 84))  # fmt: skip
+    for k in range(6):  # the middle line, nearer dashes longer
+        a, b = (
+            horizon + (h - horizon) * (k / 6) ** 1.6,
+            horizon + (h - horizon) * ((k + 0.5) / 6) ** 1.6,
+        )
+        canvas.line(
+            [(w / 2, a), (w / 2, b)], fill=(235, 220, 120), width=max(2, round(w * 0.006 * (1 + k)))
+        )
+    car = (w * 0.38, h * 0.7, w * 0.62, h * 0.86)
+    canvas.rounded_rectangle(car, radius=w * 0.03, fill=(200, 40, 50))
+    canvas.rectangle((w * 0.42, h * 0.72, w * 0.58, h * 0.77), fill=(40, 50, 70))
+    r = min(w, h) * 0.11
+    canvas.ellipse((w * 0.04, h - 2.3 * r, w * 0.04 + 2 * r, h - 0.3 * r), fill=(30, 40, 30),
+                   outline=(230, 230, 230), width=max(2, round(r * 0.05)))  # fmt: skip
+    return image
+
+
+def facecam_panels(image: Image.Image, preset: Preset) -> tuple[float, float]:
+    """The facecam layout's two panels drawn as a render lays them (a webcam stand-in on
+    top, the game under it); the rows where the streamer's face sits in the camera panel."""
+    width, height = preset.size
+    (cam_top, cam_bottom), (game_top, game_bottom) = preset.facecam.rows(height)
+    camera = _cover(stand_in((1280, 720)), (width, cam_bottom - cam_top))
+    image.paste(camera, (0, cam_top))
+    image.paste(game_stand_in((width, game_bottom - game_top)), (0, game_top))
+    panel = cam_bottom - cam_top
+    # The stand-in's head, as stand_in draws it, in the cut the panel shows.
+    scale = max(width / 1280, panel / 720)
+    shown = 720 * scale
+    head = (720 * 0.42 - 720 * 0.1) * scale, (720 * 0.42 + 720 * 0.1) * scale
+    offset = (shown - panel) / 2
+    return cam_top + head[0] - offset, cam_top + head[1] - offset
+
+
 def _cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     """Scale to fill `size`, cutting the middle out."""
     scale = max(size[0] / image.width, size[1] / image.height)
@@ -237,16 +288,20 @@ def render_checked(
             pass  # a picture not uploaded yet: the colour stands in
 
     (x0, y0, x1, y1), part, cut = picture_layout(preset, source, band)
-    picture = _cover(stand_in(source), part) if part != source else stand_in(source)
-    if cut is not None and cut.full != cut.height:
-        # Moved into the text: scaled whole, then the rows a render cuts off are cut here.
-        whole = picture.resize((cut.width, cut.full), Image.Resampling.LANCZOS)
-        picture = whole.crop((0, cut.cut_top, cut.width, cut.cut_top + cut.height))
-    shown_picture = picture.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
-    image.paste(shown_picture, (x0, y0))
+    face_band = None
+    if preset.facecam.enabled:
+        face_band = facecam_panels(image, preset)
+    else:
+        picture = _cover(stand_in(source), part) if part != source else stand_in(source)
+        if cut is not None and cut.full != cut.height:
+            # Moved into the text: scaled whole, then the rows a render cuts off are cut.
+            whole = picture.resize((cut.width, cut.full), Image.Resampling.LANCZOS)
+            picture = whole.crop((0, cut.cut_top, cut.width, cut.cut_top + cut.height))
+        shown_picture = picture.resize((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+        image.paste(shown_picture, (x0, y0))
     # Rows the picture covers, which text keeps off: both panels of a split preset.
     covered = (y0, y1)
-    if preset.split.enabled:
+    if preset.split.enabled and not preset.facecam.enabled:
         # The second panel shows the same rows, held where the first one ends.
         image.paste(shown_picture, (x0, y0 + preset.split.height))
         covered = (y0, y1 + preset.split.height)
@@ -279,6 +334,8 @@ def render_checked(
         over = min(bottom, covered[1]) - max(top, covered[0])
         if preset.framing.mode == "none" and over > 2:
             notes.append(f"Text {i} runs over the video by {round(over)} px.")
+        if face_band and min(bottom, face_band[1]) - max(top, face_band[0]) > 2:
+            notes.append(f"Text {i} covers where the streamer's face usually is.")
         for j in range(i, len(inks)):
             other = inks[j]
             if min(bottom, other[1]) - max(top, other[0]) > 2:
@@ -343,6 +400,11 @@ def render_checked(
                 notes.append(
                     "A long one-liner covers part of the video even made smaller. Give it "
                     "fewer words or a smaller size, or move the text and the video apart."
+                )
+            if face_band and top + below > face_band[0] and top + above < face_band[1]:
+                notes.append(
+                    "The one-liner covers where the streamer's face usually is in the camera "
+                    "panel; move it to where the panels meet, or lower."
                 )
             dest = work / "line.png"
             _lay(

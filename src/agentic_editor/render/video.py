@@ -9,8 +9,10 @@ from typing import Literal
 
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.edl import EDL, Clip, CropMode, Shot
+from agentic_editor.edl import Facecam as FacecamCuts
 from agentic_editor.ffmpeg import escape_filter_path
 from agentic_editor.presets import Preset
+from agentic_editor.render import facecam as panels
 from agentic_editor.render import split
 
 Anchor = Literal["top", "middle", "bottom"]
@@ -52,6 +54,8 @@ class Layers:
     # bottom panel takes over, and the input of the panels' labels.
     split_at: float | None = None
     split_labels: int | None = None
+    # Streamer clips: the camera and the game cut into two panels (render/facecam.py).
+    facecam: FacecamCuts | None = None
 
 
 # Blur boxes kept per mark. Each is an overlay of a whole frame on every frame, so a
@@ -559,6 +563,12 @@ def build_graph(
     for i, clip in enumerate(edl.clips):
         blurred, label = blur_chain(clip, i, layers.watermarks, preset.watermarks.strength)
         parts += blurred
+        if layers.facecam is not None:
+            # The camera and the game, each cut from the picture into its own panel.
+            colour = ffmpeg_color(layers.background or preset.framing.background)
+            parts += panels.graph_parts(label, layers.facecam, preset, colour, f"fc{i}")
+            segment(f"fc{i}", [], [])
+            continue
         if edl.crop_mode == "none" and edl.shots:
             # Cut top and bottom at the picture's whole width, one window whose row changes
             # from shot to shot: at once on a cut, easing over GLIDE seconds inside a shot.
@@ -625,7 +635,8 @@ def build_graph(
 
     room = zoom_room(edl, preset, source, layers)
     zoom = zoom_expression(edl, layers.pulses, layers.pulse_scale, room)
-    if zoom is not None and layers.split_at is None:  # a zoom would push the panels about
+    # A zoom would push the panels about.
+    if zoom is not None and layers.split_at is None and layers.facecam is None:
         step(
             f"scale=w='trunc({width}*({zoom})/2)*2':h='trunc({height}*({zoom})/2)*2'"
             f":eval=frame:flags=bicubic,crop={width}:{height}",

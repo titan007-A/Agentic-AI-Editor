@@ -80,6 +80,7 @@ const LANGUAGES: [string, string][] = [
 
 // Fields the schema allows to be null. An empty input is sent as null rather than "".
 const NULLABLE = new Set([
+  "facecam.game",
   "intro",
   "outro",
   "logo.file",
@@ -252,6 +253,31 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "split.outline_color", label: "Label outline color", kind: "color" },
       { path: "split.label_x", label: "Label from the panel's left (px)", kind: "number" },
       { path: "split.label_y", label: "Label from the panel's top (px)", kind: "number" },
+    ],
+  },
+  {
+    title: "Streamer facecam",
+    fields: [
+      {
+        path: "facecam.enabled",
+        label:
+          "Camera on top, game below: the streamer's camera is found in each clip (a clip that is all camera, or with none found, follows the face across the whole frame)",
+        kind: "switch",
+      },
+      { path: "facecam.top", label: "Camera panel starts at (px)", kind: "number" },
+      { path: "facecam.camera", label: "Camera panel's height (px)", kind: "number" },
+      { path: "facecam.gap", label: "Gap between the panels (px)", kind: "number" },
+      {
+        path: "facecam.game",
+        label: "Game panel's height (px; empty: to the bottom)",
+        kind: "number",
+      },
+      {
+        path: "facecam.focus",
+        label: "Where the game panel looks across the stream (0 left, 0.5 middle, 1 right)",
+        kind: "number",
+        step: 0.05,
+      },
     ],
   },
   {
@@ -445,6 +471,13 @@ const TEXT_BLOCK_FIELDS: Field[] = [
   { path: "max_width", label: "Max width (px)", kind: "number" },
   { path: "max_shrink", label: "Max shrink", kind: "number", step: 0.05 },
   { path: "line_spacing", label: "Line spacing", kind: "number", step: 0.05 },
+  {
+    path: "outline",
+    label: "Outline width (px, for text over the video)",
+    kind: "number",
+    step: 0.5,
+  },
+  { path: "outline_color", label: "Outline color", kind: "color" },
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

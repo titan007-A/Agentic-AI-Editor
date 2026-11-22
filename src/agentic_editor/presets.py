@@ -104,6 +104,9 @@ class TextBlock(Strict):
     )
     # Later entries win where two cover the same letters.
     word_colors: list[WordColor] = []
+    # px of outline round the letters, for text over the video (0: none).
+    outline: float = Field(default=0, ge=0, le=20)
+    outline_color: Color = "#000000"
 
     def filled(self, text: str, fill: Callable[[str], str]) -> "TextBlock":
         """The block showing `text`, its words in braces filled by `fill`, with its coloured
@@ -371,6 +374,44 @@ class Split(Strict):
         return self.top, self.top + self.height
 
 
+class Facecam(Strict):
+    """Streamer clips: the streamer's camera, found in the stream's picture (a box over the
+    game, see analysis/facecam.py), in a panel at the top, and the game in the panel under
+    it, both the frame's width. A clip whose picture is all camera (just chatting), or with
+    no camera found, follows the streamer's face across the whole frame instead."""
+
+    enabled: bool = False
+    top: int = Field(default=0, ge=0, le=4000, description="px, where the camera panel starts")
+    camera: int = Field(default=760, ge=100, le=4000, description="px, the camera panel's height")
+    gap: int = Field(default=0, ge=0, le=1000, description="px between the panels")
+    # px, the game panel's height; None: down to the frame's bottom.
+    game: int | None = Field(default=None, ge=100, le=4000)
+    # Where across the stream's picture the game panel looks: 0 left, 0.5 middle, 1 right.
+    # It moves off the camera when the camera would show in it.
+    focus: float = Field(default=0.5, ge=0, le=1)
+    # The camera's place in the stream's picture, set by hand (left, top, width, height,
+    # as shares of the picture); None: found in each clip.
+    box: tuple[float, float, float, float] | None = None
+
+    def rows(self, height: int) -> tuple[tuple[int, int], tuple[int, int]]:
+        """The camera panel's rows and the game panel's, in a frame `height` px tall."""
+        camera = (self.top, self.top + self.camera)
+        start = camera[1] + self.gap
+        return camera, (start, start + self.game if self.game else height)
+
+    @field_validator("box")
+    @classmethod
+    def _box_inside(cls, value):
+        if value is not None:
+            left, top, width, height = value
+            if not (0 <= left < 1 and 0 <= top < 1 and width >= 0.02 and height >= 0.02
+                    and left + width <= 1.0001 and top + height <= 1.0001):  # fmt: skip
+                raise ValueError(
+                    "facecam.box: left, top, width, height must be shares of the picture"
+                )
+        return value
+
+
 class Preset(Strict):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     label: str
@@ -417,6 +458,7 @@ class Preset(Strict):
     style_notes: str = ""
     upscale: Upscale = Upscale()
     split: Split = Split()
+    facecam: Facecam = Facecam()
 
     @model_validator(mode="before")
     @classmethod
@@ -447,6 +489,15 @@ class Preset(Strict):
                 }  # fmt: skip
                 sound = data.get("audio") if isinstance(data.get("audio"), dict) else {}
                 data["audio"] = {**sound, "source": "vocals"}
+            # Panels fill the frame; a clip without a camera box follows the streamer's
+            # face across the whole frame (the text stays where the preset puts it).
+            facecam = data.get("facecam")
+            if isinstance(facecam, dict) and facecam.get("enabled") is True:
+                framing = data.get("framing") if isinstance(data.get("framing"), dict) else {}
+                data["framing"] = {
+                    **framing, "mode": "face", "picture_center": False,
+                    "picture_x": 0, "picture_y": 0, "picture_rows": None,
+                }  # fmt: skip
         return data
 
     @field_validator("random_fields")
@@ -485,6 +536,15 @@ class Preset(Strict):
         num, _, den = self.aspect_ratio.partition(":")
         if abs(w / h - float(num) / float(den)) > 0.01:
             raise ValueError(f"resolution {self.resolution} does not match {self.aspect_ratio}")
+        if self.facecam.enabled:
+            if self.split.enabled:
+                raise ValueError("facecam and split can't both be on: each lays out the panels")
+            _, game = self.facecam.rows(h)
+            if game[1] > h or game[1] - game[0] < 100:
+                raise ValueError(
+                    f"facecam: the camera panel ({self.facecam.camera} px from row "
+                    f"{self.facecam.top}) and the game panel run off the {h} px frame"
+                )
         if self.split.enabled and self.split.top + 2 * self.split.height > h:
             raise ValueError(
                 f"split: two panels {self.split.height} px tall from row {self.split.top} "
