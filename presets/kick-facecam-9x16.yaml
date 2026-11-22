@@ -24,11 +24,11 @@ one_liner:
   offset: 712
   max_words: 14
   hint: >-
-    Like a Kick streamer clips page: say the funny or wild moment in a few words (a name
-    only when it is written on screen or said in the clip, never a guessed one; else "this
-    streamer", "she", "the chat") with one to three words in CAPITALS for the punch
-    ("Amanda's sleepover livestream gets CHAOTIC after they start playing Twister"), and end
-    with one or two fitting emoji such as 😭 😂 👀 💀 🔥. No hashtags, no quotation marks.
+    Like a Kick streamer clips page: say the funny or wild moment in this clip in a few
+    words (a name only when it is written on screen or said in the clip, never a guessed
+    one; else "this streamer", "she", "the chat"), with one to three words in CAPITALS for
+    the punch, and end with one or two fitting emoji such as 😭 😂 👀 💀 🔥. Only what this
+    clip shows. No hashtags, no quotation marks.
   fixed: true
   language: en
 text_blocks:
