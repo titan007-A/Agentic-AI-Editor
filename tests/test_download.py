@@ -93,11 +93,75 @@ def test_yt_dlp_signs_in_with_a_copy_of_the_cookies_file(tmp_path, monkeypatch):
     with download.signed_in({"quiet": True}) as options:
         assert options == {"quiet": True}  # a missing file: as without one
     monkeypatch.setattr(get_settings(), "cookies_file", None)
+    monkeypatch.setattr(get_settings(), "media_dir", tmp_path / "media")
     with download.signed_in({"quiet": True}) as options:
         assert options == {"quiet": True}
 
 
+YOUTUBE_COOKIES = (
+    "# Netscape HTTP Cookie File\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t1830000000\tLOGIN_INFO\tAFmmF2sw%3Asecret\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t1820000000\t__Secure-3PAPISID\tabc/def\n"
+    "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1820000000\t__Secure-3PSID\tg.a000\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t0\tYSC\tq\n"
+    ".google.com\tTRUE\t/\tTRUE\t1820000000\tSID\tnot-youtube\n"
+    ".notyoutube.com\tTRUE\t/\tTRUE\t1820000000\tLOGIN_INFO\tnot-youtube\n"
+)
+
+
+def test_a_youtube_login_pasted_on_the_system_page_signs_yt_dlp_in(tmp_path, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "cookies_file", None)
+    monkeypatch.setattr(get_settings(), "media_dir", tmp_path / "media")
+    state = download.save_login(download.YOUTUBE, YOUTUBE_COOKIES)
+    # Until the first sign-in cookie to expire (__Secure-3PAPISID, before LOGIN_INFO).
+    assert state["set"] and state["until"].timestamp() == 1820000000
+    kept = tmp_path / "media" / "youtube-cookies.txt"
+    assert kept.stat().st_mode & 0o777 == 0o600
+    assert "LOGIN_INFO" in kept.read_text() and "__Secure-3PSID" in kept.read_text()
+    assert "not-youtube" not in kept.read_text()  # only YouTube's are kept
+    with download.signed_in({"quiet": True}) as options:
+        assert "LOGIN_INFO" in Path(options["cookiefile"]).read_text()
+    assert download.forget_login(download.YOUTUBE)["set"] is False
+    with download.signed_in({"quiet": True}) as options:
+        assert "cookiefile" not in options
+
+
+def test_youtube_cookies_without_a_sign_in_are_refused(tmp_path, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "cookies_file", None)
+    monkeypatch.setattr(get_settings(), "media_dir", tmp_path / "media")
+    signed_out = YOUTUBE_COOKIES.replace("LOGIN_INFO\tAFmmF2sw%3Asecret", "LOGIN_INFO\t")
+    with pytest.raises(ValueError, match=r"no YouTube sign-in .*no LOGIN_INFO for youtube"):
+        download.save_login(download.YOUTUBE, signed_out)
+    with pytest.raises(ValueError, match="no SAPISID or __Secure-3PAPISID or __Secure-1PAPISID"):
+        download.save_login(download.YOUTUBE, YOUTUBE_COOKIES.replace("3PAPISID", "3PX"))
+    assert not (tmp_path / "media" / "youtube-cookies.txt").exists()
+    exported = (  # a JSON export works too
+        '[{"domain": ".youtube.com", "name": "LOGIN_INFO", "value": "x", "path": "/", '
+        '"secure": true, "expirationDate": 1830000000.5}, {"domain": ".youtube.com", '
+        '"name": "SAPISID", "value": "y", "path": "/", "secure": true, "expirationDate": 0}]'
+    )
+    state = download.save_login(download.YOUTUBE, exported)
+    assert state["set"] and state["until"].timestamp() == 1830000000
+
+
+def test_a_youtube_cookies_file_the_settings_name_is_where_the_login_goes(tmp_path, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "cookies_file", tmp_path / "mine.txt")
+    download.save_login(download.YOUTUBE, YOUTUBE_COOKIES)
+    assert "LOGIN_INFO" in (tmp_path / "mine.txt").read_text()
+
+
 def test_youtube_asking_to_sign_in_says_what_to_do(tmp_path, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "cookies_file", None)
+    monkeypatch.setattr(get_settings(), "media_dir", tmp_path / "media")
+
     class Blocked:
         def __init__(self, options):
             pass
@@ -115,8 +179,12 @@ def test_youtube_asking_to_sign_in_says_what_to_do(tmp_path, monkeypatch):
             )
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", Blocked)
-    with pytest.raises(RuntimeError, match="an admin adds a YouTube cookies file"):
-        download.fetch("https://www.youtube.com/shorts/qzAm4LKWkBU", tmp_path)
+    with pytest.raises(RuntimeError, match=r"no YouTube login is set up .* on the System page"):
+        download.fetch("https://www.youtube.com/shorts/qzAm4LKWkBU", tmp_path / "sources")
+    # Asked to sign in even signed in: the login is spent.
+    download.save_login(download.YOUTUBE, YOUTUBE_COOKIES)
+    with pytest.raises(RuntimeError, match="login has most likely expired"):
+        download.fetch("https://www.youtube.com/shorts/qzAm4LKWkBU", tmp_path / "sources")
 
 
 SENSITIVE = (
@@ -172,7 +240,7 @@ def test_a_reel_instagram_shows_only_signed_in_says_what_to_do(tmp_path, instagr
 
 
 def test_with_an_instagram_login_such_a_reel_downloads_signed_in(tmp_path, instagram):
-    state = download.save_instagram_cookies(COOKIES)
+    state = download.save_login(download.INSTAGRAM, COOKIES)
     assert state["set"] and state["until"].year == 2026
     kept = instagram.read_text()
     assert "sessionid" in kept and "google" not in kept  # only Instagram's are kept
@@ -185,14 +253,14 @@ def test_with_an_instagram_login_such_a_reel_downloads_signed_in(tmp_path, insta
 
 
 def test_an_expired_instagram_login_says_so(tmp_path, instagram):
-    download.save_instagram_cookies(COOKIES)
+    download.save_login(download.INSTAGRAM, COOKIES)
     instagram.write_text(COOKIES.replace("sessionid\t123%3Aabc", "sessionid\t"))
     with pytest.raises(RuntimeError, match="login has most likely expired"):
         download.fetch("https://www.instagram.com/reel/Df2AEd5RJ3U/", tmp_path / "sources")
 
 
 def test_other_sites_never_get_the_instagram_login(tmp_path, instagram):
-    download.save_instagram_cookies(COOKIES)
+    download.save_login(download.INSTAGRAM, COOKIES)
     with pytest.raises(yt_dlp.utils.DownloadError):
         download.fetch("https://kick.com/x/clips/clip_1", tmp_path / "sources")
     assert not any("cookiefile" in o for o in Restricted.asked)
@@ -200,14 +268,14 @@ def test_other_sites_never_get_the_instagram_login(tmp_path, instagram):
 
 def test_instagram_cookies_are_checked_before_they_are_kept(instagram):
     with pytest.raises(ValueError, match="no Instagram sign-in"):
-        download.save_instagram_cookies(".google.com\tTRUE\t/\tTRUE\t0\tSID\tx\n" * 2)
+        download.save_login(download.INSTAGRAM, ".google.com\tTRUE\t/\tTRUE\t0\tSID\tx\n" * 2)
     assert not instagram.exists()
     exported = (
         '[{"domain": ".instagram.com", "name": "sessionid", "value": "1%3Aq", "path": "/", '
         '"secure": true, "expirationDate": 1795000000.5}]'
     )
-    assert download.save_instagram_cookies(exported)["set"]  # a JSON export works too
-    assert download.forget_instagram_cookies() == {"set": False, "since": None, "until": None}
+    assert download.save_login(download.INSTAGRAM, exported)["set"]  # a JSON export works too
+    assert download.forget_login(download.INSTAGRAM) == {"set": False, "since": None, "until": None}
 
 
 def test_a_reel_refused_to_the_login_too_says_instagrams_reason(tmp_path, instagram, monkeypatch):
@@ -223,7 +291,7 @@ def test_a_reel_refused_to_the_login_too_says_instagrams_reason(tmp_path, instag
                 )
             return super().extract_info(url, download)
 
-    download.save_instagram_cookies(COOKIES)
+    download.save_login(download.INSTAGRAM, COOKIES)
     monkeypatch.setattr(yt_dlp, "YoutubeDL", Gated)
     asked = []
     monkeypatch.setattr(
@@ -276,7 +344,7 @@ def test_a_busy_instagram_is_asked_once_more_after_a_pause(tmp_path, instagram, 
                     )
             return super().extract_info(url, download)
 
-    download.save_instagram_cookies(COOKIES)
+    download.save_login(download.INSTAGRAM, COOKIES)
     monkeypatch.setattr(yt_dlp, "YoutubeDL", Busy)
     monkeypatch.setattr(download, "INSTAGRAM_PAUSE", 0)
     source = download.fetch("https://www.instagram.com/reel/DdeOTl4M7tx/", tmp_path / "sources")

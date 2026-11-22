@@ -424,8 +424,9 @@ export type StyleDraft = {
   created_at: string;
 };
 
-/** Whether downloads can sign in to Instagram, since and until when (never the cookies). */
-export type InstagramLogin = { set: boolean; since: string | null; until: string | null };
+/** Whether downloads can sign in to a site (Instagram, YouTube), since and until when
+ * (never the cookies). */
+export type SiteLogin = { set: boolean; since: string | null; until: string | null };
 
 export type SystemInfo = {
   accelerator: string;
@@ -1062,10 +1063,11 @@ export const api = {
   acceptNotice: () => request("POST", "/notice"),
   system: () => request<SystemInfo>("GET", "/system"),
   updateYtdlp: () => request<{ yt_dlp: string; note: string }>("POST", "/system/update-ytdlp"),
-  instagramLogin: () => request<InstagramLogin>("GET", "/system/instagram-login"),
-  setInstagramLogin: (cookies: string) =>
-    request<InstagramLogin>("PUT", "/system/instagram-login", { cookies }),
-  forgetInstagramLogin: () => request<InstagramLogin>("DELETE", "/system/instagram-login"),
+  siteLogin: (site: "instagram" | "youtube") => request<SiteLogin>("GET", `/system/${site}-login`),
+  setSiteLogin: (site: "instagram" | "youtube", cookies: string) =>
+    request<SiteLogin>("PUT", `/system/${site}-login`, { cookies }),
+  forgetSiteLogin: (site: "instagram" | "youtube") =>
+    request<SiteLogin>("DELETE", `/system/${site}-login`),
   fonts: () => request<string[]>("GET", "/fonts"),
   presets: (owner?: string | null) => request<Preset[]>("GET", `/presets${whose(owner)}`),
   savePreset: (preset: Preset, owner?: string | null) =>
