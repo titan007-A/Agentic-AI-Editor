@@ -2840,6 +2840,39 @@ def test_only_the_primary_account_sets_the_instagram_login_and_it_is_never_shown
     assert boss.delete(url).json()["set"] is False
 
 
+def test_only_the_primary_account_sets_the_youtube_login_and_it_is_never_shown(env, monkeypatch):
+    monkeypatch.setattr(api, "FAILED_LOGIN_DELAY", 0)
+    boss = env.client
+    ask = {"username": "arham", "password": "arham-pass-1", "role": "admin"}
+    assert boss.post("/api/admin/users", json=ask | {"my_password": PASSWORD}).status_code == 200
+    arham = TestClient(boss.app)
+    login = {"username": "arham", "password": "arham-pass-1"}
+    assert arham.post("/api/login", json=login).status_code == 200
+    _, riya = employee(env)
+    cookies = (
+        ".youtube.com\tTRUE\t/\tTRUE\t1830000000\tLOGIN_INFO\tAFmm%3Asecret\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t1820000000\tSAPISID\tsecret2\n"
+    )
+    url = "/api/system/youtube-login"
+
+    assert boss.get(url).json() == {"set": False, "since": None, "until": None}
+    assert riya.get(url).status_code == 403
+    refused = arham.put(url, json={"cookies": cookies})
+    assert refused.status_code == 403 and "YouTube login" in refused.json()["detail"]
+    instagram = ".instagram.com\tTRUE\t/\tTRUE\t1795000000\tsessionid\t123%3Asecret\n"
+    bad = boss.put(url, json={"cookies": instagram})
+    assert bad.status_code == 422 and "no YouTube sign-in" in bad.json()["detail"]
+    saved = boss.put(url, json={"cookies": cookies})
+    assert saved.status_code == 200 and saved.json()["set"]
+    seen = arham.get(url)  # other admins see that it is set, never the cookies
+    assert seen.json()["set"] and "secret" not in seen.text and "secret" not in saved.text
+    assert (env.settings.media_dir / "youtube-cookies.txt").read_text().count("secret") == 2
+    # The Instagram login is another one.
+    assert boss.get("/api/system/instagram-login").json()["set"] is False
+    assert arham.delete(url).status_code == 403
+    assert boss.delete(url).json()["set"] is False
+
+
 def test_a_download_only_preset_gets_its_post_caption_after_every_download(env, monkeypatch):
     from agentic_editor import caption
 

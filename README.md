@@ -719,14 +719,19 @@ past it with the cookies of a browser signed in to YouTube:
 
 1. In a private window, sign in to YouTube with a spare Google account (YouTube may
    block an account used this way; don't use your own), open youtube.com, and export its
-   cookies to `cookies.txt` with an extension such as "Get cookies.txt LOCALLY", for
-   youtube.com only. Close the private window without signing out.
-2. Copy the file to the server, say `~/Agentic-AI-Editor/youtube-cookies.txt`, and add
-   `COOKIES_FILE=youtube-cookies.txt` to `.env` (a path relative to the repository, or
-   absolute). Restart the server.
+   cookies with an extension such as "Get cookies.txt LOCALLY", for youtube.com only.
+   Close the private window without signing out (that would end the login).
+2. Signed in as the primary account, paste them into "YouTube login for downloads" on the
+   System page. They are checked (a youtube.com `LOGIN_INFO` and `SAPISID` are needed),
+   only youtube.com's are kept, in `media/youtube-cookies.txt` readable by the server's
+   user alone, and other admins see only whether it is set and until when. Then retry the
+   failed jobs; no restart is needed.
 
-Every download, research lookup and feed check then uses them. The file is a sign-in:
-git ignores files named `*cookies*.txt`; keep it that way.
+Every download, research lookup and feed check then uses them. When YouTube asks again
+even so, the job says the login has most likely expired: paste fresh cookies. A file kept
+elsewhere can be named instead with `COOKIES_FILE=` in `.env` (relative to the repository,
+or absolute); the System page then saves to that file. The file is a sign-in: git ignores
+files named `*cookies*.txt`; keep it that way.
 
 ## Development
 

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { HostingCard } from "@/components/hosting-card";
-import { InstagramLoginCard } from "@/components/instagram-login-card";
+import { InstagramLoginCard, YoutubeLoginCard } from "@/components/site-login-card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,6 +139,8 @@ export default function SystemPage() {
       )}
 
       {admin && <HostingCard />}
+
+      {admin && <YoutubeLoginCard primary={Boolean(me?.primary)} />}
 
       {admin && <InstagramLoginCard primary={Boolean(me?.primary)} />}
 

@@ -80,9 +80,12 @@ from agentic_editor.db import (
 from agentic_editor.db import BufferKey as BufferKeyRow
 from agentic_editor.db import User as Account
 from agentic_editor.download import (
-    forget_instagram_cookies,
-    instagram_login,
-    save_instagram_cookies,
+    INSTAGRAM,
+    YOUTUBE,
+    Login,
+    forget_login,
+    login_state,
+    save_login,
     update_ytdlp,
 )
 from agentic_editor.ffmpeg import probe as ffmpeg_probe
@@ -268,8 +271,8 @@ class LabelsRequest(BaseModel):
     labels: dict[str, str]
 
 
-class InstagramCookies(BaseModel):
-    # A cookies.txt (or JSON) exported from instagram.com while signed in.
+class LoginCookies(BaseModel):
+    # A cookies.txt (or JSON) exported from the site (instagram.com, youtube.com) signed in.
     cookies: str = Field(min_length=20, max_length=500_000)
 
 
@@ -1069,30 +1072,37 @@ def create_app(
             "yt_dlp": yt_dlp.version.__version__,
         }
 
-    @app.get("/api/system/instagram-login")
-    def get_instagram_login(_: Admin) -> dict:
-        """Whether downloads can sign in to Instagram (for the reels it shows only to people
-        signed in), and until when; never the cookies."""
-        return instagram_login(settings)
+    def login_routes(name: str, login: Login) -> None:
+        """/api/system/<name>-login: whether downloads can sign in to `login`'s site, and
+        until when (admins; never the cookies), and its cookies set or removed (only the
+        primary account: they are a sign-in to someone's account)."""
+        url = f"/api/system/{name}-login"
 
-    def instagram_login_owner(me: Account, session: Session) -> None:
-        """The Instagram login is a sign-in to someone's account: only the primary account
-        sets or removes it."""
-        if not accounts.is_primary(session, me):
-            raise HTTPException(403, "only the primary account sets the Instagram login")
+        def owner(me: Account, session: Session) -> None:
+            if not accounts.is_primary(session, me):
+                raise HTTPException(403, f"only the primary account sets the {login.site} login")
 
-    @app.put("/api/system/instagram-login")
-    def set_instagram_login(body: InstagramCookies, me: Admin, session: DB) -> dict:
-        instagram_login_owner(me, session)
-        try:
-            return save_instagram_cookies(body.cookies, settings)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
+        @app.get(url, name=f"get_{name}_login")
+        def get_login(_: Admin) -> dict:
+            return login_state(login, settings)
 
-    @app.delete("/api/system/instagram-login")
-    def delete_instagram_login(me: Admin, session: DB) -> dict:
-        instagram_login_owner(me, session)
-        return forget_instagram_cookies(settings)
+        @app.put(url, name=f"set_{name}_login")
+        def set_login(body: LoginCookies, me: Admin, session: DB) -> dict:
+            owner(me, session)
+            try:
+                return save_login(login, body.cookies, settings)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+
+        @app.delete(url, name=f"delete_{name}_login")
+        def delete_login(me: Admin, session: DB) -> dict:
+            owner(me, session)
+            return forget_login(login, settings)
+
+    # Instagram: the reels it shows only to people signed in. YouTube: every video, once it
+    # asks this machine to "confirm you're not a bot".
+    login_routes("instagram", INSTAGRAM)
+    login_routes("youtube", YOUTUBE)
 
     @app.post("/api/system/update-ytdlp")
     async def ytdlp_update(_: Admin) -> dict:

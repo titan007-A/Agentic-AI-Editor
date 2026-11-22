@@ -42,15 +42,13 @@ def _with_cookies(options: dict, path: Path) -> Iterator[dict]:
 
 @contextmanager
 def signed_in(options: dict) -> Iterator[dict]:
-    """yt-dlp's `options` with the settings' cookies file (see Settings.cookies_file), when
-    there is one, as a copy (see _with_cookies)."""
-    cookies = get_settings().cookies_file
-    if cookies is None:
-        yield options
-        return
-    path = cookies.expanduser() if cookies.expanduser().is_absolute() else ROOT / cookies
+    """yt-dlp's `options` with the YouTube login (pasted on the System page, or the file
+    Settings.cookies_file names), when there is one, as a copy (see _with_cookies)."""
+    settings = get_settings()
+    path = login_path(YOUTUBE, settings)
     if not path.is_file():
-        log.warning("the cookies file %s isn't there; YouTube may ask to sign in", path)
+        if settings.cookies_file is not None:
+            log.warning("the cookies file %s isn't there; YouTube may ask to sign in", path)
         yield options
         return
     with _with_cookies(options, path) as signed:
@@ -88,7 +86,6 @@ INSTAGRAM_GATED = (
     "make sure its birthday makes it 25 or older, then tap Retry. If Instagram still says so, "
     "it doesn't show this reel in this country."
 )
-INSTAGRAM_COOKIES = "instagram-cookies.txt"
 # Instagram now and then answers a signed-in request with a server error ("HTTP Error 560")
 # that is gone a little later: asked once more after this pause (s).
 INSTAGRAM_BUSY = re.compile(r"HTTP Error 5\d\d")
@@ -140,16 +137,6 @@ BROWSER = (
 )
 
 
-def instagram_cookies_path(settings=None) -> Path:
-    """Where the Instagram cookies are: Settings.instagram_cookies_file, else the file the
-    System page saves in the media folder. `settings`: the server's (get_settings())."""
-    settings = settings or get_settings()
-    chosen = settings.instagram_cookies_file
-    if chosen is None:
-        return settings.media_dir / INSTAGRAM_COOKIES
-    return chosen.expanduser() if chosen.expanduser().is_absolute() else ROOT / chosen
-
-
 def _instagram(url: str) -> bool:
     host = re.sub(r"^https?://", "", url.lower()).split("/", 1)[0]
     return host == "instagram.com" or host.endswith(".instagram.com")
@@ -186,18 +173,61 @@ def _netscape(text: str) -> list[list[str]]:
     return rows
 
 
-def save_instagram_cookies(text: str, settings=None) -> dict:
-    """Keep the cookies of a browser signed in to Instagram (pasted cookies.txt or JSON) for
-    the reels that need a login: only Instagram's, readable by this user alone. Raises
-    ValueError when they hold no Instagram sign-in."""
-    rows = [r for r in _netscape(text) if "instagram.com" in r[0]]
-    if not any(r[5] == "sessionid" and r[6] for r in rows):
+@dataclass(frozen=True)
+class Login:
+    """A site downloads sign in to with the cookies of a browser signed in there, pasted on
+    the System page by the primary account (or a file the settings name)."""
+
+    site: str
+    domain: str  # only this domain's cookies (and its subdomains') are kept
+    file: str  # the file in the media folder...
+    setting: str  # ...unless this setting names another
+    # Signed in: a cookie of each group is set.
+    needs: tuple[tuple[str, ...], ...]
+
+
+INSTAGRAM = Login(
+    "Instagram", "instagram.com", "instagram-cookies.txt", "instagram_cookies_file",
+    needs=(("sessionid",),),
+)  # fmt: skip
+# yt-dlp counts YouTube signed in with LOGIN_INFO and one of the SAPISIDs (cleared, LOGIN_INFO
+# is how a signed-out or rotated-away login shows).
+YOUTUBE = Login(
+    "YouTube", "youtube.com", "youtube-cookies.txt", "cookies_file",
+    needs=(("LOGIN_INFO",), ("SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")),
+)  # fmt: skip
+
+
+def login_path(login: Login, settings=None) -> Path:
+    """Where `login`'s cookies are: the file its setting names, else the one the System page
+    saves in the media folder. `settings`: the server's (get_settings())."""
+    settings = settings or get_settings()
+    chosen = getattr(settings, login.setting)
+    if chosen is None:
+        return settings.media_dir / login.file
+    return chosen.expanduser() if chosen.expanduser().is_absolute() else ROOT / chosen
+
+
+def _of(domain: str, row: list[str]) -> bool:
+    host = row[0].lstrip(".").lower()
+    return host == domain or host.endswith("." + domain)
+
+
+def save_login(login: Login, text: str, settings=None) -> dict:
+    """Keep the cookies of a browser signed in to `login`'s site (pasted cookies.txt or
+    JSON): only that site's, readable by this user alone. Raises ValueError when they hold
+    no sign-in there."""
+    rows = [r for r in _netscape(text) if _of(login.domain, r)]
+    set_ = {r[5] for r in rows if r[6]}
+    missing = [group for group in login.needs if not set_ & set(group)]
+    if missing:
+        names = " and ".join(" or ".join(group) for group in missing)
         raise ValueError(
-            "no Instagram sign-in in those cookies (no sessionid for instagram.com): export "
-            "them from instagram.com while signed in"
+            f"no {login.site} sign-in in those cookies (no {names} for {login.domain}): "
+            f"export them from {login.domain} while signed in"
         )
     lines = ["# Netscape HTTP Cookie File", *("\t".join(r) for r in rows)]
-    path = instagram_cookies_path(settings)
+    path = login_path(login, settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(".part")
     partial.unlink(missing_ok=True)
@@ -205,29 +235,31 @@ def save_instagram_cookies(text: str, settings=None) -> dict:
     with os.fdopen(fd, "w", encoding="utf-8") as out:
         out.write("\n".join(lines) + "\n")
     partial.replace(path)
-    log.info("Instagram cookies saved for downloads (%d cookies)", len(rows))
-    return instagram_login(settings)
+    log.info("%s cookies saved for downloads (%d cookies)", login.site, len(rows))
+    return login_state(login, settings)
 
 
-def forget_instagram_cookies(settings=None) -> dict:
-    instagram_cookies_path(settings).unlink(missing_ok=True)
-    return instagram_login(settings)
+def forget_login(login: Login, settings=None) -> dict:
+    login_path(login, settings).unlink(missing_ok=True)
+    return login_state(login, settings)
 
 
-def instagram_login(settings=None) -> dict:
-    """Whether Instagram cookies are set, since when, and until when the sign-in lasts (the
-    sessionid's expiry); never the cookies themselves."""
-    path = instagram_cookies_path(settings)
+def login_state(login: Login, settings=None) -> dict:
+    """Whether `login`'s cookies are set, since when, and until when the sign-in lasts (the
+    first of its sign-in cookies to expire); never the cookies themselves."""
+    path = login_path(login, settings)
     if not path.is_file():
         return {"set": False, "since": None, "until": None}
     since = datetime.fromtimestamp(path.stat().st_mtime, UTC)
-    until = None
+    names = {name for group in login.needs for name in group}
+    ends = []
     try:
         for row in _netscape(path.read_text(encoding="utf-8")):
-            if row[5] == "sessionid" and row[4].isdigit() and int(row[4]) > 0:
-                until = datetime.fromtimestamp(int(row[4]), UTC)
+            if row[5] in names and row[6] and row[4].isdigit() and int(row[4]) > 0:
+                ends.append(int(row[4]))
     except OSError:
         pass
+    until = datetime.fromtimestamp(min(ends), UTC) if ends else None
     return {"set": True, "since": since, "until": until}
 
 
@@ -237,7 +269,7 @@ def _extract(url: str, options: dict, download: bool, signed: bool = False) -> t
     with the Instagram cookies, when there are any; `signed` goes to them at once."""
     from yt_dlp import YoutubeDL
 
-    cookies = instagram_cookies_path() if _instagram(url) else None
+    cookies = login_path(INSTAGRAM) if _instagram(url) else None
     if not signed:
         try:
             with _explained(), signed_in(options) as asked, YoutubeDL(asked) as ydl:
@@ -273,8 +305,13 @@ def _extract(url: str, options: dict, download: bool, signed: bool = False) -> t
 BOT_CHECK = "confirm you’re not a bot"
 SIGN_IN = (
     "YouTube is asking this computer to sign in before it gives videos (\"confirm you're "
-    'not a bot"), so no YouTube video can be downloaded until an admin adds a YouTube '
-    'cookies file: see "YouTube asks to sign in" in the README'
+    'not a bot"), and no YouTube login is set up for downloads yet, so no YouTube video can '
+    "be downloaded. The primary account can add one on the System page; then tap Retry."
+)
+SIGN_IN_EXPIRED = (
+    'YouTube asked this computer to sign in ("confirm you\'re not a bot") even with the '
+    "YouTube login on the System page: the login has most likely expired or been signed out "
+    "(or YouTube blocked that account). Add fresh cookies there, then tap Retry."
 )
 
 
@@ -286,7 +323,8 @@ def _explained() -> Iterator[None]:
         yield
     except Exception as exc:
         if BOT_CHECK in str(exc).replace("'", "’"):
-            raise RuntimeError(SIGN_IN) from exc
+            signed = login_path(YOUTUBE).is_file()
+            raise RuntimeError(SIGN_IN_EXPIRED if signed else SIGN_IN) from exc
         raise
 
 
