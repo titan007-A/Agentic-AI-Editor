@@ -49,6 +49,14 @@ export type PileFolder = {
   /** The folder it is in; null: straight in the preset's folder. */
   parent_id: number | null;
   name: string;
+  /** The token of the link that shows its videos to anyone who has it; null: not shared. */
+  share?: string | null;
+};
+
+/** A shared folder as a client sees it (no login). */
+export type SharedFolder = {
+  name: string;
+  clips: { id: number; title: string; duration: number; caption: string; made: string }[];
 };
 
 export type FeedFields = {
@@ -1178,6 +1186,8 @@ export const api = {
   renamePileFolder: (id: number, name: string) =>
     request<PileFolder>("PATCH", `/pile-folders/${id}`, { name }),
   deletePileFolder: (id: number) => request<{ ok: boolean }>("DELETE", `/pile-folders/${id}`),
+  shareFolder: (id: number) => request<PileFolder>("POST", `/pile-folders/${id}/share`),
+  unshareFolder: (id: number) => request<PileFolder>("DELETE", `/pile-folders/${id}/share`),
   pastePile: (preset: string, outputIds: number[], folderIds: number[], to: number | null) =>
     request<{ videos: number; folders: number }>("POST", "/pile-folders/paste", {
       preset,

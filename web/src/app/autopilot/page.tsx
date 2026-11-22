@@ -6,6 +6,8 @@ import {
   CheckSquare,
   ChevronRight,
   ClipboardPaste,
+  Copy,
+  ExternalLink,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -13,6 +15,7 @@ import {
   Plus,
   Scissors,
   Send,
+  Share2,
   Trash2,
   X,
 } from "lucide-react";
@@ -812,10 +815,104 @@ function FolderTools({
           <Button variant="ghost" onClick={remove}>
             <Trash2 /> Delete folder
           </Button>
+          <ShareFolder folder={here} onChanged={onRenamed} />
         </>
       )}
       {children}
     </div>
+  );
+}
+
+/** A folder shared with a client: a link anyone can open to watch and download its
+ * videos, without logging in; it can be taken away again. */
+function ShareFolder({
+  folder,
+  onChanged,
+}: {
+  folder: PileFolder;
+  onChanged: (f: PileFolder) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const link = folder.share
+    ? `${window.location.origin}/shared/?t=${encodeURIComponent(folder.share)}`
+    : "";
+
+  async function share() {
+    setBusy(true);
+    try {
+      onChanged(await api.shareFolder(folder.id));
+      setOpen(true);
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stop() {
+    if (!window.confirm(`Stop sharing "${folder.name}"? The link stops working.`)) return;
+    setBusy(true);
+    try {
+      onChanged(await api.unshareFolder(folder.id));
+      setOpen(false);
+      toast.success("The link is off");
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success("Link copied");
+    } catch {
+      toast.error("Couldn't copy: select the link and copy it");
+    }
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        disabled={busy}
+        onClick={() => (folder.share ? setOpen(true) : void share())}
+      >
+        <Share2 /> {folder.share ? "Shared link" : "Share with client"}
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Share {folder.name}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Anyone with this link can watch and download this folder&apos;s videos (and those in its
+            folders) without logging in. New videos put in the folder show up there too.
+          </p>
+          <Input
+            readOnly
+            aria-label="Shared link"
+            value={link}
+            onFocus={(e) => e.target.select()}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={copy}>
+              <Copy /> Copy link
+            </Button>
+            <Button variant="outline" asChild>
+              <a href={link} target="_blank" rel="noreferrer">
+                <ExternalLink /> Open
+              </a>
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={stop}>
+              <Trash2 /> Stop sharing
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

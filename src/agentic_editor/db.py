@@ -174,6 +174,20 @@ class PileFolder(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class ShareLink(Base):
+    """A link that shows one pile folder's videos (and its folders' in it) to anyone who
+    has it, without logging in: a client watches them, downloads them and copies their post
+    captions. The folder's videos are read when the link is opened, so new ones show up;
+    taking the link away stops it."""
+
+    __tablename__ = "share_links"
+
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)  # who shared it
+    folder_id: Mapped[int] = mapped_column(ForeignKey("pile_folders.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Feed(Base):
     """A folder, playlist or channel the autopilot watches for new videos."""
 

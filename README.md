@@ -262,6 +262,12 @@ each with its video count and the newest video's picture. Tapping a folder opens
 videos; "All folders" or the browser's back button closes it, and the address
 (`/autopilot/?tab=look&folder=<preset>`) opens the same folder from a link.
 
+A folder made there can be shared with a client: "Share with client" gives a link
+(`/shared/?t=<token>`) that anyone can open without logging in, to watch the folder's
+videos (and those in its folders), download them and copy their post captions. New videos
+put in the folder show up there by themselves; dismissed ones don't. "Stop sharing" (or
+deleting the folder) turns the link off, and sharing again makes a new one.
+
 The preset editor keeps a small preview in the corner: a still of what the preset makes,
 redrawn a moment after every change (saved or not), on a drawn stand-in video in the shape
 you pick (16:9, 4:3, 1:1, 4:5, 9:16), with sample words for {song}, {artist} and the like.
