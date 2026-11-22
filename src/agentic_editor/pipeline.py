@@ -1027,7 +1027,7 @@ def edit(
     for preset in upscaling:
         try:
             if preset.download_only:
-                outputs.append(original(source, preset, out_dir, progress))
+                outputs.append(original(source, preset, out_dir, progress, settings, backends))
             else:
                 outputs.append(upscaled(source, preset, out_dir, settings, backends, progress))
         except Exception as exc:
@@ -1069,10 +1069,18 @@ def _codecs(path: Path) -> tuple[str, str]:
     return kind.get("video", ""), kind.get("audio", "")
 
 
-def original(source: download.Source, preset: Preset, out_dir: Path, progress: Progress) -> Output:
+def original(
+    source: download.Source,
+    preset: Preset,
+    out_dir: Path,
+    progress: Progress,
+    settings: Settings | None = None,
+    backends: Backends | None = None,
+) -> Output:
     """The video as it came, whole and unedited, as an MP4 any phone plays: its own
     streams when they are H.264 and AAC (copied, nothing lost), else the same picture and
-    sound made into those at its own size and frame rate."""
+    sound made into those at its own size and frame rate. With preset.retext, its caption
+    box is written again in other words (retext.py), the picture encoded once more."""
     dest = out_dir / f"{preset.name}.mp4"
     progress("render", f"keeping the original for {preset.name}")
     video, audio = _codecs(source.path)
@@ -1084,6 +1092,10 @@ def original(source: download.Source, preset: Preset, out_dir: Path, progress: P
                  "-c:a", "aac", "-b:a", "192k"]  # fmt: skip
     ffmpeg.run(["-y", "-i", str(source.path), "-map", "0:v:0", "-map", "0:a:0?", *codec,
                 "-movflags", "+faststart", str(dest)])  # fmt: skip
+    rewritten: list[str] = []
+    if preset.retext.enabled and settings is not None and backends is not None:
+        progress("render", f"writing the caption box again for {preset.name}")
+        rewritten = retext_box(dest, preset, out_dir, settings, backends, progress)
     length = ffmpeg.probe(dest).duration
     thumbnail = out_dir / f"{preset.name}-thumb.jpg"
     try:
@@ -1101,11 +1113,39 @@ def original(source: download.Source, preset: Preset, out_dir: Path, progress: P
         clips=[Clip(start=0.0, end=max(length, 0.1), reason="the whole video, as downloaded")],
         title=source.title,
         crop_mode="none",
-        decisions=[f"only downloaded: {how}"],
+        decisions=[f"only downloaded: {how}", *rewritten],
+        # A caption box asked to be written again and not: a person should look.
+        doubts=[r for r in rewritten if not r.startswith("caption box written again")],
     )
     (out_dir / f"{preset.name}.edl.json").write_text(edl.model_dump_json(indent=2))
     progress("done", f"{preset.name} -> {dest}")
     return Output(preset.name, dest, edl, "download", thumbnail)
+
+
+def retext_box(
+    video: Path, preset: Preset, out_dir: Path, settings: Settings, backends: Backends,
+    progress: Progress,
+) -> list[str]:  # fmt: skip
+    """The downloaded video's caption box written again in place (retext.apply); what was
+    done. A failure leaves the video as downloaded and says why."""
+    from agentic_editor import retext
+    from agentic_editor.backends import encoder_args
+
+    work = out_dir / f"{preset.name}-retext"
+    work.mkdir(parents=True, exist_ok=True)
+    rewritten = work / "rewritten.mp4"
+    try:
+        with ModelRouter(settings, backends, progress).planner() as llm:
+            said = retext.apply(
+                video, rewritten, preset, settings, encoder_args(backends, preset.bitrate_mbps),
+                llm, work,
+            )  # fmt: skip
+    except Exception as exc:  # the download still comes
+        log.warning("%s: writing the caption box again failed: %s", preset.name, exc)
+        return [f"caption box not written again: {exc}"]
+    if rewritten.is_file():
+        rewritten.replace(video)
+    return said
 
 
 def upscaled(

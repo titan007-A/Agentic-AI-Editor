@@ -10,6 +10,7 @@ import {
   ImageBlocks,
   PresetSection,
   SECTIONS,
+  RETEXT_FIELDS,
   UPSCALE_FIELDS,
   TextBlocks,
   VideoPosition,
@@ -539,6 +540,21 @@ function Presets() {
 
         {upscaleOnly ? (
           <>
+            {draft.download_only === true && (
+              <Card data-testid="retext">
+                <CardHeader>
+                  <CardTitle>Caption box</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <PresetSection
+                    fields={RETEXT_FIELDS}
+                    preset={draft}
+                    fonts={fonts}
+                    onChange={edit}
+                  />
+                </CardContent>
+              </Card>
+            )}
             {SECTIONS.filter((section) => section.title === "Post caption").map((section) => (
               <Card key={section.title} data-testid="download-caption">
                 <CardHeader>

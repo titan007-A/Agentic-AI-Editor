@@ -412,6 +412,18 @@ class Facecam(Strict):
         return value
 
 
+class Retext(Strict):
+    """For a download-only preset (left unused by the others): the white caption box a clips
+    page put over the middle of the reel, written again in other words (same meaning, names
+    and facts) and drawn in a new box of the same look over it (retext.py). A reel without
+    such a box comes as it was."""
+
+    enabled: bool = False
+    font: FontName = "Inter-SemiBold"  # clips pages' boxes are a semibold sans
+    # How the new words should read, for the writer ("short and punchy", "in Spanish").
+    hint: str = Field(default="", max_length=500)
+
+
 class Preset(Strict):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     label: str
@@ -459,6 +471,7 @@ class Preset(Strict):
     upscale: Upscale = Upscale()
     split: Split = Split()
     facecam: Facecam = Facecam()
+    retext: Retext = Retext()
 
     @model_validator(mode="before")
     @classmethod

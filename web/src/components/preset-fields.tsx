@@ -136,6 +136,19 @@ export const UPSCALE_FIELDS: Field[] = [
   },
 ];
 
+/** A download-only preset's caption box (the white box a clips page put over the middle
+ * of the reel) written again in other words and drawn over the old one. */
+export const RETEXT_FIELDS: Field[] = [
+  {
+    path: "retext.enabled",
+    label:
+      "Write the white caption box again: its words in other words (same meaning and names), in a new box over the old one",
+    kind: "switch",
+  },
+  { path: "retext.font", label: "Font of the new words", kind: "font" },
+  { path: "retext.hint", label: "How the new words should read (optional)", kind: "textarea" },
+];
+
 export const SECTIONS: { title: string; fields: Field[] }[] = [
   {
     title: "General",

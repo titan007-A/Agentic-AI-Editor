@@ -581,6 +581,23 @@ against its known hash. The GFPGAN and Real-ESRGAN network code is copied into
 in full precision: in half precision its colours drift (green and blue sank by a quarter).
 On the PC (RTX 5050) a 19 s 320x240 clip took 116 s to 1440x1080 with faces.
 
+### Only downloading, caption box written again
+
+A download-only preset (`download_only: true`) gives the video as it came. With
+`retext.enabled` ("Caption box" in the editor) the white caption box a clips page put over
+the middle of the reel ("N3on got EMOTIONAL when Jason...") is written again: OCR finds the
+lines written on white in the middle of a frame (white words outlined in black over the
+video, or on a black bar, don't count), the box is the evenly white rectangle round them
+(a white hoodie beside it has shading, so it stops there) with any narrower box of a
+caption's short last line taken in, the planner writes the words again (same meaning,
+names and facts, about as long, a word or three in capitals if the old one had them, an
+emoji or two; asked again when its words stay too close to the old ones), and a new box of
+the old one's colours is drawn over it for as long as it shows, the words sized as the old
+ones were (smaller, then the box taller about its middle, only when they don't fit). The
+picture is encoded once more, the sound copied. A reel without such a box comes as it
+was; one whose box couldn't be written again comes as downloaded, marked to look at.
+`retext.hint` says how the new words should read; `retext.font` is their font.
+
 ### Learning a style from a reel
 
 Give a reel that already looks the way you want, and a preset is drafted from it:
