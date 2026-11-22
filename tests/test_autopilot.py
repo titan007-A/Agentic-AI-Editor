@@ -15,6 +15,28 @@ def Session(tmp_path):
     return make_sessionmaker(tmp_path / "app.db")
 
 
+@pytest.fixture
+def env_api(tmp_path):
+    """The web app on its own database, signed in as the admin; and its sessions."""
+    import shutil
+
+    from fastapi.testclient import TestClient
+
+    from agentic_editor.api import create_app
+    from agentic_editor.auth import hash_password
+    from agentic_editor.settings import ROOT, Settings
+
+    presets = tmp_path / "presets"
+    shutil.copytree(ROOT / "presets", presets)
+    settings = Settings(media_dir=tmp_path / "media", presets_dir=presets,
+                        database=tmp_path / "api.db", web_dir=tmp_path / "web",
+                        password_hash=hash_password("test-pass-1"), secret_key="k")  # fmt: skip
+    sessions = make_sessionmaker(settings.database)
+    with TestClient(create_app(settings, sessions, start_worker=False)) as client:
+        assert client.post("/api/login", json={"password": "test-pass-1"}).status_code == 200
+        yield client, sessions
+
+
 @pytest.fixture(autouse=True)
 def no_tries_left_over():
     autopilot._tries.clear()  # feed ids start again at 1 in each test's database
@@ -463,3 +485,69 @@ def test_a_topic_without_a_part_takes_any_part_of_the_series():
     assert [autopilot.names_a_part(t) for t in ("GTA VI", "FIFA 24", "GTA", "Minecraft")] == [
         True, True, False, False,
     ]  # fmt: skip
+
+
+def titles(Session) -> list[str]:
+    with Session() as db:
+        return [j.title for j in db.query(Job).order_by(Job.created_at)]
+
+
+def test_a_feed_can_start_from_the_latest_videos_skipping_the_newest(Session):
+    # A folder lists its files oldest first: "a" oldest, "f" newest.
+    found = lambda f: entries("a", "b", "c", "d", "e", "f")  # noqa: E731
+    feed_id = add_feed(Session, from_latest=True, skip_newest=2, batch=2)
+    started = []
+    result = check(feed_id, Session, started.append, found, NIGHT)
+    assert result == "started 2 new video(s), 2 waiting"
+    assert titles(Session) == ["d", "c"]  # the two newest passed over, then newest first
+    with Session() as db:
+        passed = {i.key: i.reason for i in db.query(FeedItem) if i.skipped}
+    assert passed == {"f": autopilot.NEWEST_SKIPPED, "e": autopilot.NEWEST_SKIPPED}
+    finish(Session, "done", "done")
+    # A new video arrives: it goes before the rest of the old ones; the skipped stay skipped.
+    found = lambda f: entries("a", "b", "c", "d", "e", "f", "g")  # noqa: E731
+    check(feed_id, Session, started.append, found, NIGHT)
+    assert titles(Session) == ["d", "c", "g", "b"]
+    finish(Session, "done", "done", "done", "done")
+    check(feed_id, Session, started.append, found, NIGHT)
+    assert titles(Session)[-1] == "a" and len(started) == 5
+
+
+def test_turning_it_on_for_a_feed_that_only_took_new_videos_reads_them_again(tmp_path, env_api):
+    client, sessions = env_api
+    found = lambda f: entries("a", "b", "c", "d")  # noqa: E731
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    with sessions() as db:
+        feed = Feed(name="f", kind="folder", location=str(folder), presets=["square-1x1"], batch=5)
+        db.add(feed)
+        db.commit()
+        feed_id = feed.id
+    assert check(feed_id, sessions, [].append, found, NIGHT).startswith("4 video(s) already there")
+    body = client.get("/api/feeds").json()[0]
+    assert body["from_latest"] is False and body["skip_newest"] == 0
+    body = {k: body[k] for k in ("name", "kind", "location", "presets", "batch")}
+    on = client.put(f"/api/feeds/{feed_id}", json=body | {"from_latest": True, "skip_newest": 1})
+    assert on.status_code == 200 and on.json()["skip_newest"] == 1
+    check(feed_id, sessions, [].append, found, NIGHT)
+    assert titles(sessions) == ["c", "b", "a"]  # newest first, after passing over "d"
+    # Changing how many are skipped reads what is left again; videos edited stay edited.
+    client.put(f"/api/feeds/{feed_id}", json=body | {"from_latest": True, "skip_newest": 0})
+    check(feed_id, sessions, [].append, found, NIGHT)
+    assert titles(sessions) == ["c", "b", "a", "d"]
+    # Turned off: back to new videos only; what is there isn't edited again.
+    client.put(f"/api/feeds/{feed_id}", json=body | {"from_latest": False})
+    found = lambda f: entries("a", "b", "c", "d", "x", "y")  # noqa: E731
+    check(feed_id, sessions, [].append, found, NIGHT)
+    assert titles(sessions) == ["c", "b", "a", "d"]
+    found = lambda f: entries("a", "b", "c", "d", "x", "y", "z")  # noqa: E731
+    check(feed_id, sessions, [].append, found, NIGHT)
+    assert titles(sessions)[-1] == "z"
+
+
+def test_a_channel_starting_from_the_latest_keeps_its_newest_first_order():
+    feed = Feed(name="f", kind="link", location="https://x.test/@c", presets=["p"])
+    listed = entries("new", "older", "oldest")
+    assert autopilot.newest_first(feed, listed) == listed
+    folder = Feed(name="f", kind="folder", location="/x", presets=["p"])
+    assert [e.key for e in autopilot.newest_first(folder, listed)] == ["oldest", "older", "new"]

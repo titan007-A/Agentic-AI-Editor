@@ -31,6 +31,8 @@ const BLANK: FeedFields = {
   active_to: null,
   batch: 3,
   include_existing: false,
+  from_latest: false,
+  skip_newest: 0,
   topic: null,
   folder: null,
 };
@@ -39,6 +41,8 @@ const HOURS = Array.from({ length: 24 }, (_, h) => h);
 // The server's limits on videos in progress at once per feed.
 const MIN_BATCH = 1;
 const MAX_BATCH = 20;
+// The server's limit on the newest videos a feed may skip when it starts from the latest.
+const MAX_SKIP = 1000;
 
 export const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
@@ -54,6 +58,8 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
   // Kept as typed, so the field can be cleared and retyped.
   const [batchText, setBatchText] = useState(String(fields.batch));
   const batch = wholeNumber(batchText, MIN_BATCH, MAX_BATCH);
+  const [skipText, setSkipText] = useState(String(fields.skip_newest ?? 0));
+  const skip = wholeNumber(skipText, 0, MAX_SKIP);
   const timed = fields.active_from !== null;
 
   useEffect(() => {
@@ -76,10 +82,11 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
     event.preventDefault();
     setBusy(true);
     try {
-      if (batch === null) return;
+      if (batch === null || skip === null) return;
       const body = {
         ...fields,
         batch,
+        skip_newest: skip,
         notes: fields.notes?.trim() || null,
         topic: fields.topic?.trim() || null,
         folder: fields.folder?.trim() || null,
@@ -222,11 +229,48 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
         <label className="flex items-center justify-between gap-3 text-sm">
           <span>Also edit the videos already there</span>
           <Switch
-            checked={fields.include_existing}
-            disabled={!!feed}
+            checked={fields.include_existing || fields.from_latest}
+            disabled={!!feed || fields.from_latest}
             onCheckedChange={(on) => set("include_existing", on)}
           />
         </label>
+        <label className="flex items-center justify-between gap-3 text-sm">
+          <span>
+            Start from the latest videos
+            <span className="block text-xs text-muted-foreground">
+              The videos already there are edited too, newest first; new ones still go first as they
+              come. Can be turned on for a feed that only took new videos.
+            </span>
+          </span>
+          <Switch
+            checked={fields.from_latest}
+            onCheckedChange={(on) => set("from_latest", on)}
+            aria-label="Start from the latest videos"
+          />
+        </label>
+        {fields.from_latest && (
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>
+              Skip the newest (start this many videos after the latest)
+              {skip === null && (
+                <span className="block text-xs text-destructive">
+                  A whole number from 0 to {MAX_SKIP}
+                </span>
+              )}
+            </span>
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={MAX_SKIP}
+              className="w-20"
+              aria-label="Skip the newest"
+              aria-invalid={skip === null}
+              value={skipText}
+              onChange={(e) => setSkipText(e.target.value)}
+            />
+          </label>
+        )}
         <label className="flex items-center justify-between gap-3 text-sm">
           <span>
             Videos in progress at once
@@ -254,6 +298,7 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
         disabled={
           busy ||
           batch === null ||
+          skip === null ||
           !fields.name.trim() ||
           !fields.location.trim() ||
           !fields.presets.length

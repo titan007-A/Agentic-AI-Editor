@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from agentic_editor import research
@@ -291,6 +291,42 @@ def entries(feed: Feed) -> list[Entry]:
     return link_entries(feed.location)
 
 
+def newest_first(feed: Feed, found: list[Entry]) -> list[Entry]:
+    """A feed's videos newest first: a folder's files come oldest first, a channel and an
+    Instagram account list theirs newest first (a playlist keeps its own order)."""
+    return list(reversed(found)) if feed.kind == "folder" else found
+
+
+# What a video passed over at the start of a feed that starts from the latest says.
+NEWEST_SKIPPED = "one of the newest videos the feed was set to skip"
+
+
+def from_the_latest(db: Session, feed: Feed, found: list[Entry]) -> list[Entry]:
+    """The videos a feed starting from the latest hasn't seen, newest first. Once, when it
+    starts (or its setting changed): what the first look only noted counts again, and the
+    `skip_newest` newest of it are passed over for good."""
+    found = newest_first(feed, found)
+    if not feed.looked or feed.restart:
+        db.execute(
+            delete(FeedItem).where(
+                FeedItem.feed_id == feed.id,
+                FeedItem.skipped.is_(True),
+                FeedItem.job_id.is_(None),
+                or_(FeedItem.reason.is_(None), FeedItem.reason == NEWEST_SKIPPED),
+            )
+        )
+        db.flush()
+    seen = set(db.scalars(select(FeedItem.key).where(FeedItem.feed_id == feed.id)))
+    new = [e for e in found if e.key not in seen]
+    if not feed.looked or feed.restart:
+        for e in new[: feed.skip_newest]:
+            db.add(FeedItem(feed_id=feed.id, key=e.key, title=e.title, source=e.source,
+                            skipped=True, reason=NEWEST_SKIPPED))  # fmt: skip
+        new = new[feed.skip_newest :]
+        feed.restart = False
+    return new
+
+
 def active(feed: Feed, hour: int) -> bool:
     """Whether new videos may start at this hour of the day."""
     if feed.active_from is None or feed.active_to is None:
@@ -359,7 +395,7 @@ def _check(
         # The first look also marks what is already there, whatever the hour, so that
         # later only what arrives after the feed began counts as new. A look that failed
         # to read the feed doesn't count.
-        skipping = not feed.looked and not feed.include_existing
+        skipping = not feed.looked and not feed.include_existing and not feed.from_latest
         if not feed.enabled or not (skipping or active(feed, now.hour)):
             return "waiting" if feed.enabled else "off"
         try:
@@ -369,8 +405,11 @@ def _check(
             feed.last_checked, feed.last_result = datetime.now(UTC), f"couldn't read it: {exc}"
             db.commit()
             return feed.last_result
-        seen = set(db.scalars(select(FeedItem.key).where(FeedItem.feed_id == feed.id)))
-        new = [e for e in found if e.key not in seen]
+        if feed.from_latest:
+            new = from_the_latest(db, feed, found)
+        else:
+            seen = set(db.scalars(select(FeedItem.key).where(FeedItem.feed_id == feed.id)))
+            new = [e for e in found if e.key not in seen]
         if skipping:
             for e in new:
                 db.add(
