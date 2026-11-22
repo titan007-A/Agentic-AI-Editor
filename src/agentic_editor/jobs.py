@@ -30,6 +30,7 @@ from agentic_editor import (
 )
 from agentic_editor.animate import schedule, studio
 from agentic_editor.backends import get_backends
+from agentic_editor.clipper import hunt as kick_hunt
 from agentic_editor.db import (
     AccountSnapshot,
     Animation,
@@ -38,6 +39,7 @@ from agentic_editor.db import (
     HiddenAccount,
     InstagramChannel,
     Job,
+    KickHunt,
     NicheAccount,
     NicheSchedule,
     NicheSearch,
@@ -1133,6 +1135,12 @@ def animate(animation_id: str) -> None:
 
 
 @huey.task()
+def hunt(hunt_id: str) -> None:
+    """A Kick clipper hunt: a stream's moments found and cut, each queued as a job."""
+    kick_hunt.run(hunt_id, sessions(), get_settings())
+
+
+@huey.task()
 def write_caption(output_id: int) -> None:
     """One queued caption's turn, shared with the jobs (see take_turn)."""
     take_turn(("caption", output_id))
@@ -1231,6 +1239,7 @@ CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__n
 ACCOUNT, QUESTIONS = read_account.task_class.__name__, ask_questions.task_class.__name__
 CHAT = answer_chat.task_class.__name__
 ANIMATE = animate.task_class.__name__
+HUNT = hunt.task_class.__name__
 READ = read_pdf_list.task_class.__name__
 
 
@@ -1268,6 +1277,13 @@ def recover(Session: sessionmaker) -> None:
             a
             for a in db.scalars(select(Animation.id).where(Animation.status == "queued"))
             if (ANIMATE, a) not in pending
+        ]
+        for found in db.scalars(select(KickHunt).where(KickHunt.status.in_(kick_hunt.BUSY))):
+            found.status, found.error = "failed", INTERRUPTED
+        lost_hunts = [
+            h
+            for h in db.scalars(select(KickHunt.id).where(KickHunt.status == "queued"))
+            if (HUNT, h) not in pending
         ]
         # A turn runs whichever job or caption is due, so what counts is a turn for each.
         turns = sum(1 for name, _ in pending if name in (PROCESS, CAPTION))
@@ -1318,6 +1334,9 @@ def recover(Session: sessionmaker) -> None:
     for animation_id in lost_animations:
         log.info("queueing animation %s again", animation_id)
         animate(animation_id)
+    for hunt_id in lost_hunts:
+        log.info("queueing kick hunt %s again", hunt_id)
+        hunt(hunt_id)
     for output_id in lost_captions:
         log.info("queueing the caption of output %s again", output_id)
         write_caption(output_id)

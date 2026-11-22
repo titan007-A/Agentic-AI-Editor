@@ -882,6 +882,101 @@ export type AnimationAutopilot = {
   channels: { id: string; username: string }[];
 };
 
+/** A Kick streamer the account clips (Kick Clipper tab); `live`: clipped while it streams. */
+export type KickStreamer = {
+  id: string;
+  slug: string;
+  username: string;
+  avatar: string;
+  live: boolean;
+  preset: string;
+  per_hour: number;
+  folder: string;
+  /** The folder its clips go to on the piles ("Kick <name>" when none is given). */
+  folder_shown: string;
+  is_live: boolean;
+  last_checked: string | null;
+  last_result: string | null;
+  link: string;
+  created_at: string;
+};
+
+export type KickStream = {
+  id: number;
+  uuid: string;
+  title: string;
+  started: string;
+  /** Seconds; 0 while live. */
+  duration: number;
+  live: boolean;
+  thumbnail: string;
+  views: number;
+  link: string;
+  has_video: boolean;
+};
+
+export type KickStreams = {
+  slug: string;
+  username: string;
+  avatar: string;
+  is_live: boolean;
+  streams: KickStream[];
+};
+
+export type KickClipJob = {
+  id: string;
+  status: "queued" | "running" | "done" | "failed";
+  stage: string;
+  progress: number;
+  error: string | null;
+  outputs: { id: number; duration: number; title: string; preset: string }[];
+};
+
+/** A moment a hunt found: the window cut from the stream (seconds into it) and its clip. */
+export type KickMoment = {
+  start: number;
+  end: number;
+  peak: number;
+  score: number;
+  why: string[];
+  chat_at: number | null;
+  job_id: string | null;
+  error?: string;
+  link: string;
+  job: KickClipJob | null;
+};
+
+export type KickHunt = {
+  id: string;
+  slug: string;
+  username: string;
+  title: string;
+  uuid: string;
+  stream_id: number;
+  start: number;
+  end: number;
+  count: number;
+  preset: string;
+  live: boolean;
+  folder: string;
+  status: "queued" | "reading" | "listening" | "cutting" | "done" | "failed";
+  message: string;
+  error: string | null;
+  created_at: string;
+  streamer_id: string | null;
+  link: string;
+  moments: KickMoment[];
+};
+
+export type KickHuntRequest = {
+  link: string;
+  start?: string;
+  end?: string;
+  count?: number;
+  preset?: string;
+  folder?: string;
+};
+
 export type AnimationVoice = { id: string; name: string; group: string; about: string };
 
 export type AnimationBrief = {
@@ -920,6 +1015,26 @@ export const api = {
     >,
   ) => request<AnimationAutopilot>("PUT", "/animation-autopilot", body),
   animationAutopilotNow: () => request<Animation>("POST", "/animation-autopilot/now"),
+  kickStreamers: () => request<KickStreamer[]>("GET", "/kick/streamers"),
+  addKickStreamer: (body: {
+    name: string;
+    live?: boolean;
+    preset?: string;
+    per_hour?: number;
+    folder?: string;
+  }) => request<KickStreamer>("POST", "/kick/streamers", body),
+  changeKickStreamer: (
+    id: string,
+    body: Partial<Pick<KickStreamer, "live" | "preset" | "per_hour" | "folder">>,
+  ) => request<KickStreamer>("PATCH", `/kick/streamers/${id}`, body),
+  removeKickStreamer: (id: string) => request<{ ok: boolean }>("DELETE", `/kick/streamers/${id}`),
+  kickStreams: (name: string) =>
+    request<KickStreams>("GET", `/kick/streams?name=${encodeURIComponent(name)}`),
+  kickHunts: () => request<KickHunt[]>("GET", "/kick/hunts"),
+  kickHunt: (id: string) => request<KickHunt>("GET", `/kick/hunts/${id}`),
+  startKickHunt: (body: KickHuntRequest) => request<KickHunt>("POST", "/kick/hunts", body),
+  retryKickHunt: (id: string) => request<KickHunt>("POST", `/kick/hunts/${id}/retry`),
+  removeKickHunt: (id: string) => request<{ ok: boolean }>("DELETE", `/kick/hunts/${id}`),
   approveAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/approve`),
   skipAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/skip`),
   nicheSearches: () => request<NicheSearch[]>("GET", "/niche"),

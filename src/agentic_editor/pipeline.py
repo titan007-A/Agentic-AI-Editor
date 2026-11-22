@@ -38,6 +38,7 @@ from agentic_editor.analysis import faces, ocr, onscreen, subjects, watermarks
 from agentic_editor.analysis.watermarks import Watermark
 from agentic_editor.analyze import Analysis, analyze, file_hash, with_silences
 from agentic_editor.backends import Backends
+from agentic_editor.clipper import hunt as kick_hunt
 from agentic_editor.cuts import clean_edl
 from agentic_editor.edl import EDL, Clip, Cue, Shot
 from agentic_editor.heuristic import plan_by_energy
@@ -95,6 +96,8 @@ def resolve_source(value: str, settings: Settings) -> download.Source:
         return download.fetch(value, settings.media_dir / "sources")
     if value.startswith(UPLOAD_PREFIX):
         return download.local(settings.media_dir / "uploads" / value.removeprefix(UPLOAD_PREFIX))
+    if value.startswith(kick_hunt.SOURCE):
+        return kick_hunt.saved_source(value, settings)
     return download.local(Path(value).expanduser())
 
 

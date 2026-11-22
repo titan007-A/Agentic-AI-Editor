@@ -34,7 +34,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from agentic_editor import research
-from agentic_editor.db import Feed, FeedItem, Job, PileFolder
+from agentic_editor.clipper import hunt as kick_hunt
+from agentic_editor.db import Feed, FeedItem, Job, KickHunt, PileFolder
 from agentic_editor.download import signed_in
 
 log = logging.getLogger(__name__)
@@ -466,9 +467,13 @@ def file_outputs(db: Session, job: Job) -> None:
     each video's preset's folder."""
     item = db.scalar(select(FeedItem).where(FeedItem.job_id == job.id))
     name = " ".join((item.feed.folder or "").split()) if item else ""
+    owner = item.feed.owner_id if item else None
+    hunt_id = kick_hunt.hunt_of_source(job.source)
+    hunt = db.get(KickHunt, hunt_id) if hunt_id and not name else None
+    if hunt is not None:  # a Kick clipper moment: its hunt's folder
+        name, owner = kick_hunt.folder_name(hunt), hunt.owner_id
     if not name:
         return
-    owner = item.feed.owner_id
     for output in job.outputs:
         place = select(PileFolder).where(
             PileFolder.preset == output.preset,
