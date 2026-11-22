@@ -75,6 +75,7 @@ from agentic_editor.db import (
     ResearchItem,
     ResearchMessage,
     Setting,
+    ShareLink,
     StyleDraft,
 )
 from agentic_editor.db import BufferKey as BufferKeyRow
@@ -119,6 +120,10 @@ PDF_BYTES = 10 * 1024 * 1024  # the largest PDF of songs a research takes
 # How long a shutdown waits for running jobs; any still running are failed at the next start.
 SHUTDOWN_SECONDS = 30
 PILE_LIMIT = 100
+# A shared folder's link: a random token this many bytes long, and the videos it shows.
+SHARE_BYTES = 18
+SHARE_TOKEN = re.compile(r"[A-Za-z0-9_-]{20,32}")
+SHARED_LIMIT = 300
 # Comments that still want something done: a reply to send, a person's answer, a draft.
 OPEN_COMMENTS = ("new", "drafted", "look", "failed")
 COMMENTS_SHOWN = 200
@@ -590,6 +595,21 @@ class PileFolderView(BaseModel):
     preset: str
     parent_id: int | None
     name: str
+    # The token of the link showing its videos to anyone who has it (ShareLink), if shared.
+    share: str | None = None
+
+
+class SharedClip(BaseModel):
+    id: int
+    title: str
+    duration: float
+    caption: str  # the post's caption, when written
+    made: datetime
+
+
+class SharedFolder(BaseModel):
+    name: str
+    clips: list[SharedClip]
 
 
 class PasteRequest(BaseModel):
@@ -2933,7 +2953,9 @@ def create_app(
         """The thumbnail, or a copy `width` px wide for a card, made once. Through a relay
         a dozen full 1080x1920 images is what makes a long list slow to appear, and asking
         again on every refresh only to hear they haven't changed costs a round trip each."""
-        output = find_output(output_id, session, account)
+        return thumbnail_file(find_output(output_id, session, account), width)
+
+    def thumbnail_file(output: Output, width: int | None) -> FileResponse:
         if not output.thumbnail:
             raise HTTPException(404, "no thumbnail")
         path = Path(output.thumbnail)
@@ -3070,10 +3092,14 @@ def create_app(
             for o in outputs
         ]
 
-    def folder_view(folder: PileFolder) -> PileFolderView:
+    def folder_view(folder: PileFolder, share: str | None = None) -> PileFolderView:
         return PileFolderView(
-            id=folder.id, preset=folder.preset, parent_id=folder.parent_id, name=folder.name
-        )
+            id=folder.id, preset=folder.preset, parent_id=folder.parent_id, name=folder.name,
+            share=share,
+        )  # fmt: skip
+
+    def share_of(folder: PileFolder, session: Session) -> str | None:
+        return session.scalar(select(ShareLink.token).where(ShareLink.folder_id == folder.id))
 
     def find_folder(folder_id: int, session: Session, account: Account) -> PileFolder:
         folder = session.get(PileFolder, folder_id)
@@ -3103,7 +3129,8 @@ def create_app(
         query = select(PileFolder).order_by(PileFolder.name)
         if not sees_every_render(account, session):
             query = query.where(PileFolder.owner_id == account.id)
-        return [folder_view(f) for f in session.scalars(query)]
+        shares = dict(session.execute(select(ShareLink.folder_id, ShareLink.token)).all())
+        return [folder_view(f, shares.get(f.id)) for f in session.scalars(query)]
 
     @app.post("/api/pile-folders")
     def make_pile_folder(body: PileFolderRequest, account: User, session: DB) -> PileFolderView:
@@ -3128,7 +3155,7 @@ def create_app(
             body.name, folder.preset, folder.parent_id, session, account, renaming=folder.id
         )
         session.commit()
-        return folder_view(folder)
+        return folder_view(folder, share_of(folder, session))
 
     @app.delete("/api/pile-folders/{folder_id}")
     def delete_pile_folder(folder_id: int, account: User, session: DB) -> dict:
@@ -3138,10 +3165,96 @@ def create_app(
             output.folder_id = folder.parent_id
         for child in session.scalars(select(PileFolder).where(PileFolder.parent_id == folder.id)):
             child.parent_id = folder.parent_id
+        session.execute(delete(ShareLink).where(ShareLink.folder_id == folder.id))
         session.flush()
         session.delete(folder)
         session.commit()
         return {"ok": True}
+
+    # A folder shared with a client: a link anyone can open to watch and download its
+    # videos, without logging in. The link holds a long random token; taking it away (or
+    # deleting the folder) stops it.
+    @app.post("/api/pile-folders/{folder_id}/share")
+    def share_folder(folder_id: int, account: User, session: DB) -> PileFolderView:
+        folder = find_folder(folder_id, session, account)
+        token = share_of(folder, session)
+        if token is None:
+            token = secrets.token_urlsafe(SHARE_BYTES)
+            session.add(ShareLink(token=token, owner_id=account.id, folder_id=folder.id))
+            session.commit()
+        return folder_view(folder, token)
+
+    @app.delete("/api/pile-folders/{folder_id}/share")
+    def unshare_folder(folder_id: int, account: User, session: DB) -> PileFolderView:
+        folder = find_folder(folder_id, session, account)
+        session.execute(delete(ShareLink).where(ShareLink.folder_id == folder.id))
+        session.commit()
+        return folder_view(folder)
+
+    def shared_folder(token: str, session: Session) -> PileFolder:
+        link = session.get(ShareLink, token) if SHARE_TOKEN.fullmatch(token) else None
+        folder = session.get(PileFolder, link.folder_id) if link else None
+        if folder is None:
+            raise HTTPException(404, "this link isn't shared any more")
+        return folder
+
+    def shared_outputs(folder: PileFolder, session: Session) -> list[Output]:
+        """The videos in the folder and in the folders inside it, newest first; not the
+        ones dismissed, nor any whose file is gone."""
+        ids, todo = {folder.id}, [folder.id]
+        while todo:
+            inside = session.scalars(select(PileFolder.id).where(PileFolder.parent_id.in_(todo)))
+            todo = [i for i in inside if i not in ids]
+            ids.update(todo)
+        query = (
+            select(Output)
+            .where(Output.folder_id.in_(ids), func.coalesce(Output.verdict, "") != "dismissed")
+            .order_by(Output.id.desc())
+            .limit(SHARED_LIMIT)
+        )
+        return [o for o in session.scalars(query) if Path(o.path).is_file()]
+
+    def shared_output(token: str, output_id: int, session: Session) -> Output:
+        found = [o for o in shared_outputs(shared_folder(token, session), session)
+                 if o.id == output_id]  # fmt: skip
+        if not found:
+            raise HTTPException(404, "no such video in this folder")
+        return found[0]
+
+    @app.get("/api/shared/{token}")
+    def shared(token: str, session: DB) -> SharedFolder:
+        """A shared folder's videos, for anyone with its link."""
+        folder = shared_folder(token, session)
+
+        def clip(o: Output) -> SharedClip:
+            caption = o.caption if o.caption_status == "done" else ""
+            title = o.title or o.job.title or "Clip"
+            return SharedClip(
+                id=o.id, title=title, duration=o.duration, caption=caption, made=o.job.created_at
+            )
+
+        return SharedFolder(
+            name=folder.name, clips=[clip(o) for o in shared_outputs(folder, session)]
+        )
+
+    @app.get("/api/shared/{token}/{output_id}/video")
+    def shared_video(
+        token: str, output_id: int, session: DB, download: bool = False
+    ) -> FileResponse:
+        output = shared_output(token, output_id, session)
+        name = download_name(output)
+        return FileResponse(
+            output.path, media_type="video/mp4", filename=f"{name}.mp4" if download else None
+        )
+
+    @app.get("/api/shared/{token}/{output_id}/thumbnail")
+    def shared_thumbnail(
+        token: str,
+        output_id: int,
+        session: DB,
+        width: Annotated[int | None, Query(ge=120, le=1080)] = None,
+    ) -> FileResponse:
+        return thumbnail_file(shared_output(token, output_id, session), width)
 
     @app.post("/api/pile-folders/paste")
     def paste_into_folder(body: PasteRequest, account: User, session: DB) -> dict:

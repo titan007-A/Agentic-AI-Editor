@@ -33,7 +33,7 @@ export function pileHref(tab, folder, inside = null) {
   return `/autopilot/${query ? `?${query}` : ""}`;
 }
 
-/** @typedef {{ id: number, preset: string, parent_id: number | null, name: string }} Made */
+/** @typedef {{ id: number, preset: string, parent_id: number | null, name: string, share?: string | null }} Made */
 
 /**
  * The folder a made folder sits in: null (straight in the preset's folder) also when that

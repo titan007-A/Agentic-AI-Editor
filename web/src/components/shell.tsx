@@ -44,9 +44,10 @@ const ADMIN_LINKS = [
   { href: "/people/", label: "People" },
 ];
 
-// Pages anyone can read without logging in (Meta's reviewers read the policies): no
-// header, and no asking who is signed in, which would send them to the login page.
-const PUBLIC = ["/privacy", "/terms", "/data-deletion"];
+// Pages anyone can read without logging in (Meta's reviewers read the policies, a client
+// opens the folder shared with them): no header, and no asking who is signed in, which
+// would send them to the login page.
+const PUBLIC = ["/privacy", "/terms", "/data-deletion", "/shared"];
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

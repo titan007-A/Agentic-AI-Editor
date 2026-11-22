@@ -2975,3 +2975,80 @@ def test_a_reel_goes_to_instagram_as_a_link_anyone_can_open(env, monkeypatch, ca
     answer = env.client.post(f"/api/outputs/{output['id']}/instagram", json=body)
     assert answer.status_code == 502 and "rejected" in answer.json()["detail"]
     assert "posting output" in caplog.text and "rejected" in caplog.text
+
+
+def test_a_folder_shared_with_a_client_opens_without_a_login(env, tmp_path):
+    client = env.client
+    ids = []
+    with env.sessions() as db:
+        for i in range(4):
+            job = Job(source=f"https://x.test/{i}", presets=["square-1x1"], status="done",
+                      title=f"Stream {i}")  # fmt: skip
+            db.add(job)
+            db.flush()
+            video = tmp_path / f"clip{i}.mp4"
+            video.write_bytes(b"0123456789" * 100)
+            thumb = tmp_path / f"clip{i}.jpg"
+            Image.new("RGB", (1080, 1920), "red").save(thumb)
+            output = Output(job_id=job.id, preset="square-1x1", path=str(video), duration=20.5,
+                            planner="fake-model", edl={}, thumbnail=str(thumb), title=f"Clip {i}",
+                            caption=f"caption {i}" if i == 1 else "secret draft",
+                            caption_status="done" if i == 1 else "writing")  # fmt: skip
+            db.add(output)
+            db.flush()
+            ids.append(output.id)
+        db.commit()
+    made = client.post("/api/pile-folders", json={"preset": "square-1x1", "name": "For Capp"})
+    folder = made.json()
+    assert folder["share"] is None
+    inner = client.post(
+        "/api/pile-folders",
+        json={"preset": "square-1x1", "parent_id": folder["id"], "name": "Week 2"},
+    )
+    for output_id, where in ((ids[0], folder["id"]), (ids[1], inner.json()["id"]),
+                             (ids[3], folder["id"])):  # fmt: skip
+        client.post(f"/api/outputs/{output_id}/folder", json={"folder_id": where})
+    client.post(f"/api/outputs/{ids[3]}/verdict", json={"verdict": "dismissed"})
+
+    shared = client.post(f"/api/pile-folders/{folder['id']}/share").json()
+    token = shared["share"]
+    assert token and len(token) == 24
+    assert client.post(f"/api/pile-folders/{folder['id']}/share").json()["share"] == token
+    listed = {f["id"]: f["share"] for f in client.get("/api/pile-folders").json()}
+    assert listed[folder["id"]] == token and listed[inner.json()["id"]] is None
+
+    anon = TestClient(client.app)  # no login
+    assert anon.get("/api/piles/ready").status_code == 401
+    seen = anon.get(f"/api/shared/{token}").json()
+    assert seen["name"] == "For Capp"
+    # The folder's and its inner folder's videos, newest first; not the dismissed one, nor
+    # the one in no folder; a caption only once written.
+    assert [c["id"] for c in seen["clips"]] == [ids[1], ids[0]]
+    assert [c["caption"] for c in seen["clips"]] == ["caption 1", ""]
+    assert seen["clips"][0]["title"] == "Clip 1" and seen["clips"][0]["duration"] == 20.5
+    whole = anon.get(f"/api/shared/{token}/{ids[0]}/video")
+    assert whole.status_code == 200 and whole.content == b"0123456789" * 100
+    part = anon.get(f"/api/shared/{token}/{ids[0]}/video", headers={"Range": "bytes=0-9"})
+    assert part.status_code == 206 and part.content == b"0123456789"
+    saved = anon.get(f"/api/shared/{token}/{ids[0]}/video?download=1")
+    assert "attachment" in saved.headers["content-disposition"]
+    thumb = anon.get(f"/api/shared/{token}/{ids[1]}/thumbnail?width=480")
+    assert thumb.status_code == 200 and Image.open(io.BytesIO(thumb.content)).width == 480
+    assert anon.get(f"/api/shared/{token}/{ids[2]}/video").status_code == 404  # not in it
+    assert anon.get(f"/api/shared/{token}/{ids[3]}/video").status_code == 404  # dismissed
+    assert anon.get("/api/shared/not-a-token-at-all-xxxxx").status_code == 404
+    assert anon.get("/api/shared/x").status_code == 404
+
+    # Someone who can't see the folder can't share it or take its link away.
+    _, riya = employee(env)
+    assert riya.post(f"/api/pile-folders/{folder['id']}/share").status_code == 404
+    assert riya.delete(f"/api/pile-folders/{folder['id']}/share").status_code == 404
+
+    off = client.delete(f"/api/pile-folders/{folder['id']}/share")
+    assert off.json()["share"] is None
+    assert anon.get(f"/api/shared/{token}").status_code == 404
+    # Shared again it gets a new link; deleting the folder takes it away.
+    again = client.post(f"/api/pile-folders/{folder['id']}/share").json()["share"]
+    assert again != token and anon.get(f"/api/shared/{again}").status_code == 200
+    assert client.delete(f"/api/pile-folders/{folder['id']}").status_code == 200
+    assert anon.get(f"/api/shared/{again}").status_code == 404
