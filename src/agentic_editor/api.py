@@ -43,13 +43,14 @@ from agentic_editor import (
     hosting,
     instagram,
     jobs,
+    mcp_access,
     niche,
     research,
     songlist,
 )
+from agentic_editor.animate import mcp_tools, studio
 from agentic_editor.animate import routes as animate_routes
 from agentic_editor.animate import schedule as animate_schedule
-from agentic_editor.animate import studio
 from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
 from agentic_editor.clipper import hunt as kick_hunt
@@ -827,6 +828,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Claude's MCP endpoint (animate/mcp_tools) answers only while its manager runs.
+        async with app.state.mcp_server.session_manager.run(), work_running(app):
+            yield
+
+    @asynccontextmanager
+    async def work_running(app: FastAPI) -> AsyncIterator[None]:
         consumer = None
         if start_worker:
             await asyncio.to_thread(jobs.recover, make_session)
@@ -3557,9 +3564,40 @@ def create_app(
         accounts.remove(session, target, settings.presets_dir, keep_work_for=keeper)
         return {"ok": True}
 
+    studio_deps = dict(
+        User=User, DB=DB, enqueue=enqueue, settings=settings, public_base=public_base
+    )  # fmt: skip
     animate_routes.install(
-        app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,
-        enqueue=enqueue, settings=settings, public_base=public_base,
+        app, renders_of=renders_of, sees_every_render=sees_every_render, **studio_deps
+    )
+
+    # Claude, over MCP (animate/mcp_tools, mcp_access): the studio's own operations, but
+    # only ever the account's own reels, the primary account's too.
+    async def post_reel(output_id, channel_id, caption, account, session, request) -> dict:
+        body = IgPostRequest(channel_id=channel_id, caption=caption)
+        return await post_to_instagram(output_id, body, account, session, request)
+
+    def reached_at(request: Request) -> str:
+        """The site's address as this caller reached it (through Cloudflare: the public one),
+        for Claude's links and sign-in details: an app checks they match the address it was
+        given. Posting still gives Instagram PUBLIC_URL (public_base)."""
+        return str(request.base_url).rstrip("/")
+
+    tools = app.state.mcp_tools = mcp_tools.Studio(
+        animate_routes.operations(
+            renders_of=animate_routes.own_only,
+            sees_every_render=animate_routes.nobody_elses,
+            **studio_deps,
+        ),
+        make_session=make_session,
+        settings=settings,
+        base_of=reached_at,
+        post_reel=post_reel,
+    )
+    app.state.mcp_server = tools.server
+    mcp_access.install(
+        app, User=User, DB=DB, make_session=make_session, base_of=reached_at,
+        endpoint=mcp_tools.http_endpoint(tools.server),
     )  # fmt: skip
     kick_routes.install(
         app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,

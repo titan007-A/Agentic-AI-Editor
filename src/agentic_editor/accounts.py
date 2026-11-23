@@ -22,6 +22,7 @@ from agentic_editor.db import (
     BufferKey,
     Feed,
     Job,
+    McpToken,
     PresetBuffer,
     Research,
     ResearchAccount,
@@ -214,8 +215,8 @@ def remove(
     # made for them keep the account's name.
     for item in session.scalars(select(ResearchAccount).where(ResearchAccount.owner_id == user.id)):
         session.delete(item)
-    # Its Buffer keys are its own: never handed to whoever keeps its work.
-    for kind in (BufferKey, PresetBuffer):
+    # Its Buffer keys and Claude's ways in are its own: never handed to whoever keeps its work.
+    for kind in (BufferKey, PresetBuffer, McpToken):
         for item in session.scalars(select(kind).where(kind.owner_id == user.id)):
             session.delete(item)
     if user.role == MEMBER or user.private_presets:

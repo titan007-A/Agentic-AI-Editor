@@ -340,6 +340,41 @@ class AnimationAutopilot(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class McpToken(Base):
+    """One way in for Claude to an account's Animations tab (mcp_access): a key the person
+    made and copied into Claude Code, or a connection claude.ai made through the sign-in
+    page. Only hashes are kept. It works as long as the account's password stays the same
+    (`version`), like a signed-in session."""
+
+    __tablename__ = "mcp_tokens"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(8), default="key")  # key or oauth
+    client_id: Mapped[str | None] = mapped_column(String(64))  # oauth: the McpClient
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    refresh_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    tail: Mapped[str] = mapped_column(String(8), default="")  # a key's last letters, to tell it
+    # May post reels (Instagram, an autopilot reel's approval); off unless the person said so.
+    posting: Mapped[bool] = mapped_column(default=False)
+    version: Mapped[int] = mapped_column(default=0)  # the account's session_version
+    expires_at: Mapped[datetime | None]  # oauth: the access token's end; refreshed
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    last_used_at: Mapped[datetime | None]
+
+
+class McpClient(Base):
+    """An app that registered itself to ask for a connection (OAuth dynamic client
+    registration, as claude.ai does): it still needs a signed-in person to allow it."""
+
+    __tablename__ = "mcp_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    info: Mapped[dict] = mapped_column(JSON)  # OAuthClientInformationFull
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class KickStreamer(Base):
     """A Kick streamer an account clips (clipper/), with the preset and folder its clips
     get; with `live` on it is clipped while it streams, one stretch at a time."""
