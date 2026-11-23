@@ -25,16 +25,17 @@ FEATURES = (
 )  # fmt: skip
 DEFAULT_USERS = ("siddhant",)
 # Features first tried by other accounts than DEFAULT_USERS.
+# In a feature's list: every account, now and later (new admins and employees too).
+EVERYONE = "*"
 DEFAULTS = {
     "niche_finder": ("siddhant", "aman"),
     "trim_choice": ("aman",),
-    "youtube_songs": ("siddhant", "prajjwal"),
+    # Everyone: the owner wants most of a research's results from YouTube, whole songs too.
+    "youtube_songs": (EVERYONE,),
     "dm_queue": ("siddhant-content",),
     "animation_studio": ("siddhant", "siddhant-content"),
     "kick_clipper": ("siddhant", "employee"),
 }
-# In a feature's list: every account, now and later (new admins and employees too).
-EVERYONE = "*"
 
 
 def users(name: str, session: Session) -> list[str]:

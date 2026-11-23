@@ -26,6 +26,7 @@ class Planner:
         if "queries" in schema["properties"]:
             return {
                 "brief": "Bryan Adams singing live",
+                "music": True,
                 "queries": ["Bryan Adams live", "#summerof69", "Bryan Adams live", "  "],
             }
         if "questions" in schema["properties"]:
@@ -134,14 +135,19 @@ def test_a_reel_is_known_by_its_code_however_it_is_linked(link, code):
 
 def test_the_request_is_understood_and_searched_with_the_model_s_searches():
     llm = Planner()
-    brief, queries = research.plan(llm, "muje Bryan Adams ke live gaane dundh de")
+    brief, queries, music = research.plan(llm, "muje Bryan Adams ke live gaane dundh de")
+    assert music is True
     assert brief == "Bryan Adams singing live"
     # The request's own words aren't searched ("gaane" finds Hindi songs), and too few
     # searches are asked for once more.
     assert queries == ["Bryan Adams live", "summerof69"]
     assert len(llm.asked) == 2 and "muje Bryan Adams" in llm.asked[0]
     # A model that can't answer still leaves the request to search.
-    assert research.plan(Planner(broken=True), "Bryan Adams live") == ("", ["Bryan Adams live"])
+    assert research.plan(Planner(broken=True), "Bryan Adams live") == (
+        "",
+        ["Bryan Adams live"],
+        None,
+    )
 
 
 def test_searches_find_each_reel_once_and_go_on_past_a_failing_engine():
@@ -339,7 +345,7 @@ def test_an_account_is_learned_from_its_own_reels():
     assert nobody == research.Learned("", [], [])
 
 
-def test_a_research_for_an_account_finds_reels_like_its_own_but_not_its_own():
+def test_a_research_for_an_account_finds_reels_like_its_own_but_not_its_own(all_instagram):
     llm = AccountPlanner()
 
     def find(query, count):
@@ -374,7 +380,7 @@ def test_a_research_for_an_account_finds_reels_like_its_own_but_not_its_own():
     assert result.queries[0] == "Bryan Adams live"  # no focus: the model's searches only
 
 
-def test_feedback_steers_planning_and_rating_and_hidden_accounts_stay_out():
+def test_feedback_steers_planning_and_rating_and_hidden_accounts_stay_out(all_instagram):
     llm = AccountPlanner()
 
     def find(query, count):
@@ -419,7 +425,11 @@ def test_feedback_steers_planning_and_rating_and_hidden_accounts_stay_out():
 
 def test_a_model_that_cant_plan_an_account_s_searches_leaves_its_name_and_presets():
     context = research.Context(handle="voiceshq", presets={"v": "Vocals only; isolated"})
-    assert research.plan(Planner(broken=True), "", context) == ("", ["voiceshq", "Vocals only"])
+    assert research.plan(Planner(broken=True), "", context) == (
+        "",
+        ["voiceshq", "Vocals only"],
+        None,
+    )
 
 
 def test_a_research_the_engines_turned_away_says_so():
@@ -483,7 +493,7 @@ def test_the_answers_are_part_of_what_to_find():
 
 def test_a_model_that_cant_plan_searches_the_request_without_the_answers():
     asked = research.with_answers("Bryan Adams", [{"question": "Live?", "answer": "Live"}])
-    assert research.plan(Planner(broken=True), asked) == ("", ["Bryan Adams"])
+    assert research.plan(Planner(broken=True), asked) == ("", ["Bryan Adams"], None)
     context = research.Context(handle="voiceshq", presets={"v": "Vocals only; isolated"})
     answers_only = research.with_answers("", [{"question": "Live?", "answer": "Live"}])
     assert research.plan(Planner(broken=True), answers_only, context)[1][0] == "voiceshq"
@@ -637,7 +647,7 @@ def test_a_daily_research_doesnt_search_x():
     assert "x" in research.SITES and "x" not in research.DAILY_SITES
 
 
-def test_low_quality_reels_stay_out_and_sd_ranks_below_hd():
+def test_low_quality_reels_stay_out_and_sd_ranks_below_hd(all_instagram):
     llm = Planner()
 
     def find(query, count):
@@ -667,7 +677,7 @@ def test_low_quality_reels_stay_out_and_sd_ranks_below_hd():
     assert research.Reel(code="x", url="", query="").quality == ""  # not known
 
 
-def test_a_research_looks_at_the_accounts_source_pages_too():
+def test_a_research_looks_at_the_accounts_source_pages_too(all_instagram):
     llm = Planner()
     asked = []
 
@@ -1053,7 +1063,7 @@ def test_source_pages_get_40_of_every_100_shown_the_searches_60():
     assert sum(r.handle == "gira" for r in picked) == 2
 
 
-def test_a_research_with_a_source_page_rates_20_of_its_reels_and_shows_6():
+def test_a_research_with_a_source_page_rates_20_of_its_reels_and_shows_6(all_instagram):
     llm = Planner()
 
     def find(query, count):
@@ -1364,3 +1374,101 @@ def test_a_singers_own_channel_a_search_turns_up_gives_its_latest_songs_too():
         "yt:ADAMSHEAVEN": ("Bryan Adams live", "own", "Bryan Adams"),
         "yt:ADAMSRUNTOU": ("Bryan Adams's own channel", "own", "Bryan Adams"),
     }
+
+
+def test_instagram_takes_at_most_a_tenth_of_what_a_research_shows():
+    llm = Planner()
+
+    def find(query, count):
+        n = abs(hash(query)) % 1000
+        if query.startswith("site:youtube.com/shorts"):
+            return [{"href": f"https://www.youtube.com/shorts/S{n:03d}{i:07d}"} for i in range(12)]
+        return [hit(f"IG{n:03d}{i:05d}") for i in range(12)]
+
+    def info(url):
+        code = research.code_of(url)
+        if code.startswith(research.YOUTUBE):
+            return {"channel": code, "uploader_id": "@" + code[3:], "media_type": "short",
+                    "duration": 30, "title": "Bryan Adams live", "like_count": 500}  # fmt: skip
+        return {"channel": code.lower(), "description": "Bryan Adams live", "like_count": 900}
+
+    looked = []
+
+    def counting(url):
+        looked.append(url)
+        return info(url)
+
+    result = research.run(
+        "Bryan Adams live", lambda: nullcontext(llm), set(), set(), lambda *a: None, find,
+        counting, 0, sites=("instagram", "shorts"),
+    )  # fmt: skip
+    instagram = [r for r in result.reels if r.on_instagram]
+    assert len(result.reels) == research.SHOWN
+    assert len(instagram) == max(1, int(research.SHOWN * research.INSTAGRAM_SHOWN)) == 1
+    assert result.left_out["Instagram's share"] >= 1
+    # Most of what is looked up is YouTube's, though the engines found as many reels.
+    assert sum("instagram.com" in u for u in looked) <= round(research.MAX_REELS * 0.2)
+
+
+def test_instagram_few_keeps_youtube_s_order_and_instagram_s_room():
+    reels = [Reel(f"IG{i}", "", "") for i in range(30)] + [
+        Reel(f"yt:Y{i:010d}", "", "") for i in range(30)
+    ]
+    kept = research.instagram_few(reels, 20)
+    assert len(kept) == 20 and sum(r.on_instagram for r in kept) == 4  # 20% of 20
+    assert [r.code for r in kept if r.youtube] == [f"yt:Y{i:010d}" for i in range(16)]
+
+
+@pytest.mark.parametrize("music", [True, False])
+def test_whole_songs_are_searched_only_when_the_research_is_music(music):
+    class Military(Planner):
+        def chat_json(self, messages, schema, **kwargs):
+            reply = super().chat_json(messages, schema, **kwargs)
+            return {**reply, "music": music} if "queries" in schema["properties"] else reply
+
+    songs_asked = []
+
+    def songs(query, count):
+        songs_asked.append(query)
+        return []
+
+    research.run(
+        "special forces combat footage", lambda: nullcontext(Military()), set(), set(),
+        lambda *a: None, lambda q, c: [], lambda u: {}, 0,
+        sites=("instagram", "shorts", "songs"), songs=songs,
+    )  # fmt: skip
+    assert bool(songs_asked) == music
+    assert "songs" in research.DAILY_SITES
+
+
+def test_a_rating_that_breaks_off_is_asked_again_in_halves_and_unrated_reels_stay_out(
+    all_instagram,
+):
+    class Breaks(Planner):
+        """Can't answer for more than 5 reels at once, nor ever for the reel BROKEN."""
+
+        def chat_json(self, messages, schema, **kwargs):
+            prompt = messages[-1]["content"]
+            if "ratings" in schema["properties"]:
+                listed = [line for line in prompt.split("\n") if line[:1].isdigit()]
+                if len(listed) > 5 or "BROKEN" in prompt:
+                    raise LLMError("did not return JSON")
+            return super().chat_json(messages, schema, **kwargs)
+
+    reels = [Reel(f"R{i}", "", "", caption="Bryan Adams live") for i in range(10)]
+    research.rate(Breaks(), "Bryan Adams", reels)
+    assert all(r.relevance == 0.9 for r in reels)
+
+    def find(query, count):
+        return [hit("GOOD01"), hit("BROKEN"), hit("GOOD02")]
+
+    def info(url):
+        code = research.code_of(url)
+        return {"channel": code.lower(), "description": f"Bryan Adams live {code}", "like_count": 9}
+
+    result = research.run(
+        "Bryan Adams live", lambda: nullcontext(Breaks()), set(), set(), lambda *a: None, find,
+        info, 0,
+    )  # fmt: skip
+    assert sorted(r.code for r in result.reels) == ["GOOD01", "GOOD02"]
+    assert result.left_out["couldn't be rated"] == 1
