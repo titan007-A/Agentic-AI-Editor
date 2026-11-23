@@ -11,6 +11,7 @@ render_job.
 import hashlib
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from agentic_editor.edl import EDL, Clip
 from agentic_editor.settings import Settings
 
 log = logging.getLogger(__name__)
+_mixing = threading.Lock()
 
 SOURCE = "animation:"  # a Job's source for rendering an animation
 BUSY = ("drafting", "changing", "painting", "voicing")  # a task is working on it
@@ -72,7 +74,13 @@ def preview_sound(plan: Plan, player: dict, settings: Settings, speak=voice.spea
     raw = json.dumps([player, plan.mood, plan.voice, 1], sort_keys=True, default=str)
     key = hashlib.sha256(raw.encode()).hexdigest()[:24]
     dest = settings.cache_dir / "animation-sound" / f"{key}.wav"
-    if not dest.exists():
+    if dest.exists():
+        return dest
+    # The browser asks for the sound more than once at a time (ranges, a second tab): one
+    # mix, the others wait for it, instead of each speaking and mixing it all again.
+    with _mixing:
+        if dest.exists():
+            return dest
         dest.parent.mkdir(parents=True, exist_ok=True)
         timeline, spoken = timeline_of(plan, settings, speak)
         partial = dest.with_suffix(".part.wav")

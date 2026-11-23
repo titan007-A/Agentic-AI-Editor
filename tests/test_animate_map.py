@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from agentic_editor.animate import images, maps, mapwriter, planner, sound, studio
+from agentic_editor.animate import images, maps, mapwriter, planner, sound, studio, voice
 from agentic_editor.animate.plan import Plan, map_problems, problems, tidy
 from agentic_editor.animate.timeline import build, player_data
 from agentic_editor.db import Animation
@@ -569,3 +569,59 @@ def test_a_tour_is_said_the_reference_way_whatever_the_writer_wrote():
         assert mapwriter.telling(fact), fact
     for fact in ("a symbol of home comfort", "a custard topped with caramel"):
         assert not mapwriter.telling(fact), fact
+
+
+def test_many_card_pictures_are_painted_in_turns_of_the_gpu(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from agentic_editor import slots
+    from tests.test_animate import FakeProc
+
+    turns = []
+
+    @contextmanager
+    def turn(what, progress=None):
+        turns.append(what)
+        yield
+
+    monkeypatch.setattr(slots.gpu, "turn", turn)
+    settings = Settings(cache_dir=tmp_path / "cache")
+    shown = []
+    pictures = [images.Picture(f"a plate of dish number {n}", n) for n in range(19)]
+    names = images.paint(
+        pictures, "map", settings, lambda s, m: shown.append(m), run=FakeProc, size=images.CARD
+    )
+    assert all(names) and len(set(names)) == 19
+    assert len(turns) == 3  # 8 + 8 + 3: anyone waiting for the GPU goes between turns
+    assert (FakeProc.last["width"], FakeProc.last["height"]) == images.CARD
+    assert len(FakeProc.last["jobs"]) == 3
+    assert shown[-1] == "painted 19 of 19 pictures" and "painted 9 of 19 pictures" in shown
+
+
+def test_a_line_asked_for_twice_at_once_is_spoken_once(tmp_path, monkeypatch):
+    """The studio's sound is fetched more than once at a time (the browser's ranges): the
+    second asker waits for the first's recording instead of making it again."""
+    import threading
+    import time
+
+    pytest.importorskip("torch")
+    from tests.test_animate import FakePipeline
+
+    class Slow(FakePipeline):
+        def __call__(self, text, voice, speed):
+            time.sleep(0.3)
+            yield from super().__call__(text, voice, speed)
+
+    fake = Slow()
+    monkeypatch.setattr(voice, "_pipeline", lambda lang: fake)
+    got = []
+
+    def ask():
+        got.append(voice.speak("Japan has mochi.", "am_michael", tmp_path))
+
+    threads = [threading.Thread(target=ask) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert fake.calls == 1 and len(got) == 3 and got[0] == got[1] == got[2]

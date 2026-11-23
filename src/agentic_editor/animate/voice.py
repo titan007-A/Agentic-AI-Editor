@@ -118,6 +118,11 @@ def _write(path: Path, samples: np.ndarray) -> None:
         w.writeframes(pcm.tobytes())
 
 
+def _saved(wav: Path, meta: Path) -> Spoken:
+    saved = json.loads(meta.read_text(encoding="utf-8"))
+    return Spoken(str(wav), saved["duration"], [Word(**w) for w in saved["words"]])
+
+
 def speak(text: str, voice: str, cache: Path, speed: float | None = None) -> Spoken:
     """`text` in `voice`, as a WAV in `cache` with its words' times (from its start)."""
     chosen = BY_ID.get(voice) or BY_ID[GROUPS["narrator"]]
@@ -126,9 +131,11 @@ def speak(text: str, voice: str, cache: Path, speed: float | None = None) -> Spo
     key = _key(text, chosen.id, speed)
     wav, meta = cache / f"{key}.wav", cache / f"{key}.json"
     if wav.exists() and meta.exists():
-        saved = json.loads(meta.read_text(encoding="utf-8"))
-        return Spoken(str(wav), saved["duration"], [Word(**w) for w in saved["words"]])
+        return _saved(wav, meta)
     with _lock:
+        # Asked for at once (the studio's sound fetched twice): spoken by the first only.
+        if wav.exists() and meta.exists():
+            return _saved(wav, meta)
         pipe = _pipeline(chosen.id[0])
         parts: list[np.ndarray] = []
         words: list[Word] = []
@@ -140,19 +147,19 @@ def speak(text: str, voice: str, cache: Path, speed: float | None = None) -> Spo
             words += _words(result.tokens, offset)
             parts.append(samples)
             offset += len(samples) / RATE
-    if not parts:
-        raise RuntimeError(f"Kokoro said nothing for {text[:60]!r}")
-    samples = np.concatenate(parts)
-    peak = float(np.max(np.abs(samples))) or 1.0
-    samples = samples * min(1.0, 0.89 / peak)
-    partial = wav.with_suffix(".part.wav")
-    _write(partial, samples)
-    duration = round(len(samples) / RATE, 3)
-    meta.write_text(
-        json.dumps({"duration": duration, "words": [w.model_dump() for w in words]}),
-        encoding="utf-8",
-    )
-    partial.replace(wav)
+        if not parts:
+            raise RuntimeError(f"Kokoro said nothing for {text[:60]!r}")
+        samples = np.concatenate(parts)
+        peak = float(np.max(np.abs(samples))) or 1.0
+        samples = samples * min(1.0, 0.89 / peak)
+        partial = wav.with_suffix(".part.wav")
+        _write(partial, samples)
+        duration = round(len(samples) / RATE, 3)
+        meta.write_text(
+            json.dumps({"duration": duration, "words": [w.model_dump() for w in words]}),
+            encoding="utf-8",
+        )
+        partial.replace(wav)
     log.info("voice %s: %.1f s for %d words", chosen.id, duration, len(words))
     return Spoken(str(wav), duration, words)
 

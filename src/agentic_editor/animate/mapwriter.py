@@ -465,9 +465,17 @@ def _wrong(plan: Plan, length: str, known) -> list[str]:
                     "country's usual English name"
                 )
     low, high = COUNTRIES.get(length, COUNTRIES["auto"])
-    count = sum(1 for s in plan.scenes if s.visual.kind == "country")
-    if count > high + 3:
-        found.append(f"{count} countries is too many for this length; keep {low}-{high}")
+    countries = [s for s in plan.scenes if s.visual.kind == "country"]
+    if len(countries) > high + 3:
+        found.append(f"{len(countries)} countries is too many for this length; keep {low}-{high}")
+    if any("narration is" in f and "needs" in f for f in found):
+        # Too short: what to add, said plainly (a small model doesn't work it out).
+        few = [s.visual.text for s in countries if len(s.visual.items) < 3][:6]
+        found.append(
+            "name more famous things: 3-5 for each big country"
+            + (f" (e.g. {', '.join(few)})" if few else "")
+            + f", and tour {low}-{high} countries"
+        )
     return found
 
 

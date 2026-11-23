@@ -27,7 +27,11 @@ log = logging.getLogger(__name__)
 RUNNER = Path(__file__).parent / "paint_runner.py"
 STEPS = 9
 SIZE = (720, 1280)  # 9:16, shown at 1080x1920 (the player scales it to cover)
-CARD = (720, 896)  # a World map card's picture (4:5, the card's own shape)
+# A World map card's picture: the card's own 4:5 shape, sized for a card 376 px wide (a
+# tour has thirty of them, so smaller paints faster).
+CARD = (512, 640)
+# Pictures painted in one turn of the GPU; between turns a job waiting for it goes first.
+BATCH = 8
 # The most the model may take to load, and then each picture, before the painting is given
 # up (the scenes are drawn instead): a stuck model never holds the GPU for long.
 LOAD_SECONDS = 150
@@ -106,17 +110,20 @@ def paint(
         if p.prompt.strip() and not (out / name).exists()
     ]
     todo = list({job["dest"]: job for job in todo}.values())  # one painting per picture
-    if todo:
+    for start in range(0, len(todo), BATCH):
+        part = todo[start : start + BATCH]
         request = {
             "model": settings.image_model, "steps": STEPS, "width": size[0], "height": size[1],
-            "jobs": todo,
+            "jobs": part,
         }  # fmt: skip
         with slots.gpu.turn("paint the pictures", progress):
-            _run(request, len(todo), settings, progress, run)
+            _run(request, len(part), settings, progress, run, (start, len(todo)))
     return [name if (out / name).exists() else "" for name in names]
 
 
-def _run(request: dict, count: int, settings: Settings, progress, run) -> None:
+def _run(
+    request: dict, count: int, settings: Settings, progress, run, of: tuple[int, int] = (0, 0)
+) -> None:
     # The model's own chatter (progress bars) goes to a file: a pipe nobody reads fills up
     # and stops it.
     log_file = folder(settings) / "paint.log"
@@ -125,13 +132,14 @@ def _run(request: dict, count: int, settings: Settings, progress, run) -> None:
             [str(python_of(settings)), "-I", str(RUNNER)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=chatter, text=True,
         )  # fmt: skip
-        _follow(proc, request, count, progress)
+        _follow(proc, request, count, progress, of)
     if proc.returncode:
         tail = log_file.read_text(encoding="utf-8", errors="replace")[-500:]
         log.warning("painting failed (%s): %s", proc.returncode, tail)
 
 
-def _follow(proc, request: dict, count: int, progress) -> None:
+def _follow(proc, request: dict, count: int, progress, of: tuple[int, int] = (0, 0)) -> None:
+    before, total = of[0], of[1] or count
     # A watchdog: reading the runner's lines blocks, so a stuck runner is killed on time.
     deadline = LOAD_SECONDS + SECONDS_EACH * count
     watchdog = threading.Timer(deadline, proc.kill)
@@ -146,8 +154,9 @@ def _follow(proc, request: dict, count: int, progress) -> None:
             except ValueError:
                 continue
             if "done" in said:
-                progress("paint", f"painted {said['done']} of {count} pictures")
-                log.info("picture %s of %s in %s s", said["done"], count, said.get("seconds"))
+                done = before + said["done"]
+                progress("paint", f"painted {done} of {total} pictures")
+                log.info("picture %s of %s in %s s", done, total, said.get("seconds"))
             elif "loaded" in said:
                 log.info("image model loaded in %s s", said["loaded"])
         proc.wait(timeout=deadline)
