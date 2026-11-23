@@ -1013,7 +1013,15 @@ export type McpConnections = {
   key?: string;
 };
 /** An app asking to connect, on the sign-in page (/connect/). */
-export type McpAsk = { app: string; goes_to: string; account: string; studio: boolean };
+export type McpAsk = {
+  app: string;
+  /** The host (and port) the browser goes back to after the answer. */
+  goes_to: string;
+  /** Claude's own address: claude.ai, or Claude Code on this computer. */
+  known: boolean;
+  account: string;
+  studio: boolean;
+};
 
 export type AnimationBrief = {
   idea: string;

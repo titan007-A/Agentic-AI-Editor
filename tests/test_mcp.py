@@ -2,9 +2,11 @@
 tools taking an animation from one line to a rendered video through the real HTTP
 endpoint, and what a connection may not do (other accounts, posting unless allowed)."""
 
+import base64
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -301,15 +303,13 @@ def test_many_unknown_keys_from_one_address_have_to_wait(site):
     site.app.state.mcp_guard.clock = lambda: now[0]
 
     async def scenario(web, transport):
-        key = await make_key(web)
+        guess = {"Authorization": "Bearer aie_guess"}
         for _ in range(mcp_access.TokenGuard.FREE_TRIES):
-            bad = await web.post("/mcp", json={}, headers={"Authorization": "Bearer aie_guess"})
-            assert bad.status_code == 401
-        waits = await web.post("/mcp", json={}, headers={"Authorization": f"Bearer {key}"})
+            assert (await web.post("/mcp", json={}, headers=guess)).status_code == 401
+        waits = await web.post("/mcp", json={}, headers=guess)
         assert waits.status_code == 429 and int(waits.headers["retry-after"]) > 0
         now[0] += 3600
-        async with claude(transport, key) as c:
-            await call(c, "list_animations")
+        assert (await web.post("/mcp", json={}, headers=guess)).status_code == 401
 
     run(site, scenario)
 
@@ -367,15 +367,22 @@ def test_connections_are_each_accounts_own_and_go_with_it(site):
 
 
 def test_reels_being_written_at_once_are_capped(site, monkeypatch):
-    monkeypatch.setattr(jobs, "animate", lambda animation_id: None)  # they stay queued
-
     async def scenario(web, transport):
         async with claude(transport, await make_key(web)) as c:
+            ready = await call(c, "create_animation", idea="the lost city of Ubar")
+            monkeypatch.setattr(jobs, "animate", lambda animation_id: None)  # they stay queued
             for n in range(mcp_tools.MAX_WORKING):
                 made = await call(c, "create_animation", idea=f"lost city number {n}")
                 assert made["status"] == "queued" and made["next"].startswith("Still working")
             assert "being written already" in await refused(
                 c, "create_animation", idea="one more lost city"
+            )
+            # Any other work waits too: changes, voices, edits, undo, retry.
+            assert "being written already" in await refused(
+                c, "change_animation", animation_id=ready["id"], request="darker"
+            )
+            assert "being written already" in await refused(
+                c, "set_style_and_voice", animation_id=ready["id"], voice="calm"
             )
             busy = (await call(c, "list_animations"))["animations"][0]
             assert "isn't ready" in await refused(c, "render_animation", animation_id=busy["id"])
@@ -413,7 +420,9 @@ def oauth_client(transport, web, store, name="Claude", answer=None):
         assert place.path == "/connect/"
         ask = parse_qs(place.query)["request"][0]
         shown = (await web.get(f"/api/mcp/requests/{ask}")).json()
-        assert shown == {"app": name, "goes_to": "claude.ai", "account": "admin", "studio": True}
+        assert shown == {
+            "app": name, "goes_to": "claude.ai", "known": True, "account": "admin", "studio": True
+        }  # fmt: skip
         reply = (await web.post(f"/api/mcp/requests/{ask}", json=answer or {"allow": True})).json()
         back = urlparse(reply["redirect"])
         assert (
@@ -660,3 +669,203 @@ def test_aiedit_mcp_serves_the_tools_over_stdio(site, tmp_path):
 
 def made_id(db) -> str:
     return db.scalar(select(Animation.id).where(Animation.id != "hers1"))
+
+
+def register(web, **fields):
+    """An app registering itself, as claude.ai does (dynamic client registration)."""
+    body = {
+        "client_name": "Claude", "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+    } | fields  # fmt: skip
+    return web.post("/register", json=body)
+
+
+def pkce() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+    return verifier, challenge.decode().rstrip("=")
+
+
+async def ask_to_connect(web, client, **extra) -> tuple[str, str]:
+    """The app's /authorize: the request the page asks about, and the PKCE verifier."""
+    verifier, challenge = pkce()
+    query = {
+        "response_type": "code", "client_id": client["client_id"], "state": "s1",
+        "redirect_uri": client["redirect_uris"][0], "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    } | extra  # fmt: skip
+    sent = await web.get("/authorize", params=query)
+    assert sent.status_code == 302, sent.text
+    return parse_qs(urlparse(sent.headers["location"]).query)["request"][0], verifier
+
+
+async def trade(web, client, code, verifier):
+    return await web.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+            "redirect_uri": client["redirect_uris"][0], "client_id": client["client_id"],
+            "client_secret": client["client_secret"],
+        },
+    )  # fmt: skip
+
+
+def test_an_app_may_only_be_sent_back_to_a_web_address(site):
+    async def scenario(web, transport):
+        for bad in (
+            "javascript://claude.ai/%0afetch('/api/mcp/keys')//",
+            "data:text/html,hi",
+            "http://evil.example/callback",
+            "https://claude.ai@evil.example/callback",
+        ):
+            refused = await register(web, redirect_uris=[bad])
+            assert refused.status_code == 400, bad
+            assert refused.json()["error"] == "invalid_redirect_uri"
+        too_many = [f"https://claude.ai/cb{n}" for n in range(mcp_access.MAX_REDIRECTS + 1)]
+        assert (await register(web, redirect_uris=too_many)).status_code == 400
+        local = await register(web, redirect_uris=["http://localhost:4567/callback"])
+        assert local.status_code == 201
+        with site.sessions() as db:
+            assert [c.info.get("redirect_uris") for c in db.scalars(select(McpClient))] == [
+                ["http://localhost:4567/callback"]
+            ]
+
+        # An app that isn't Claude is named as such on the page.
+        other = (
+            await register(web, client_name="Other", redirect_uris=["https://x.example/cb"])
+        ).json()
+        ask, _ = await ask_to_connect(web, other)
+        shown = (await web.get(f"/api/mcp/requests/{ask}")).json()
+        assert shown["goes_to"] == "x.example" and shown["known"] is False
+
+        page = await web.get("/connect/")
+        assert page.headers["x-frame-options"] == "DENY"
+        assert page.headers["content-security-policy"] == "frame-ancestors 'none'"
+
+    run(site, scenario)
+
+
+def test_a_request_is_answered_once_and_a_code_dies_with_a_new_password(site):
+    async def scenario(web, transport):
+        client = (await register(web)).json()
+        ask, verifier = await ask_to_connect(web, client, scope="animations")
+        allowed = (await web.post(f"/api/mcp/requests/{ask}", json={"allow": True})).json()
+        again = await web.post(f"/api/mcp/requests/{ask}", json={"allow": True})
+        assert again.status_code == 404
+        code = parse_qs(urlparse(allowed["redirect"]).query)["code"][0]
+        with site.sessions() as db:
+            accounts.set_password(db, db.get(User, site.ids.admin), "another-pass-123")
+        late = await trade(web, client, code, verifier)
+        assert late.status_code == 400 and late.json()["error"] == "invalid_grant"
+
+    run(site, scenario)
+
+
+def test_tokens_carry_only_the_one_scope_and_expired_ones_still_revoke(site):
+    async def scenario(web, transport):
+        client = (await register(web, scope="animations everything")).json()
+        ask, verifier = await ask_to_connect(web, client, scope="animations everything")
+        allowed = (await web.post(f"/api/mcp/requests/{ask}", json={"allow": True})).json()
+        code = parse_qs(urlparse(allowed["redirect"]).query)["code"][0]
+        tokens = (await trade(web, client, code, verifier)).json()
+        assert tokens["scope"] == "animations"
+        with site.sessions() as db:
+            row = db.scalar(select(McpToken))
+            row.expires_at = row.expires_at - timedelta(days=2)
+            db.commit()
+        revoked = await web.post(
+            "/revoke",
+            data={
+                "token": tokens["access_token"], "client_id": client["client_id"],
+                "client_secret": client["client_secret"],
+            },
+        )  # fmt: skip
+        assert revoked.status_code == 200
+        with site.sessions() as db:
+            assert db.scalar(select(McpToken)) is None
+
+    run(site, scenario)
+
+
+def test_a_connection_unused_for_long_has_to_sign_in_again(site):
+    async def scenario(web, transport):
+        client = (await register(web)).json()
+        ask, verifier = await ask_to_connect(web, client)
+        allowed = (await web.post(f"/api/mcp/requests/{ask}", json={"allow": True})).json()
+        code = parse_qs(urlparse(allowed["redirect"]).query)["code"][0]
+        tokens = (await trade(web, client, code, verifier)).json()
+        with site.sessions() as db:
+            row = db.scalar(select(McpToken))
+            row.expires_at = row.expires_at - timedelta(seconds=mcp_access.REFRESH_SECONDS)
+            db.commit()
+        stale = await web.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
+                "client_id": client["client_id"], "client_secret": client["client_secret"],
+            },
+        )  # fmt: skip
+        assert stale.status_code == 400
+
+    run(site, scenario)
+
+
+def test_registering_and_asking_are_limited_per_address(site, monkeypatch):
+    async def scenario(web, transport):
+        for _ in range(mcp_access.REGISTRATIONS_PER_HOUR):
+            assert (await register(web)).status_code == 201
+        assert (await register(web)).status_code == 429
+        with site.sessions() as db:
+            client = db.scalar(select(McpClient)).info
+        _, challenge = pkce()
+        query = {
+            "response_type": "code", "client_id": client["client_id"], "state": "s" * 600,
+            "redirect_uri": client["redirect_uris"][0], "code_challenge": challenge,
+        }  # fmt: skip
+        too_long = await web.get("/authorize", params=query)
+        assert too_long.status_code == 302
+        assert "error=invalid_request" in too_long.headers["location"]
+
+    run(site, scenario)
+
+
+def test_expired_tokens_from_a_shared_address_never_lock_out_good_ones(site):
+    now = [1000.0]
+    site.app.state.mcp_guard.clock = lambda: now[0]
+
+    async def scenario(web, transport):
+        client = (await register(web)).json()
+        ask, verifier = await ask_to_connect(web, client)
+        allowed = (await web.post(f"/api/mcp/requests/{ask}", json={"allow": True})).json()
+        code = parse_qs(urlparse(allowed["redirect"]).query)["code"][0]
+        expired = (await trade(web, client, code, verifier)).json()["access_token"]
+        with site.sessions() as db:
+            row = db.scalar(select(McpToken))
+            row.expires_at = row.expires_at - timedelta(days=2)
+            db.commit()
+        for _ in range(mcp_access.TokenGuard.FREE_TRIES + 5):
+            late = await web.post("/mcp", json={}, headers={"Authorization": f"Bearer {expired}"})
+            assert late.status_code == 401
+        key = await make_key(web)
+        async with claude(transport, key) as c:
+            await call(c, "list_animations")
+        # Unknown keys do count; then even a good key from there is let in.
+        for _ in range(mcp_access.TokenGuard.FREE_TRIES):
+            await web.post("/mcp", json={}, headers={"Authorization": "Bearer aie_guess"})
+        guessing = await web.post("/mcp", json={}, headers={"Authorization": "Bearer aie_guess"})
+        assert guessing.status_code == 429
+        async with claude(transport, key) as c:
+            await call(c, "list_animations")
+
+    run(site, scenario)
+
+
+def test_a_new_password_removes_every_connection(site):
+    async def scenario(web, transport):
+        await make_key(web)
+        await make_key(web)
+        with site.sessions() as db:
+            accounts.set_password(db, db.get(User, site.ids.admin), "another-pass-123")
+            assert db.scalar(select(McpToken)) is None
+
+    run(site, scenario)

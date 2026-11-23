@@ -101,16 +101,22 @@ reels (an autopilot reel may post by itself), anything outside the Animations ta
 ## Safety
 
 - Keys and tokens are stored only as hashes; a key is shown once when made.
-- Changing the account's password disconnects every key and connection, like the signed-in
-  sessions. Removing an account removes them. Each can be disconnected on the tab.
+- Changing the account's password (or its role) removes every key and connection, like the
+  signed-in sessions. Removing an account removes them. Each can be disconnected on the tab.
 - A connection only works while the account has the Animations tab (`animation_studio`).
 - Posting needs the connection's **posting** switch on and `confirm=true` on the call;
-  Claude is told to use it only when you clearly ask.
-- Limits: 60 tool calls a minute per connection; at most 3 reels being written at once
-  started from Claude; an address sending many unknown keys has to wait.
+  Claude is told to use it only when you clearly ask. An autopilot reel posts by itself
+  only after the autopilot's own render: rendering it again later (from the tab or from
+  Claude) never posts it.
+- Limits: 60 tool calls a minute per account; from Claude, at most 3 of the account's reels
+  being written and 3 rendering at once; an address sending many unknown keys has to wait;
+  apps registering (20 an hour) and asking to connect (60 in 10 minutes) are limited per
+  address.
 - claude.ai connects with OAuth (the app registers itself, PKCE, a sign-in page here asks
-  you); access tokens last a day and are refreshed by the app; refresh tokens change on
-  every refresh.
+  you); an app may only be sent back to an https address (or http on the same computer,
+  for Claude Code), and the page warns when that address isn't Claude's. Access tokens
+  last a day and are refreshed by the app; refresh tokens change on every refresh and
+  end after 60 days unused.
 
 ## On the server
 

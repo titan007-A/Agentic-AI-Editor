@@ -29,12 +29,12 @@ from sqlalchemy import func, select
 
 from agentic_editor.animate import images, studio
 from agentic_editor.animate.routes import AnimationRequest, ChangeRequest, PlanEdit, StudioChoice
-from agentic_editor.db import Animation, InstagramChannel, Output
+from agentic_editor.db import Animation, InstagramChannel, Job, Output
 from agentic_editor.db import User as Account
-from agentic_editor.mcp_access import Caller, CallLimit
+from agentic_editor.mcp_access import CALLS_PER_MINUTE, Caller, Hits
 
 WORKING = ("queued", *studio.BUSY)
-MAX_WORKING = 3  # reels of one account being written at once, started from here
+MAX_WORKING = 3  # one account's reels being written (or rendered) at once, from Claude
 WAIT_MOST = 50  # seconds wait_for_animation holds on (Cloudflare ends a request at 100)
 POSTING_OFF = (
     "posting is off for this connection; the person can turn it on in the Animations tab "
@@ -224,7 +224,7 @@ class Studio:
     def __init__(self, ops, *, make_session, settings, base_of, post_reel):
         self.ops, self.make_session, self.settings = ops, make_session, settings
         self.base_of, self.post_reel = base_of, post_reel
-        self.limit = CallLimit()
+        self.limit = Hits(CALLS_PER_MINUTE, 60)  # per account, whichever way in
         # The account `aiedit mcp --user` acts as, over stdio; never used for HTTP requests.
         self.local: Caller | None = None
         self.server = MCPServer(
@@ -261,13 +261,22 @@ class Studio:
             return request
         return SimpleNamespace(base_url=self.base(None) + "/")
 
-    async def call(self, ctx: Context, work, *, posting: bool = False, counted: bool = True):
+    async def call(
+        self,
+        ctx: Context,
+        work,
+        *,
+        posting: bool = False,
+        counted: bool = True,
+        queues: Literal["writing", "rendering"] | None = None,
+    ):
         """`work(account, session, request)` in a worker thread, as the caller's account; a
-        refusal of the studio's becomes the tool's error."""
+        refusal of the studio's becomes the tool's error. Work it `queues` waits for the
+        account's earlier work once MAX_WORKING of it is under way."""
         caller, request = self.caller(ctx)
         if posting and not caller.posting:
             raise ToolError(POSTING_OFF)
-        if counted and not self.limit.allow(caller.token_id or caller.account_id):
+        if counted and not self.limit.allow(caller.account_id):
             raise ToolError("too many calls in a minute; wait a little")
 
         def run():
@@ -275,6 +284,8 @@ class Studio:
                 account = session.get(Account, caller.account_id)
                 if account is None:
                     raise ToolError("this account no longer exists")
+                if queues:
+                    self.wait_turn(account, session, queues)
                 try:
                     return work(account, session, request)
                 except HTTPException as exc:
@@ -286,6 +297,30 @@ class Studio:
                     raise ToolError(f"not valid: {problems}") from None
 
         return await anyio.to_thread.run_sync(run), request
+
+    @staticmethod
+    def wait_turn(account, session, queues: str) -> None:
+        if queues == "rendering":
+            busy = (
+                select(func.count())
+                .select_from(Job)
+                .where(
+                    Job.owner_id == account.id,
+                    Job.source.startswith(studio.SOURCE),
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+            what = "reels are rendering"
+        else:
+            busy = (
+                select(func.count())
+                .select_from(Animation)
+                .where(Animation.owner_id == account.id, Animation.status.in_(WORKING))
+            )
+            what = "reels are being written"
+        count = session.scalar(busy)
+        if count >= MAX_WORKING:
+            raise ToolError(f"{count} {what} already; wait for them to finish")
 
     async def shown(self, ctx: Context, work, **kwargs) -> dict:
         view, request = await self.call(ctx, work, **kwargs)
@@ -385,22 +420,13 @@ class Studio:
             call wait_for_animation next."""
 
             def work(account, session, request):
-                busy = session.scalar(
-                    select(func.count())
-                    .select_from(Animation)
-                    .where(Animation.owner_id == account.id, Animation.status.in_(WORKING))
-                )
-                if busy >= MAX_WORKING:
-                    raise ToolError(
-                        f"{busy} reels are being written already; wait for them to finish"
-                    )
                 body = AnimationRequest(
                     idea=idea, kind=kind, style=style, voice=voice, length=length,
                     images=painted_pictures,
                 )  # fmt: skip
                 return ops.create_animation(body, account, session)
 
-            return await self.shown(ctx, work)
+            return await self.shown(ctx, work, queues="writing")
 
         @tool(annotations=CHANGE)
         async def change_animation(
@@ -425,7 +451,9 @@ class Studio:
                 request=request, scene=None if scene_number is None else scene_number - 1
             )
             return await self.shown(
-                ctx, lambda a, s, r: ops.change_animation(animation_id, body, a, s)
+                ctx,
+                lambda a, s, r: ops.change_animation(animation_id, body, a, s),
+                queues="writing",
             )
 
         @tool(annotations=CHANGE)
@@ -443,7 +471,9 @@ class Studio:
             """Saves exact edits to the plan, as the scene editor does: it is checked, then
             the voice is recorded again. Call wait_for_animation next."""
             return await self.shown(
-                ctx, lambda a, s, r: ops.edit_animation(animation_id, PlanEdit(plan=plan), a, s)
+                ctx,
+                lambda a, s, r: ops.edit_animation(animation_id, PlanEdit(plan=plan), a, s),
+                queues="writing",
             )
 
         @tool(annotations=CHANGE)
@@ -460,7 +490,7 @@ class Studio:
             pictures, without writing anything new. Call wait_for_animation next."""
             body = StudioChoice(style=style, voice=voice, images=painted_pictures)
             return await self.shown(
-                ctx, lambda a, s, r: ops.set_animation(animation_id, body, a, s)
+                ctx, lambda a, s, r: ops.set_animation(animation_id, body, a, s), queues="writing"
             )
 
         @tool(annotations=CHANGE)
@@ -498,23 +528,29 @@ class Studio:
                     raise ToolError("none of those scenes has a painted picture")
                 return ops.edit_animation(animation_id, PlanEdit(plan=plan), account, session)
 
-            return await self.shown(ctx, work)
+            return await self.shown(ctx, work, queues="writing")
 
         @tool(annotations=CHANGE)
         async def undo_last_change(ctx: Context, animation_id: AnimationId) -> dict:
             """Goes back to the version before the last change."""
-            return await self.shown(ctx, lambda a, s, r: ops.undo_animation(animation_id, a, s))
+            return await self.shown(
+                ctx, lambda a, s, r: ops.undo_animation(animation_id, a, s), queues="writing"
+            )
 
         @tool(annotations=CHANGE)
         async def retry_animation(ctx: Context, animation_id: AnimationId) -> dict:
             """Tries a failed draft or change again."""
-            return await self.shown(ctx, lambda a, s, r: ops.retry_animation(animation_id, a, s))
+            return await self.shown(
+                ctx, lambda a, s, r: ops.retry_animation(animation_id, a, s), queues="writing"
+            )
 
         @tool(annotations=CHANGE)
         async def render_animation(ctx: Context, animation_id: AnimationId) -> dict:
             """Renders the ready animation into the final video (an ordinary job in Jobs,
             with the reel's caption). Takes about a minute; call wait_for_animation next."""
-            return await self.shown(ctx, lambda a, s, r: ops.render_animation(animation_id, a, s))
+            return await self.shown(
+                ctx, lambda a, s, r: ops.render_animation(animation_id, a, s), queues="rendering"
+            )
 
         @tool(annotations=CHANGE)
         async def skip_autopilot_reel(ctx: Context, animation_id: AnimationId) -> dict:

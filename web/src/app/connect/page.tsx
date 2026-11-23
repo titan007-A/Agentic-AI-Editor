@@ -43,6 +43,10 @@ function Connect() {
     setBusy(true);
     try {
       const { redirect } = await api.answerMcpAsk(ask, { allow, posting: allow && posting });
+      // Only ever back to a web address; never a javascript: or data: one.
+      if (!["https:", "http:"].includes(new URL(redirect).protocol)) {
+        throw new Error("That app's return address isn't allowed.");
+      }
       window.location.href = redirect;
     } catch (err) {
       setError(errorText(err));
@@ -72,6 +76,12 @@ function Connect() {
                 After you answer, you go back to <strong>{found.goes_to}</strong>. Only allow it if
                 you started connecting there just now.
               </p>
+              {!found.known && (
+                <p className="font-semibold text-destructive">
+                  This is not a Claude address. If you didn&apos;t set this app up yourself, press
+                  Cancel.
+                </p>
+              )}
               {found.studio ? (
                 <>
                   <label className="flex items-center justify-between gap-2">
