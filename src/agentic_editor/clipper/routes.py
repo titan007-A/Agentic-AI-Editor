@@ -268,7 +268,7 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
 
         def read(c: kick.Client):
             if link.kind == "stream":
-                slug, stream = c.video(link.uuid)
+                slug, stream = c.video(link.uuid, link.slug)
                 slug = link.slug or slug
             else:
                 slug = link.slug
