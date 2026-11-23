@@ -147,6 +147,28 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp(args: argparse.Namespace) -> int:
+    """The Animations tab's MCP tools over stdio, for Claude Code on this machine, acting as
+    one account. The running server's worker does the work they queue."""
+    from agentic_editor import accounts, features
+    from agentic_editor.api import create_app
+    from agentic_editor.mcp_access import FEATURE, Caller
+
+    settings = get_settings()
+    app = create_app(settings, start_worker=False)
+    with app.state.mcp_tools.make_session() as session:
+        account = accounts.find(session, args.user)
+        if account is None:
+            print(f"no account called {accounts.normal(args.user)}", file=sys.stderr)
+            return 2
+        if not features.enabled(account, FEATURE, session):
+            print(f"the animation studio isn't on for {account.username}", file=sys.stderr)
+            return 2
+        app.state.mcp_tools.local = Caller(account.id, None, args.posting)
+    app.state.mcp_server.run("stdio")
+    return 0
+
+
 def _hash_password(args: argparse.Namespace) -> int:
     import getpass
     import secrets
@@ -298,6 +320,14 @@ def main(argv: list[str] | None = None) -> int:
     ).set_defaults(handler=_fetch_models)
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
     commands.add_parser("serve", help="run the web app and job worker").set_defaults(handler=_serve)
+    mcp = commands.add_parser(
+        "mcp", help="the Animations tab's tools for Claude over stdio (the server does the work)"
+    )
+    mcp.add_argument("--user", required=True, help="the account Claude acts as")
+    mcp.add_argument(
+        "--posting", action="store_true", help="let Claude post reels when asked (off by default)"
+    )
+    mcp.set_defaults(handler=_mcp)
     commands.add_parser("hash-password", help="hash a login password for .env").set_defaults(
         handler=_hash_password
     )
