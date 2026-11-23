@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28",
     "huey>=2.5",
     "itsdangerous>=2.2",
+    "mcp>=2.3,<3",
     "numpy>=2.0",
     "pillow>=11.0",
     # The animation studio draws frames with Playwright's Chromium (animate/render.py);

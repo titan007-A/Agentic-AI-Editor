@@ -197,9 +197,28 @@ def test_a_doubtful_fact_or_a_failed_post_keeps_it_for_a_person(tmp_path):
     with Session() as db:
         a = db.get(Animation, "a1")
         assert a.post_status == "awaiting" and "token expired" in a.post_error
+        a.post_status = "rendering"
+        db.commit()
     schedule.after_render("a1", Session, settings, ok=False, error="the render failed: boom")
     with Session() as db:
         assert db.get(Animation, "a1").post_status == "failed"
+
+
+def test_a_reel_rendered_again_later_never_posts_by_itself(tmp_path):
+    """Only the autopilot's own render may post: one rendered again by a person (or by
+    Claude, which may not post) after an edit waits as it was, posted or not."""
+    settings, Session = studio_env(tmp_path)
+    made(tmp_path, Session, channel_id="ig1", auto_post=True, approved=12)
+    sent = []
+    for status in ("awaiting", "posted", "skipped"):
+        with Session() as db:
+            db.get(Animation, "a1").post_status = status
+            db.commit()
+        schedule.after_render("a1", Session, settings, ok=True, send=lambda *a: sent.append(a))
+        schedule.after_render("a1", Session, settings, ok=False, error="boom")
+        with Session() as db:
+            assert db.get(Animation, "a1").post_status == status
+    assert sent == []
 
 
 def test_approving_posts_it_and_counts(tmp_path):

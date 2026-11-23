@@ -219,6 +219,8 @@ class Feed(Base):
     # The folder its finished videos go in, inside their preset's folder on the piles
     # (PileFolder, made the first time); None: straight in the preset's folder.
     folder: Mapped[str | None] = mapped_column(Text)
+    # Each day's videos in a folder of that day inside it ("23-NOV"), so days stay apart.
+    dated: Mapped[bool] = mapped_column(default=True)
     # Whether the first look, which notes what is already there, has been made. A new feed
     # starts without it; feeds saved before this column existed had made it, so the column
     # is added to them as true.
@@ -340,6 +342,41 @@ class AnimationAutopilot(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class McpToken(Base):
+    """One way in for Claude to an account's Animations tab (mcp_access): a key the person
+    made and copied into Claude Code, or a connection claude.ai made through the sign-in
+    page. Only hashes are kept. It works as long as the account's password stays the same
+    (`version`), like a signed-in session."""
+
+    __tablename__ = "mcp_tokens"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(8), default="key")  # key or oauth
+    client_id: Mapped[str | None] = mapped_column(String(64))  # oauth: the McpClient
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    refresh_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    tail: Mapped[str] = mapped_column(String(8), default="")  # a key's last letters, to tell it
+    # May post reels (Instagram, an autopilot reel's approval); off unless the person said so.
+    posting: Mapped[bool] = mapped_column(default=False)
+    version: Mapped[int] = mapped_column(default=0)  # the account's session_version
+    expires_at: Mapped[datetime | None]  # oauth: the access token's end; refreshed
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    last_used_at: Mapped[datetime | None]
+
+
+class McpClient(Base):
+    """An app that registered itself to ask for a connection (OAuth dynamic client
+    registration, as claude.ai does): it still needs a signed-in person to allow it."""
+
+    __tablename__ = "mcp_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    info: Mapped[dict] = mapped_column(JSON)  # OAuthClientInformationFull
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class KickStreamer(Base):
     """A Kick streamer an account clips (clipper/), with the preset and folder its clips
     get; with `live` on it is clipped while it streams, one stretch at a time."""
@@ -355,6 +392,9 @@ class KickStreamer(Base):
     avatar: Mapped[str] = mapped_column(Text, default="")
     live: Mapped[bool] = mapped_column(default=False)  # clip it while it streams
     preset: Mapped[str] = mapped_column(String(64), default="")
+    # A clip that isn't gameplay under a camera is made with this (clipper/hunt.clip_preset);
+    # "": the account's kick-clips when it has it.
+    irl_preset: Mapped[str] = mapped_column(String(64), default="")
     per_hour: Mapped[int] = mapped_column(default=4)  # clips an hour of live stream, at most
     folder: Mapped[str] = mapped_column(Text, default="")  # on the piles; "" is "Kick <name>"
     # The live stream being clipped, and how far into it the clipping has got (seconds).
@@ -387,6 +427,13 @@ class KickHunt(Base):
     end: Mapped[float] = mapped_column(default=0.0)  # 0: to the end
     count: Mapped[int] = mapped_column(default=5)  # clips wanted, at most
     preset: Mapped[str] = mapped_column(String(64), default="")
+    # "auto": each clip's layout by what it shows (clipper/hunt.clip_preset: gameplay under a
+    # camera -> the facecam preset, anything else -> irl_preset); "fixed": `preset` for all.
+    layout: Mapped[str] = mapped_column(String(8), default="auto")
+    irl_preset: Mapped[str] = mapped_column(String(64), default="")
+    # Started by a schedule (the morning clips), not a person: its clips wait behind people's
+    # own jobs, as a live follow's do (jobs.automatic_jobs).
+    auto: Mapped[bool] = mapped_column(default=False)
     live: Mapped[bool] = mapped_column(default=False)  # a live stretch: strong moments only
     folder: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="queued")

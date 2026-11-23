@@ -18,7 +18,8 @@ def setup(level: int = logging.INFO) -> None:
     logging.getLogger("agentic_editor").setLevel(level)
     # One line per request to Ollama drowns out the pipeline's own progress.
     # httpx2 is the Hugging Face client's copy, one line per file while models download.
-    for name in ("httpx", "httpx2"):
+    # The MCP endpoint (stateless) notes the end of a "session" after every request.
+    for name in ("httpx", "httpx2", "mcp.server.streamable_http"):
         logging.getLogger(name).setLevel(max(level, logging.WARNING))
 
 

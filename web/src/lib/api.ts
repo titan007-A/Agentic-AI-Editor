@@ -78,6 +78,8 @@ export type FeedFields = {
   topic: string | null;
   /** The folder on the piles its videos go in; null: straight in the preset's folder. */
   folder: string | null;
+  /** Each day's videos in a folder of that day inside it ("23-NOV"). */
+  dated: boolean;
 };
 
 export type FeedItem = {
@@ -901,6 +903,29 @@ export type AnimationAutopilot = {
   channels: { id: string; username: string }[];
 };
 
+/** The account's morning Kick clips (Kick Clipper tab, "Every morning"). */
+export type KickDaily = {
+  on: boolean;
+  /** Local hour it starts (0-23). */
+  hour: number;
+  streamers: string[];
+  /** Clips from GTA streams, filed into "DD-MON-GTA". */
+  gta: number;
+  /** Clips from the other streams, filed into "DD-MON-FOOTAGE". */
+  footage: number;
+  /** Newest finished streams looked at per streamer. */
+  streams: number;
+  last_on: string;
+  last_result: string;
+  facecam_preset: string;
+  full_preset: string;
+};
+
+export type KickDailyRequest = Pick<
+  KickDaily,
+  "on" | "hour" | "streamers" | "gta" | "footage" | "streams"
+>;
+
 /** A Kick streamer the account clips (Kick Clipper tab); `live`: clipped while it streams. */
 export type KickStreamer = {
   id: string;
@@ -998,6 +1023,37 @@ export type KickHuntRequest = {
 
 export type AnimationVoice = { id: string; name: string; group: string; about: string };
 
+/** A way in for Claude to the Animations tab: a key made here, or an app connected by OAuth. */
+export type McpConnection = {
+  id: string;
+  label: string;
+  kind: "key" | "oauth";
+  /** The app's own name, for a connection made through the sign-in page. */
+  app: string;
+  /** A key's last letters, to tell it apart; the key itself never comes back. */
+  tail: string;
+  posting: boolean;
+  created_at: string;
+  last_used_at: string | null;
+};
+export type McpConnections = {
+  /** The MCP endpoint's address, as this browser reaches the site. */
+  url: string;
+  connections: McpConnection[];
+  /** A key just made, shown this once. */
+  key?: string;
+};
+/** An app asking to connect, on the sign-in page (/connect/). */
+export type McpAsk = {
+  app: string;
+  /** The host (and port) the browser goes back to after the answer. */
+  goes_to: string;
+  /** Claude's own address: claude.ai, or Claude Code on this computer. */
+  known: boolean;
+  account: string;
+  studio: boolean;
+};
+
 export type AnimationBrief = {
   idea: string;
   kind: string;
@@ -1036,6 +1092,15 @@ export const api = {
     >,
   ) => request<AnimationAutopilot>("PUT", "/animation-autopilot", body),
   animationAutopilotNow: () => request<Animation>("POST", "/animation-autopilot/now"),
+  mcpConnections: () => request<McpConnections>("GET", "/mcp/connections"),
+  newMcpKey: (body: { label: string; posting: boolean }) =>
+    request<McpConnections>("POST", "/mcp/keys", body),
+  setMcpPosting: (id: string, posting: boolean) =>
+    request<{ ok: boolean; posting: boolean }>("PATCH", `/mcp/connections/${id}`, { posting }),
+  removeMcpConnection: (id: string) => request<{ ok: boolean }>("DELETE", `/mcp/connections/${id}`),
+  mcpAsk: (ask: string) => request<McpAsk>("GET", `/mcp/requests/${encodeURIComponent(ask)}`),
+  answerMcpAsk: (ask: string, body: { allow: boolean; posting: boolean }) =>
+    request<{ redirect: string }>("POST", `/mcp/requests/${encodeURIComponent(ask)}`, body),
   kickStreamers: () => request<KickStreamer[]>("GET", "/kick/streamers"),
   addKickStreamer: (body: {
     name: string;
@@ -1051,6 +1116,8 @@ export const api = {
   removeKickStreamer: (id: string) => request<{ ok: boolean }>("DELETE", `/kick/streamers/${id}`),
   kickStreams: (name: string) =>
     request<KickStreams>("GET", `/kick/streams?name=${encodeURIComponent(name)}`),
+  kickDaily: () => request<KickDaily>("GET", "/kick/daily"),
+  setKickDaily: (body: KickDailyRequest) => request<KickDaily>("PUT", "/kick/daily", body),
   kickHunts: () => request<KickHunt[]>("GET", "/kick/hunts"),
   kickHunt: (id: string) => request<KickHunt>("GET", `/kick/hunts/${id}`),
   startKickHunt: (body: KickHuntRequest) => request<KickHunt>("POST", "/kick/hunts", body),

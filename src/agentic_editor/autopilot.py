@@ -501,29 +501,50 @@ def _check_topic(
     return result, started
 
 
-def file_outputs(db: Session, job: Job) -> None:
+# A folder name that already says its day ("23-NOV-GTA"): no day folder goes inside it.
+DAY_NAMED = re.compile(r"(?<![\w])\d{1,2}-[A-Z]{3}(?![a-z])", re.IGNORECASE)
+
+
+def day_tag(when: datetime | None = None) -> str:
+    """The day a video was finished as the owner names folders: "23-NOV" (local time)."""
+    return (when or datetime.now()).strftime("%d-%b").upper()
+
+
+def _folder(db: Session, owner: str | None, preset: str, name: str, parent: int | None):
+    """The pile folder `name` in `preset`'s folder (inside `parent`), made the first time."""
+    place = select(PileFolder).where(
+        PileFolder.preset == preset,
+        PileFolder.parent_id.is_(None) if parent is None else PileFolder.parent_id == parent,
+        PileFolder.owner_id.is_(None) if owner is None else PileFolder.owner_id == owner,
+    )
+    folder = next((f for f in db.scalars(place) if f.name.casefold() == name.casefold()), None)
+    if folder is None:
+        folder = PileFolder(owner_id=owner, preset=preset, name=name, parent_id=parent)
+        db.add(folder)
+        db.flush()
+    return folder
+
+
+def file_outputs(db: Session, job: Job, now: datetime | None = None) -> None:
     """Put a feed's finished videos in its folder on the piles, made the first time, inside
-    each video's preset's folder."""
+    each video's preset's folder, and in it the day's folder ("23-NOV": the owner sees each
+    day's videos apart) when the feed dates them (Feed.dated) or for a Kick clipper moment,
+    unless the folder's own name already says its day."""
     item = db.scalar(select(FeedItem).where(FeedItem.job_id == job.id))
     name = " ".join((item.feed.folder or "").split()) if item else ""
     owner = item.feed.owner_id if item else None
+    dated = bool(item and item.feed.dated)
     hunt_id = kick_hunt.hunt_of_source(job.source)
     hunt = db.get(KickHunt, hunt_id) if hunt_id and not name else None
     if hunt is not None:  # a Kick clipper moment: its hunt's folder
-        name, owner = kick_hunt.folder_name(hunt), hunt.owner_id
+        name, owner, dated = kick_hunt.folder_name(hunt), hunt.owner_id, True
     if not name:
         return
+    day = day_tag(now) if dated and not DAY_NAMED.search(name) else None
     for output in job.outputs:
-        place = select(PileFolder).where(
-            PileFolder.preset == output.preset,
-            PileFolder.parent_id.is_(None),
-            PileFolder.owner_id.is_(None) if owner is None else PileFolder.owner_id == owner,
-        )
-        folder = next((f for f in db.scalars(place) if f.name.casefold() == name.casefold()), None)
-        if folder is None:
-            folder = PileFolder(owner_id=owner, preset=output.preset, name=name)
-            db.add(folder)
-            db.flush()
+        folder = _folder(db, owner, output.preset, name, None)
+        if day:
+            folder = _folder(db, owner, output.preset, day, folder.id)
         output.folder_id = folder.id
 
 

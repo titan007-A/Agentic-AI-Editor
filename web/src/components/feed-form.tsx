@@ -35,6 +35,7 @@ const BLANK: FeedFields = {
   skip_newest: 0,
   topic: null,
   folder: null,
+  dated: true,
 };
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -198,6 +199,12 @@ export function FeedForm({ feed, onSaved }: { feed?: Feed; onSaved: (feed: Feed)
           A folder in the preset&apos;s folder on the piles, made the first time a video is
           finished.
         </p>
+        {fields.folder?.trim() && (
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>A folder for each day inside it (like 23-NOV)</span>
+            <Switch checked={fields.dated} onCheckedChange={(on) => set("dated", on)} />
+          </label>
+        )}
       </div>
 
       <div className="space-y-3 rounded-md border border-dashed p-3">

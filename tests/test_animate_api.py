@@ -276,3 +276,12 @@ def test_world_map_reels_have_ideas_tiles_and_their_own_writer(env, monkeypatch,
         f"v{maps.VERSION}/0/..%2F0%2F3_1.jpg",
     ):
         assert env.client.get(f"/api/animation-map/{bad}").status_code == 404, bad
+
+
+def test_every_studio_operation_is_a_route(env):
+    served = {
+        (method, route.path)
+        for route in env.client.app.routes
+        for method in getattr(route, "methods", None) or ()
+    }
+    assert {(method, path) for method, path, _ in routes.ROUTES} <= served

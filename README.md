@@ -207,6 +207,14 @@ Downloads are keyed by the site's video id and uploads by content hash, and all
 analysis (vocal stems, transcripts, scene cuts) is cached by the hash of the source
 file, so the same video is never downloaded, separated or transcribed twice.
 
+### Claude (MCP)
+
+Claude (claude.ai's custom connectors, Claude Code) can work the Animations tab as your
+account through the MCP endpoint at `/mcp`: write a reel from an idea, read and change its
+script, change the voice or pictures, render it and give back the link; post only when
+allowed and asked. Keys and connections are made on the Animations tab (Connect Claude).
+Steps and the tools: [docs/claude-mcp.md](docs/claude-mcp.md).
+
 ### Post to Buffer
 
 Everyone, admin or employee, adds their own Buffer API keys on the Buffer page (Buffer:

@@ -22,6 +22,7 @@ from agentic_editor.db import (
     BufferKey,
     Feed,
     Job,
+    McpToken,
     PresetBuffer,
     Research,
     ResearchAccount,
@@ -168,8 +169,15 @@ def set_password(session: Session, user: User, password: str) -> None:
     """A new password, which also signs the account out everywhere."""
     check_password(password)
     user.password_hash = hash_password(password)
-    user.session_version += 1
+    sign_out(session, user)
     session.commit()
+
+
+def sign_out(session: Session, user: User) -> None:
+    """Ends the account's signed-in sessions and Claude's ways in (keys, connections)."""
+    user.session_version += 1
+    for token in session.scalars(select(McpToken).where(McpToken.owner_id == user.id)):
+        session.delete(token)
 
 
 def set_role(session: Session, user: User, role: str, presets_root: Path) -> None:
@@ -186,7 +194,7 @@ def set_role(session: Session, user: User, role: str, presets_root: Path) -> Non
     else:
         user.presets_by = None
     user.role = role
-    user.session_version += 1
+    sign_out(session, user)
     session.commit()
 
 
@@ -214,8 +222,8 @@ def remove(
     # made for them keep the account's name.
     for item in session.scalars(select(ResearchAccount).where(ResearchAccount.owner_id == user.id)):
         session.delete(item)
-    # Its Buffer keys are its own: never handed to whoever keeps its work.
-    for kind in (BufferKey, PresetBuffer):
+    # Its Buffer keys and Claude's ways in are its own: never handed to whoever keeps its work.
+    for kind in (BufferKey, PresetBuffer, McpToken):
         for item in session.scalars(select(kind).where(kind.owner_id == user.id)):
             session.delete(item)
     if user.role == MEMBER or user.private_presets:

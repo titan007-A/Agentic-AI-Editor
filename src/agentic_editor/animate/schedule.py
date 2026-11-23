@@ -137,10 +137,12 @@ def after_render(
     send=instagram.post_reel,
 ) -> None:
     """An autopilot reel's render ended: it posts by itself when allowed, else waits for
-    approval; a failed render is noted."""  # fmt: skip
+    approval; a failed render is noted. Only the autopilot's own render (`render`, status
+    "rendering"): a reel rendered again later, by a person or by Claude, is never posted
+    by itself, and one already posted or skipped stays so."""  # fmt: skip
     with Session() as db:
         a = db.get(Animation, animation_id)
-        if a is None or not a.autopilot_id:
+        if a is None or not a.autopilot_id or a.post_status != "rendering":
             return
         if not ok:
             a.post_status, a.post_error = "failed", error or "the render failed"
