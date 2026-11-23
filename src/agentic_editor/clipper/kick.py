@@ -46,6 +46,15 @@ class KickError(RuntimeError):
     pass
 
 
+class NotFound(KickError):
+    pass
+
+
+# Kick's website links a stream by a newer id (a UUIDv7) its API doesn't know; that id
+# begins with the time the stream started, which places it in the streamer's list.
+SAME_START = 5.0  # seconds; a streamer's streams start minutes apart at the least
+
+
 @dataclass(frozen=True)
 class Link:
     kind: str  # "stream" (a past or live stream's video) or "channel"
@@ -79,7 +88,8 @@ class Stream:
     duration: float  # seconds; 0 while live
     live: bool
     source: str  # the HLS master playlist ("" when Kick doesn't give it)
-    uuid: str = ""  # its video's id, for links
+    # its video's id, for links: the website's own when known (lists give the API's older id)
+    uuid: str = ""
     thumbnail: str = ""
     views: int = 0
 
@@ -167,6 +177,17 @@ def _when(value) -> datetime | None:
     return found.replace(tzinfo=UTC) if found.tzinfo is None else found.astimezone(UTC)
 
 
+def minted(uuid: str) -> datetime | None:
+    """When a UUIDv7 was made (its first 48 bits, milliseconds); None for other ids."""
+    digits = uuid.replace("-", "")
+    if len(digits) != 32 or digits[12] != "7":
+        return None
+    try:
+        return datetime.fromtimestamp(int(digits[:12], 16) / 1000, UTC)
+    except ValueError:
+        return None
+
+
 def _int(value, default: int = 0) -> int:
     try:
         return int(value)
@@ -216,7 +237,7 @@ class Client:
                     raise KickError(f"Kick couldn't be reached: {exc}") from exc
             else:
                 if answer.status_code == 404:
-                    raise KickError("Kick doesn't know that (404)")
+                    raise NotFound("Kick doesn't know that (404)")
                 if answer.status_code in (401, 403) and "/api/" not in url:
                     # The video itself refused (its playlists and pieces), not the site API.
                     raise KickError(
@@ -267,19 +288,44 @@ class Client:
         items = data if isinstance(data, list) else []
         return [s for s in (_stream(i) for i in items if isinstance(i, dict)) if s is not None]
 
-    def video(self, uuid: str) -> tuple[str, Stream]:
-        """A stream by its video's id: (its streamer's slug, the stream)."""
-        data = self.json(f"v1/video/{uuid}")
+    def video(self, uuid: str, slug: str = "") -> tuple[str, Stream]:
+        """A stream by its video's id: (its streamer's slug, the stream). The website's
+        newer id is found among `slug`'s streams by the time it was made."""
+        try:
+            data = self.json(f"v1/video/{uuid}")
+        except NotFound:
+            when = minted(uuid)
+            if when is None:
+                raise
+            stream = self.started_at(slug, when)
+            stream.uuid = uuid
+            return slug, stream
         live = data.get("livestream") if isinstance(data, dict) else None
         if not isinstance(live, dict):
             raise KickError("Kick doesn't know that stream")
-        stream = _stream({**live, "video": {"uuid": uuid}})
+        stream = _stream({**live, "video": {"uuid": str(live.get("vod_id") or uuid)}})
         if stream is None:
             raise KickError("Kick doesn't know when that stream was")
         stream.source = str(data.get("source") or live.get("source") or "")
         channel = live.get("channel") or {}
         slug = str(channel.get("slug") or (channel.get("user") or {}).get("username") or "")
         return slug.lower(), stream
+
+    def started_at(self, slug: str, when: datetime) -> Stream:
+        """The streamer's stream that started at `when`."""
+        if not slug:
+            raise KickError(
+                "that stream link has no streamer's name in it; give the one like "
+                "kick.com/<name>/videos/..."
+            )
+        streams = self.streams(slug)
+        found = min(streams, key=lambda s: abs((s.started - when).total_seconds()), default=None)
+        if found is None or abs((found.started - when).total_seconds()) > SAME_START:
+            raise KickError(
+                f"Kick no longer lists {slug}'s stream from {when:%b %d, %H:%M} UTC (it lists "
+                "only their newest streams); pick one of those"
+            )
+        return found
 
     def chat(self, channel_id: int, start: datetime) -> list[Line]:
         """Chat messages sent in the CHAT_SPAN seconds from `start` (fewer, ending sooner,

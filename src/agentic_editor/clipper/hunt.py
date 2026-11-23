@@ -509,11 +509,23 @@ def _check_one(db, streamer: KickStreamer, client) -> str | None:
         wait = LIVE_STRETCH - (ready - streamer.done_until)
         streamer.last_result = f"live; next stretch in about {math.ceil(wait / 60)} min"
         return None
-    return _stretch(db, streamer, channel.username, stream, streamer.done_until, ready)
+    return _stretch(db, streamer, channel.username, stream, streamer.done_until, ready, client)
 
 
-def _stretch(db, streamer, username, stream, start: float, end: float) -> str:
+def website_id(client, uuid: str) -> str:
+    """The id Kick's website opens a stream's video by (its lists give an older one that
+    the website no longer opens); `uuid` itself when Kick won't say."""
+    if not uuid:
+        return uuid
+    try:
+        return client.video(uuid)[1].uuid or uuid
+    except kick.KickError:
+        return uuid
+
+
+def _stretch(db, streamer, username, stream, start: float, end: float, client) -> str:
     count = max(1, math.ceil(streamer.per_hour * (end - start) / 3600))
+    stream.uuid = website_id(client, stream.uuid)
     hunt = new_hunt(
         db, streamer.owner_id, streamer.slug, username or streamer.slug, streamer.channel_id,
         stream, start, end, count, streamer.preset, live=True, folder=streamer.folder,
@@ -534,7 +546,9 @@ def _stream_over(db, streamer: KickStreamer, client) -> str | None:
     if stream is not None and stream.source:
         total = client.playlist(kick.smallest(client.variants(stream.source))).duration
         if total - streamer.done_until >= LIVE_LAST:
-            hunt_id = _stretch(db, streamer, streamer.username, stream, streamer.done_until, total)
+            hunt_id = _stretch(
+                db, streamer, streamer.username, stream, streamer.done_until, total, client
+            )
     streamer.stream_id, streamer.done_until = None, 0.0
     if hunt_id is None:
         streamer.last_result = "offline"

@@ -9,7 +9,7 @@ from agentic_editor.clipper import hunt, kick
 from agentic_editor.db import Setting
 from tests import test_api
 from tests.test_api import employee
-from tests.test_clipper import UUID, FakeKick
+from tests.test_clipper import NEW_ID, UUID, FakeKick
 
 env = test_api.env  # the editor with a signed-in admin (a fixture)
 
@@ -88,7 +88,7 @@ def test_a_hunt_on_a_stream_s_stretch_makes_its_clips_as_jobs(env, kicked):
     assert (found["start"], found["end"], found["preset"]) == (1700, 1880, "kick-clips")
     first = found["moments"][0]
     assert first["start"] <= 1810 <= first["end"]
-    assert first["link"] == f"https://kick.com/xqc/videos/{UUID}?t={int(first['start'])}"
+    assert first["link"] == f"https://kick.com/xqc/videos/{NEW_ID}?t={int(first['start'])}"
     assert first["job"]["status"] == "done" and first["job"]["outputs"]
     call = next(c for c in env.calls if c["source"] == f"kick:kick-{found['id']}-0")
     assert call["presets"] == ["kick-clips"] and "Kick live stream" in call["notes"]
@@ -98,6 +98,19 @@ def test_a_hunt_on_a_stream_s_stretch_makes_its_clips_as_jobs(env, kicked):
     assert [h["id"] for h in listed] == [found["id"]]
     assert env.client.delete(f"/api/kick/hunts/{found['id']}").json() == {"ok": True}
     assert env.client.get(f"/api/jobs/{first['job_id']}").status_code == 200  # clips stay
+
+
+def test_a_hunt_takes_the_website_s_newer_stream_link(env, kicked):
+    add_preset(env, "kick-clips")
+    made = env.client.post(
+        "/api/kick/hunts",
+        json={"link": f"https://kick.com/xqc/videos/{NEW_ID}", "start": "28:20", "end": "31:20",
+              "count": 1},
+    )  # fmt: skip
+    assert made.status_code == 200, made.text
+    found = made.json()
+    assert found["status"] == "done", found["error"]
+    assert found["moments"] and found["moments"][0]["start"] <= 1810 <= found["moments"][0]["end"]
 
 
 def test_a_hunt_is_refused_what_it_cant_do(env, kicked):

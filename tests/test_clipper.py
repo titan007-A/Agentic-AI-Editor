@@ -1,5 +1,6 @@
 import itertools
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -24,6 +25,8 @@ from agentic_editor.settings import Settings
 
 STARTED = datetime(2026, 11, 19, 21, 3, 0, tzinfo=UTC)
 UUID = "61802db4-bbbd-4c96-a0a2-30db8bb54598"
+# The website's newer id for the same stream: a UUIDv7 made when it started (STARTED).
+NEW_ID = "01a1f59e-afa0-7c3e-9d1f-2b8e4f6a0c11"
 
 
 def playlist_text(seconds: float, start: datetime = STARTED, piece: float = 10.0) -> str:
@@ -74,10 +77,12 @@ class FakeKick:
             found.insert(0, self._stream(live=True))
         return found
 
-    def video(self, uuid):
-        if uuid != UUID:
+    def video(self, uuid, slug=""):
+        """By the API's id or (with the streamer named) the website's; the stream comes
+        back with the website's id, as Kick's answer gives it."""
+        if uuid != UUID and not (uuid == NEW_ID and slug == "xqc"):
             raise kick.KickError("Kick doesn't know that stream")
-        return "xqc", self._stream()
+        return "xqc", replace(self._stream(), uuid=NEW_ID)
 
     def variants(self, source):
         base = source.rsplit("/", 1)[0]
@@ -181,6 +186,53 @@ def test_kick_refusing_is_asked_again_then_told():
     locked = kick.Client(httpx.MockTransport(lambda r: httpx.Response(403)), pause=0)
     with pytest.raises(kick.KickError, match="subscribers-only stream needs a signed-in"):
         locked.playlist("https://stream.kick.com/x/160p30/playlist.m3u8")
+
+
+def test_the_website_s_newer_stream_id_is_found_by_when_the_stream_started():
+    assert kick.minted(NEW_ID) == STARTED
+    assert kick.minted(UUID) is None  # a version 4 id carries no time
+    listed = [
+        {"id": 6, "session_title": "later", "start_time": "2026-11-20 01:00:00",
+         "source": "https://stream.test/later.m3u8", "video": {"uuid": "u-later"}},
+        {"id": 5, "session_title": "GTA 6", "start_time": "2026-11-19 21:03:00",
+         "source": "https://stream.test/old.m3u8", "video": {"uuid": UUID}},
+    ]  # fmt: skip
+    by_old_id = {
+        "uuid": UUID, "source": "https://stream.test/old.m3u8",
+        "livestream": {"id": 5, "session_title": "GTA 6", "start_time": "2026-11-19 21:03:00",
+                       "vod_id": NEW_ID, "channel": {"slug": "xqc"}},
+    }  # fmt: skip
+    asked = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.path)
+        if request.url.path == f"/api/v1/video/{UUID}":
+            return httpx.Response(200, json=by_old_id)
+        if request.url.path.startswith("/api/v1/video/"):
+            return httpx.Response(404, json={"message": "No query results for model [Video]."})
+        return httpx.Response(200, json=listed)
+
+    client = kick.Client(httpx.MockTransport(answer), pause=0)
+    slug, stream = client.video(NEW_ID, "xqc")
+    # Found in the list, and kept by the website's id: the website no longer opens the old.
+    assert (slug, stream.id, stream.uuid, stream.source) == (
+        "xqc", 5, NEW_ID, "https://stream.test/old.m3u8"
+    )  # fmt: skip
+    assert asked == [f"/api/v1/video/{NEW_ID}", "/api/v2/channels/xqc/videos"]
+    slug, stream = client.video(UUID)
+    assert (slug, stream.id, stream.uuid) == ("xqc", 5, NEW_ID)  # Kick names the website's id
+    assert hunt.website_id(client, UUID) == NEW_ID
+    assert hunt.website_id(client, "11111111-2222-4333-8444-555555555555") == (
+        "11111111-2222-4333-8444-555555555555"
+    )  # Kick won't say: the id kept as it was
+    assert hunt.website_id(client, "") == ""
+    with pytest.raises(kick.KickError, match="no streamer's name"):
+        client.video(NEW_ID)
+    gone = "01a1f000-0000-7000-8000-000000000000"  # started before every stream listed
+    with pytest.raises(kick.KickError, match="no longer lists xqc's stream"):
+        client.video(gone, "xqc")
+    with pytest.raises(kick.KickError, match="404"):  # an old id Kick doesn't know stays a 404
+        client.video("11111111-2222-4333-8444-555555555555", "xqc")
 
 
 def test_a_playlist_places_the_chat_s_clock_times_in_the_stream():
@@ -354,7 +406,8 @@ def test_a_hunt_cuts_its_moments_and_queues_15_to_30_second_jobs(world):
     # The post caption is told whose stream and its title (which names the game).
     assert source.description.startswith("A moment from xQc's Kick live stream titled \"GTA 6")
     assert '"kekw" ×' in source.description
-    assert source.url == f"https://kick.com/xqc/videos/{UUID}?t={int(first['start'])}"
+    # The website opens the stream by its newer id, not the one the API lists.
+    assert source.url == f"https://kick.com/xqc/videos/{NEW_ID}?t={int(first['start'])}"
 
 
 def test_a_long_stream_is_sampled_then_read_again_around_its_likely_moments(world, monkeypatch):
