@@ -1472,3 +1472,25 @@ def test_a_rating_that_breaks_off_is_asked_again_in_halves_and_unrated_reels_sta
     )  # fmt: skip
     assert sorted(r.code for r in result.reels) == ["GOOD01", "GOOD02"]
     assert result.left_out["couldn't be rated"] == 1
+
+
+def test_a_short_youtube_wouldnt_show_is_left_out():
+    def find(query, count):
+        if query.startswith("site:youtube.com/shorts"):
+            return [{"href": "https://www.youtube.com/shorts/SHOWS000001"},
+                    {"href": "https://www.youtube.com/shorts/PRIVATE0001",
+                     "body": "Enjoy the videos and music you love"}]  # fmt: skip
+        return []
+
+    def info(url):
+        if "PRIVATE0001" in url:
+            raise RuntimeError("Private video")
+        return {"channel": "Chiara", "uploader_id": "@chiara", "media_type": "short",
+                "duration": 30, "title": "Bryan Adams live", "like_count": 9}  # fmt: skip
+
+    result = research.run(
+        "Bryan Adams live", lambda: nullcontext(Planner()), set(), set(), lambda *a: None, find,
+        info, 0, sites=("shorts",),
+    )  # fmt: skip
+    assert [r.code for r in result.reels] == ["yt:SHOWS000001"]
+    assert result.left_out["couldn't be looked up"] == 1
