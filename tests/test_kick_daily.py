@@ -1,16 +1,20 @@
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from agentic_editor import autopilot
-from agentic_editor.clipper import daily, kick, moments
+from agentic_editor.clipper import daily, hunt, kick, moments
 from agentic_editor.db import Feed, FeedItem, Job, KickHunt, Output, PileFolder, User
-from tests import test_api
+from agentic_editor.presets import load_presets
+from tests import test_api, test_clipper_api
+from tests.test_clipper import UUID
 from tests.test_clipper_api import add_preset, clipper_on
 
 env = test_api.env  # the editor with a signed-in admin (a fixture)
+kicked = test_clipper_api.kicked  # Kick faked, hunts run at once (a fixture)
 DAY = datetime(2026, 11, 24, 8, 5)
 
 
@@ -48,9 +52,8 @@ class ManyKick:
 
 
 def looked(client, s):
-    """GTA play with the streamer's camera over it by the title; "IRL GTA" is real life."""
-    gta = "GTA 6" in s.title
-    return gta, gta
+    """GTA play by the title; "IRL GTA" is real life."""
+    return "GTA 6" in s.title
 
 
 def owner(env) -> str:
@@ -75,8 +78,10 @@ def test_morning_clips_share_gta_and_footage_over_new_streams_in_the_right_prese
         other = [h for h in hunts if h.folder == "24-NOV-FOOTAGE"]
         assert len(gta) + len(other) == len(hunts)
         assert {h.stream_id: h.count for h in gta} == {11: 8, 12: 7}  # 15, at most 8 a stream
-        assert {h.preset for h in gta} == {daily.FACECAM}
-        assert {h.preset for h in other} == {daily.FULL}
+        # Each clip picks its layout (hunt.clip_preset): the facecam band or the whole picture.
+        assert {(h.preset, h.irl_preset, h.layout) for h in hunts} == {
+            (daily.FACECAM, daily.FULL, "auto")
+        }
         # The live stream, a 6-minute one and ddg's 4th newest are passed over.
         assert {h.stream_id for h in other} == {13, 21, 31, 32, 42}
         each = Counter()
@@ -97,7 +102,7 @@ def test_morning_clips_share_gta_and_footage_over_new_streams_in_the_right_prese
 
 
 def test_share_gives_each_streamer_a_turn_and_never_overfills_a_stream():
-    picked = [daily.Picked(slug, slug, 1, stream(n, "x"), False, False)
+    picked = [daily.Picked(slug, slug, 1, stream(n, "x"), False)
               for slug, n in (("a", 1), ("a", 2), ("b", 3), ("c", 4))]  # fmt: skip
     assert {p.stream.id: n for p, n in daily.share(picked, 7)} == {1: 2, 2: 1, 3: 2, 4: 2}
     assert sum(n for _, n in daily.share(picked, 100)) == 4 * daily.MOST_PER_HUNT
@@ -203,3 +208,46 @@ def test_autopilot_videos_go_in_a_folder_of_their_day(env):
 def test_a_folder_named_with_its_day_gets_no_day_folder(name):
     assert autopilot.DAY_NAMED.search(name)
     assert not autopilot.DAY_NAMED.search("GTA-KICK")
+
+
+def test_a_clip_s_layout_follows_what_it_shows(env, monkeypatch):
+    add_preset(env, "kick-clips")
+    have = load_presets(env.settings.presets_dir)
+    camera, whole = "kick-facecam-9x16", "kick-clips"
+    assert hunt.layout_presets(have, camera) == (camera, whole)
+    assert hunt.layout_presets(have, whole) == (camera, whole)
+    # A whole-picture counterpart given wins; one that cuts a camera panel can't be it.
+    assert hunt.layout_presets(have, camera, "square-1x1") == (camera, "square-1x1")
+    assert hunt.layout_presets(have, whole, camera) == (camera, whole)
+    assert hunt.layout_presets({k: v for k, v in have.items() if k != camera}, whole) == (
+        None, whole,
+    )  # fmt: skip
+
+    shows = {"game.mp4": (True, "GTA 6"), "call.mp4": (False, "a video call")}
+    monkeypatch.setattr(hunt, "shows_gameplay", lambda video, settings: shows[video.name])
+
+    def pick(name, chosen=whole, irl=""):
+        return hunt.clip_preset(Path(name), chosen, irl, None, env.settings)
+
+    assert pick("game.mp4") == camera
+    assert pick("call.mp4") == whole and pick("call.mp4", camera) == whole
+    assert pick("call.mp4", camera, "square-1x1") == "square-1x1"
+
+
+def test_a_hunt_makes_each_clip_in_the_layout_it_shows_unless_fixed(env, kicked, monkeypatch):
+    add_preset(env, "kick-clips")
+    monkeypatch.setattr(hunt, "shows_gameplay", lambda video, settings: (True, "GTA 6"))
+    body = {"link": f"https://kick.com/xqc/videos/{UUID}", "start": "28:20", "end": "31:20",
+            "count": 1, "preset": "kick-clips"}  # fmt: skip
+
+    def made_with(found):
+        with env.sessions() as db:
+            return db.get(Job, found["moments"][0]["job_id"]).presets
+
+    auto = env.client.post("/api/kick/hunts", json=body).json()
+    assert auto["layout"] == "auto" and auto["status"] == "done", auto["error"]
+    assert made_with(auto) == ["kick-facecam-9x16"]  # gameplay under a camera
+    fixed = env.client.post("/api/kick/hunts", json={**body, "layout": "fixed"}).json()
+    assert made_with(fixed) == ["kick-clips"]  # as chosen, whatever it shows
+    bad = env.client.post("/api/kick/hunts", json={**body, "irl_preset": "nope"})
+    assert bad.status_code == 422

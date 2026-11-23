@@ -7,6 +7,7 @@ Jobs page and in the hunt's folder on the piles.
 
 import re
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
@@ -27,6 +28,8 @@ class StreamerRequest(BaseModel):
     name: str = Field(min_length=2, max_length=300)  # the streamer's name, or a Kick link
     live: bool = False
     preset: str = Field(default="", max_length=64)
+    # Clips that aren't gameplay under a camera ("": kick-clips when there is one).
+    irl_preset: str = Field(default="", max_length=64)
     per_hour: int = Field(default=4, ge=1, le=12)
     folder: str = Field(default="", max_length=80)
 
@@ -34,6 +37,7 @@ class StreamerRequest(BaseModel):
 class StreamerChange(BaseModel):
     live: bool | None = None
     preset: str | None = Field(default=None, max_length=64)
+    irl_preset: str | None = Field(default=None, max_length=64)
     per_hour: int | None = Field(default=None, ge=1, le=12)
     folder: str | None = Field(default=None, max_length=80)
 
@@ -54,6 +58,9 @@ class HuntRequest(BaseModel):
     count: int = Field(default=5, ge=1, le=10)
     preset: str = Field(default="", max_length=64)
     folder: str = Field(default="", max_length=80)
+    # "auto": each clip's layout by what it shows (hunt.clip_preset); "fixed": `preset`.
+    layout: Literal["auto", "fixed"] = "auto"
+    irl_preset: str = Field(default="", max_length=64)
 
 
 def seconds_of(text: str) -> float | None:
@@ -115,6 +122,10 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
             raise HTTPException(422, "there is no preset to make the clips with")
         return editing[0]
 
+    def irl_for(account, name: str) -> str:
+        """The preset for clips that aren't gameplay: "" (kick-clips when there is one)."""
+        return preset_for(account, name) if name.strip() else ""
+
     def own(query, model, account, session: Session):
         if sees_every_render(account, session):
             return query
@@ -137,7 +148,8 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
     def streamer_view(s: KickStreamer) -> dict:
         return {
             "id": s.id, "slug": s.slug, "username": s.username or s.slug, "avatar": s.avatar,
-            "live": s.live, "preset": s.preset, "per_hour": s.per_hour, "folder": s.folder,
+            "live": s.live, "preset": s.preset, "irl_preset": s.irl_preset,
+            "per_hour": s.per_hour, "folder": s.folder,
             "folder_shown": " ".join(s.folder.split()) or f"Kick {s.username or s.slug}",
             "is_live": s.is_live, "last_checked": s.last_checked, "last_result": s.last_result,
             "link": f"https://kick.com/{s.slug}", "created_at": s.created_at,
@@ -169,7 +181,8 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
         return {
             "id": h.id, "slug": h.slug, "username": h.username or h.slug, "title": h.title,
             "uuid": h.uuid, "stream_id": h.stream_id, "start": h.start, "end": h.end,
-            "count": h.count, "preset": h.preset, "live": h.live,
+            "count": h.count, "preset": h.preset, "live": h.live, "layout": h.layout,
+            "irl_preset": h.irl_preset,
             "folder": hunt.folder_name(h), "status": h.status, "message": h.message,
             "error": h.error, "created_at": h.created_at, "streamer_id": h.streamer_id,
             "link": f"https://kick.com/{h.slug}/videos/{h.uuid}" if h.uuid else "",
@@ -198,6 +211,7 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
             owner_id=account.id, slug=channel.slug.lower(), username=channel.username,
             channel_id=channel.id, avatar=channel.avatar, live=body.live, preset=preset,
             per_hour=body.per_hour, folder=" ".join(body.folder.split()),
+            irl_preset=irl_for(account, body.irl_preset),
             is_live=channel.live is not None,
         )  # fmt: skip
         session.add(found)
@@ -213,6 +227,8 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
         found = find_streamer(streamer_id, account, session)
         if body.preset is not None:
             found.preset = preset_for(account, body.preset)
+        if body.irl_preset is not None:
+            found.irl_preset = irl_for(account, body.irl_preset)
         if body.per_hour is not None:
             found.per_hour = body.per_hour
         if body.folder is not None:
@@ -302,7 +318,9 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
         folder = " ".join(body.folder.split()) or (streamer.folder if streamer else "")
         found = hunt.new_hunt(
             session, account.id, channel.slug.lower(), channel.username, channel.id, stream,
-            start or 0.0, end or 0.0, body.count, preset, folder=folder,
+            start or 0.0, end or 0.0, body.count, preset, folder=folder, layout=body.layout,
+            irl_preset=irl_for(account, body.irl_preset)
+            or (streamer.irl_preset if streamer else ""),
         )  # fmt: skip
         session.commit()
         jobs.hunt(found.id)

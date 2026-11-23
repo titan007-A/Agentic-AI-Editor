@@ -401,6 +401,115 @@ def about(name: str, stream_title: str, moment: moments.Moment) -> str:
     return text
 
 
+# Each clip's layout by what it shows (owner: "jinme game play nhi hai unko bhi gameplay
+# waale facecam ki tarah edit kr de rha hai"): a streamer's camera over gameplay (a video
+# game, or a casino or slots game's screen) is cut into the facecam band; anything else (real
+# life, all camera, a video call, a website, a video being watched) is shown whole.
+FACECAM_PRESET = "kick-facecam-9x16"
+IRL_PRESET = "kick-clips"
+# Frames looked at, across the clip: most must be gameplay (a clip may turn from a video call
+# to slots near its end, and is mostly the call).
+GAME_FRAMES = 4
+GAME_PROMPT = (
+    "These {frames} frames, in order, are from one livestream clip; a streamer's camera may sit "
+    "in a corner or along an edge over the main picture. For each frame, look at the main "
+    "picture, not the camera: is it a video game being played, or a casino, slots or betting "
+    "game's screen? In games, give one true or false per frame, in order: true for either, "
+    "false for real life, a video call, a website or chat, a video or film being watched, a "
+    "desktop, or a picture that is all camera. In shows, say in a few words what the main "
+    "picture is."
+)
+GAME_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "games": {"type": "array", "items": {"type": "boolean"}},
+        "shows": {"type": "string"},
+    },
+    "required": ["games", "shows"],
+}
+
+
+def layout_presets(have: dict, chosen: str, irl: str = "") -> tuple[str | None, str | None]:
+    """A hunt's two layouts among the account's presets `have`: the facecam one (the chosen
+    preset when it cuts a camera panel, else kick-facecam-9x16) and the whole-picture one
+    (`irl` when given, the chosen preset when it doesn't cut a camera, else kick-clips);
+    None where the account has none."""
+
+    def facecam(name: str) -> bool:
+        return name in have and have[name].facecam.enabled
+
+    camera = chosen if facecam(chosen) else (FACECAM_PRESET if facecam(FACECAM_PRESET) else None)
+    if irl and irl in have and not facecam(irl):
+        whole = irl
+    elif chosen in have and not facecam(chosen):
+        whole = chosen
+    else:
+        whole = IRL_PRESET if IRL_PRESET in have and not facecam(IRL_PRESET) else None
+    return camera, whole
+
+
+def shows_gameplay(video: Path, settings: Settings, router=None) -> tuple[bool, str]:
+    """Whether a clip is gameplay under a streamer's camera, and why: the camera finder
+    sees a camera box (the clips of one hunt sharing the surest, see facecam.in_stream),
+    and the vision model says the main picture is a video game or a casino game. Anything
+    that can't be told is not: the whole picture never looks wrong."""
+    from agentic_editor import ffmpeg, slots
+    from agentic_editor.analysis import facecam
+    from agentic_editor.backends import get_backends
+    from agentic_editor.review import sample_frames
+    from agentic_editor.router import ModelRouter
+
+    try:
+        info = ffmpeg.probe(video)
+        camera = facecam.in_stream(
+            video, 0.0, info.duration, (info.width, info.height), settings.models_dir,
+            settings.ffmpeg_bin, fellow_moments(video),
+        )  # fmt: skip
+    except Exception as exc:
+        log.info("couldn't look for a camera in %s: %s", video, exc)
+        return False, "the camera couldn't be looked for"
+    if camera is None or camera.box is None:
+        return False, "no camera box over the picture"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            frames = sample_frames(video, info.duration, Path(tmp), GAME_FRAMES)
+            router = router or ModelRouter(settings, get_backends())
+            with slots.behind(), router.vision() as vision:
+                answer = vision.chat_json(
+                    [{"role": "user", "content": GAME_PROMPT.format(frames=len(frames))}],
+                    GAME_SCHEMA,
+                    images=frames,
+                    temperature=0,
+                )
+    except Exception as exc:
+        log.info("couldn't tell whether %s is gameplay: %s", video, exc)
+        return False, "the picture couldn't be looked at"
+    shows = " ".join(str(answer.get("shows") or "").split())[:120]
+    said = [g is True for g in (answer.get("games") or [])][: len(frames)]
+    gameplay = len(said) == len(frames) and sum(said) * 2 > len(frames)
+    return gameplay, f"{shows} ({sum(said)} of {len(frames)} frames gameplay)"
+
+
+def clip_preset(video: Path, chosen: str, irl: str, user, settings: Settings) -> str:
+    """The preset a hunt's clip is made with: the facecam layout for gameplay under a
+    camera, the whole picture for anything else (see layout_presets); the chosen preset
+    when the account hasn't both."""
+    from agentic_editor import accounts
+    from agentic_editor.presets import load_presets
+
+    try:
+        have = load_presets(accounts.presets_dir(user, settings.presets_dir))
+    except Exception as exc:  # a broken preset file elsewhere mustn't stop the clip
+        log.warning("couldn't read the presets for a clip's layout: %s", exc)
+        return chosen
+    camera, whole = layout_presets(have, chosen, irl)
+    if not camera or not whole or camera == whole:
+        return chosen
+    game, shows = shows_gameplay(video, settings)
+    log.info("clip %s: %s -> %s", video.parent.name, shows, camera if game else whole)
+    return camera if game else whole
+
+
 def make_job(
     hunt_id: str,
     index: int,
@@ -415,6 +524,8 @@ def make_job(
         hunt = db.get(KickHunt, hunt_id)
         slug, uuid, name = hunt.slug, hunt.uuid, hunt.username or hunt.slug
         stream_title, preset, owner = hunt.title, hunt.preset, hunt.owner_id
+        layout, irl = hunt.layout, hunt.irl_preset
+        user = db.get(User, owner) if owner else None
     key = key_of(hunt_id, index)
     folder = settings.media_dir / "sources" / key
     dest = folder / "source.mp4"
@@ -431,6 +542,8 @@ def make_job(
         "description": about(name, stream_title, moment),
     }  # fmt: skip
     (folder / "source.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    if layout != "fixed":
+        preset = clip_preset(dest, preset, irl, user, settings)
     with Session() as db:
         job = Job(
             source=SOURCE + key, title=title, presets=[preset], notes=notes_for(moment),
@@ -455,13 +568,15 @@ def new_hunt(
     live: bool = False,
     folder: str = "",
     streamer_id: str | None = None,
+    layout: str = "auto",
+    irl_preset: str = "",
 ) -> KickHunt:
     found = KickHunt(
         owner_id=owner_id, streamer_id=streamer_id, slug=slug, username=username,
         channel_id=channel_id, stream_id=stream.id, uuid=stream.uuid, title=stream.title,
         started=stream.started.astimezone(UTC).replace(tzinfo=None), source=stream.source,
         start=start, end=end, count=count, preset=preset, live=live, folder=folder,
-        moments=[],
+        moments=[], layout=layout, irl_preset=irl_preset,
     )  # fmt: skip
     db.add(found)
     db.flush()
@@ -559,7 +674,7 @@ def _stretch(db, streamer, username, stream, start: float, end: float, client) -
     hunt = new_hunt(
         db, streamer.owner_id, streamer.slug, username or streamer.slug, streamer.channel_id,
         stream, start, end, count, streamer.preset, live=True, folder=streamer.folder,
-        streamer_id=streamer.id,
+        streamer_id=streamer.id, irl_preset=streamer.irl_preset,
     )  # fmt: skip
     streamer.done_until = end
     streamer.last_result = f"clipping {clock(start)}-{clock(end)} of the stream"

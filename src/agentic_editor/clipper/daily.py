@@ -5,11 +5,11 @@ At its hour, once a day, an account's schedule takes its streamers' newest finis
 it hasn't clipped yet (the newest one again when a streamer had none new: a hunt keeps away
 from the clips already made of a stream, see hunt.clipped_before), looks at each (a few
 seconds from four places in it): the vision model says whether it is GTA (as a topic feed
-does, autopilot.judge_topic) and the camera finder whether a streamer's camera sits over
-it. A stream with a camera box is clipped in the facecam band preset, the others in the
-full-picture one. `gta` clips are shared out over the GTA streams and `footage` over the
-others, a streamer at a time in turn, and filed into the day's folders "DD-MON-GTA" and
-"DD-MON-FOOTAGE" on the piles. The hunts run one after another in one worker, so the
+does, autopilot.judge_topic). `gta` clips are shared out over the GTA streams and
+`footage` over the others, a streamer at a time in turn, and filed into the day's folders
+"DD-MON-GTA" and "DD-MON-FOOTAGE" on the piles. Each clip gets its layout by what it shows
+(hunt.clip_preset): gameplay under a camera the facecam band, anything else the whole
+picture. The hunts run one after another in one worker, so the
 others stay free for people's edits; each clip is an ordinary job in the fair queue.
 """
 
@@ -121,7 +121,6 @@ class Picked:
     channel_id: int
     stream: kick.Stream
     gta: bool
-    camera: bool
 
 
 def share(picked: list[Picked], total: int) -> list[tuple[Picked, int]]:
@@ -151,11 +150,10 @@ def share(picked: list[Picked], total: int) -> list[tuple[Picked, int]]:
     return [(p, counts[id(p)]) for p in picked if counts.get(id(p))]
 
 
-def look(client, stream: kick.Stream, settings, router=None) -> tuple[bool | None, bool]:
-    """Whether the stream is GTA (None when it couldn't be told) and whether a streamer's
-    camera sits over its picture, from a few seconds of it at SAMPLE_AT."""
+def look(client, stream: kick.Stream, settings, router=None) -> bool | None:
+    """Whether the stream is GTA, from a few seconds of it at SAMPLE_AT; None when it
+    couldn't be told."""
     from agentic_editor import autopilot
-    from agentic_editor.analysis import facecam
 
     playlist = client.playlist(kick.best(client.variants(stream.source), SAMPLE_HEIGHT))
     with tempfile.TemporaryDirectory() as tmp:
@@ -169,7 +167,7 @@ def look(client, stream: kick.Stream, settings, router=None) -> tuple[bool | Non
             except RuntimeError as exc:
                 log.info("couldn't cut %s at %.0f s: %s", stream.uuid, start, exc)
         if not parts:
-            return None, False
+            return None
         sample = Path(tmp) / "sample.mp4"
         listing = Path(tmp) / "parts.txt"
         listing.write_text("".join(f"file '{p}'\n" for p in parts))
@@ -179,17 +177,11 @@ def look(client, stream: kick.Stream, settings, router=None) -> tuple[bool | Non
             check=True, capture_output=True, timeout=120,
         )  # fmt: skip
         entry = autopilot.Entry(f"kick-{stream.id}", stream.title, str(sample))
-        verdict = autopilot.judge_topic(TOPIC, [entry], settings, router)[0]
         try:
-            from agentic_editor import ffmpeg
-
-            info = ffmpeg.probe(sample)
-            found = facecam.find(sample, 0.0, info.duration, (info.width, info.height),
-                                 settings.models_dir, settings.ffmpeg_bin)  # fmt: skip
-        except Exception as exc:  # the full picture is the safe look
-            log.info("couldn't look for a camera in %s: %s", stream.uuid, exc)
-            found = None
-    return verdict.fits, bool(found and found.box)
+            return autopilot.judge_topic(TOPIC, [entry], settings, router)[0].fits
+        except Exception as exc:  # the vision model away: run() goes by the title
+            log.warning("couldn't look at %s's picture: %s", stream.uuid, exc)
+            return None
 
 
 def run(
@@ -222,7 +214,7 @@ def run(
             }
         editing = [n for n, p in have.items() if not p.download_only] or list(have)
         full = FULL if FULL in have else editing[0]
-        presets = {True: FACECAM if FACECAM in have else full, False: full}
+        chosen = FACECAM if FACECAM in have else full  # each clip picks its layout
         picked: list[Picked] = []
         notes: list[str] = []
         for slug in daily.streamers:
@@ -238,14 +230,14 @@ def run(
             new = [s for s in streams if (slug, s.id) not in hunted]
             for stream in new or streams[:1]:
                 try:
-                    gta, camera = looker(client, stream)
+                    gta = looker(client, stream)
                 except Exception as exc:
                     log.warning("couldn't look at %s's stream %s: %s", slug, stream.uuid, exc)
                     notes.append(f"{slug}: a stream couldn't be looked at")
                     continue
                 if gta is None:
                     gta = "gta" in stream.title.lower()  # the title, when the frames can't say
-                picked.append(Picked(slug, channel.username, channel.id, stream, gta, camera))
+                picked.append(Picked(slug, channel.username, channel.id, stream, gta))
         day = autopilot.day_tag(now)
         plan = [
             (p, n, f"{day}-GTA") for p, n in share([p for p in picked if p.gta], daily.gta)
@@ -258,7 +250,7 @@ def run(
             for p, count, folder in plan:
                 found = hunt.new_hunt(
                     db, owner_id, p.slug, p.username, p.channel_id, p.stream, 0.0, 0.0,
-                    count, presets[p.camera], folder=folder,
+                    count, chosen, folder=folder, irl_preset=full,
                 )  # fmt: skip
                 made.append(found.id)
             db.commit()
