@@ -1589,6 +1589,10 @@ def run(
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
     reels = [r for r in reels if not r.page or r.handle == r.page]  # another's, found by name
+    # A Short YouTube wouldn't show (gone, private, age-locked) has nothing but what the
+    # search engine said: no channel, no caption to judge, nothing to download.
+    left_out["couldn't be looked up"] = sum(r.short and not r.looked_up for r in reels)
+    reels = [r for r in reels if not (r.short and not r.looked_up)]
     if context.handle:
         left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
         reels = [r for r in reels if r.handle != context.handle]
