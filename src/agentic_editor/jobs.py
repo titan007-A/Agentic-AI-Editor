@@ -1143,6 +1143,15 @@ def hunt(hunt_id: str) -> None:
 
 
 @huey.task()
+def kick_daily(owner_id: str) -> None:
+    """An account's morning Kick clips (clipper/daily.py): its streamers' new streams looked
+    at and hunted one after another in this one worker, each clip queued as a job."""
+    from agentic_editor.clipper import daily
+
+    daily.run(owner_id, sessions(), get_settings())
+
+
+@huey.task()
 def write_caption(output_id: int) -> None:
     """One queued caption's turn, shared with the jobs (see take_turn)."""
     take_turn(("caption", output_id))

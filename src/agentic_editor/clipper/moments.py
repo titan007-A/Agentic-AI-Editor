@@ -145,10 +145,12 @@ def find(
     loudness: np.ndarray | None = None,
     clips: list[tuple[float, float, int]] = (),
     least: float = 0.0,
+    avoid: list[tuple[float, float]] = (),
 ) -> list[Moment]:
     """Up to `count` moments in the stretch `start`-`end` (seconds into the stream), the
     strongest first, each with its clip, apart; `least` leaves out weaker ones. `loudness`
-    is one value (dB) a second from `start`."""
+    is one value (dB) a second from `start`. `avoid`: clips already made of this stream
+    (seconds into it), kept apart from like the moments found here."""
     length = max(1, math.ceil(end - start))
     weights, known = chat_signal(length + CHAT_LAG, start, list(read), list(lines))
     has_chat = bool(known.any() and weights.sum() > 0)
@@ -164,6 +166,9 @@ def find(
     cover = clip_cover(length, start, list(clips))
     score = smooth(chat + 0.6 * loud + cover, 5)
     taken = np.zeros(length, dtype=bool)
+    for a, b in avoid:
+        lo, hi = math.floor(a - start) - APART, math.ceil(b - start) + APART
+        taken[max(0, lo) : max(0, min(length, hi))] = True
     found: list[Moment] = []
     shortest = min(SHORTEST, length)
     while len(found) < count:

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import event, select
 
-from agentic_editor import api, jobs, pipeline, style
+from agentic_editor import api, autopilot, jobs, pipeline, style
 from agentic_editor.api import create_app
 from agentic_editor.auth import hash_password
 from agentic_editor.backends import Backends
@@ -333,7 +333,6 @@ def test_a_folder_feed_edits_what_it_holds_into_the_ready_pile(env, tmp_path):
 
 
 def test_a_topic_feed_edits_only_videos_about_it_into_its_folder(env, tmp_path, monkeypatch):
-    from agentic_editor import autopilot
 
     folder = tmp_path / "clips"
     folder.mkdir()
@@ -376,10 +375,14 @@ def test_a_topic_feed_edits_only_videos_about_it_into_its_folder(env, tmp_path, 
     assert passed["title"] == "quiz" and passed["reason"] == "not GTA 5: a quiz show"
     assert [c["source"] for c in env.calls] == [str(folder / "gta-heist.mp4")]
 
-    folders = env.client.get("/api/pile-folders").json()
-    assert [(f["name"], f["preset"]) for f in folders] == [("GTA-kick", "square-1x1")]
+    # In the feed's folder, inside it the day's (the owner sees each day's videos apart).
+    folders = {f["name"]: f for f in env.client.get("/api/pile-folders").json()}
+    day = autopilot.day_tag()
+    assert set(folders) == {"GTA-kick", day}
+    assert {f["preset"] for f in folders.values()} == {"square-1x1"}
+    assert folders[day]["parent_id"] == folders["GTA-kick"]["id"]
     ready = env.client.get("/api/piles/ready").json()
-    assert [o["folder_id"] for j in ready for o in j["outputs"]] == [folders[0]["id"]]
+    assert [o["folder_id"] for j in ready for o in j["outputs"]] == [folders[day]["id"]]
 
     body = {**{k: feed[k] for k in ("name", "kind", "location", "presets")}, "folder": "a/b"}
     refused = env.client.put(f"/api/feeds/{feed['id']}", json=body)
@@ -402,7 +405,6 @@ def test_a_feed_moved_somewhere_else_notes_what_is_already_there(env, tmp_path):
 
 
 def test_an_instagram_account_feed_is_looked_through_without_holding_the_page(env, monkeypatch):
-    from agentic_editor import autopilot
 
     reels = [autopilot.Entry("Instagram-OLD", "Adele old", "https://www.instagram.com/reel/OLD/")]
     gate = threading.Event()

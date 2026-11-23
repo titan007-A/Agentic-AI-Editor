@@ -219,6 +219,8 @@ class Feed(Base):
     # The folder its finished videos go in, inside their preset's folder on the piles
     # (PileFolder, made the first time); None: straight in the preset's folder.
     folder: Mapped[str | None] = mapped_column(Text)
+    # Each day's videos in a folder of that day inside it ("23-NOV"), so days stay apart.
+    dated: Mapped[bool] = mapped_column(default=True)
     # Whether the first look, which notes what is already there, has been made. A new feed
     # starts without it; feeds saved before this column existed had made it, so the column
     # is added to them as true.
@@ -355,6 +357,9 @@ class KickStreamer(Base):
     avatar: Mapped[str] = mapped_column(Text, default="")
     live: Mapped[bool] = mapped_column(default=False)  # clip it while it streams
     preset: Mapped[str] = mapped_column(String(64), default="")
+    # A clip that isn't gameplay under a camera is made with this (clipper/hunt.clip_preset);
+    # "": the account's kick-clips when it has it.
+    irl_preset: Mapped[str] = mapped_column(String(64), default="")
     per_hour: Mapped[int] = mapped_column(default=4)  # clips an hour of live stream, at most
     folder: Mapped[str] = mapped_column(Text, default="")  # on the piles; "" is "Kick <name>"
     # The live stream being clipped, and how far into it the clipping has got (seconds).
@@ -387,6 +392,10 @@ class KickHunt(Base):
     end: Mapped[float] = mapped_column(default=0.0)  # 0: to the end
     count: Mapped[int] = mapped_column(default=5)  # clips wanted, at most
     preset: Mapped[str] = mapped_column(String(64), default="")
+    # "auto": each clip's layout by what it shows (clipper/hunt.clip_preset: gameplay under a
+    # camera -> the facecam preset, anything else -> irl_preset); "fixed": `preset` for all.
+    layout: Mapped[str] = mapped_column(String(8), default="auto")
+    irl_preset: Mapped[str] = mapped_column(String(64), default="")
     live: Mapped[bool] = mapped_column(default=False)  # a live stretch: strong moments only
     folder: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="queued")

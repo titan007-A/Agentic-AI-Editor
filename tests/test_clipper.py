@@ -483,8 +483,10 @@ def test_a_moment_s_clips_go_in_its_hunt_s_folder_and_its_video_is_kept(world):
         job.outputs.append(out)
         db.add(job)
         db.flush()
-        autopilot.file_outputs(db, job)
-        folder = db.get(PileFolder, job.outputs[0].folder_id)
+        autopilot.file_outputs(db, job, now=datetime(2026, 11, 24, 9))
+        day = db.get(PileFolder, job.outputs[0].folder_id)  # the day's folder, inside the hunt's
+        folder = db.get(PileFolder, day.parent_id)
+        assert (day.name, day.owner_id, day.preset) == ("24-NOV", "emp1", "kick-clips")
         assert (folder.name, folder.owner_id, folder.preset) == ("GTA clips", "emp1", "kick-clips")
         db.add(Job(id="j2", source=f"kick:kick-{hunt_id}-1", presets=["kick-clips"]))
         db.commit()
