@@ -241,6 +241,22 @@ TOUR = [
 ]  # fmt: skip
 
 
+class MapModel(Writer):
+    """The planner model for World map reels: the writer's replies in turn, and the line
+    by line check (mapwriter.vet) answered with `wrong`."""
+
+    def __init__(self, *replies, wrong=()):
+        super().__init__(*replies)
+        self.wrong = list(wrong)
+        self.vetted: list[list[dict]] = []
+
+    def chat_json(self, messages, schema, temperature=0.3):
+        if schema is mapwriter.VET_SCHEMA:
+            self.vetted.append(messages)
+            return {"wrong": self.wrong}
+        return super().chat_json(messages, schema, temperature)
+
+
 def map_reply(countries=None, **changes):
     reply = {
         "title": "Most Famous Desserts In Every Country",
@@ -295,7 +311,7 @@ def test_a_draft_is_sent_back_once_for_a_country_off_the_map(world):
         return maps.find(name, table) is not None
 
     bad = [*TOUR[:5], country("Atlantis", "Atlantis has ambrosia.", "ambrosia")]
-    writer = Writer(map_reply(countries=bad), map_reply())
+    writer = MapModel(map_reply(countries=bad), map_reply())
     brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
     plan, left = planner.draft(writer, brief, [], known)
     assert len(writer.asked) == 2 and left == []
@@ -424,7 +440,7 @@ def test_a_world_map_reel_is_written_voiced_and_mapped(tmp_path, world, monkeypa
     monkeypatch.setattr(maps, "fetch", lambda *a, **k: pytest.fail("the map is here already"))
     monkeypatch.setattr(maps, "ready", lambda models_dir: True)
     tour = [*TOUR, country("Atlantis", "Atlantis has ambrosia.", "ambrosia")]
-    model = Writer(map_reply(countries=tour), map_reply(countries=tour))
+    model = MapModel(map_reply(countries=tour), map_reply(countries=tour))
     with Session() as db:
         db.add(Animation(id="m1", owner_id="u1", idea="desserts", style="map", images=False,
                          task={"op": "draft"}))  # fmt: skip
@@ -487,7 +503,9 @@ def test_a_map_autopilot_needs_no_niche(tmp_path, world, monkeypatch):
     monkeypatch.setattr(schedule, "render", lambda *a: None)
     monkeypatch.setattr(maps, "fetch", lambda *a, **k: pytest.fail("no downloads in tests"))
     monkeypatch.setattr(maps, "ready", lambda models_dir: True)
-    studio.run_task(started[0], Session, settings, Router(Writer(map_reply())), speak=fake_speak)
+    studio.run_task(
+        started[0], Session, settings, Router(MapModel(map_reply(), map_reply())), speak=fake_speak
+    )
     with Session() as db:
         a = db.get(Animation, started[0])
         assert a.status == "ready", a.error
@@ -625,3 +643,22 @@ def test_a_line_asked_for_twice_at_once_is_spoken_once(tmp_path, monkeypatch):
     for t in threads:
         t.join()
     assert fake.calls == 1 and len(got) == 3 and got[0] == got[1] == got[2]
+
+
+def test_things_that_dont_belong_are_left_out_after_a_line_by_line_check():
+    tour = [*TOUR, country("Canada", "Canada has maple syrup.", "maple syrup")]
+    # Lines: 1-3 the US, 4-5 the UK, 6-7 France, 8-9 Italy, 10 Holland, 11-12 Japan, 13 Canada.
+    model = MapModel(map_reply(countries=tour), wrong=[2, 13])
+    brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
+    plan, notes = planner.draft(model, brief, [])
+    asked = model.vetted[0][0]["content"]
+    assert "1. The United States: apple pie" in asked and "13. Canada: maple syrup" in asked
+    usa = plan.scenes[1]
+    assert [i.text for i in usa.visual.items] == ["apple pie", "cheesecake"]
+    assert usa.narration == "The United States has apple pie and cheesecake."
+    assert "Canada" not in [s.visual.text for s in plan.scenes]
+    assert notes[0] == "left out as not fitting the topic: The United States: brownies, Canada"
+    # A check that calls most of it wrong has misread the question: nothing is left out.
+    model = MapModel(map_reply(), wrong=list(range(1, 9)))
+    plan, notes = planner.draft(model, brief, [])
+    assert sum(len(s.visual.items) for s in plan.scenes) == 12 and not notes

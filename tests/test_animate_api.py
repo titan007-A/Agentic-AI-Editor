@@ -229,13 +229,13 @@ def test_world_map_reels_have_ideas_tiles_and_their_own_writer(env, monkeypatch,
     from PIL import Image
 
     from agentic_editor.animate import maps
-    from tests.test_animate_map import map_reply
+    from tests.test_animate_map import MapModel, map_reply
 
     # No map on this machine: nothing to fetch in a test, no country checked or flown to.
     monkeypatch.setattr(studio, "ensure_map", lambda settings, say=None: [])
     monkeypatch.setattr(maps, "table", lambda models_dir: {})
     monkeypatch.setattr(maps, "tiles_dir", lambda models_dir: tmp_path / "tiles")
-    model = Writer(map_reply(), map_reply())
+    model = MapModel(map_reply(), map_reply())
     monkeypatch.setattr(planner, "gather", lambda *a, **k: [])
     monkeypatch.setattr(planner, "subject", lambda llm, idea: ("", ""))
     monkeypatch.setattr(

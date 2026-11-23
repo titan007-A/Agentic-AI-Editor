@@ -247,28 +247,34 @@ def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
-def parse(scene: Scene) -> tuple[str, list[str]]:
-    """A country sentence as said: how it names the country ("The United States") and the
-    short fact told after each thing ("" for none), in the order of the scene's items."""
+def parse(scene: Scene) -> tuple[str, list[str], list[str]]:
+    """A country sentence as said: how it names the country ("The United States"), the
+    short fact told after each thing ("" for none) and how each thing was said ("the
+    telephone"; its name when it can't be told apart), in the order of the scene's items."""
     v = scene.visual
     names = [set(_words(i.text)) - FILLER for i in v.items]
     country = set(_words(v.text)) - FILLER
     head, has, _ = scene.narration.partition(" has ")
     opening = head.strip() if has and country and country <= set(_words(head)) else v.text
     facts = ["" for _ in v.items]
+    said = [i.text for i in v.items]
     last = -1
     for part in re.split(r"[,;:]", scene.narration):
         part = re.sub(r"^\s*and\s+", "", part).strip().rstrip(".!")
+        part = part.split(" has ", 1)[1].strip() if " has " in part else part
         words = set(_words(part)) - FILLER
         if not words:
             continue
-        named = next((k for k, n in enumerate(names) if n and n <= words), -1)
+        hits = [k for k, n in enumerate(names) if n and n <= words]
+        named = hits[0] if hits else -1
         rest = words - country - set().union(*names) if names else words - country
         if named >= 0 and len(rest) <= 2:
             last = named
+            if len(hits) == 1 and not rest:  # "the telephone": its own words, articles too
+                said[named] = re.sub(r"^and\s+", "", part)
         elif len(rest) >= 3 and last >= 0 and not facts[last]:
             facts[last] = part
-    return opening, facts
+    return opening, facts, said
 
 
 def telling(fact: str) -> bool:
@@ -284,16 +290,18 @@ def asides(plan: Plan) -> list[str]:
     for scene in plan.scenes:
         if scene.visual.kind != "country":
             continue
-        _, facts = parse(scene)
+        _, facts, _ = parse(scene)
         for item, fact in zip(scene.visual.items, facts, strict=True):
             if fact:
                 out.append(f"{scene.visual.text}, {item.text}: {fact}")
     return out
 
 
-def sentence(opening: str, items: list[Item], facts: list[str]) -> str:
-    """'<Country> has A, B, and C.' with each kept fact after its thing."""
-    parts = [f"{i.text}, {f}," if f else i.text for i, f in zip(items, facts, strict=True)]
+def sentence(opening: str, items: list[Item], facts: list[str], said=None) -> str:
+    """'<Country> has A, B, and C.' with each kept fact after its thing, each thing as it
+    was said (`said`) or by its name."""
+    names = said or [i.text for i in items]
+    parts = [f"{n}, {f}," if f else n for n, f in zip(names, facts, strict=True)]
     if len(parts) == 1:
         said = parts[0].rstrip(",")
     elif len(parts) == 2 and not facts[0]:
@@ -319,7 +327,7 @@ def tighten(plan: Plan, length: str) -> Plan:
     }
     kept: dict[int, list[str]] = {}
     budget = FACTS_PER_REEL
-    for n, (_, facts) in found.items():
+    for n, (_, facts, _) in found.items():
         mine = ["" for _ in facts]
         for k, fact in enumerate(facts):
             if fact and budget and len(fact.split()) <= FACT_WORDS and telling(fact):
@@ -336,13 +344,12 @@ def tighten(plan: Plan, length: str) -> Plan:
             if n in gone:
                 continue
             if n in found:
-                opening = found[n][0]
+                opening, _, said = found[n]
                 items = scene.visual.items[:cap] if cap else scene.visual.items
                 facts = scenes_kept[n][: len(items)]
                 visual = scene.visual.model_copy(update={"items": items})
-                scene = scene.model_copy(
-                    update={"narration": sentence(opening, items, facts), "visual": visual}
-                )
+                told = sentence(opening, items, facts, said[: len(items)])
+                scene = scene.model_copy(update={"narration": told, "visual": visual})
             scenes.append(scene)
         return plan.model_copy(update={"scenes": scenes})
 
@@ -528,14 +535,89 @@ def _brief_text(idea: str, length: str) -> str:
     )
 
 
+VET_SCHEMA = {
+    "type": "object",
+    "properties": {"wrong": {"type": "array", "items": {"type": "integer"}}},
+    "required": ["wrong"],
+}
+# A check that finds more than this share wrong has misread the question: it is ignored.
+VET_MOST = 0.4
+
+
+def vet(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
+    """The tour with the things that don't belong left out, as the model sees it when
+    asked plainly line by line (a small model judges a list far better than it writes
+    one): a thing off the topic (a food in a reel about inventions), or not really from or
+    famous in its country. A country left with nothing goes too, never below
+    MIN_COUNTRIES. Returns what was left out, for the person."""
+    from agentic_editor.animate.plan import MIN_COUNTRIES
+
+    where = [
+        (si, ii)
+        for si, s in enumerate(plan.scenes)
+        if s.visual.kind == "country"
+        for ii in range(len(s.visual.items))
+    ]
+    if not where:
+        return plan, []
+    lines = [
+        f"{n}. {plan.scenes[si].visual.text}: {plan.scenes[si].visual.items[ii].text}"
+        for n, (si, ii) in enumerate(where, 1)
+    ]
+    reply = llm.chat_json(
+        [{"role": "user", "content": (
+            f"A reel's topic: {idea}\nEach line is a country and a thing the reel says that "
+            "country has:\n" + "\n".join(lines) + "\n\nWhich lines are wrong: the thing "
+            "doesn't fit the topic, or it isn't really from (or famous in) that country? "
+            "Answer with their numbers; an empty list if every line is right."
+        )}],
+        VET_SCHEMA,
+        temperature=0.0,
+    )  # fmt: skip
+    wrong = {int(n) - 1 for n in reply.get("wrong", []) if str(n).lstrip("-").isdigit()}
+    wrong = {n for n in wrong if 0 <= n < len(where)}
+    if not wrong or len(wrong) > VET_MOST * len(where):
+        return plan, []
+    gone = {where[n] for n in wrong}
+    scenes, left_out = [], []
+    countries = sum(1 for s in plan.scenes if s.visual.kind == "country")
+    for si, scene in enumerate(plan.scenes):
+        if scene.visual.kind != "country":
+            scenes.append(scene)
+            continue
+        items = [i for ii, i in enumerate(scene.visual.items) if (si, ii) not in gone]
+        dropped = [i.text for ii, i in enumerate(scene.visual.items) if (si, ii) in gone]
+        if not items and countries > MIN_COUNTRIES:
+            countries -= 1
+            left_out.append(scene.visual.text)
+            continue
+        if not items:  # too few countries to lose this one: kept as written
+            scenes.append(scene)
+            continue
+        left_out += [f"{scene.visual.text}: {d}" for d in dropped]
+        scenes.append(
+            scene.model_copy(update={"visual": scene.visual.model_copy(update={"items": items})})
+        )
+    note = ["left out as not fitting the topic: " + ", ".join(left_out)] if left_out else []
+    return plan.model_copy(update={"scenes": scenes}), note
+
+
 def draft(llm, idea: str, length: str, sources_text: str, sources, voice: str, known=None):
-    """A first World map Plan for `idea`, and what is still off about it."""
+    """A first World map Plan for `idea`, and what is still off about it: written, checked
+    line by line (vet), and said the reference way again."""
     user = (
         f"{_brief_text(idea, length)}\n\nSources (use their facts where they help; most of "
         f"a reel like this is common knowledge):\n{sources_text}"
     )
     messages = [{"role": "system", "content": GUIDE}, {"role": "user", "content": user}]
-    return _ask(llm, messages, sources, voice, length, known, temperature=0.7)
+    plan, _ = _ask(llm, messages, sources, voice, length, known, temperature=0.7)
+    try:
+        plan, removed = vet(llm, plan, idea)
+    except LLMError as exc:  # unchecked rather than lost
+        log.warning("checking the World map tour failed: %s", exc)
+        removed = []
+    plan = tighten(plan, length)
+    return plan, [*removed, *_wrong(plan, length, known)]
 
 
 def change(llm, plan: Plan, idea: str, request: str, length: str, known=None):

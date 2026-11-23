@@ -2044,7 +2044,9 @@
       // All of it once more, every card small on it, before flying on.
       const end = cards.length ? cards[cards.length - 1] : beats[0] || sc.start;
       const back = Math.max(end + 0.85, sc.end - 0.75, last);
-      if (back < sc.end - 0.15) keys.push({ t: back, dur: Math.min(0.6, sc.end - back), to: { lon, lat, w: fit } });
+      // Close enough that its cards still read, as the reference pulls back (the whole
+      // country is all but in view).
+      if (back < sc.end - 0.15) keys.push({ t: back, dur: Math.min(0.6, sc.end - back), to: { lon, lat, w: fit * 0.86 } });
     });
     keys.sort((a, b) => a.t - b.t);
     // Each move starts from wherever the camera is when it starts (mid-move or drifting).
