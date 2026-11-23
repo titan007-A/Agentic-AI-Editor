@@ -78,6 +78,8 @@ export type FeedFields = {
   topic: string | null;
   /** The folder on the piles its videos go in; null: straight in the preset's folder. */
   folder: string | null;
+  /** Each day's videos in a folder of that day inside it ("23-NOV"). */
+  dated: boolean;
 };
 
 export type FeedItem = {
@@ -895,6 +897,29 @@ export type AnimationAutopilot = {
   channels: { id: string; username: string }[];
 };
 
+/** The account's morning Kick clips (Kick Clipper tab, "Every morning"). */
+export type KickDaily = {
+  on: boolean;
+  /** Local hour it starts (0-23). */
+  hour: number;
+  streamers: string[];
+  /** Clips from GTA streams, filed into "DD-MON-GTA". */
+  gta: number;
+  /** Clips from the other streams, filed into "DD-MON-FOOTAGE". */
+  footage: number;
+  /** Newest finished streams looked at per streamer. */
+  streams: number;
+  last_on: string;
+  last_result: string;
+  facecam_preset: string;
+  full_preset: string;
+};
+
+export type KickDailyRequest = Pick<
+  KickDaily,
+  "on" | "hour" | "streamers" | "gta" | "footage" | "streams"
+>;
+
 /** A Kick streamer the account clips (Kick Clipper tab); `live`: clipped while it streams. */
 export type KickStreamer = {
   id: string;
@@ -1043,6 +1068,8 @@ export const api = {
   removeKickStreamer: (id: string) => request<{ ok: boolean }>("DELETE", `/kick/streamers/${id}`),
   kickStreams: (name: string) =>
     request<KickStreams>("GET", `/kick/streams?name=${encodeURIComponent(name)}`),
+  kickDaily: () => request<KickDaily>("GET", "/kick/daily"),
+  setKickDaily: (body: KickDailyRequest) => request<KickDaily>("PUT", "/kick/daily", body),
   kickHunts: () => request<KickHunt[]>("GET", "/kick/hunts"),
   kickHunt: (id: string) => request<KickHunt>("GET", `/kick/hunts/${id}`),
   startKickHunt: (body: KickHuntRequest) => request<KickHunt>("POST", "/kick/hunts", body),

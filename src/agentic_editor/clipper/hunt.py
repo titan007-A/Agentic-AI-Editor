@@ -148,6 +148,7 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
         )  # fmt: skip
         slug, channel_id, live, count = hunt.slug, hunt.channel_id, hunt.live, hunt.count
         wanted = (hunt.start, hunt.end)
+        avoid = clipped_before(db, hunt)
     if not stream.source:
         raise kick.KickError("Kick hasn't made this stream's video yet; try again in a while")
     variants = client.variants(stream.source)
@@ -177,7 +178,7 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
     sampled = (reach - start) / CHAT_READS > kick.CHAT_SPAN
     regions = []
     if sampled or end - start > LOUD_MOST:
-        rough = moments.find(start, end, count * 3, lines, read, None, clips)
+        rough = moments.find(start, end, count * 3, lines, read, None, clips, avoid=avoid)
         regions = regions_of(rough, start, end)
     if sampled and regions:
         told("reading the chat around the likely moments")
@@ -193,7 +194,7 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
         log.warning("hunt %s: the stream's sound couldn't be read: %s", hunt_id, exc)
         loudness = None
     least = moments.STRONG if live else 0.0
-    found = moments.find(start, end, count, lines, read, loudness, clips, least=least)
+    found = moments.find(start, end, count, lines, read, loudness, clips, least=least, avoid=avoid)
     if not found:
         _set(
             Session, hunt_id, status="done", moments=[],
@@ -219,6 +220,25 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
         message += f" ({len(found) - len(made)} couldn't be cut)"
     _set(Session, hunt_id, status="done", moments=kept, message=message)
     return made
+
+
+def clipped_before(db, hunt: KickHunt) -> list[tuple[float, float]]:
+    """The clips the same account's other hunts already made of this stream, so a new hunt
+    of it finds other moments (seconds into the stream)."""
+    if not hunt.stream_id:
+        return []
+    others = db.scalars(
+        select(KickHunt).where(
+            KickHunt.stream_id == hunt.stream_id, KickHunt.id != hunt.id,
+            KickHunt.owner_id.is_(None) if hunt.owner_id is None
+            else KickHunt.owner_id == hunt.owner_id,
+        )
+    ).all()  # fmt: skip
+    return [
+        (float(m["start"]), float(m["end"]))
+        for other in others for m in (other.moments or [])
+        if m.get("job_id") and m.get("start") is not None and m.get("end") is not None
+    ]  # fmt: skip
 
 
 def _moment_view(moment: moments.Moment) -> dict:

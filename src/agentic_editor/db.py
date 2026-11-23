@@ -219,6 +219,8 @@ class Feed(Base):
     # The folder its finished videos go in, inside their preset's folder on the piles
     # (PileFolder, made the first time); None: straight in the preset's folder.
     folder: Mapped[str | None] = mapped_column(Text)
+    # Each day's videos in a folder of that day inside it ("23-NOV"), so days stay apart.
+    dated: Mapped[bool] = mapped_column(default=True)
     # Whether the first look, which notes what is already there, has been made. A new feed
     # starts without it; feeds saved before this column existed had made it, so the column
     # is added to them as true.

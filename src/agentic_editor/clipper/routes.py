@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from agentic_editor import features, jobs
-from agentic_editor.clipper import hunt, kick
+from agentic_editor.clipper import daily, hunt, kick
 from agentic_editor.db import Job, KickHunt, KickStreamer, Output
 
 FEATURE = hunt.FEATURE
@@ -36,6 +36,15 @@ class StreamerChange(BaseModel):
     preset: str | None = Field(default=None, max_length=64)
     per_hour: int | None = Field(default=None, ge=1, le=12)
     folder: str | None = Field(default=None, max_length=80)
+
+
+class DailyRequest(BaseModel):
+    on: bool = False
+    hour: int = Field(default=8, ge=0, le=23)
+    streamers: list[str] = Field(default_factory=list, max_length=20)  # names or links
+    gta: int = Field(default=15, ge=0, le=60)
+    footage: int = Field(default=20, ge=0, le=60)
+    streams: int = Field(default=3, ge=1, le=5)
 
 
 class HuntRequest(BaseModel):
@@ -321,3 +330,34 @@ def install(app, *, User, DB, renders_of, sees_every_render, presets_of, client=
         session.delete(found)
         session.commit()
         return {"ok": True}
+
+    def daily_view(d: daily.Daily) -> dict:
+        return {**d.model_dump(), "facecam_preset": daily.FACECAM, "full_preset": daily.FULL}
+
+    @app.get("/api/kick/daily")
+    def get_daily(account: User, session: DB) -> dict:
+        """The account's morning clips (clipper/daily.py)."""
+        clipper_user(account, session)
+        return daily_view(daily.load(session, account.id))
+
+    @app.put("/api/kick/daily")
+    def set_daily(body: DailyRequest, account: User, session: DB) -> dict:
+        clipper_user(account, session)
+        names = []
+        for given in body.streamers:
+            if not given.strip():
+                continue
+            try:
+                link = kick.parse_link(given)
+            except kick.KickError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            if not link.slug:
+                raise HTTPException(422, f"{given!r} isn't a streamer's name or channel link")
+            names.append(link.slug)
+        found = daily.load(session, account.id)
+        changed = found.model_copy(update={**body.model_dump(), "streamers": names})
+        if body.on and not changed.streamers:
+            raise HTTPException(422, "add the streamers to clip every morning")
+        daily.save(session, account.id, daily.Daily.model_validate(changed.model_dump()))
+        session.commit()
+        return daily_view(daily.load(session, account.id))

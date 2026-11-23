@@ -52,6 +52,7 @@ from agentic_editor.animate import schedule as animate_schedule
 from agentic_editor.animate import studio
 from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
+from agentic_editor.clipper import daily as kick_daily
 from agentic_editor.clipper import hunt as kick_hunt
 from agentic_editor.clipper import routes as kick_routes
 from agentic_editor.db import (
@@ -541,6 +542,8 @@ class FeedRequest(BaseModel):
     topic: str | None = Field(default=None, max_length=200)
     # The folder on the piles its videos go in; None: straight in the preset's folder.
     folder: str | None = Field(default=None, max_length=80)
+    # Each day's videos in a folder of that day inside it ("23-NOV").
+    dated: bool = True
 
 
 class FeedItemView(BaseModel):
@@ -799,6 +802,10 @@ def create_app(
                 await asyncio.to_thread(jobs.start_niche_schedules, make_session)
             except Exception:
                 log.exception("starting the scheduled niche searches failed")
+            try:
+                await asyncio.to_thread(kick_daily.start_due, make_session)
+            except Exception:
+                log.exception("starting the morning Kick clips failed")
             try:
                 await asyncio.to_thread(animate_schedule.start_due, make_session)
             except Exception:

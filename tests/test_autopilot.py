@@ -456,11 +456,12 @@ def test_a_feeds_finished_videos_go_in_its_folder_made_once(Session):
         for job in db.query(Job).all():
             job.outputs.append(Output(preset="p", path="/o.mp4", duration=10, planner="m", edl={}))
             db.flush()
-            autopilot.file_outputs(db, job)
+            autopilot.file_outputs(db, job, now=datetime(2026, 11, 24, 9))
         db.commit()
         mine = db.query(PileFolder).filter_by(owner_id="emp1", preset="p").all()
-        assert [f.name for f in mine] == ["GTA-kick"]
-        assert {o.folder_id for o in db.query(Output)} == {mine[0].id}
+        assert [f.name for f in mine] == ["GTA-kick", "24-NOV"]  # the day's folder inside
+        assert mine[1].parent_id == mine[0].id
+        assert {o.folder_id for o in db.query(Output)} == {mine[1].id}
 
 
 def test_a_feed_without_a_folder_leaves_its_videos_in_the_presets_folder(Session):
