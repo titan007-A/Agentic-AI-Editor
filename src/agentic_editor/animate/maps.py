@@ -135,7 +135,7 @@ def fetch(models_dir: Path, progress=None, download=None) -> Path:
             progress(f"downloading the world map ({name})")
             with logs.download_progress(f"the world map's {name}", out):
                 partial = path.with_suffix(f".{os.getpid()}.part")
-                (download or _download)(url, partial)
+                (download or DOWNLOAD)(url, partial)
                 found = hashlib.sha256(partial.read_bytes()).hexdigest()
                 if found != digest:
                     partial.unlink(missing_ok=True)
@@ -169,6 +169,9 @@ def _download(url: str, dest: Path, tries: int = 4, pause: float = 10.0) -> None
                 raise
         log.info("the map's server is busy; asking again in %.0f s", pause * (attempt + 1))
         time.sleep(pause * (attempt + 1))
+
+
+DOWNLOAD = _download  # how fetch downloads (tests put a stop to it)
 
 
 def tone(pixels: np.ndarray) -> np.ndarray:

@@ -226,11 +226,11 @@ def test_a_world_map_reel_flies_lights_the_country_and_pins_its_cards(tmp_path, 
     data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, models)
     assert data["map"]["tiles"] and data["map"]["levels"] == 1
     usa = data["scenes"][1]
-    card_at = usa["beats"][1] + 0.6  # the first card has popped and the camera is on it
+    card_at = usa["beats"][1] + 0.22  # the first card has popped, the camera is on it
     data["duration"] = round(card_at + 0.5, 2)
     opts = render.options(ROOT / "fonts", models)
     shown = Image.open(render.frame(data, opts, card_at, tmp_path / "shown.jpg")).convert("RGB")
-    r, g, b = shown.getpixel((540, 700))  # the card, white
+    r, g, b = shown.getpixel((390, 590))  # the card, white (beside its picture)
     assert min(r, g, b) > 225, (r, g, b)
     r, g, b = shown.getpixel((90, 1650))  # the lit country: the land under purple
     assert b > g + 20 and r > g, (r, g, b)
