@@ -12,12 +12,16 @@ looks wrong. A face that fills much of the picture with no box round it is a str
 is all camera ("full")."""
 
 import itertools
+import json
 import logging
-from dataclasses import dataclass
+import os
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
+from agentic_editor import ffmpeg
 from agentic_editor.analysis import layout
 
 log = logging.getLogger(__name__)
@@ -31,6 +35,9 @@ FRAME_SIDE = 0.6  # what the frame's own edge scores as a side of the box
 SURE = 0.55  # a box scoring under this isn't trusted
 STRIP = 8  # px either side of a line compared
 CANDIDATES = 6  # lines tried per side, besides the frame's edge
+# Least height of a camera, in faces: a streamer close to the camera fills much of it, the
+# chin just above its bottom edge.
+TALLEST_FACE = 1.5
 FULL_FACE = 0.08  # a face this wide (share of the picture) with no box: all camera
 FULL_AREA = 0.55  # a box this much of the picture: all camera
 
@@ -38,15 +45,17 @@ FULL_AREA = 0.55  # a box this much of the picture: all camera
 @dataclass(frozen=True)
 class Camera:
     """The camera in source pixels: `box` (x, y, width, height) of the camera, None when
-    the picture is all camera, and the streamer's `face` (x, y, width, height)."""
+    the picture is all camera, and the streamer's `face` (x, y, width, height). Not `sure`:
+    a face stayed put but no box round it was sure (no box, and not all camera either)."""
 
     face: tuple[int, int, int, int] | None
     box: tuple[int, int, int, int] | None
     score: float = 0.0
+    sure: bool = True
 
     @property
     def full(self) -> bool:
-        return self.box is None
+        return self.box is None and self.sure
 
 
 def inside(face: tuple[int, int, int, int] | None, box: tuple[int, int, int, int]) -> bool:
@@ -158,9 +167,8 @@ def _lines(picture: Picture, face: tuple[float, ...], side: str) -> list[int]:
         )
     else:
         start, end = x - 0.6 * w, x + 1.6 * w
-        places = (
-            range(int(y - 0.4 * h), 0, -1) if side == "top" else range(int(y + 1.6 * h), height - 1)
-        )
+        below = y + (TALLEST_FACE - 0.4) * h  # the top is 0.4 of a face above it at least
+        places = range(int(y - 0.4 * h), 0, -1) if side == "top" else range(int(below), height - 1)
     scored = sorted(
         ((_coverage(edges, at, start, end, vertical), at) for at in places), reverse=True
     )
@@ -236,7 +244,7 @@ def camera_box(
     best = None
     for left, right, top, bottom in itertools.product(*(options[s] for s in SIDES)):
         wide, tall = right - left, bottom - top
-        if wide < 2 * w or tall < 1.8 * h or not 0.75 <= wide / tall <= 2.4:
+        if wide < 2 * w or tall < TALLEST_FACE * h or not 0.75 <= wide / tall <= 2.4:
             continue
         if (left == 0) + (right == width) + (top == 0) + (bottom == height) > 2:
             continue  # a box on three edges is the whole picture's width or height
@@ -262,6 +270,19 @@ def find(
 ) -> Camera | None:
     """The streamer's camera in `video` between `start` and `end`, in source pixels; None
     when no face stays put (no streamer on camera) or no box round it is sure."""
+    camera = look(video, start, end, source, models_dir, ffmpeg_bin)
+    return camera if camera is not None and camera.sure else None
+
+
+def look(
+    video: Path,
+    start: float,
+    end: float,
+    source: tuple[int, int],
+    models_dir: Path,
+    ffmpeg_bin: str,
+) -> Camera | None:
+    """As find, with the face kept when no box round it is sure (a Camera not `sure`)."""
     width = WIDTH
     height = max(2, round(WIDTH * source[1] / source[0] / 2) * 2)
     frames = layout.sample(
@@ -281,10 +302,72 @@ def find(
         if face[2] / width >= FULL_FACE:
             return Camera(in_source, None, found[1] if found else 0.0)
         log.info("facecam: no sure camera box round the face at %s (%s)", in_source, found)
-        return None
+        return Camera(in_source, None, found[1] if found else 0.0, sure=False)
     (left, top, right, bottom), score = found
     if (right - left) * (bottom - top) / (width * height) >= FULL_AREA:
         return Camera(in_source, None, score)
     box = (round(left * scale), round(top * scale), round((right - left) * scale),
            round((bottom - top) * scale))  # fmt: skip
     return Camera(in_source, box, score)
+
+
+def holds(box: tuple[int, int, int, int], face: tuple[int, int, int, int] | None) -> bool:
+    """Whether `box` could be the camera round `face`: the face's middle in it, the box of
+    a camera's size for that face (as camera_box asks)."""
+    return (
+        face is not None and inside(face, box)
+        and box[2] >= 2 * face[2] and box[3] >= TALLEST_FACE * face[3]
+    )  # fmt: skip
+
+
+def kept(video: Path, models_dir: Path, ffmpeg_bin: str) -> Camera | None:
+    """The camera found in the whole of `video`, kept beside it (<name>.camera.json) so a
+    video is looked at once."""
+    keep = video.with_name(f"{video.stem}.camera.json")
+    try:
+        data = json.loads(keep.read_text(encoding="utf-8"))
+        if data is None:
+            return None
+        return Camera(*(tuple(data[k]) if data[k] else None for k in ("face", "box")),
+                      float(data["score"]), bool(data["sure"]))  # fmt: skip
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    info = ffmpeg.probe(video)
+    camera = look(video, 0.0, info.duration, (info.width, info.height), models_dir, ffmpeg_bin)
+    part = keep.with_name(f".{keep.name}.{os.getpid()}")
+    part.write_text(json.dumps(asdict(camera) if camera else None), encoding="utf-8")
+    part.replace(keep)
+    return camera
+
+
+def in_stream(
+    video: Path,
+    start: float,
+    end: float,
+    source: tuple[int, int],
+    models_dir: Path,
+    ffmpeg_bin: str,
+    fellows: Sequence[Path] = (),
+) -> Camera | None:
+    """As find, for a clip of a stream whose other clips are `fellows` (the moments of one
+    Kick hunt): a stream's camera stays where it is, so the surest box found in any of them
+    that could be the camera round this clip's face is taken over a box found less sure
+    here, or none (a busy game's lines can hide the camera's edge in one clip and not in
+    the next)."""
+    own = look(video, start, end, source, models_dir, ffmpeg_bin)
+    best = None
+    if own is not None and fellows:
+        for other in fellows:
+            try:
+                seen = kept(other, models_dir, ffmpeg_bin)
+            except Exception as exc:  # the clip's own look still stands
+                log.warning("facecam: looking at %s failed: %s", other, exc)
+                continue
+            fits = seen is not None and seen.sure and seen.box and holds(seen.box, own.face)
+            if fits and (best is None or seen.score > best.score):
+                best = seen
+    if best is not None and (not own.sure or own.box is None or best.score > own.score):
+        log.info("facecam: the camera another clip of the stream found, %s (%.2f), over this "
+                 "clip's %s (%.2f)", best.box, best.score, own.box, own.score)  # fmt: skip
+        return Camera(own.face, best.box, best.score)
+    return own if own is not None and own.sure else None

@@ -107,6 +107,9 @@ class TextBlock(Strict):
     # px of outline round the letters, for text over the video (0: none).
     outline: float = Field(default=0, ge=0, le=20)
     outline_color: Color = "#000000"
+    # Across the frame: each line centred, or against the left or right edge, `inset` px in.
+    align: Literal["center", "left", "right"] = "center"
+    inset: int = Field(default=0, ge=0, le=2000, description="px in from the edge it is aligned to")
 
     def filled(self, text: str, fill: Callable[[str], str]) -> "TextBlock":
         """The block showing `text`, its words in braces filled by `fill`, with its coloured

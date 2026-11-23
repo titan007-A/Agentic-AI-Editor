@@ -434,9 +434,8 @@ def render_checked(
 
 
 def _wide_overlap(block: text.Placed, box: tuple[int, int, int, int], width: int) -> bool:
-    """Whether a picture's columns meet a centred text block's widest line."""
-    wide = max(block.font.length(line, block.size) for line in block.lines)
-    left, right = (width - wide) / 2, (width + wide) / 2
+    """Whether a picture's columns meet a text block's lines."""
+    left, right = block.columns(width)
     return min(right, box[2]) - max(left, box[0]) > 2
 
 
