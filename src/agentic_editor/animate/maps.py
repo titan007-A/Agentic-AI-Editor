@@ -23,7 +23,9 @@ import math
 import os
 import re
 import threading
+import time
 import unicodedata
+import urllib.error
 import urllib.request
 from functools import lru_cache
 from pathlib import Path
@@ -148,11 +150,25 @@ def fetch(models_dir: Path, progress=None, download=None) -> Path:
     return out
 
 
-def _download(url: str, dest: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "agentic-editor-maps/1.0"})
-    with urllib.request.urlopen(request, timeout=600) as answer, dest.open("wb") as f:
-        while chunk := answer.read(1 << 20):
-            f.write(chunk)
+def _download(url: str, dest: Path, tries: int = 4, pause: float = 10.0) -> None:
+    """`url` into `dest`; asked again a few times when the site says it's busy (Wikimedia
+    answers 429 now and then)."""
+    agent = "agentic-editor-maps/1.0 (a video editor fetching public-domain map data once)"
+    request = urllib.request.Request(url, headers={"User-Agent": agent})
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(request, timeout=600) as answer, dest.open("wb") as f:
+                while chunk := answer.read(1 << 20):
+                    f.write(chunk)
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == tries - 1:
+                raise
+        log.info("the map's server is busy; asking again in %.0f s", pause * (attempt + 1))
+        time.sleep(pause * (attempt + 1))
 
 
 def tone(pixels: np.ndarray) -> np.ndarray:

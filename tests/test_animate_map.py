@@ -662,3 +662,38 @@ def test_things_that_dont_belong_are_left_out_after_a_line_by_line_check():
     model = MapModel(map_reply(), wrong=list(range(1, 9)))
     plan, notes = planner.draft(model, brief, [])
     assert sum(len(s.visual.items) for s in plan.scenes) == 12 and not notes
+
+
+def test_a_busy_map_server_is_asked_again(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    answers = [
+        urllib.error.HTTPError("u", 429, "Too many requests", {}, None),
+        io.BytesIO(b"the earth"),
+    ]
+
+    class Answer:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self.body
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(request, timeout):
+        got = answers.pop(0)
+        if isinstance(got, Exception):
+            raise got
+        return Answer(got)
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    dest = tmp_path / "earth.jpg"
+    maps._download("https://example.org/earth.jpg", dest, pause=0)
+    assert dest.read_bytes() == b"the earth" and not answers
+    answers[:] = [urllib.error.HTTPError("u", 404, "Not found", {}, None)]
+    with pytest.raises(urllib.error.HTTPError):
+        maps._download("https://example.org/earth.jpg", dest, pause=0)
