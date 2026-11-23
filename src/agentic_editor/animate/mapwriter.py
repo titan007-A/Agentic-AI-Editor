@@ -26,6 +26,7 @@ from agentic_editor.animate.plan import (
     Scene,
     Source,
     Visual,
+    narration_words,
     problems,
     tidy,
 )
@@ -537,11 +538,38 @@ def _brief_text(idea: str, length: str) -> str:
 
 VET_SCHEMA = {
     "type": "object",
-    "properties": {"wrong": {"type": "array", "items": {"type": "integer"}}},
-    "required": ["wrong"],
+    "properties": {
+        "lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer"},
+                    "is_one": {"type": "boolean"},
+                    "from_there": {"type": "boolean"},
+                },
+                "required": ["n", "is_one", "from_there"],
+            },
+        }
+    },
+    "required": ["lines"],
 }
+# The kind of thing a topic is about: "inventions" in "Most famous inventions from every
+# country".
+KIND_OF = re.compile(
+    r"(?:most\s+(?:famous|popular|iconic|haunted)|popular|famous|biggest|best|greatest)\s+"
+    r"(.+?)\s+(?:from|in|of|around)\b",
+    re.I,
+)
+
+
+def kind_of(idea: str) -> str:
+    found = KIND_OF.search(idea)
+    return found.group(1).strip() if found else idea.strip()
+
+
 # A check that finds more than this share wrong has misread the question: it is ignored.
-VET_MOST = 0.4
+VET_MOST = 0.6
 
 
 def vet(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
@@ -564,17 +592,24 @@ def vet(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
         f"{n}. {plan.scenes[si].visual.text}: {plan.scenes[si].visual.items[ii].text}"
         for n, (si, ii) in enumerate(where, 1)
     ]
+    kind = kind_of(idea)
     reply = llm.chat_json(
         [{"role": "user", "content": (
-            f"A reel's topic: {idea}\nEach line is a country and a thing the reel says that "
-            "country has:\n" + "\n".join(lines) + "\n\nWhich lines are wrong: the thing "
-            "doesn't fit the topic, or it isn't really from (or famous in) that country? "
-            "Answer with their numbers; an empty list if every line is right."
+            f"A reel's topic: {idea}. Its things must be {kind}.\n"
+            "Each line is a country and a thing the reel names for it:\n" + "\n".join(lines)
+            + f"\n\nFor every line answer: is_one: is the thing itself one of the {kind} "
+            f"(not just something the country is known for)? from_there: does it really come "
+            "from that country, or is it most famous there? Be strict."
         )}],
         VET_SCHEMA,
         temperature=0.0,
     )  # fmt: skip
-    wrong = {int(n) - 1 for n in reply.get("wrong", []) if str(n).lstrip("-").isdigit()}
+    wrong = set()
+    for line in reply.get("lines", []):
+        if not isinstance(line, dict) or not str(line.get("n", "")).lstrip("-").isdigit():
+            continue
+        if line.get("is_one") is False or line.get("from_there") is False:
+            wrong.add(int(line["n"]) - 1)
     wrong = {n for n in wrong if 0 <= n < len(where)}
     if not wrong or len(wrong) > VET_MOST * len(where):
         return plan, []
@@ -611,13 +646,40 @@ def draft(llm, idea: str, length: str, sources_text: str, sources, voice: str, k
     )
     messages = [{"role": "system", "content": GUIDE}, {"role": "user", "content": user}]
     plan, _ = _ask(llm, messages, sources, voice, length, known, temperature=0.7)
-    try:
-        plan, removed = vet(llm, plan, idea)
-    except LLMError as exc:  # unchecked rather than lost
-        log.warning("checking the World map tour failed: %s", exc)
-        removed = []
+    plan, removed = _vetted(llm, plan, idea)
+    low = MAP_WORDS.get(length, MAP_WORDS["auto"])[0]
+    if removed and narration_words(plan) < low * 0.9:
+        # Much of it didn't belong: written once more with real ones instead, and checked.
+        ask = (
+            f"{removed[0]}. Write the whole reel again with real {kind_of(idea)} instead, the "
+            "things each country is truly famous for: 3-5 for each big country."
+        )
+        again = [
+            *messages,
+            {"role": "assistant", "content": json.dumps(to_reply(plan), ensure_ascii=False)},
+            {"role": "user", "content": ask},
+        ]
+        try:
+            second = tighten(
+                to_plan(llm.chat_json(again, SCHEMA, temperature=0.5), sources, voice), length
+            )
+            second, removed_again = _vetted(llm, second, idea)
+            if narration_words(second) > narration_words(plan) and len(
+                _wrong(second, length, known)
+            ) <= len(_wrong(plan, length, known)):
+                plan, removed = second, [*removed, *removed_again]
+        except LLMError as exc:
+            log.warning("writing the World map tour again failed: %s", exc)
     plan = tighten(plan, length)
     return plan, [*removed, *_wrong(plan, length, known)]
+
+
+def _vetted(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
+    try:
+        return vet(llm, plan, idea)
+    except LLMError as exc:  # unchecked rather than lost
+        log.warning("checking the World map tour failed: %s", exc)
+        return plan, []
 
 
 def change(llm, plan: Plan, idea: str, request: str, length: str, known=None):

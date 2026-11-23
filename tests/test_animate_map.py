@@ -243,7 +243,8 @@ TOUR = [
 
 class MapModel(Writer):
     """The planner model for World map reels: the writer's replies in turn, and the line
-    by line check (mapwriter.vet) answered with `wrong`."""
+    by line check (mapwriter.vet) answered with `wrong` (the lines it calls wrong, the same
+    each time, or one list per check)."""
 
     def __init__(self, *replies, wrong=()):
         super().__init__(*replies)
@@ -253,7 +254,14 @@ class MapModel(Writer):
     def chat_json(self, messages, schema, temperature=0.3):
         if schema is mapwriter.VET_SCHEMA:
             self.vetted.append(messages)
-            return {"wrong": self.wrong}
+            each = self.wrong and isinstance(self.wrong[0], list)
+            wrong = (self.wrong.pop(0) if self.wrong else []) if each else self.wrong
+            count = messages[0]["content"].count("\n") + 1
+            return {
+                "lines": [
+                    {"n": n, "is_one": n not in wrong, "from_there": True} for n in range(1, count)
+                ]
+            }
         return super().chat_json(messages, schema, temperature)
 
 
@@ -648,20 +656,38 @@ def test_a_line_asked_for_twice_at_once_is_spoken_once(tmp_path, monkeypatch):
 def test_things_that_dont_belong_are_left_out_after_a_line_by_line_check():
     tour = [*TOUR, country("Canada", "Canada has maple syrup.", "maple syrup")]
     # Lines: 1-3 the US, 4-5 the UK, 6-7 France, 8-9 Italy, 10 Holland, 11-12 Japan, 13 Canada.
-    model = MapModel(map_reply(countries=tour), wrong=[2, 13])
+    # (Short of words afterwards: written again, the same, so the first stays.)
+    model = MapModel(map_reply(countries=tour), map_reply(countries=tour), wrong=[2, 13])
     brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
     plan, notes = planner.draft(model, brief, [])
     asked = model.vetted[0][0]["content"]
     assert "1. The United States: apple pie" in asked and "13. Canada: maple syrup" in asked
+    assert "Its things must be desserts." in asked
+    assert mapwriter.kind_of("Most haunted places from every country") == "places"
+    assert mapwriter.kind_of("Popular car brands in different countries") == "car brands"
     usa = plan.scenes[1]
     assert [i.text for i in usa.visual.items] == ["apple pie", "cheesecake"]
     assert usa.narration == "The United States has apple pie and cheesecake."
     assert "Canada" not in [s.visual.text for s in plan.scenes]
     assert notes[0] == "left out as not fitting the topic: The United States: brownies, Canada"
     # A check that calls most of it wrong has misread the question: nothing is left out.
-    model = MapModel(map_reply(), wrong=list(range(1, 9)))
+    model = MapModel(map_reply(), wrong=list(range(1, 10)))
     plan, notes = planner.draft(model, brief, [])
     assert sum(len(s.visual.items) for s in plan.scenes) == 12 and not notes
+    # Too little left: written once more with real ones, and that is checked too.
+    short = planner.Brief("Most famous desserts from every country", style="map", length="short")
+    better = [dict(c) for c in TOUR]
+    better[0] = country(
+        "The United States",
+        "The United States has apple pie, pecan pie, key lime pie, and cheesecake.",
+        "apple pie", "pecan pie", "key lime pie", "cheesecake",
+    )  # fmt: skip
+    model = MapModel(map_reply(), map_reply(countries=better), wrong=[[2, 3, 4, 5, 6, 7], [3]])
+    plan, notes = planner.draft(model, short, [])
+    assert len(model.vetted) == 2
+    assert "Write the whole reel again with real desserts" in model.asked[-1][-1]["content"]
+    assert [i.text for i in plan.scenes[1].visual.items] == ["apple pie", "pecan pie", "cheesecake"]
+    assert notes[1] == "left out as not fitting the topic: The United States: key lime pie"
 
 
 def test_a_busy_map_server_is_asked_again(tmp_path, monkeypatch):
