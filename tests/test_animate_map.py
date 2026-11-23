@@ -742,3 +742,14 @@ def test_the_tours_opening_country_is_never_left_out_whole():
     countries = [s.visual.text for s in plan.scenes if s.visual.kind == "country"]
     assert countries[0] == "The United States" and "Holland" not in countries
     assert len(plan.scenes[1].visual.items) == 3  # kept as written
+
+
+def test_a_world_map_reel_is_encoded_lighter(monkeypatch, tmp_path):
+    from agentic_editor.animate import render
+
+    asked = []
+    monkeypatch.setattr(render.subprocess, "Popen", lambda cmd, **kw: asked.append(cmd))
+    render._encoder(tmp_path / "a.mp4", 30, render.CRFS.get("map", render.CRF))
+    render._encoder(tmp_path / "b.mp4", 30)
+    crf = [cmd[cmd.index("-crf") + 1] for cmd in asked]
+    assert crf == ["22", "17"]

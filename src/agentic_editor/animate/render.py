@@ -27,6 +27,10 @@ PLAYER = Path(__file__).parent / "player"
 FPS = 30
 SIZE = (1080, 1920)
 CRF = "17"
+# A moving satellite map is detail in every pixel of every frame: at 17 a World map reel
+# came to 10 Mbit/s (111 MB for 88 s). At 22 it is about 5 (SSIM 0.99 against 17), still
+# well above what Instagram keeps.
+CRFS = {"map": "22"}
 # Frames leave the browser as JPEG: half the time of PNG, and at this quality nothing the
 # H.264 encode after it keeps (both are 4:2:0).
 JPEG_QUALITY = 95
@@ -62,11 +66,11 @@ def options(fonts_dir: Path, models_dir: Path, images_dir: Path | None = None) -
     }
 
 
-def _encoder(dest: Path, fps: int) -> subprocess.Popen:
+def _encoder(dest: Path, fps: int, crf: str = CRF) -> subprocess.Popen:
     settings = get_settings()
     cmd = [
         settings.ffmpeg_bin, "-v", "error", "-y", "-f", "image2pipe", "-framerate", str(fps),
-        "-c:v", "mjpeg", "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", CRF,
+        "-c:v", "mjpeg", "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", crf,
         "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart", str(dest),
     ]  # fmt: skip
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -81,7 +85,7 @@ async def _range(
     try:
         await page.goto((PLAYER / "player.html").as_uri())
         info = await page.evaluate("([d, o]) => window.Player.load(d, o)", [data, opts])
-        encoder = _encoder(dest, fps)
+        encoder = _encoder(dest, fps, CRFS.get(data.get("style", ""), CRF))
         try:
             for f in frames:
                 await page.evaluate("t => window.Player.seek(t)", f / fps)
