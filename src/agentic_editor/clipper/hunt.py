@@ -570,13 +570,14 @@ def new_hunt(
     streamer_id: str | None = None,
     layout: str = "auto",
     irl_preset: str = "",
+    auto: bool = False,
 ) -> KickHunt:
     found = KickHunt(
         owner_id=owner_id, streamer_id=streamer_id, slug=slug, username=username,
         channel_id=channel_id, stream_id=stream.id, uuid=stream.uuid, title=stream.title,
         started=stream.started.astimezone(UTC).replace(tzinfo=None), source=stream.source,
         start=start, end=end, count=count, preset=preset, live=live, folder=folder,
-        moments=[], layout=layout, irl_preset=irl_preset,
+        moments=[], layout=layout, irl_preset=irl_preset, auto=auto,
     )  # fmt: skip
     db.add(found)
     db.flush()

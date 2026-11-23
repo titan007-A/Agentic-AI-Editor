@@ -9,8 +9,9 @@ does, autopilot.judge_topic). `gta` clips are shared out over the GTA streams an
 `footage` over the others, a streamer at a time in turn, and filed into the day's folders
 "DD-MON-GTA" and "DD-MON-FOOTAGE" on the piles. Each clip gets its layout by what it shows
 (hunt.clip_preset): gameplay under a camera the facecam band, anything else the whole
-picture. The hunts run one after another in one worker, so the
-others stay free for people's edits; each clip is an ordinary job in the fair queue.
+picture. The hunts are queued as a schedule's (KickHunt.auto): they run one at a time and
+give way to people's own jobs (jobs.claim_hunt), and their clips wait behind people's own
+jobs in the fair queue (jobs.automatic_jobs).
 """
 
 import json
@@ -190,19 +191,22 @@ def run(
     settings,
     client=None,
     looker: Callable | None = None,
-    hunter: Callable[[str], None] | None = None,
+    queue: Callable[[str], None] | None = None,
     now: datetime | None = None,
 ) -> str:
-    """Today's clips for the account: streams picked and looked at, hunts made and run one
-    after another (`hunter`, hunt.run by default). What was done, as said on the tab."""
+    """Today's clips for the account: streams picked and looked at, hunts made and queued
+    (`queue`, jobs.hunt by default). What was done, as said on the tab."""
     from agentic_editor import accounts, autopilot
     from agentic_editor.presets import load_presets
 
+    if queue is None:
+        from agentic_editor import jobs
+
+        queue = jobs.hunt
     now = now or datetime.now()
     own_client = client is None
     client = client or kick.Client()
     looker = looker or (lambda c, s: look(c, s, settings))
-    hunter = hunter or (lambda hunt_id: hunt.run(hunt_id, Session, settings, client=client))
     try:
         with Session() as db:
             daily = load(db, owner_id)
@@ -250,7 +254,7 @@ def run(
             for p, count, folder in plan:
                 found = hunt.new_hunt(
                     db, owner_id, p.slug, p.username, p.channel_id, p.stream, 0.0, 0.0,
-                    count, chosen, folder=folder, irl_preset=full,
+                    count, chosen, folder=folder, irl_preset=full, auto=True,
                 )  # fmt: skip
                 made.append(found.id)
             db.commit()
@@ -261,10 +265,9 @@ def run(
         )
         if notes:
             result += "; " + "; ".join(notes)
-        _said(Session, owner_id, result + "; finding the moments")
         for hunt_id in made:
-            hunter(hunt_id)
-        _said(Session, owner_id, result)
+            queue(hunt_id)  # one runs at a time; the rest wait their turn (jobs.claim_hunt)
+        _said(Session, owner_id, result + "; finding the moments, one stream at a time")
         return result
     except Exception as exc:
         log.exception("the morning Kick clips of %s failed", owner_id)
