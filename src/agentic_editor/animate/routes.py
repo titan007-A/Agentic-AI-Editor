@@ -8,6 +8,7 @@ can't be changed again. Rendering makes an ordinary Job.
 import hashlib
 import re
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Literal
 
 from fastapi import HTTPException, Request
@@ -96,9 +97,55 @@ def asset_version(name: str) -> str:
     return digest
 
 
-def install(
-    app, *, User, DB, renders_of, sees_every_render, enqueue, settings, public_base
-) -> None:
+# The studio's routes: method, path and the operation (in `operations`) answering it.
+ROUTES = (
+    ("GET", "/api/animations", "list_animations"),
+    ("POST", "/api/animations", "create_animation"),
+    ("GET", "/api/animations/{animation_id}", "get_animation"),
+    ("PUT", "/api/animations/{animation_id}", "edit_animation"),
+    ("PATCH", "/api/animations/{animation_id}", "set_animation"),
+    ("POST", "/api/animations/{animation_id}/change", "change_animation"),
+    ("POST", "/api/animations/{animation_id}/retry", "retry_animation"),
+    ("POST", "/api/animations/{animation_id}/undo", "undo_animation"),
+    ("POST", "/api/animations/{animation_id}/render", "render_animation"),
+    ("DELETE", "/api/animations/{animation_id}", "delete_animation"),
+    ("GET", "/api/animations/{animation_id}/sound", "animation_sound"),
+    ("GET", "/api/animation-voices", "animation_voices"),
+    ("GET", "/api/animation-voices/{voice_id}/sample", "voice_sample"),
+    ("GET", "/api/animation-player/{name}", "player_file"),
+    ("GET", "/api/animation-autopilot", "get_autopilot"),
+    ("PUT", "/api/animation-autopilot", "set_autopilot"),
+    ("POST", "/api/animation-autopilot/now", "autopilot_now"),
+    ("POST", "/api/animations/{animation_id}/approve", "approve_animation"),
+    ("POST", "/api/animations/{animation_id}/skip", "skip_animation"),
+    ("GET", "/api/animation-images/{name}", "animation_image"),
+)
+
+
+def own_only(account, owner_id: str | None, session: Session) -> bool:
+    """`renders_of` for a caller who sees only their own animations, whoever they are."""
+    return owner_id == account.id
+
+
+def nobody_elses(account, session: Session) -> bool:
+    """`sees_every_render` for the same caller: never anyone else's."""
+    return False
+
+
+def install(app, *, renders_of, sees_every_render, **deps) -> None:
+    """Puts the studio's routes on the app (`deps` as `operations` takes them)."""
+    ops = operations(renders_of=renders_of, sees_every_render=sees_every_render, **deps)
+    for method, path, name in ROUTES:
+        app.add_api_route(path, getattr(ops, name), methods=[method])
+
+
+def operations(
+    *, User, DB, renders_of, sees_every_render, enqueue, settings, public_base
+) -> SimpleNamespace:
+    """The studio's operations, each a route's function: called by FastAPI for the web,
+    and by Claude's connection (mcp_tools) with `own_only`/`nobody_elses`, so both go
+    through the same checks and refusals (HTTPException)."""
+
     def studio_user(account, session: Session) -> None:
         if not features.enabled(account, FEATURE, session):
             raise HTTPException(403, "the animation studio isn't on for this account yet")
@@ -153,7 +200,6 @@ def install(
         jobs.animate(found.id)
         session.refresh(found)  # as it is now (the queue may have taken it up already)
 
-    @app.get("/api/animations")
     def list_animations(account: User, session: DB) -> list[dict]:
         studio_user(account, session)
         query = select(Animation).order_by(Animation.created_at.desc()).limit(100)
@@ -161,7 +207,6 @@ def install(
             query = query.where(Animation.owner_id == account.id)
         return [view(a, session) for a in session.scalars(query)]
 
-    @app.post("/api/animations")
     def create_animation(body: AnimationRequest, account: User, session: DB) -> dict:
         studio_user(account, session)
         if body.voice not in ("auto", *voice.GROUPS, *voice.BY_ID):
@@ -175,11 +220,9 @@ def install(
         queue(found, session, {"op": "draft"}, "waiting for a free slot")
         return view(found, session, full=True)
 
-    @app.get("/api/animations/{animation_id}")
     def get_animation(animation_id: str, account: User, session: DB) -> dict:
         return view(find(animation_id, session, account), session, full=True)
 
-    @app.put("/api/animations/{animation_id}")
     def edit_animation(animation_id: str, body: PlanEdit, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         idle(found)
@@ -193,7 +236,6 @@ def install(
         queue(found, session, {"op": "voice"}, "recording the voice-over")
         return view(found, session, full=True)
 
-    @app.patch("/api/animations/{animation_id}")
     def set_animation(animation_id: str, body: StudioChoice, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         idle(found)
@@ -218,7 +260,6 @@ def install(
         queue(found, session, {"op": "voice"}, "recording the voice-over")
         return view(found, session, full=True)
 
-    @app.post("/api/animations/{animation_id}/change")
     def change_animation(
         animation_id: str, body: ChangeRequest, account: User, session: DB
     ) -> dict:
@@ -237,7 +278,6 @@ def install(
         queue(found, session, task, "waiting for a free slot")
         return view(found, session, full=True)
 
-    @app.post("/api/animations/{animation_id}/retry")
     def retry_animation(animation_id: str, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         if found.status != "failed":
@@ -245,7 +285,6 @@ def install(
         queue(found, session, {"op": "voice" if found.plan else "draft"}, "waiting for a free slot")
         return view(found, session, full=True)
 
-    @app.post("/api/animations/{animation_id}/undo")
     def undo_animation(animation_id: str, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         idle(found)
@@ -256,7 +295,6 @@ def install(
         queue(found, session, {"op": "voice"}, "going back")
         return view(found, session, full=True)
 
-    @app.post("/api/animations/{animation_id}/render")
     def render_animation(animation_id: str, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         if found.status != "ready" or not found.plan:
@@ -273,7 +311,6 @@ def install(
         session.expire_all()  # the job as it is now (the queue may have taken it up already)
         return view(found, session, full=True)
 
-    @app.delete("/api/animations/{animation_id}")
     def delete_animation(animation_id: str, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         idle(found)
@@ -281,7 +318,6 @@ def install(
         session.commit()
         return {"ok": True}
 
-    @app.get("/api/animations/{animation_id}/sound")
     def animation_sound(animation_id: str, account: User, session: DB) -> FileResponse:
         found = find(animation_id, session, account)
         if not found.plan or not found.player:
@@ -292,14 +328,12 @@ def install(
             headers={"Cache-Control": "private, max-age=3600"},
         )
 
-    @app.get("/api/animation-voices")
     def animation_voices(account: User, session: DB) -> list[dict]:
         studio_user(account, session)
         return [
             {"id": v.id, "name": v.name, "group": v.group, "about": v.about} for v in voice.VOICES
         ]
 
-    @app.get("/api/animation-voices/{voice_id}/sample")
     def voice_sample(voice_id: str, account: User, session: DB) -> FileResponse:
         studio_user(account, session)
         chosen = voice.BY_ID.get(voice_id)
@@ -310,7 +344,6 @@ def install(
             spoken.path, media_type="audio/wav", headers={"Cache-Control": "private, max-age=86400"}
         )
 
-    @app.get("/api/animation-player/{name}")
     def player_file(name: str, account: User, v: str = "") -> Response:
         """The player and its fonts. The page names its script and style with their
         content's hash (?v=), so a new player is never taken from a cache: Cloudflare
@@ -374,12 +407,10 @@ def install(
             select(AnimationAutopilot).where(AnimationAutopilot.owner_id == account.id)
         )
 
-    @app.get("/api/animation-autopilot")
     def get_autopilot(account: User, session: DB) -> dict:
         studio_user(account, session)
         return pilot_view(pilot_of(account, session), account, session)
 
-    @app.put("/api/animation-autopilot")
     def set_autopilot(
         body: AutopilotSettings, account: User, session: DB, request: Request
     ) -> dict:
@@ -407,7 +438,6 @@ def install(
         session.commit()
         return pilot_view(pilot, account, session)
 
-    @app.post("/api/animation-autopilot/now")
     def autopilot_now(account: User, session: DB) -> dict:
         """One of the autopilot's reels now, whatever the hour."""
         studio_user(account, session)
@@ -420,7 +450,6 @@ def install(
         session.refresh(found)
         return view(found, session, full=True)
 
-    @app.post("/api/animations/{animation_id}/approve")
     def approve_animation(animation_id: str, account: User, session: DB, request: Request) -> dict:
         found = find(animation_id, session, account)
         if found.post_status not in ("awaiting", "failed") or not found.job_id:
@@ -436,7 +465,6 @@ def install(
         session.commit()
         return view(found, session, full=True)
 
-    @app.post("/api/animations/{animation_id}/skip")
     def skip_animation(animation_id: str, account: User, session: DB) -> dict:
         found = find(animation_id, session, account)
         if found.post_status not in ("awaiting", "failed"):
@@ -445,7 +473,6 @@ def install(
         session.commit()
         return view(found, session, full=True)
 
-    @app.get("/api/animation-images/{name}")
     def animation_image(name: str, account: User, session: DB) -> FileResponse:
         """A painted picture (images.name_of: named by what it shows, so kept for good)."""
         studio_user(account, session)
@@ -456,3 +483,6 @@ def install(
             raise HTTPException(404, "no such picture")
         kept = {"Cache-Control": "private, max-age=31536000, immutable"}
         return FileResponse(path, media_type="image/png", headers=kept)
+
+    defined = locals()
+    return SimpleNamespace(**{name: defined[name] for _, _, name in ROUTES})

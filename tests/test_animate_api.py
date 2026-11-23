@@ -223,3 +223,12 @@ def test_painted_pictures_are_served_by_name_and_switched_per_reel(
     assert made["images"] is False
     on = env.client.patch(f"/api/animations/{made['id']}", json={"images": True}).json()
     assert on["images"] is True and on["status"] == "ready"
+
+
+def test_every_studio_operation_is_a_route(env):
+    served = {
+        (method, route.path)
+        for route in env.client.app.routes
+        for method in getattr(route, "methods", None) or ()
+    }
+    assert {(method, path) for method, path, _ in routes.ROUTES} <= served
