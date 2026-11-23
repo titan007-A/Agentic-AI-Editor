@@ -396,6 +396,9 @@ class KickHunt(Base):
     # camera -> the facecam preset, anything else -> irl_preset); "fixed": `preset` for all.
     layout: Mapped[str] = mapped_column(String(8), default="auto")
     irl_preset: Mapped[str] = mapped_column(String(64), default="")
+    # Started by a schedule (the morning clips), not a person: its clips wait behind people's
+    # own jobs, as a live follow's do (jobs.automatic_jobs).
+    auto: Mapped[bool] = mapped_column(default=False)
     live: Mapped[bool] = mapped_column(default=False)  # a live stretch: strong moments only
     folder: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="queued")

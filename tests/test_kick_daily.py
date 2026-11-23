@@ -70,10 +70,10 @@ def test_morning_clips_share_gta_and_footage_over_new_streams_in_the_right_prese
         db.commit()
     ran = []
     result = daily.run(me, env.sessions, env.settings, client=ManyKick(), looker=looked,
-                       hunter=ran.append, now=DAY)  # fmt: skip
+                       queue=ran.append, now=DAY)  # fmt: skip
     with env.sessions() as db:
         hunts = db.scalars(select(KickHunt).where(KickHunt.owner_id == me)).all()
-        assert sorted(h.id for h in hunts) == sorted(ran)  # all run, one after another
+        assert sorted(h.id for h in hunts) == sorted(ran)  # all queued (they run one at a time)
         gta = [h for h in hunts if h.folder == "24-NOV-GTA"]
         other = [h for h in hunts if h.folder == "24-NOV-FOOTAGE"]
         assert len(gta) + len(other) == len(hunts)
@@ -88,13 +88,14 @@ def test_morning_clips_share_gta_and_footage_over_new_streams_in_the_right_prese
         for h in other:
             each[h.slug] += h.count
         assert sum(each.values()) == 20 and set(each.values()) == {5}  # shared in turn
-        assert daily.load(db, me).last_result == result
+        assert daily.load(db, me).last_result.startswith(result)
+        assert all(h.auto for h in hunts)  # a schedule's: its clips wait behind people's jobs
     assert "15 GTA clips and 20 others" in result and "nobody: no Kick channel" in result
     # The next morning: no new streams, so each streamer's newest again (a hunt keeps off
     # the clips already made of a stream), filed in that day's folders.
     ran.clear()
     daily.run(me, env.sessions, env.settings, client=ManyKick(), looker=looked,
-              hunter=ran.append, now=DAY + timedelta(days=1))  # fmt: skip
+              queue=ran.append, now=DAY + timedelta(days=1))  # fmt: skip
     with env.sessions() as db:
         again = [db.get(KickHunt, h) for h in ran]
         assert {h.stream_id for h in again} == {11, 21, 31, 42}
@@ -251,3 +252,82 @@ def test_a_hunt_makes_each_clip_in_the_layout_it_shows_unless_fixed(env, kicked,
     assert made_with(fixed) == ["kick-clips"]  # as chosen, whatever it shows
     bad = env.client.post("/api/kick/hunts", json={**body, "irl_preset": "nope"})
     assert bad.status_code == 422
+
+
+NOW = datetime(2026, 11, 24, 3, 0, tzinfo=UTC)
+
+
+def a_hunt(db, owner, made=NOW, **fields) -> KickHunt:
+    fields = {"created_at": made, "updated_at": made, **fields}
+    found = KickHunt(owner_id=owner, slug="ddg", moments=[], **fields)
+    db.add(found)
+    db.flush()
+    return found
+
+
+def test_hunts_go_one_at_a_time_and_give_way_to_peoples_jobs(env, monkeypatch):
+    from agentic_editor import jobs
+
+    me = owner(env)
+    with env.sessions() as db:
+        mine = a_hunt(db, me)
+        db.commit()
+        assert jobs.hunt_may_start(db, mine, NOW, workers=2)  # nothing else: it may go
+        # Another hunt at work: this one waits; one silent for long (a crash) doesn't count.
+        other = a_hunt(db, me, status="listening", updated_at=NOW - timedelta(minutes=2))
+        db.commit()
+        assert not jobs.hunt_may_start(db, mine, NOW, workers=2)
+        other.updated_at = NOW - jobs.HUNT_STALE - timedelta(minutes=1)
+        db.commit()
+        assert jobs.hunt_may_start(db, mine, NOW, workers=2)
+        # A person's job waits and one worker is busy: the hunt would take the last one.
+        db.add_all([Job(source="https://x.test/a", presets=["p"], owner_id=me, status="running"),
+                    Job(source="https://x.test/b", presets=["p"], owner_id=me)])  # fmt: skip
+        db.commit()
+        assert not jobs.hunt_may_start(db, mine, NOW, workers=2)
+        assert jobs.hunt_may_start(db, mine, NOW, workers=3)  # a worker stays free
+        later = NOW + jobs.HUNT_AGING
+        assert jobs.hunt_may_start(db, mine, later, workers=2)  # it has waited long enough
+        # The waiting job is a schedule's Kick clip, not a person's: the hunt may go.
+        queued = db.scalar(select(Job).where(Job.status == "queued"))
+        auto = a_hunt(db, me, auto=True, status="done")
+        queued.source = f"kick:kick-{auto.id}-0"
+        db.commit()
+        assert jobs.hunt_may_start(db, mine, NOW, workers=2)
+    # claim_hunt marks the one it lets go, and leaves a hunt no longer queued alone.
+    monkeypatch.setattr(jobs, "sessions", lambda: env.sessions)
+    monkeypatch.setattr(jobs, "get_settings", lambda: env.settings)
+    assert jobs.claim_hunt(env.sessions, mine.id, NOW) == "go"
+    with env.sessions() as db:
+        assert db.get(KickHunt, mine.id).status == "reading"
+    assert jobs.claim_hunt(env.sessions, mine.id, NOW) is None
+    with env.sessions() as db:
+        waiting = a_hunt(db, me)
+        db.commit()
+    # `mine` is at work (claiming marked it just now, by the clock).
+    assert jobs.claim_hunt(env.sessions, waiting.id, datetime.now(UTC)) == jobs.BUSY
+    later = []
+    monkeypatch.setattr(jobs.hunt, "schedule", lambda args, delay: later.append((args, delay)))
+    monkeypatch.setattr(jobs.kick_hunt, "run", lambda *a, **k: pytest.fail("ran while busy"))
+    jobs.hunt.call_local(waiting.id)
+    assert later == [((waiting.id,), jobs.HUNT_RETRY)]  # asks again later, holding no worker
+
+
+def test_a_schedules_kick_clips_wait_behind_peoples_own_jobs(env):
+    from agentic_editor import jobs
+
+    me = owner(env)
+    with env.sessions() as db:
+        scheduled = a_hunt(db, me, auto=True, status="done")
+        followed = a_hunt(db, me, live=True, status="done")
+        asked = a_hunt(db, me, status="done")  # a person asked for these clips
+        made = NOW - timedelta(minutes=5)
+        for n, (h, when) in enumerate([(scheduled, made), (followed, made),
+                                       (asked, NOW), (None, NOW)]):  # fmt: skip
+            source = f"kick:kick-{h.id}-0" if h else f"https://x.test/{n}"
+            db.add(Job(id=f"j{n}", source=source, presets=["p"], owner_id=me, created_at=when))
+        db.commit()
+        ids = ["j0", "j1", "j2", "j3"]
+        assert jobs.automatic_jobs(db, ids) == {"j0", "j1"}
+        # The person's jobs go first though the schedule's and the follow's were queued earlier.
+        assert jobs.next_turn(db, NOW)[1] in {"j2", "j3"}

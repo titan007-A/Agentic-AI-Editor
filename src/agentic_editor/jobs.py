@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from huey import SqliteHuey
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import (
@@ -143,6 +143,29 @@ def _utc(at: datetime) -> datetime:
 Turn = tuple[str, str | int]  # ("job", job id) or ("caption", output id)
 
 
+def automatic_jobs(db, ids: list[str]) -> set[str]:
+    """The jobs among `ids` no person is waiting on: a feed's, and the Kick clips a schedule
+    (the morning clips) or a live follow made. They go after people's own (next_turn)."""
+    automatic = set(db.scalars(select(FeedItem.job_id).where(FeedItem.job_id.in_(ids))))
+    kicked = {
+        job_id: kick_hunt.hunt_of_source(source)
+        for job_id, source in db.execute(
+            select(Job.id, Job.source).where(
+                Job.id.in_(ids), Job.source.like(kick_hunt.SOURCE + "%")
+            )
+        )
+    }
+    hunts = {h for h in kicked.values() if h}
+    if hunts:
+        background = set(
+            db.scalars(
+                select(KickHunt.id).where(KickHunt.id.in_(hunts), or_(KickHunt.auto, KickHunt.live))
+            )
+        )
+        automatic |= {job_id for job_id, h in kicked.items() if h in background}
+    return automatic
+
+
 def next_turn(db, now: datetime) -> Turn | None:
     """The queued job or post caption whose turn it is. Jobs and captions share the
     workers and the GPU, so they take turns together: people's own work before
@@ -159,7 +182,7 @@ def next_turn(db, now: datetime) -> Turn | None:
     if not jobs_ and not captions:
         return None
     ids = [j.id for j in jobs_] + [row[2] for row in captions]
-    automatic = set(db.scalars(select(FeedItem.job_id).where(FeedItem.job_id.in_(ids))))
+    automatic = automatic_jobs(db, ids)
     running = Counter(db.scalars(select(Job.owner_id).where(Job.status == "running")))
     running.update(
         db.scalars(select(Job.owner_id).join(Job.outputs).where(Output.caption_status == "writing"))
@@ -1136,16 +1159,66 @@ def animate(animation_id: str) -> None:
     studio.run_task(animation_id, sessions(), get_settings())
 
 
+# A Kick hunt holds a worker for minutes (reading the chat, listening, cutting) outside the
+# jobs' turns, so hunts go one at a time and give way to people's own jobs (claim_hunt).
+HUNT_RETRY = 60  # seconds a hunt that may not start yet waits in the schedule
+HUNT_AGING = timedelta(minutes=20)  # then it starts whenever no other hunt runs
+HUNT_STALE = timedelta(minutes=15)  # a busy hunt not heard from this long doesn't count
+
+
+def hunt_may_start(db, found: KickHunt, now: datetime, workers: int) -> bool:
+    """Whether a queued hunt may take a worker now: no other hunt runs, and it wouldn't
+    take the last free worker while people's own jobs wait (until it waited HUNT_AGING)."""
+    busy = db.scalars(
+        select(KickHunt).where(KickHunt.id != found.id, KickHunt.status.in_(kick_hunt.BUSY))
+    ).all()
+    if any(now - _utc(h.updated_at) < HUNT_STALE for h in busy):
+        return False
+    if now - _utc(found.created_at) >= HUNT_AGING:
+        return True
+    queued = list(db.scalars(select(Job.id).where(Job.status == "queued")))
+    waiting = set(queued) - automatic_jobs(db, queued)
+    running = db.scalar(select(func.count()).select_from(Job).where(Job.status == "running"))
+    running += db.scalar(
+        select(func.count()).select_from(Output).where(Output.caption_status == "writing")
+    )
+    return not (waiting and running + 1 >= workers)
+
+
+def claim_hunt(Session: sessionmaker, hunt_id: str, now: datetime | None = None) -> str | None:
+    """ "go" when the hunt may run now (marked started), BUSY when it waits, None when it
+    is gone or no longer queued."""
+    with _claiming, Session() as db:
+        at = now or datetime.now(UTC)
+        found = db.get(KickHunt, hunt_id)
+        if found is None or found.status != "queued":
+            return None
+        if not hunt_may_start(db, found, at, get_settings().max_concurrent_jobs):
+            return BUSY
+        found.status, found.message = "reading", "starting"
+        db.commit()
+        return "go"
+
+
 @huey.task()
 def hunt(hunt_id: str) -> None:
-    """A Kick clipper hunt: a stream's moments found and cut, each queued as a job."""
-    kick_hunt.run(hunt_id, sessions(), get_settings())
+    """A Kick clipper hunt: a stream's moments found and cut, each queued as a job. While
+    it may not start (claim_hunt) it waits HUNT_RETRY seconds in the queue's schedule,
+    holding no worker meanwhile."""
+    Session = sessions()
+    claimed = claim_hunt(Session, hunt_id)
+    if claimed == BUSY:
+        hunt.schedule((hunt_id,), delay=HUNT_RETRY)
+        return
+    if claimed is None:
+        return
+    kick_hunt.run(hunt_id, Session, get_settings())
 
 
 @huey.task()
 def kick_daily(owner_id: str) -> None:
     """An account's morning Kick clips (clipper/daily.py): its streamers' new streams looked
-    at and hunted one after another in this one worker, each clip queued as a job."""
+    at and their hunts queued, which then run one at a time (claim_hunt)."""
     from agentic_editor.clipper import daily
 
     daily.run(owner_id, sessions(), get_settings())
