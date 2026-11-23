@@ -733,3 +733,12 @@ def test_a_card_with_a_plain_emoji_shows_its_countrys_other_one():
     plan = map_plan(countries=tour)
     assert plan.scenes[1].visual.items[0].emoji == "🍰"  # the country's own
     assert plan.scenes[6].visual.items[0].emoji == "🌍"  # none left: the default
+
+
+def test_the_tours_opening_country_is_never_left_out_whole():
+    model = MapModel(map_reply(), map_reply(), wrong=[1, 2, 3, 10])  # all the US, and Holland
+    brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
+    plan, _ = planner.draft(model, brief, [])
+    countries = [s.visual.text for s in plan.scenes if s.visual.kind == "country"]
+    assert countries[0] == "The United States" and "Holland" not in countries
+    assert len(plan.scenes[1].visual.items) == 3  # kept as written

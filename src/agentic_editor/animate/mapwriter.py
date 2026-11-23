@@ -630,11 +630,12 @@ def vet(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
             continue
         items = [i for ii, i in enumerate(scene.visual.items) if (si, ii) not in gone]
         dropped = [i.text for ii, i in enumerate(scene.visual.items) if (si, ii) in gone]
-        if not items and countries > MIN_COUNTRIES:
+        opening = not any(s.visual.kind == "country" for s in scenes)
+        if not items and countries > MIN_COUNTRIES and not opening:
             countries -= 1
             left_out.append(scene.visual.text)
             continue
-        if not items:  # too few countries to lose this one: kept as written
+        if not items:  # the tour's opening country, or too few to lose one: as written
             scenes.append(scene)
             continue
         left_out += [f"{scene.visual.text}: {d}" for d in dropped]
