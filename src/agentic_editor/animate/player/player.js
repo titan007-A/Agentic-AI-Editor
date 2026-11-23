@@ -2395,19 +2395,18 @@
   }
 
   // World map captions: one word (or one name) at a time, low on the screen, white with a
-  // soft shadow, each word's first letter capitalised as the reference reels show them.
+  // soft shadow, the first letter a capital as the reference reels show them ("Has",
+  // "Marine biologist"), punctuation off.
   function mapSubtitles(theme, layer, captions) {
-    const shown = (text) =>
-      text
-        .replace(/^[^\p{L}\p{N}$£€]+|[^\p{L}\p{N}%)]+$/gu, "")
-        .replace(/^\p{Ll}/u, (c) => c.toUpperCase());
+    const bare = (text) => text.replace(/^[^\p{L}\p{N}$£€]+|[^\p{L}\p{N}%)]+$/gu, "");
+    const shown = (text) => text.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
     const chunks = captions.map((c) => {
       const box = place(el("div", "abs fit center", layer), 80, 1305, W - 160, 120);
       font(box, theme.caption, 60, theme.text);
       box.style.display = "none";
       box.style.whiteSpace = "nowrap";
       box.style.textShadow = "0 3px 10px rgba(0,0,0,0.65), 0 1px 2px rgba(0,0,0,0.6)";
-      box.textContent = c.words.map((w) => shown(w.text)).filter(Boolean).join(" ");
+      box.textContent = shown(c.words.map((w) => bare(w.text)).filter(Boolean).join(" "));
       box._fit = [60, 34];
       return { c, box, spans: [] };
     });

@@ -373,6 +373,18 @@ def tighten(plan: Plan, length: str) -> Plan:
 # ---- between the model's shape and a Plan --------------------------------------------------
 
 
+# Emoji that show nothing in particular (a dot, a square): a card shows its country's
+# other emoji instead.
+PLAIN_EMOJI = set("⚫⚪⬛⬜🔴🔵🟠🟡🟢🟣🟤🟥🟦🟧🟨🟩🟪🟫▪▫◾◽◼◻🔘❓❔")
+
+
+def _emoji_of(items: list[dict]) -> list[str]:
+    said = [str(i.get("emoji", "")).strip() for i in items]
+    plain = [e.rstrip("\ufe0f") in PLAIN_EMOJI or not e for e in said]
+    good = [e for e, p in zip(said, plain, strict=True) if not p]
+    return [good[0] if p and good else ("" if p else e) for e, p in zip(said, plain, strict=True)]
+
+
 def to_plan(reply: dict, sources: list[Source], voice: str) -> Plan:
     """A Plan from the model's answer: the hook as a title scene, a country scene each."""
     hook = " ".join(str(reply.get("hook", "")).split())
@@ -386,14 +398,10 @@ def to_plan(reply: dict, sources: list[Source], voice: str) -> Plan:
     for c in reply.get("countries", []):
         if not isinstance(c, dict):
             continue
+        given = [i for i in c.get("items", []) if isinstance(i, dict)]
         items = [
-            Item(
-                text=str(i.get("name", "")),
-                emoji=str(i.get("emoji", "")),
-                art=str(i.get("picture", "")),
-            )
-            for i in c.get("items", [])
-            if isinstance(i, dict)
+            Item(text=str(i.get("name", "")), emoji=e, art=str(i.get("picture", "")))
+            for i, e in zip(given, _emoji_of(given), strict=True)
         ]
         scenes.append(
             Scene(

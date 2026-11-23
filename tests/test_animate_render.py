@@ -234,7 +234,7 @@ def test_a_world_map_reel_flies_lights_the_country_and_pins_its_cards(tmp_path, 
     assert min(r, g, b) > 225, (r, g, b)
     r, g, b = shown.getpixel((90, 1650))  # the lit country: the land under purple
     assert b > g + 20 and r > g, (r, g, b)
-    caption = boxes_at(data, opts, card_at, ["Apple Pie"])["Apple Pie"]
+    caption = boxes_at(data, opts, card_at, ["Apple pie"])["Apple pie"]
     assert caption is not None and 1280 < caption["y"] < 1420
     video = tmp_path / "picture.mp4"
     assert render.frames_to_video(data, opts, video, fps=10) == []

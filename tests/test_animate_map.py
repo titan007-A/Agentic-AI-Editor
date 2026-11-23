@@ -723,3 +723,13 @@ def test_a_busy_map_server_is_asked_again(tmp_path, monkeypatch):
     answers[:] = [urllib.error.HTTPError("u", 404, "Not found", {}, None)]
     with pytest.raises(urllib.error.HTTPError):
         maps._download("https://example.org/earth.jpg", dest, pause=0)
+
+
+def test_a_card_with_a_plain_emoji_shows_its_countrys_other_one():
+    tour = [dict(c) for c in TOUR]
+    first = tour[0]["items"]
+    tour[0] = {**tour[0], "items": [{**first[0], "emoji": "⚫"}, *first[1:]]}
+    tour[5] = {**tour[5], "items": [{**i, "emoji": "🟦"} for i in tour[5]["items"]]}
+    plan = map_plan(countries=tour)
+    assert plan.scenes[1].visual.items[0].emoji == "🍰"  # the country's own
+    assert plan.scenes[6].visual.items[0].emoji == "🌍"  # none left: the default
