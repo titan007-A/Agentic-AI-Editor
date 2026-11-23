@@ -64,6 +64,7 @@ export const AnimationPreview = forwardRef<
       fontBase: PLAYER,
       emojiFont: `${PLAYER}NotoColorEmoji.ttf`,
       imageBase: "/api/animation-images/",
+      mapBase: "/api/animation-map/",
     });
   }, [data, post]);
 

@@ -758,6 +758,9 @@ export type AnimationItem = {
   year: string;
   value: string;
   motion: string;
+  /** A World map card's picture: what it shows, and its file once painted. */
+  art?: string;
+  image?: string;
 };
 
 export type AnimationVisualKind =
@@ -771,7 +774,8 @@ export type AnimationVisualKind =
   | "quote"
   | "reveal"
   | "dots"
-  | "scene";
+  | "scene"
+  | "country";
 
 /** A character in a scene: who (from the cast), what they do and feel, what they hold, a line. */
 export type AnimationActor = {
@@ -807,6 +811,8 @@ export type AnimationVisual = {
   art?: string;
   image?: string;
   art_seed?: number;
+  /** A country scene's country as the map knows it, when the narration says it otherwise. */
+  country?: string;
 };
 
 export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
@@ -816,7 +822,7 @@ export type AnimationPlan = {
   v: number;
   title: string;
   kind: "facts" | "lesson" | "story" | "news";
-  style: "glow" | "paper" | "story" | "kinetic" | "stick";
+  style: "glow" | "paper" | "story" | "kinetic" | "stick" | "map";
   voice: string;
   mood: string;
   scenes: AnimationScene[];
@@ -1020,6 +1026,8 @@ export const api = {
   renderAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/render`),
   deleteAnimation: (id: string) => request<{ ok: boolean }>("DELETE", `/animations/${id}`),
   animationVoices: () => request<AnimationVoice[]>("GET", "/animation-voices"),
+  animationIdeas: (style: string) =>
+    request<{ ideas: string[] }>("GET", `/animation-ideas?style=${encodeURIComponent(style)}`),
   animationAutopilot: () => request<AnimationAutopilot>("GET", "/animation-autopilot"),
   setAnimationAutopilot: (
     body: Omit<

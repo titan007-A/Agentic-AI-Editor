@@ -16,7 +16,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor.animate import images, planner, voice
+from agentic_editor.animate import images, maps, mapwriter, planner, voice
 from agentic_editor.animate.plan import Plan, tidy
 from agentic_editor.animate.render import render
 from agentic_editor.animate.timeline import Spoken, Timeline, build, player_data
@@ -31,7 +31,7 @@ BUSY = ("drafting", "changing", "painting", "voicing")  # a task is working on i
 HISTORY = 20
 STYLE_NAMES = {
     "glow": "Neon Glow", "paper": "Clean Paper", "story": "Character story",
-    "kinetic": "Bold kinetic text", "stick": "Stick figure",
+    "kinetic": "Bold kinetic text", "stick": "Stick figure", "map": "World map",
 }  # fmt: skip
 
 
@@ -110,6 +110,8 @@ def paint_plan(
     paint = paint or images.paint
     if plan.style in images.UNPAINTED:
         return plan, []
+    if plan.style == "map":
+        return _paint_cards(plan, animation_id, Session, settings, paint)
     wanted = [(i, s) for i, s in enumerate(plan.scenes) if s.visual.art.strip()]
     if not wanted:
         return plan, []
@@ -133,12 +135,73 @@ def paint_plan(
     return plan.model_copy(update={"scenes": scenes}), note
 
 
-def without_pictures(plan: Plan) -> Plan:
-    scenes = [
-        s.model_copy(update={"visual": s.visual.model_copy(update={"image": ""})})
-        for s in plan.scenes
+def _paint_cards(
+    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint
+) -> tuple[Plan, list[str]]:
+    """A World map reel's card pictures: each thing alone on white (the map itself is the
+    background, so scenes get no painting of their own)."""
+    wanted = [
+        (si, ii, item)
+        for si, s in enumerate(plan.scenes)
+        if s.visual.kind == "country"
+        for ii, item in enumerate(s.visual.items)
+        if item.art.strip()
     ]
+    if not wanted:
+        return plan, []
+    if paint is images.paint and not images.available(settings):
+        return plan, [
+            "card pictures need the image model (installed on the Mac); the cards show emoji"
+        ]
+    pictures = [images.Picture(item.art, _seed_of(item.art, 0)) for _, _, item in wanted]
+    progress = lambda stage, message: _set(Session, animation_id, message=message)  # noqa: E731
+    names = paint(pictures, "map", settings, progress, size=images.CARD)
+    scenes = list(plan.scenes)
+    for (si, ii, _), name in zip(wanted, names, strict=True):
+        visual = scenes[si].visual
+        items = list(visual.items)
+        items[ii] = items[ii].model_copy(update={"image": name})
+        scenes[si] = scenes[si].model_copy(
+            update={"visual": visual.model_copy(update={"items": items})}
+        )
+    missing = sum(1 for n in names if not n)
+    note = [f"{missing} of {len(names)} card pictures couldn't be painted"] if missing else []
+    return plan.model_copy(update={"scenes": scenes}), note
+
+
+def without_pictures(plan: Plan) -> Plan:
+    scenes = []
+    for s in plan.scenes:
+        items = [i.model_copy(update={"image": ""}) for i in s.visual.items]
+        visual = s.visual.model_copy(update={"image": "", "items": items})
+        scenes.append(s.model_copy(update={"visual": visual}))
     return plan.model_copy(update={"scenes": scenes})
+
+
+def ensure_map(settings: Settings, say=None) -> list[str]:
+    """The world map, fetched and made the first time a World map reel needs it; a note
+    when it can't be (the reel then flies over a plain ocean)."""
+    if maps.ready(settings.models_dir):
+        return []
+    try:
+        maps.fetch(settings.models_dir, say)
+    except Exception as exc:
+        log.exception("no world map")
+        return [f"the world map couldn't be fetched ({exc}); the reel shows a plain ocean"]
+    return []
+
+
+def known_country(settings: Settings):
+    """Whether a name is a country on the map (None when the map isn't here to ask)."""
+    table = maps.table(settings.models_dir)
+    if not table:
+        return None
+    return lambda name: maps.find(name, table) is not None
+
+
+def player_of(plan: Plan, timeline: Timeline, settings: Settings) -> dict:
+    """What the player draws: the timeline's data, with the map a World map reel needs."""
+    return maps.attach(player_data(plan, timeline), plan, settings.models_dir)
 
 
 def _seed_of(art: str, again: int) -> int:
@@ -168,6 +231,13 @@ def run_task(
         notes: list[str] = []
         doubts: list[str] = []
         plan = current
+        wants_map = (current.style if current else brief.style) == "map" or (
+            op == "auto" and brief.style == "map"
+        )
+        if wants_map:  # before the writer holds the model: the first time takes a while
+            say = lambda message: _set(Session, animation_id, message=message)  # noqa: E731
+            notes += ensure_map(settings, say)
+        known = known_country(settings) if wants_map else None
         if op in ("draft", "auto", "change", "scene"):
             router = router or ModelRouter(settings, get_backends(), lambda *args: None)
             if op in ("draft", "auto"):
@@ -197,7 +267,8 @@ def run_task(
                         query=query,
                     )
                     _set(Session, animation_id, message=f"writing the reel ({len(found)} sources)")
-                    plan, notes = planner.draft(llm, brief, found)
+                    plan, wrote = planner.draft(llm, brief, found, known)
+                    notes = [*notes, *wrote]
                     if op == "auto":  # nobody reads it before it may post: check its facts
                         _set(Session, animation_id, message="checking the facts")
                         doubts = planner.fact_check(llm, plan, found)
@@ -213,7 +284,10 @@ def run_task(
                 )
                 with router.planner() as llm:
                     planner.roomy(llm)
-                    plan, notes = planner.change(llm, current, task.get("request", ""), brief)
+                    plan, wrote = planner.change(
+                        llm, current, task.get("request", ""), brief, known
+                    )
+                    notes = [*notes, *wrote]
             else:
                 index = int(task.get("scene", 0))
                 _set(
@@ -239,7 +313,10 @@ def run_task(
             plan = without_pictures(plan)
         _set(Session, animation_id, status="voicing", message="recording the voice-over")
         timeline, _ = timeline_of(plan, settings, speak)
-        data = player_data(plan, timeline)
+        data = player_of(plan, timeline, settings)
+        lost = maps.missing(plan, settings.models_dir)
+        if lost:
+            notes = [*notes, "not on the map (shown without flying there): " + ", ".join(lost)]
         _set(Session, animation_id, message="mixing the sound")
         try:
             preview_sound(plan, data, settings, speak)
@@ -287,10 +364,13 @@ def _choose_topic(animation_id: str, Session: sessionmaker, llm) -> str:
     with Session() as db:
         a = db.get(Animation, animation_id)
         pilot = db.get(AnimationAutopilot, a.autopilot_id) if a and a.autopilot_id else None
-        if pilot is None or not pilot.niche.strip():
+        if pilot is None or (not pilot.niche.strip() and pilot.style != "map"):
             raise planner.PlannerError("the autopilot has no topics left and no niche to find more")
-        niche, used = pilot.niche, list(pilot.used or [])
-    topic = planner.next_topic(llm, niche, used)
+        niche, used, style = pilot.niche, list(pilot.used or []), pilot.style
+    if style == "map":
+        topic = mapwriter.next_topic(llm, niche, used)
+    else:
+        topic = planner.next_topic(llm, niche, used)
     with Session() as db:
         a = db.get(Animation, animation_id)
         a.idea = topic

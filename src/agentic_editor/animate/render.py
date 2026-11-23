@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from agentic_editor import ffmpeg, slots
-from agentic_editor.animate import sound
+from agentic_editor.animate import maps, sound
 from agentic_editor.animate.plan import Plan
 from agentic_editor.animate.timeline import Timeline, player_data
 from agentic_editor.render import fonts
@@ -53,10 +53,12 @@ def options(fonts_dir: Path, models_dir: Path, images_dir: Path | None = None) -
     """player.js load() options for a page opened from disk. The colour emoji font is the
     captions' (fetched the first time); without it the browser's own emoji are drawn."""
     found = fonts.colored(models_dir / "fonts")
+    tiles = maps.tiles_dir(models_dir)
     return {
         "fontBase": fonts_dir.resolve().as_uri() + "/",
         "emojiFont": found.resolve().as_uri() if found else None,
         "imageBase": images_dir.resolve().as_uri() + "/" if images_dir else None,
+        "mapBase": tiles.resolve().as_uri() + "/" if maps.ready(models_dir) else None,
     }
 
 
@@ -186,7 +188,7 @@ def render(
     """The finished reel (MP4), its thumbnail and any text that didn't fit."""
     progress = progress or (lambda *a: None)
     out_dir.mkdir(parents=True, exist_ok=True)
-    data = player_data(plan, timeline)
+    data = maps.attach(player_data(plan, timeline), plan, models_dir)
     opts = options(fonts_dir, models_dir, images_dir)
     progress("animate", "mixing the voice, music and sound effects")
     mixed = sound.mix(timeline, voices, plan.mood, out_dir / "sound.wav", seed=seed_of(plan.title))

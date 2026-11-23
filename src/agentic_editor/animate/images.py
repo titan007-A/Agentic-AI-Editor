@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 RUNNER = Path(__file__).parent / "paint_runner.py"
 STEPS = 9
 SIZE = (720, 1280)  # 9:16, shown at 1080x1920 (the player scales it to cover)
+CARD = (720, 896)  # a World map card's picture (4:5, the card's own shape)
 # The most the model may take to load, and then each picture, before the painting is given
 # up (the scenes are drawn instead): a stuck model never holds the GPU for long.
 LOAD_SECONDS = 150
@@ -39,6 +40,9 @@ LOOKS = {
     "light, highly detailed",
     "paper": "vintage editorial illustration, muted earthy colours, textured paper, finely "
     "detailed",
+    # A World map card: the thing alone on white, so it sits in the white card like a cut-out.
+    "map": "one single subject centred and filling most of the frame, isolated on a plain pure "
+    "white background, bright clean studio product photo, vivid natural colours, soft shadow",
 }
 # Styles that are their own look: drawn, never painted.
 UNPAINTED = ("stick", "kinetic")
@@ -76,21 +80,26 @@ def full_prompt(picture: Picture, style: str) -> str:
     return ", ".join(p for p in parts if p)
 
 
-def name_of(prompt: str, seed: int, model: str) -> str:
+def name_of(prompt: str, seed: int, model: str, size: tuple[int, int] = SIZE) -> str:
     """The file a picture is kept in, by everything that makes it."""
-    raw = json.dumps([model, STEPS, SIZE, prompt, seed], ensure_ascii=False)
+    raw = json.dumps([model, STEPS, list(size), prompt, seed], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()[:24] + ".png"
 
 
 def paint(
-    pictures: list[Picture], style: str, settings: Settings, progress=None, run=subprocess.Popen
+    pictures: list[Picture],
+    style: str,
+    settings: Settings,
+    progress=None,
+    run=subprocess.Popen,
+    size: tuple[int, int] = SIZE,
 ) -> list[str]:
     """The file names of `pictures`, painted where not kept already; "" for one that
     couldn't be (the scene is drawn without it)."""
     progress = progress or (lambda *a: None)
     out = folder(settings)
     out.mkdir(parents=True, exist_ok=True)
-    names = [name_of(full_prompt(p, style), p.seed, settings.image_model) for p in pictures]
+    names = [name_of(full_prompt(p, style), p.seed, settings.image_model, size) for p in pictures]
     todo = [
         {"prompt": full_prompt(p, style), "seed": p.seed, "dest": str(out / name)}
         for p, name in zip(pictures, names, strict=True)
@@ -99,7 +108,7 @@ def paint(
     todo = list({job["dest"]: job for job in todo}.values())  # one painting per picture
     if todo:
         request = {
-            "model": settings.image_model, "steps": STEPS, "width": SIZE[0], "height": SIZE[1],
+            "model": settings.image_model, "steps": STEPS, "width": size[0], "height": size[1],
             "jobs": todo,
         }  # fmt: skip
         with slots.gpu.turn("paint the pictures", progress):

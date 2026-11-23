@@ -44,6 +44,7 @@ const STYLES = [
   ["story", "Character story"],
   ["kinetic", "Bold kinetic text"],
   ["stick", "Stick figure"],
+  ["map", "World map (country by country)"],
 ] as const;
 const LENGTHS = [
   ["auto", "Auto: AI decides"],
@@ -122,6 +123,7 @@ export default function AnimationsPage() {
   const [voice, setVoice] = useState("auto");
   const [length, setLength] = useState("auto");
   const [pictures, setPictures] = useState(true);
+  const [ideas, setIdeas] = useState<string[]>([]);
   const [request, setRequest] = useState("");
   const [sending, setSending] = useState(false);
   const [shrunk, setShrunk] = useState<string[]>([]);
@@ -235,6 +237,24 @@ export default function AnimationsPage() {
     }
   }
 
+  // World map reels have a kind of topic of their own: offer some, never one made already.
+  const loadIdeas = useCallback(async (forStyle: string) => {
+    if (forStyle !== "map") {
+      setIdeas([]);
+      return;
+    }
+    try {
+      setIdeas((await api.animationIdeas(forStyle)).ideas);
+    } catch {
+      setIdeas([]);
+    }
+  }, []);
+
+  function chooseStyle(next: string) {
+    setStyle(next);
+    void loadIdeas(next);
+  }
+
   function playSample(id: string) {
     if (!id || ["auto", "narrator", "calm", "energetic"].includes(id)) return;
     sample.current?.pause();
@@ -311,7 +331,7 @@ export default function AnimationsPage() {
                     id="style"
                     className={SELECT}
                     value={style}
-                    onChange={(e) => setStyle(e.target.value)}
+                    onChange={(e) => chooseStyle(e.target.value)}
                   >
                     {STYLES.map(([k, label]) => (
                       <option key={k} value={k}>
@@ -345,12 +365,40 @@ export default function AnimationsPage() {
                   Hear this voice
                 </Button>
               )}
+              {style === "map" && (
+                <div className="space-y-2 rounded-md border-[1.5px] border-dashed border-foreground/50 p-2">
+                  <p className="text-xs text-muted-foreground">
+                    World map: the camera flies over the Earth from country to country, each country
+                    lights up and a picture card pops up for every thing named. Write a topic like
+                    the ones below.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ideas.map((one) => (
+                      <Button
+                        key={one}
+                        size="sm"
+                        variant="outline"
+                        className="h-auto min-h-9 text-left text-xs whitespace-normal"
+                        onClick={() => setIdea(one)}
+                      >
+                        {one}
+                      </Button>
+                    ))}
+                    <Button size="sm" variant="ghost" onClick={() => void loadIdeas("map")}>
+                      <RefreshCw className="size-3.5" /> More ideas
+                    </Button>
+                  </div>
+                </div>
+              )}
               <label className="flex items-center justify-between gap-2 text-sm">
                 <span>
-                  Painted pictures behind the scenes
+                  {style === "map"
+                    ? "Card pictures painted by the AI"
+                    : "Painted pictures behind the scenes"}
                   <span className="block text-xs text-muted-foreground">
-                    An AI paints each scene (a few minutes more). Not for Stick figure or Bold
-                    kinetic text.
+                    {style === "map"
+                      ? "An AI paints each card's picture (a few minutes more); without it the cards show emoji."
+                      : "An AI paints each scene (a few minutes more). Not for Stick figure or Bold kinetic text."}
                   </span>
                 </span>
                 <Switch
@@ -507,7 +555,11 @@ export default function AnimationsPage() {
                 )}
                 {current.plan && !["stick", "kinetic"].includes(current.plan.style) && (
                   <label className="flex items-center justify-between gap-2 text-sm">
-                    <span>Painted pictures behind the scenes</span>
+                    <span>
+                      {current.plan.style === "map"
+                        ? "Card pictures painted by the AI"
+                        : "Painted pictures behind the scenes"}
+                    </span>
                     <Switch
                       checked={current.images ?? true}
                       disabled={busy || dirty || sending}

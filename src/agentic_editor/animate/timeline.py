@@ -18,8 +18,11 @@ TAIL = 0.7  # after the last scene
 # The least a visual needs on screen to play out, voice or not.
 MIN_SCENE = {
     "stat": 2.8, "reveal": 3.2, "dots": 3.0, "cta": 2.8, "timeline": 2.6, "compare": 2.8,
-    "scene": 2.6,
+    "scene": 2.6, "country": 2.4,
 }  # fmt: skip
+# A country's cards are all seen once more as the camera pulls back before it flies on.
+EXTRA_HOLD = {"country": 0.45}
+CARD_GAP = 0.55  # the least time between two cards of a country (the camera moves between)
 # How long a character takes to come on (player.js ENTRANCES); its steps are heard meanwhile.
 ENTRANCES = {"walk_in": (1.6, 0.42), "run_in": (0.9, 0.24)}  # (seconds, a step every)
 WALK_OUT = 1.6
@@ -197,6 +200,19 @@ def beats(
         at = _find_number(words, v.value) or _find(words, v.value or v.text)
         at = max(start + 0.15, (at - 0.3) if at is not None else early)
         return [at, at + 1.0]
+    if kind == "country":
+        # The country lights up as it is named; each card pops as its name is said.
+        named = _find(words, v.text)
+        first = max(start + 0.05, (named - 0.05) if named is not None else early)
+        found: list[float | None] = []
+        cursor = first
+        for item in v.items:
+            at = _find(words, item.text, cursor)
+            found.append(at)
+            cursor = at + 0.05 if at is not None else cursor
+        fallback = _spread(len(v.items), voice_start + span * 0.3, voice_start + span * 0.9)
+        cards = _ordered(found, fallback, gap=CARD_GAP)
+        return [first, *[max(t, first + 0.35) for t in cards]]
     if kind == "scene":
         # Each actor comes on in turn; the bubble opens as its line is said (or the voice starts).
         starts = [start + 0.1 + 0.25 * i for i in range(max(1, len(v.actors)))]
@@ -228,6 +244,51 @@ def captions(scenes: list[SceneTime]) -> list[Caption]:
             nxt = chunks[i + 1][0].start - 0.05 if i + 1 < len(chunks) else None
             end = min(nxt, last + 0.4) if nxt is not None else min(last, scene.end)
             out.append(Caption(start, max(end, start + 0.2), c))
+    return out
+
+
+STOP = {"a", "an", "and", "the", "of", "in", "on", "to", "by", "for", "or", "with", "its", "his"}
+
+
+def _phrase_at(words: list[Word], i: int, phrases: list[list[str]]) -> int:
+    """How many words from `i` make one of `phrases` (as plain words), the longest; 1 when
+    none does."""
+    best = 1
+    for phrase in phrases:
+        n = len(phrase)
+        if n > best and [plain(w.text) for w in words[i : i + n]] == phrase:
+            best = n
+    return best
+
+
+def word_captions(scenes: list[SceneTime], plan: Plan) -> list[Caption]:
+    """Subtitles one word at a time, as World map reels show them: a name said in several
+    words (a country, a thing on a card) stays together, and so does a number with the
+    word it counts ("7 Oscars"). Each shows until the next one starts."""
+    out: list[Caption] = []
+    visuals = [s.visual for s in plan.scenes]
+    for n, scene in enumerate(scenes):
+        v = visuals[n] if n < len(visuals) else None
+        names = (
+            [v.text, *(i.text for i in v.items)] if v is not None and v.kind == "country" else []
+        )
+        phrases = [p for p in ([plain(w) for w in name.split() if plain(w)] for name in names) if p]
+        chunks: list[list[Word]] = []
+        i = 0
+        words = scene.words
+        while i < len(words):
+            size = _phrase_at(words, i, phrases)
+            if size == 1 and i + 1 < len(words) and _digits(words[i].text):
+                after = plain(words[i + 1].text)
+                if after.isalpha() and len(after) > 2 and after not in STOP:
+                    size = 2
+            chunks.append(words[i : i + size])
+            i += size
+        for k, chunk in enumerate(chunks):
+            start = max(scene.start, chunk[0].start - 0.03)
+            nxt = chunks[k + 1][0].start - 0.03 if k + 1 < len(chunks) else None
+            end = nxt if nxt is not None else min(chunk[-1].end + 0.6, scene.end)
+            out.append(Caption(start, max(end, start + 0.12), chunk))
     return out
 
 
@@ -270,8 +331,9 @@ def cues(plan: Plan, scenes: list[SceneTime]) -> list[Cue]:
                 step *= 1.18
                 t += step
             out.append(Cue(b[0] + COUNT, "ding", -22.0))
-        elif s.kind in ("icons", "list", "compare", "timeline") and b:
-            items = b[1:] if s.kind == "list" else b[: len(b) - 1] if s.kind == "icons" else b
+        elif s.kind in ("icons", "list", "compare", "timeline", "country") and b:
+            first = s.kind in ("list", "country")
+            items = b[1:] if first else b[: len(b) - 1] if s.kind == "icons" else b
             out += [Cue(t, "pop", -22.0) for t in items]
         elif s.kind == "place" and b:
             out.append(Cue(b[0] + 0.45, "drop", -18.0))
@@ -296,7 +358,8 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
         kind = "cta" if i == len(scenes) - 1 else scene.visual.kind
         voice_start = at + (FIRST_LEAD if i == 0 else LEAD)
         voice_end = voice_start + spoken.duration
-        end = max(voice_end + scene.hold, at + MIN_SCENE.get(kind, 1.6))
+        hold = scene.hold + EXTRA_HOLD.get(kind, 0.0)
+        end = max(voice_end + hold, at + MIN_SCENE.get(kind, 1.6))
         words = [
             Word(text=w.text, start=voice_start + w.start, end=voice_start + w.end)
             for w in spoken.words
@@ -317,7 +380,7 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
         times.append(SceneTime(kind, at, end, voice_start, voice_end, words, b, talk_from))
         at = end
     timeline = Timeline(times, at + TAIL)
-    timeline.captions = captions(times)
+    timeline.captions = word_captions(times, plan) if plan.style == "map" else captions(times)
     timeline.cues = cues(plan, times)
     return timeline
 

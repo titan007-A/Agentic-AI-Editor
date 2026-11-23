@@ -14,18 +14,21 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 KINDS = ("facts", "lesson", "story", "news")
-STYLES = ("glow", "paper", "story", "kinetic", "stick")
-MOODS = ("mysterious", "uplifting", "emotional", "tense", "curious")
+STYLES = ("glow", "paper", "story", "kinetic", "stick", "map")
+MOODS = ("mysterious", "uplifting", "emotional", "tense", "curious", "upbeat")
 LENGTHS = ("auto", "short", "medium", "long")
 # Narration words a reel of each length runs to (Kokoro speaks about 2.6 words a second).
 WORDS = {"short": (50, 85), "medium": (90, 150), "long": (155, 230), "auto": (70, 130)}
+# A World map reel tours a dozen countries or more, so it runs longer when left to itself
+# (the reference reels: 100-230 words, 55-100 s).
+MAP_WORDS = {"short": (55, 90), "medium": (90, 150), "long": (150, 230), "auto": (110, 175)}
 
 Kind = Literal["facts", "lesson", "story", "news"]
-Style = Literal["glow", "paper", "story", "kinetic", "stick"]
-Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious"]
+Style = Literal["glow", "paper", "story", "kinetic", "stick", "map"]
+Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious", "upbeat"]
 VisualKind = Literal[
     "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots",
-    "scene",
+    "scene", "country",
 ]  # fmt: skip
 # Character scenes (player.js character rig): where, who looks like what, what they do.
 SETTINGS = ("room", "street", "park", "office", "night", "school", "shop", "stage", "plain")
@@ -88,6 +91,11 @@ CATALOGUE: dict[str, tuple[str, str]] = {
         "one short word or number drawn by glowing dots",
         "value (max 8 characters), text (max 8 words)",
     ),
+    "country": (
+        "one country and the things it is known for (World map reels)",
+        "text (the country as the narration names it), items: 1-5 of {text (the thing's "
+        "name), emoji (one emoji for it), art (what its picture shows)}",
+    ),
     "scene": (
         "a moment of the story acted by characters from the cast, in a place",
         "setting (one of " + ", ".join(SETTINGS) + "), actors: 1-2 of {name (from the "
@@ -104,8 +112,11 @@ CATALOGUE: dict[str, tuple[str, str]] = {
 }
 
 MOTIONS = ("pop", "float", "walk_left", "walk_right", "shake", "spin", "grow", "fall", "pulse")
-DEFAULT_EMOJI = {"icons": "✨", "compare": "❓", "place": "📍", "reveal": "💡", "list": ""}
-MAX_SCENES = 16
+DEFAULT_EMOJI = {
+    "icons": "✨", "compare": "❓", "place": "📍", "reveal": "💡", "list": "", "country": "🌍",
+}  # fmt: skip
+MAX_SCENES = 24
+MAX_COUNTRY_ITEMS = 5
 CTA = "Follow for more."
 
 
@@ -119,6 +130,10 @@ class Item(Loose):
     year: str = ""
     value: str = ""
     motion: str = "pop"
+    # A World map card's picture: what it shows, as the writer put it, and its file once
+    # painted (animate/images.py).
+    art: str = ""
+    image: str = ""
 
 
 class Actor(Loose):
@@ -153,6 +168,9 @@ class Visual(Loose):
     setting: str = ""
     actors: list[Actor] = Field(default_factory=list)
     crowd: int = 0  # extra people standing around in a character scene
+    # A country scene's country as the map knows it, when it differs from how the
+    # narration names it ("the States"); empty: `text` is looked up.
+    country: str = ""
     # The painted picture behind the scene (animate/images.py): what it shows, as the
     # writer put it; the picture's file once painted; a number to paint it again.
     art: str = ""
@@ -230,7 +248,7 @@ def tidy(plan: Plan) -> Plan:
     scenes = []
     for scene in plan.scenes[:MAX_SCENES]:
         v = scene.visual
-        cap = {"list": 5, "timeline": 5, "icons": 3, "compare": 2}.get(v.kind, 5)
+        cap = {"list": 5, "timeline": 5, "icons": 3, "compare": 2}.get(v.kind, MAX_COUNTRY_ITEMS)
         items = [
             Item(
                 emoji=_emoji(i.emoji, DEFAULT_EMOJI.get(v.kind, "")),
@@ -238,6 +256,8 @@ def tidy(plan: Plan) -> Plan:
                 year=_one_line(i.year, 16),
                 value=_one_line(i.value, 16),
                 motion=i.motion if i.motion in MOTIONS else "pop",
+                art=_one_line(i.art, 240) if v.kind == "country" else "",
+                image=i.image if v.kind == "country" and _PICTURE.fullmatch(i.image or "") else "",
             )
             for i in v.items[:cap]
         ]
@@ -271,6 +291,7 @@ def tidy(plan: Plan) -> Plan:
                 "setting": setting_of(v),
                 "actors": actors,
                 "crowd": max(0, min(8, int(v.crowd or 0))) if v.kind == "scene" else 0,
+                "country": _one_line(v.country, 60) if v.kind == "country" else "",
                 "art": _one_line(v.art, 300),
                 "image": v.image if _PICTURE.fullmatch(v.image or "") else "",
                 "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
@@ -363,7 +384,8 @@ def problems(plan: Plan, length: str = "auto") -> list[str]:
         found.append("the reel has no title")
     if len(plan.scenes) < 3:
         found.append(f"a reel needs at least 3 scenes, this has {len(plan.scenes)}")
-    low, high = WORDS.get(length, WORDS["auto"])
+    words = MAP_WORDS if plan.style == "map" else WORDS
+    low, high = words.get(length, words["auto"])
     total = narration_words(plan)
     if total < low * 0.8:
         found.append(f"the narration is {total} words; this length needs {low}-{high}")
@@ -406,7 +428,42 @@ def problems(plan: Plan, length: str = "auto") -> list[str]:
             found.append(f"{where}: dots draw at most 10 characters")
         if v.kind == "scene" and not v.actors:
             found.append(f"{where}: needs at least one actor from the cast")
-        lows = {"compare": 2, "list": 2, "timeline": 2, "icons": 1}
+        lows = {"compare": 2, "list": 2, "timeline": 2, "icons": 1, "country": 1}
         if v.kind in lows and len(v.items) < lows[v.kind]:
             found.append(f"{where}: needs at least {lows[v.kind]} items")
+    if plan.style == "map":
+        found += map_problems(plan)
+    return found
+
+
+MIN_COUNTRIES = 5
+
+
+def map_problems(plan: Plan) -> list[str]:
+    """What a World map reel's writer must fix: enough countries, each once, each naming
+    its country and every thing on its cards."""
+    found: list[str] = []
+    countries = [(n, s) for n, s in enumerate(plan.scenes, 1) if s.visual.kind == "country"]
+    if len(countries) < MIN_COUNTRIES:
+        found.append(
+            f"a World map reel needs at least {MIN_COUNTRIES} countries, this has {len(countries)}"
+        )
+    named: set[str] = set()
+    for n, scene in countries:
+        v = scene.visual
+        where = f"scene {n} ({v.text or 'country'})"
+        name = _plain(v.text)
+        if not name:
+            found.append(f"scene {n}: which country is it? text is empty")
+            continue
+        if name in named:
+            found.append(f"{where}: {v.text} comes twice; each country once")
+        named.add(name)
+        if not _says(scene.narration, v.text):
+            found.append(f"{where}: the narration must name {v.text}")
+        for item in v.items:
+            if not item.text.strip():
+                found.append(f"{where}: a card has no name")
+            elif not _says(scene.narration, item.text):
+                found.append(f"{where}: say {item.text} in the narration")
     return found
