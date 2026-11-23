@@ -18,6 +18,7 @@ import { AnimationAutopilotCard } from "@/components/animation-autopilot";
 import { AnimationPreview, type PreviewHandle } from "@/components/animation-preview";
 import { AnimationScenes } from "@/components/animation-scenes";
 import { AnimationTimeline } from "@/components/animation-timeline";
+import { ClaudeConnectCard } from "@/components/claude-connect";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -156,7 +157,10 @@ export default function AnimationsPage() {
       .then((found) => {
         if (!live) return;
         setList(found);
-        if (found.length) void open(found[0].id);
+        // A link to one reel (?id=, as Claude gives them) opens it; else the newest.
+        const wanted = new URLSearchParams(window.location.search).get("id");
+        if (wanted) void open(wanted);
+        else if (found.length) void open(found[0].id);
       })
       .catch(() => {});
     api
@@ -419,6 +423,8 @@ export default function AnimationsPage() {
               void open(a.id);
             }}
           />
+
+          <ClaudeConnectCard />
         </div>
 
         {current ? (

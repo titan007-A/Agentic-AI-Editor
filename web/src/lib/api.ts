@@ -992,6 +992,29 @@ export type KickHuntRequest = {
 
 export type AnimationVoice = { id: string; name: string; group: string; about: string };
 
+/** A way in for Claude to the Animations tab: a key made here, or an app connected by OAuth. */
+export type McpConnection = {
+  id: string;
+  label: string;
+  kind: "key" | "oauth";
+  /** The app's own name, for a connection made through the sign-in page. */
+  app: string;
+  /** A key's last letters, to tell it apart; the key itself never comes back. */
+  tail: string;
+  posting: boolean;
+  created_at: string;
+  last_used_at: string | null;
+};
+export type McpConnections = {
+  /** The MCP endpoint's address, as this browser reaches the site. */
+  url: string;
+  connections: McpConnection[];
+  /** A key just made, shown this once. */
+  key?: string;
+};
+/** An app asking to connect, on the sign-in page (/connect/). */
+export type McpAsk = { app: string; goes_to: string; account: string; studio: boolean };
+
 export type AnimationBrief = {
   idea: string;
   kind: string;
@@ -1028,6 +1051,15 @@ export const api = {
     >,
   ) => request<AnimationAutopilot>("PUT", "/animation-autopilot", body),
   animationAutopilotNow: () => request<Animation>("POST", "/animation-autopilot/now"),
+  mcpConnections: () => request<McpConnections>("GET", "/mcp/connections"),
+  newMcpKey: (body: { label: string; posting: boolean }) =>
+    request<McpConnections>("POST", "/mcp/keys", body),
+  setMcpPosting: (id: string, posting: boolean) =>
+    request<{ ok: boolean; posting: boolean }>("PATCH", `/mcp/connections/${id}`, { posting }),
+  removeMcpConnection: (id: string) => request<{ ok: boolean }>("DELETE", `/mcp/connections/${id}`),
+  mcpAsk: (ask: string) => request<McpAsk>("GET", `/mcp/requests/${encodeURIComponent(ask)}`),
+  answerMcpAsk: (ask: string, body: { allow: boolean; posting: boolean }) =>
+    request<{ redirect: string }>("POST", `/mcp/requests/${encodeURIComponent(ask)}`, body),
   kickStreamers: () => request<KickStreamer[]>("GET", "/kick/streamers"),
   addKickStreamer: (body: {
     name: string;
