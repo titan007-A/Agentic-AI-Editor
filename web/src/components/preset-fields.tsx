@@ -479,6 +479,8 @@ const TEXT_BLOCK_FIELDS: Field[] = [
   { path: "color", label: "Color", kind: "color" },
   { path: "anchor", label: "Anchor", kind: "select", options: ["top", "bottom"] },
   { path: "offset", label: "Offset from edge (px)", kind: "number" },
+  { path: "align", label: "Align", kind: "select", options: ["center", "left", "right"] },
+  { path: "inset", label: "Inset from that side (px)", kind: "number" },
   { path: "size", label: "Size", kind: "number" },
   { path: "min_size", label: "Min size", kind: "number" },
   { path: "max_width", label: "Max width (px)", kind: "number" },

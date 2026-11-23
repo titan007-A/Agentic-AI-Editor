@@ -174,7 +174,7 @@ def test_the_edit_cuts_the_panels_round_the_camera_found(monkeypatch, make_analy
     edl = EDL(clips=[Clip(start=0, end=20)], crop_mode="face")
     settings = get_settings()
     found = Camera((210, 72, 95, 126), (0, 0, 386, 318), 0.7)
-    monkeypatch.setattr(pipeline.camera_finder, "find", lambda *a, **k: found)
+    monkeypatch.setattr(pipeline.camera_finder, "in_stream", lambda *a, **k: found)
     cut = pipeline.facecam_cuts(edl, facecam_preset(), analysis, settings.media_dir, settings)
     assert cut.facecam is not None and not cut.doubts
     assert any("386x318 box at 0,0" in d for d in cut.decisions)
@@ -184,10 +184,11 @@ def test_the_edit_cuts_the_panels_round_the_camera_found(monkeypatch, make_analy
     assert any("480x432 box at 0,0" in d for d in cut.decisions)
     assert cut.facecam.face == (210, 72, 95, 126)
     # All camera, or none: the face is followed over the whole frame (none is a doubt).
-    monkeypatch.setattr(pipeline.camera_finder, "find", lambda *a, **k: Camera((1, 1, 9, 9), None))
+    all_camera = Camera((1, 1, 9, 9), None)
+    monkeypatch.setattr(pipeline.camera_finder, "in_stream", lambda *a, **k: all_camera)
     cut = pipeline.facecam_cuts(edl, facecam_preset(), analysis, settings.media_dir, settings)
     assert cut.facecam is None and not cut.doubts and "all camera" in cut.decisions[-1]
-    monkeypatch.setattr(pipeline.camera_finder, "find", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline.camera_finder, "in_stream", lambda *a, **k: None)
     cut = pipeline.facecam_cuts(edl, facecam_preset(), analysis, settings.media_dir, settings)
     assert cut.facecam is None and cut.doubts
     # A preset without the layout is left alone.
@@ -234,9 +235,21 @@ def test_the_kick_facecam_preset_loads_and_previews_clean():
 
     settings = get_settings()
     preset = load_preset(settings.presets_dir / "kick-facecam-9x16.yaml")
-    assert preset.facecam.enabled and preset.text_blocks[0].outline == 4
-    _, notes = preview.render_checked(preset, settings, "16:9")
+    assert preset.facecam.enabled and preset.facecam.gap > 0
+    jpeg, notes = preview.render_checked(preset, settings, "16:9")
     assert notes == []
+    # A black band between the panels, Kick's logo at its left and the channel at its right,
+    # the one-liner under it.
+    image = Image.open(io.BytesIO(jpeg)).convert("RGB")
+    camera, game = preset.facecam.rows(1920)
+    band = camera[1], game[0]
+    middle = (band[0] + band[1]) // 2
+    assert max(image.getpixel((500, middle))) < 40
+    row = [image.getpixel((x, middle)) for x in range(1080)]
+    green = [x for x, (r, g, _) in enumerate(row) if g > 200 > r]
+    white = [x for x, rgb in enumerate(row) if min(rgb) > 200]
+    assert green and max(green) < 500 and white and min(white) > 500
+    assert preset.one_liner.offset >= band[1]
 
 
 @needs_ffmpeg
@@ -256,3 +269,69 @@ def test_a_render_puts_the_camera_on_top_and_the_game_below(tmp_path):
     camera, game = image.getpixel((540, 380)), image.getpixel((540, 1300))
     assert camera[0] > 200 and camera[2] < 60  # the red camera fills the top panel
     assert game[2] > 200 and game[0] < 60  # the blue game the bottom one
+
+
+def test_text_can_stand_at_the_left_or_the_right(tmp_path):
+    settings = get_settings()
+    font = text.font_file(settings.fonts_dir, "Anton-Regular")
+    block = Preset.model_fields["text_blocks"].annotation.__args__[0](
+        text="KICK.COM/XQC", font="Anton-Regular", size=60, anchor="top", offset=100,
+    )  # fmt: skip
+    spans = {}
+    for align in ("left", "center", "right"):
+        placed = text.place(block.model_copy(update={"align": align, "inset": 40}), font,
+                            (1080, 1920), None, None)  # fmt: skip
+        layer = np.asarray(Image.open(text.draw([placed], (1080, 1920), tmp_path / "t.png")))
+        columns = np.flatnonzero((layer[..., 3] > 128).any(axis=0))
+        spans[align] = (columns[0], columns[-1])
+        assert abs(placed.columns(1080)[0] - columns[0]) < 8
+    assert abs(spans["left"][0] - 40) < 8 and abs(spans["right"][1] - 1040) < 8
+    middle = (spans["center"][0] + spans["center"][1]) / 2
+    assert abs(middle - 540) < 8
+
+
+def test_a_hunts_clips_share_the_surest_camera_found_in_them(tmp_path, monkeypatch):
+    from agentic_editor.clipper import hunt
+
+    videos = []
+    for n in range(3):
+        (tmp_path / f"kick-abc123-{n}").mkdir()
+        videos.append(tmp_path / f"kick-abc123-{n}" / "source.mp4")
+        videos[-1].write_bytes(b"v")
+    (tmp_path / "kick-other-0").mkdir()
+    (tmp_path / "kick-other-0" / "source.mp4").write_bytes(b"v")
+    assert hunt.fellow_moments(videos[0]) == videos[1:]
+    assert hunt.fellow_moments(tmp_path / "upload.mp4") == []
+
+    face = (220, 450, 110, 140)
+    cam = (0, 370, 490, 316)
+    looks = {
+        videos[0]: Camera(face, (0, 370, 1156, 710), 0.58),  # a game's line taken for its edge
+        videos[1]: Camera(face, None, 0.4, sure=False),  # no box sure
+        videos[2]: Camera((210, 452, 108, 140), cam, 0.8),
+    }
+    seen = []
+
+    def look(video, *args):
+        seen.append(video)
+        return looks[video]
+
+    monkeypatch.setattr(finder, "look", look)
+    monkeypatch.setattr(finder.ffmpeg, "probe", lambda v: type("I", (), {
+        "duration": 30.0, "width": 1920, "height": 1080})())  # fmt: skip
+
+    def found(video):
+        fellows = hunt.fellow_moments(video)
+        return finder.in_stream(video, 0, 30, SOURCE, tmp_path, "ffmpeg", fellows)
+
+    assert found(videos[0]) == Camera(face, cam, 0.8)
+    assert found(videos[1]) == Camera(face, cam, 0.8)
+    assert found(videos[2]) == looks[videos[2]]  # its own is the surest
+    assert seen.count(videos[2]) == 2  # once as its own, once kept for the others
+    # A face the surer box can't be the camera round (elsewhere, or far too big) keeps its own.
+    looks[videos[0]] = Camera((1500, 100, 100, 130), (1350, 0, 570, 330), 0.6)
+    assert found(videos[0]) == looks[videos[0]]
+    looks[videos[0]] = Camera((60, 300, 400, 520), None, 0.7)  # all camera now
+    assert found(videos[0]).full
+    # Nothing sure anywhere: no camera, as find says.
+    assert finder.in_stream(videos[1], 0, 30, SOURCE, tmp_path, "ffmpeg", []) is None

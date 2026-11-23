@@ -21,7 +21,7 @@ one_liner:
   color: '#000000'
   box_color: '#FFFFFF'
   position: top
-  offset: 712
+  offset: 892
   max_words: 14
   hint: >-
     Like a Kick streamer clips page: say the funny or wild moment in this clip in a few
@@ -31,21 +31,23 @@ one_liner:
     clip shows. No hashtags, no quotation marks.
   fixed: true
   language: en
+# The band between the camera and the game: Kick's logo at its left, the channel at its right.
 text_blocks:
-- text: KICK       KICK.COM/{CHANNEL}
+- text: KICK.COM/{CHANNEL}
   font: Anton-Regular
-  size: 44
-  min_size: 24
+  size: 66
+  min_size: 30
   color: '#FFFFFF'
-  anchor: bottom
-  offset: 430
-  max_width: 1000
-  outline: 4
-  outline_color: '#000000'
-  word_colors:
-  - words: KICK
-    color: '#53FC18'
-    occurrence: 0
+  anchor: top
+  offset: 791
+  max_width: 560
+  align: right
+  inset: 48
+images:
+- file: assets/kick-logo.png
+  x: 44
+  y: 770
+  width: 380
 auto_name: false
 post_caption:
   enabled: true
@@ -60,7 +62,7 @@ facecam:
   enabled: true
   top: 0
   camera: 760
-  gap: 0
+  gap: 110
   focus: 0.5
 framing:
   mode: face

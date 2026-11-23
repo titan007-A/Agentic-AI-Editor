@@ -139,6 +139,23 @@ class Placed:
     word_colors: tuple[tuple[str, str, int | None], ...] = ()
     outline: float = 0.0  # px round the letters, in outline_color
     outline_color: str = "#000000"
+    align: str = "center"  # each line across the frame: centred, or at the left or right
+    inset: int = 0  # px in from the edge it is aligned to
+
+    def line_x(self, line: str, width: int) -> float:
+        """Where a line starts across a frame `width` px wide."""
+        length = self.font.length(line, self.size)
+        if self.align == "left":
+            return float(self.inset)
+        if self.align == "right":
+            return width - self.inset - length
+        return (width - length) / 2
+
+    def columns(self, width: int) -> tuple[float, float]:
+        """Columns of the frame the block's lines span."""
+        spans = [(x, x + self.font.length(line, self.size))
+                 for line in self.lines for x in [self.line_x(line, width)]]  # fmt: skip
+        return min(s[0] for s in spans), max(s[1] for s in spans)
 
     @property
     def band(self) -> tuple[float, float]:
@@ -224,7 +241,7 @@ def place(
     return Placed(
         lines, face, size, top, block.color, line_height(face, size, block.line_spacing),
         tuple((w.words, w.color, w.occurrence) for w in block.word_colors),
-        block.outline, block.outline_color,
+        block.outline, block.outline_color, block.align, block.inset,
     )  # fmt: skip
 
 
@@ -309,7 +326,7 @@ def draw(
         passes = [round(block.outline), 0] if round(block.outline) else [0]
         for outline in passes:
             for i, (line, pieces) in enumerate(zip(block.lines, colored, strict=True)):
-                x = (width - block.font.length(line, block.size)) / 2
+                x = block.line_x(line, width)
                 y = block.top + i * block.line_height
                 for piece, color in pieces:
                     ink = block.outline_color if outline else color

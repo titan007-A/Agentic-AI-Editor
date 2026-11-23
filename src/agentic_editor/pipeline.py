@@ -847,9 +847,10 @@ def facecam_cuts(
     clip = edl.clips[0]
     source = (analysis.width, analysis.height)
     try:
-        camera = camera_finder.find(
-            video, clip.start, clip.end, source, settings.models_dir, settings.ffmpeg_bin
-        )
+        camera = camera_finder.in_stream(
+            video, clip.start, clip.end, source, settings.models_dir, settings.ffmpeg_bin,
+            kick_hunt.fellow_moments(video),
+        )  # fmt: skip
     except Exception as exc:  # the face follow still makes a reel
         log.warning("facecam: looking for the camera failed: %s", exc)
         camera = None

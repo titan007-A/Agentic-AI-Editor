@@ -65,6 +65,16 @@ def key_of(hunt_id: str, index: int) -> str:
     return f"kick-{hunt_id}-{index}"
 
 
+def fellow_moments(video: Path) -> list[Path]:
+    """The videos of the other moments of the hunt `video` is a moment's video of (kept as
+    sources/kick-<hunt>-<n>/source.mp4, see make_job); none for any other video."""
+    parts = video.parent.name.split("-")
+    if video.name != "source.mp4" or len(parts) != 3 or parts[0] != "kick":
+        return []
+    found = video.parent.parent.glob(f"kick-{parts[1]}-*/source.mp4")
+    return sorted(p for p in found if p.parent != video.parent)
+
+
 def hunt_of_source(source: str) -> str | None:
     """The hunt a moment's Job came from ("kick:kick-<hunt>-<n>")."""
     if not source.startswith(SOURCE):
