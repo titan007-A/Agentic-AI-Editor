@@ -152,6 +152,15 @@ function Researcher() {
   // Whole songs' YouTube videos: for accounts with the youtube_songs feature.
   const songsOn = useMe()?.features?.includes("youtube_songs") ?? false;
   const offered = SITES.filter((s) => s.site !== "songs" || songsOn);
+  // Ticked from the start where they're on: most of what a research gives is YouTube's
+  // (the owner: Instagram a tenth at most). Only once, so unticking them sticks.
+  const songsTicked = useRef(false);
+  useEffect(() => {
+    if (songsOn && !songsTicked.current) {
+      songsTicked.current = true;
+      setSites((s) => (s.includes("songs") ? s : [...s, "songs"]));
+    }
+  }, [songsOn]);
 
   const refreshList = useCallback(
     () =>
@@ -317,16 +326,18 @@ function Researcher() {
           It searches Instagram, YouTube Shorts and X (posts with a video, when you tick it) through
           web search engines for reels like your account&apos;s best ones, or for what you describe,
           and gives the 15 that fit best and are most viral (of up to 50 it rates), never one it
-          showed you before. With source pages, 4 in 10 come from them and 6 from the search. Choose
-          up to 10 of them to edit.
+          showed you before. Instagram reels are at most a tenth of them; the rest come from
+          YouTube. With source pages, 4 in 10 come from them and 6 from the search. Choose up to 10
+          of them to edit.
         </p>
         {songsOn && (
           <p className="mt-1 text-sm text-muted-foreground">
             YouTube full songs searches YouTube itself, and the singers&apos; own channels it finds,
             for whole songs on the singer&apos;s own channel or an official label&apos;s (T-Series,
-            Sony Music, VEVO...). The model looks at every one and leaves out streams, interviews,
-            medleys, covers, remixes, lyric or audio-only videos and fan uploads. It gives up to 30
-            (of up to 120 it rates), and each edit cuts the song to its preset&apos;s length.
+            Sony Music, VEVO...), when what you ask for is music. The model looks at every one and
+            leaves out streams, interviews, medleys, covers, remixes, lyric or audio-only videos and
+            fan uploads. It gives up to 30 (of up to 120 it rates), and each edit cuts the song to
+            its preset&apos;s length.
           </p>
         )}
       </div>

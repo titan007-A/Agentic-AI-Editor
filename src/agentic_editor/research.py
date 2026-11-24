@@ -38,7 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import pairwise, zip_longest
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -72,8 +72,14 @@ SITES = {
 }
 SONGS = "songs"
 SITE = SITES["instagram"]
-# What a daily research searches: X only when the person asks for it.
-DAILY_SITES = ("instagram", "shorts")
+# What a daily research searches: X only when the person asks for it; whole songs only
+# when what it finds is music (see Planned.music).
+DAILY_SITES = ("instagram", "shorts", "songs")
+# The owner: Instagram reels at most a tenth of what a research shows, the rest YouTube
+# (Shorts, and whole songs for music). They take at most this share of what is looked
+# up too, so YouTube's results get looked up and rated.
+INSTAGRAM_SHOWN = 0.1
+INSTAGRAM_LOOKED_UP = 0.2
 MAX_SHORT = 180  # seconds: YouTube's longest Short; longer is a video, left out
 # A whole song's video, in seconds: shorter is a clip or a teaser, longer a jukebox or a
 # concert.
@@ -162,6 +168,9 @@ RATE_BATCH = 10
 # Reels the model rates below this fit are left out, not shown at the bottom: a search
 # also finds what only shares a word with the request.
 MIN_FIT = 0.5
+# When the person typed what they want, "related" (5/10) isn't it: a ranking, a compilation
+# or a studio take when they asked for live performances.
+ASKED_FIT = 0.6
 MIN_QUERIES = 8  # fewer from the model, and it is asked once more
 MAX_QUESTIONS = 6  # asked before a research
 ANSWERED = "Their answers to the researcher's questions:"
@@ -226,6 +235,10 @@ class Reel:
     @property
     def on_x(self) -> bool:
         return self.code.startswith(X)
+
+    @property
+    def on_instagram(self) -> bool:
+        return not self.youtube and not self.on_x
 
     @property
     def kind(self) -> str:
@@ -302,7 +315,19 @@ class Learned:
 
 class Searches(BaseModel):
     brief: str = Field(max_length=400)  # required: left optional, the model skipped it
+    # Whether what they want is music (songs, singers, bands, performances): whole songs'
+    # YouTube videos are searched only then.
+    music: bool
     queries: list[str] = Field(min_length=1, max_length=MAX_QUERIES * 2)
+
+
+class Planned(NamedTuple):
+    """A research's plan: the request in one English sentence, its searches, and whether
+    it is about music (None when the model couldn't say)."""
+
+    brief: str
+    queries: list[str]
+    music: bool | None = None
 
 
 class Rating(BaseModel):
@@ -373,6 +398,8 @@ PLAN = (
     "may be in Hindi, Hinglish or any language ('gaane' means songs, 'dundh' find, 'bdia' "
     "good). First write `brief`: in one English sentence, exactly what content they want "
     "(the music, artists or topic, its language or country, live or studio, any era). "
+    "Then `music`: true when what they want is music (songs, singers, bands, "
+    "performances), false for anything else (military, sports, history, comedy...). "
     + SEARCHES
     + "\n\nTheir request: {description}"
 )
@@ -383,7 +410,9 @@ PLAN_FOR = (
     "exactly what content to find: reels like the account's best liked ones that are going "
     "viral now and suit the presets (the music, artists or topic, its language or country, "
     "live or studio, any era); their request for this time, which may be in Hindi or "
-    "Hinglish, comes first. " + SEARCHES
+    "Hinglish, comes first. Then `music`: true when what to find is music (songs, "
+    "singers, bands, performances), false for anything else (military, sports, history, "
+    "comedy...). " + SEARCHES
 )
 RATE = (
     "Rate how well each reel (an Instagram reel, a YouTube Short or a YouTube song's whole "
@@ -391,7 +420,14 @@ RATE = (
     "wants, from its account, caption "
     "and search snippet. Judge only the content asked for, not popularity: music of another "
     "language or country than the one asked for is 0, and so is a reel that only shares a "
-    "word or a place name with the request. For each reel give:\n"
+    "word or a place name with the request. For anything that isn't music (combat footage, "
+    "sports, fails, animals...) the caption's language doesn't matter, as the editor writes "
+    "their own words over it: judge what the video shows. Judge its kind too: when the "
+    "account posts real footage, a narrated slideshow of still pictures, AI-made pictures or "
+    "video, a text-to-speech explainer, a ranking ('top 5'), a quiz, a news presenter "
+    "talking or a staged POV skit is at most 3, unless that kind is what they asked for or "
+    "what the account posts; and when it posts singers' own performances, so is a lyric "
+    "video and a cover or play-along by someone else. For each reel give:\n"
     "- n: its number\n"
     "- relevance: 10 = exactly it, 5 = related, 0 = unrelated\n"
     "- why: one sentence (under 25 words) on why it fits or doesn't\n"
@@ -490,6 +526,26 @@ def song_url(code: str) -> str:
 
 
 NOT_SONG = "not a song's video"
+# YouTube's own track of a song (a still picture with the sound, "Provided to YouTube by
+# <distributor>"): nothing to edit.
+ART_TRACK = re.compile(r"^\s*provided to youtube by\b", re.IGNORECASE | re.MULTILINE)
+STILL = "a still picture with the song"
+# Made with AI rather than filmed (a person asking for AI pictures says so: see not_wanted).
+MADE_WITH_AI = re.compile(
+    r"\bai[ -]?(?:shorts?|generated|made|art|video|cover|version|animation)\b|#ai\b|"
+    r"\b(?:made|created) (?:with|by|using) ai\b",
+    re.IGNORECASE,
+)
+ASKS_FOR_AI = re.compile(r"\b(?:ai|artificial intelligence)\b", re.IGNORECASE)
+AI_MADE = "made with AI"
+# In a music research, a Short or reel that isn't a singer singing: a lyric edit, a ranking
+# or quiz, a compilation, someone's cover, an altered copy.
+NOT_A_PERFORMANCE = re.compile(
+    r"\b(?:lyrics?|lyrical|karaoke|top \d+|compilation|playlist|medley|mashup|nightcore|"
+    r"slowed|sped up|8d|covers?|tribute|quiz|which .{1,40} would you|best .{1,30} songs)\b",
+    re.IGNORECASE,
+)
+NOT_PERFORMED = "not the singer performing"
 NOT_USABLE = "not a song video to edit"  # the model's word (see judge_songs)
 LIVE = ("is_live", "is_upcoming", "was_live", "post_live")  # streams, on or past
 OFF_CHANNEL = "not the artist's or a label's channel"
@@ -535,6 +591,41 @@ def not_a_song(link: str, title: str, duration: float | None, media_type=None, l
     if duration is not None and not MIN_SONG <= duration <= MAX_SONG:
         return NOT_SONG
     return NOT_SONG if NOT_A_SONG.search(title) else ""
+
+
+def not_wanted(reel: Reel, music: bool, wants_ai: bool = False) -> str:
+    """Why a looked-up reel is left out before the model rates it, "" when it may be
+    wanted: YouTube's still-picture track of a song (STILL), one made with AI unless the
+    person asked for AI (AI_MADE), and in a music research a Short or reel that isn't the
+    singer performing (a lyric edit, a ranking, a cover: NOT_PERFORMED). The model let
+    these through as fitting; their words say what they are."""
+    text = f"{reel.title}\n{reel.caption}"
+    if reel.youtube and (ART_TRACK.search(reel.caption) or ART_TRACK.search(reel.snippet)):
+        return STILL
+    if not wants_ai and MADE_WITH_AI.search(text):
+        return AI_MADE
+    if music and not reel.full and NOT_A_PERFORMANCE.search(text):
+        return NOT_PERFORMED
+    return ""
+
+
+def instagram_share(picked: list[Reel], share: float = 0.1) -> tuple[list[Reel], int]:
+    """`picked` with Instagram's reels at most `share` of the list as it ends up (at least
+    one may stay): with fewer found than asked, a fixed number of them would be more than
+    their share. The lowest-ranked go; how many did."""
+    if share >= 1:
+        return picked, 0
+    others = sum(not r.on_instagram for r in picked)
+    room = max(1, int(others * share / (1 - share) + 1e-9))
+    kept, given, dropped = [], 0, 0
+    for reel in picked:
+        if reel.on_instagram:
+            if given >= room:
+                dropped += 1
+                continue
+            given += 1
+        kept.append(reel)
+    return kept, dropped
 
 
 def _song(entry: dict, query: str, source: str = "", kind: str | None = None) -> Reel | None:
@@ -771,7 +862,7 @@ def _taste(context: Context, rating: bool = False) -> str:
     return "\n\n".join(parts)
 
 
-def plan(llm, description: str, context: Context | None = None) -> tuple[str, list[str]]:
+def plan(llm, description: str, context: Context | None = None) -> Planned:
     """The request as the model understood it, in English, and the searches for it. The
     request itself, in whatever words, isn't searched ("italian gaane" finds Hindi songs),
     unless the model can't answer at all. For an account the description is an optional
@@ -795,7 +886,7 @@ def plan(llm, description: str, context: Context | None = None) -> tuple[str, li
         fallback = [asked[:120]]
     if taste := _taste(context or Context()):
         prompt += "\n\n" + taste
-    brief, queries = "", []
+    brief, queries, music = "", [], None
     messages = [{"role": "user", "content": prompt}]
     for _ in range(2):
         try:
@@ -804,10 +895,11 @@ def plan(llm, description: str, context: Context | None = None) -> tuple[str, li
             log.warning("couldn't plan searches: %s", exc)
             continue
         brief = brief or reply.brief.strip()
+        music = reply.music if music is None else music
         queries += reply.queries
         if len(_tidy(queries)) >= MIN_QUERIES:
             break
-    return brief, (_tidy(queries) or _tidy(fallback))[:MAX_QUERIES]
+    return Planned(brief, (_tidy(queries) or _tidy(fallback))[:MAX_QUERIES], music)
 
 
 def _tidy(queries: list[str]) -> list[str]:
@@ -1170,8 +1262,8 @@ def rate(
     context: Context | None = None,
 ) -> None:
     """Each reel's relevance, 0-1, from the planning model, with why, its song, what it
-    matches and the preset it suits best. A batch it can't rate keeps None, ranked as half
-    relevant."""
+    matches and the preset it suits best. A batch it can't rate is tried again in halves;
+    what still can't be rated keeps None (see run: left out, unless nothing was rated)."""
     context = context or Context()
     wish = description.strip()
     if context.handle:
@@ -1181,8 +1273,9 @@ def rate(
         wish = f"{wish}\nThat is, {account}" if wish else account
     if taste := _taste(context, rating=True):
         wish = f"{wish}\n\n{taste}"
-    for start in range(0, len(reels), batch):
-        group = reels[start : start + batch]
+    groups = [reels[start : start + batch] for start in range(0, len(reels), batch)]
+    while groups:
+        group = groups.pop(0)
         lines = "\n".join(
             f"{n}. {r.kind}"
             f" | account: {r.account or '?'} | caption: {_short(r.caption or r.title, 300)}"
@@ -1200,7 +1293,10 @@ def rate(
                 ),
             )
         except LLMError as exc:
-            log.warning("couldn't rate reels %d-%d: %s", start + 1, start + len(group), exc)
+            log.warning("couldn't rate %d reels (%s...): %s", len(group), group[0].code, exc)
+            if len(group) > 1:  # a long answer broke off: half as many at a time
+                half = len(group) // 2
+                groups[:0] = [group[:half], group[half:]]
             continue
         for rating in reply.ratings:
             if 1 <= rating.n <= len(group):
@@ -1295,6 +1391,21 @@ def trends(items: list, now: datetime | None = None) -> tuple[list, list[SongTre
     return reels[:TRENDING], going[:TRENDING]
 
 
+def instagram_few(reels: list[Reel], limit: int) -> list[Reel]:
+    """The first `limit` reels to look up, Instagram's at most INSTAGRAM_LOOKED_UP of them
+    (the rest YouTube's, in the order found), so a tenth of what is shown can be
+    Instagram's and the rest has YouTube's to choose from."""
+    room = max(2, round(limit * INSTAGRAM_LOOKED_UP))
+    kept, taken = [], 0
+    for reel in reels:
+        if reel.on_instagram:
+            if taken >= room:
+                continue
+            taken += 1
+        kept.append(reel)
+    return kept[:limit]
+
+
 def pick(
     ranked: list[Reel],
     count: int = SHOWN,
@@ -1303,6 +1414,7 @@ def pick(
     per_artist: int | None = PER_ARTIST,
     asked: str = "",
     sourced: int | None = None,
+    instagram: int | None = None,
 ) -> tuple[list[Reel], dict[str, int], float | None]:
     """The best `count` of the ranked reels, at most `per_account` from one account (by its
     Instagram name, its display name when that isn't known), `per_song` of one song and
@@ -1319,10 +1431,13 @@ def pick(
 
     Whole songs come SONGS_PER_CHANNEL from one channel (a label's posts many singers'
     songs), and all of them when the singer was asked for: the channel is often theirs;
-    and SONGS_PER_ARTIST of one singer."""
+    and SONGS_PER_ARTIST of one singer.
+
+    With `instagram`, at most that many Instagram reels, wherever they come from: places
+    they would have taken stay with YouTube's, or empty (the owner wants few)."""
     named = f" {_same(asked)} "
     picked: list[Reel] = []
-    passed = {"same account": 0, "same song": 0, "same artist": 0}
+    passed = {"same account": 0, "same song": 0, "same artist": 0, "Instagram's share": 0}
     accounts: dict[str, int] = {}
     songs: dict[str, int] = {}
     artists: dict[str, int] = {}
@@ -1334,6 +1449,9 @@ def pick(
     skipped: set[int] = set()
 
     def blocked(reel: Reel, filling: bool = False) -> str | None:
+        given = sum(r.on_instagram for r in picked)
+        if reel.on_instagram and instagram is not None and given >= instagram:
+            return "Instagram's share"
         who, song, artist = _same(reel.handle or reel.account), _same(reel.song), _same(reel.artist)
         wanted = artist and f" {artist} " in named
         cap = per_account
@@ -1491,11 +1609,13 @@ def run(
     brings new ones. With whole songs more are looked up and given (SONGS_REELS,
     SONGS_SHOWN), and only those the model says are a song's own video to edit."""
     context = context or Context()
-    many = SONGS in sites
-    limit, shown = (SONGS_REELS, SONGS_SHOWN) if many else (MAX_REELS, SHOWN)
     progress("planning the searches", 0.02)
     with planner() as llm:
-        brief, queries = plan(llm, description, context)
+        brief, queries, music = plan(llm, description, context)
+    if music is False:  # whole songs only for music: none to find for military, sports...
+        sites = tuple(s for s in sites if s != SONGS)
+    many = SONGS in sites
+    limit, shown = (SONGS_REELS, SONGS_SHOWN) if many else (MAX_REELS, SHOWN)
     reels, failed = search(queries, find, pause, progress, sites, songs)
     if not reels and failed:
         raise RuntimeError("the search engines didn't answer; try again in a few minutes")
@@ -1522,10 +1642,15 @@ def run(
         "shown before": sum(r.code in seen and r.code not in used for r in reels),
         "the account's own": sum(r.code in context.own - used - seen for r in reels),
     }
-    reels = [r for r in reels if r.code not in used | seen | context.own][:limit]
+    reels = [r for r in reels if r.code not in used | seen | context.own]
+    reels = instagram_few(reels, limit)
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
     reels = [r for r in reels if not r.page or r.handle == r.page]  # another's, found by name
+    # A Short YouTube wouldn't show (gone, private, age-locked) has nothing but what the
+    # search engine said: no channel, no caption to judge, nothing to download.
+    left_out["couldn't be looked up"] = sum(r.short and not r.looked_up for r in reels)
+    reels = [r for r in reels if not (r.short and not r.looked_up)]
     if context.handle:
         left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
         reels = [r for r in reels if r.handle != context.handle]
@@ -1537,6 +1662,11 @@ def run(
     reels = [r for r in reels if not r.long and not r.no_video and not r.unfit]
     left_out["low quality"] = sum(r.quality == "low" for r in reels)
     reels = [r for r in reels if r.quality != "low"]
+    wants_ai = bool(ASKS_FOR_AI.search(f"{description} {brief}"))
+    for r in reels:
+        r.unfit = not_wanted(r, bool(music) or many, wants_ai)
+    unfit.update(r.unfit for r in reels if r.unfit)
+    reels = [r for r in reels if not r.unfit]
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:
@@ -1549,14 +1679,25 @@ def run(
     unfit.update(r.unfit for r in reels if r.unfit)
     reels = [r for r in reels if not r.unfit]
     left_out.update(unfit)
-    fitting = [r for r in reels if r.relevance is None or r.relevance >= MIN_FIT]
-    left_out["didn't fit"] = len(reels) - len(fitting)
+    # A reel the model couldn't rate isn't shown (the owner: no junk), unless it rated none:
+    # then they all are, as half relevant, rather than nothing.
+    rated = any(r.relevance is not None for r in reels)
+    left_out["couldn't be rated"] = sum(r.relevance is None for r in reels) if rated else 0
+    least = ASKED_FIT if description.strip() else MIN_FIT
+    fitting = [
+        r for r in reels
+        if (r.relevance is None and not rated) or (r.relevance or 0) >= least - 1e-9
+    ]  # fmt: skip
+    left_out["didn't fit"] = len(reels) - len(fitting) - left_out["couldn't be rated"]
     suggest(fitting, context)
     spread(fitting)
     # Only the person's own words (and answers) free an artist: the model's brief may name
     # examples of a genre they didn't ask for.
     sourced = round(shown * SOURCE_SHARE) if context.sources else None
-    picked, passed, cutoff = pick(rank(fitting), shown, asked=description, sourced=sourced)
+    picked, passed, cutoff = pick(rank(fitting), shown, asked=description, sourced=sourced,
+                                  instagram=max(1, int(shown * INSTAGRAM_SHOWN)))  # fmt: skip
+    picked, over = instagram_share(picked, INSTAGRAM_SHOWN)
+    passed["Instagram's share"] = passed.get("Instagram's share", 0) + over
     left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
     return Result(
         queries,

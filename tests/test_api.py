@@ -1329,7 +1329,7 @@ def test_the_researcher_asks_first_and_the_answers_become_part_of_the_research(e
     assert env.client.get(f"/api/research/{other['id']}").json()["status"] == "done"
 
 
-def test_the_chat_answers_from_the_reasoning_or_starts_a_follow_up(env, monkeypatch):
+def test_the_chat_answers_from_the_reasoning_or_starts_a_follow_up(env, monkeypatch, all_instagram):
     fake_research(monkeypatch, env)
     body = {"description": "Bryan Adams live", "skip_questions": True}
     found = env.client.post("/api/research", json=body).json()
@@ -1357,7 +1357,9 @@ def test_the_chat_answers_from_the_reasoning_or_starts_a_follow_up(env, monkeypa
     assert early.status_code == 409  # chat opens once it is done
 
 
-def test_a_research_ranks_reels_that_fit_first_and_never_shows_one_twice(env, monkeypatch):
+def test_a_research_ranks_reels_that_fit_first_and_never_shows_one_twice(
+    env, monkeypatch, all_instagram
+):
     fake_research(monkeypatch, env)
     started = env.client.post(
         "/api/research", json={"description": "Bryan Adams live", "skip_questions": True}
@@ -1396,7 +1398,9 @@ def test_a_research_ranks_reels_that_fit_first_and_never_shows_one_twice(env, mo
     assert env.client.get(f"/api/research/{found['id']}").status_code == 404
 
 
-def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(env, monkeypatch):
+def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(
+    env, monkeypatch, all_instagram
+):
     fake_research(monkeypatch, env)
     bad = env.client.post("/api/research/accounts", json={"handle": "x y", "presets": ["a"]})
     assert bad.status_code == 422
@@ -1448,7 +1452,7 @@ def test_an_instagram_account_is_learned_and_researched_for_with_its_presets(env
     assert riya.delete(f"/api/research/accounts/{mine['id']}").status_code == 404
 
 
-def test_feedback_on_reels_teaches_later_researches(env, monkeypatch):
+def test_feedback_on_reels_teaches_later_researches(env, monkeypatch, all_instagram):
     fake_research(monkeypatch, env)
     body = {"handle": "voiceshq", "presets": ["voicehq-9x16"]}
     account = env.client.post("/api/research/accounts", json=body).json()
@@ -1558,7 +1562,7 @@ def test_whole_youtube_songs_are_searched_only_for_the_accounts_that_have_them(e
     assert riya.post("/api/research", json=body).status_code == 200
 
 
-def test_an_account_can_be_researched_for_every_morning(env, monkeypatch):
+def test_an_account_can_be_researched_for_every_morning(env, monkeypatch, all_instagram):
     from datetime import datetime
 
     fake_research(monkeypatch, env)
@@ -1577,7 +1581,7 @@ def test_an_account_can_be_researched_for_every_morning(env, monkeypatch):
     assert morning(30, 10) == []  # once a day
     found = env.client.get(f"/api/research/{first}").json()
     assert found["daily"] and found["status"] == "done" and found["handle"] == "voiceshq"
-    assert found["sites"] == ["instagram", "shorts"]
+    assert found["sites"] == ["instagram", "shorts", "songs"]  # songs only when it's music
     assert len(morning(31, 7)) == 1  # the next morning
     assert env.client.get("/api/research/accounts").json()[0]["daily_on"] == "2026-10-31"
 
@@ -1613,7 +1617,7 @@ def test_an_account_takes_reels_from_its_source_pages(env, monkeypatch):
     assert context.sources == ["instagram:bestvocals", "youtube:@ChiaraTomao"]
 
 
-def test_the_trend_radar_reads_the_persons_recent_researches(env, monkeypatch):
+def test_the_trend_radar_reads_the_persons_recent_researches(env, monkeypatch, all_instagram):
     from datetime import UTC, datetime, timedelta
 
     fake_research(monkeypatch, env)

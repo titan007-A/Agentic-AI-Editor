@@ -83,3 +83,13 @@ def make_analysis():
         )
 
     return build
+
+
+@pytest.fixture
+def all_instagram(monkeypatch):
+    """Instagram's share of a research lifted (research.INSTAGRAM_SHOWN, _LOOKED_UP), for
+    tests of other things whose fake engines find only Instagram reels."""
+    from agentic_editor import research
+
+    monkeypatch.setattr(research, "INSTAGRAM_SHOWN", 1.0)
+    monkeypatch.setattr(research, "INSTAGRAM_LOOKED_UP", 1.0)
