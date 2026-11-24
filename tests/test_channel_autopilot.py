@@ -720,6 +720,14 @@ def due(env, post_id):
         db.commit()
 
 
+def test_a_post_goes_at_once_on_its_own_thread_not_behind_the_queues_edits(env, monkeypatch):
+    posted = []
+    monkeypatch.setattr(pilot, "post", lambda post_id, Session, settings: posted.append(post_id))
+    monkeypatch.setattr(jobs, "sessions", lambda: env.sessions)
+    pilot.default_queue().post(7).join(5)
+    assert posted == [7]
+
+
 def test_in_dry_run_nothing_goes_to_instagram(env, tmp_path, graph):
     owner = page(env)
     post_id, output_id = ready_reel(env, tmp_path, owner)

@@ -218,12 +218,34 @@ _running = threading.Lock()  # one autopilot's work at a time
 _deferred: dict[str, datetime] = {}  # when its work first gave way to people's jobs
 
 
+def _alone(what: str, run) -> threading.Thread:
+    """Run a post or a read of posts' numbers on its own thread: they only wait on Meta,
+    and a queue worker may be busy with an edit for many minutes (a post at its time
+    must not wait for one)."""
+
+    def go() -> None:
+        try:
+            run()
+        except Exception:
+            log.exception("channel autopilot: %s failed", what)
+
+    thread = threading.Thread(target=go, daemon=True, name=f"channel {what}")
+    thread.start()
+    return thread
+
+
 def default_queue() -> SimpleNamespace:
     from agentic_editor import jobs
+    from agentic_editor.settings import get_settings
 
     return SimpleNamespace(
-        work=jobs.channel_work, post=jobs.channel_post, read=jobs.channel_read,
-        learn=jobs.channel_learn, find=jobs.find_reels,
+        work=jobs.channel_work, learn=jobs.channel_learn, find=jobs.find_reels,
+        post=lambda post_id: _alone(
+            f"post {post_id}", lambda: post(post_id, jobs.sessions(), get_settings())
+        ),
+        read=lambda pilot_id: _alone(
+            f"numbers of {pilot_id}", lambda: read_numbers(pilot_id, jobs.sessions())
+        ),
     )  # fmt: skip
 
 

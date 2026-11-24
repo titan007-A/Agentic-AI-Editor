@@ -1363,16 +1363,6 @@ def channel_work(pilot_id: str) -> None:
 
 
 @huey.task()
-def channel_post(post_id: int) -> None:
-    channel_pilot.post(post_id, sessions(), get_settings())
-
-
-@huey.task()
-def channel_read(pilot_id: str) -> None:
-    channel_pilot.read_numbers(pilot_id, sessions())
-
-
-@huey.task()
 def channel_learn(pilot_id: str, research_id: str | None = None) -> None:
     """Read a channel autopilot's page (its posts and their numbers), then start its
     research, which learns from them; the research starts whatever came of the reading."""
