@@ -261,13 +261,28 @@ def confidence(score: float, doubts: list[str], issues: list[str]) -> Check:
     return Check("confidence", ok, detail)
 
 
+# The caption feature's note that its length missed the preset's words ("71 words, not
+# 25-70"): a style target, not a doubt about what it says, within WORDS_SLACK of the range.
+WORD_COUNT = re.compile(r"^(\d+) words, not (\d+)-(\d+)$")
+WORDS_SLACK = 0.25
+
+
+def _length_only(note: str) -> bool:
+    if not (found := WORD_COUNT.match(note.strip())):
+        return False
+    count, least, most = (int(g) for g in found.groups())
+    return least * (1 - WORDS_SLACK) <= count <= most * (1 + WORDS_SLACK)
+
+
 def caption(text: str, status: str | None, notes: list[str]) -> Check:
     if status != "done" or not text.strip():
         why = "; ".join(notes) or status or "not written"
         return Check("caption", False, f"no caption: {why}")
-    if notes:
-        return Check("caption", False, "to check before posting: " + "; ".join(notes))
-    return Check("caption", True, f"written, {len(text.split())} words, checked by its sources")
+    doubts = [n for n in notes if not _length_only(n)]
+    if doubts:
+        return Check("caption", False, "to check before posting: " + "; ".join(doubts))
+    said = f"written, {len(text.split())} words, checked by its sources"
+    return Check("caption", True, said + ("" if not notes else f" ({'; '.join(notes)})"))
 
 
 def reel_length(duration: float, preset: Preset) -> Check:

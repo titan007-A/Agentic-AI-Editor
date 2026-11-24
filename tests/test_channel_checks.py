@@ -222,6 +222,11 @@ def test_the_edit_must_have_no_doubts_and_its_caption_nothing_to_check():
     assert not checks.caption("", "failed", ["nothing found"]).ok
     noted = checks.caption("text", "done", ["Wikipedia has no article on it. Check it."])
     assert not noted.ok and "Wikipedia" in noted.detail
+    # Its length a little off the preset's words is a style target, not a doubt.
+    assert checks.caption("text", "done", ["71 words, not 25-70"]).ok
+    assert not checks.caption("text", "done", ["120 words, not 25-70"]).ok
+    mixed = checks.caption("text", "done", ["71 words, not 25-70", "not in the sources: 1977"])
+    assert not mixed.ok and "71 words" not in mixed.detail
     preset = vs_preset()
     assert checks.reel_length(45.0, preset).ok
     assert not checks.reel_length(20.0, preset).ok
