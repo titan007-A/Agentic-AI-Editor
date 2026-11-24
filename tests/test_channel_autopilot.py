@@ -457,6 +457,7 @@ def test_a_video_shazam_doubts_is_skipped_never_guessed(env, source, heard, titl
         assert not row.checks[-1]["ok"]
 
 
+@needs_ffmpeg
 def test_a_video_that_cant_be_downloaded_or_is_too_short_is_skipped(env, source):
     owner = page(env)
     with env.sessions() as db:
