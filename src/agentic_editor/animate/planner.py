@@ -410,23 +410,26 @@ def _write(
     return better, left if better is again else wrong
 
 
-def draft(llm, brief: Brief, found: list[Found], known=None) -> tuple[Plan, list[str]]:
+def draft(llm, brief: Brief, found: list[Found], known=None, checks=None) -> tuple[Plan, list[str]]:
     """A first Plan for `brief`, and what is still off about it (shown to the person).
-    `known(name)` says whether a country is on the map (World map reels)."""
+    `known(name)` says whether a country is on the map, `checks` the strict check's verdicts
+    kept from earlier reels (World map reels: mapwriter.Checks)."""
     if brief.style == mapwriter.STYLE:
         sources = [Source(title=f.title, url=f.url) for f in found if f.url]
         voice = _voice_for(brief.voice, "", "facts", mapwriter.MOOD, mapwriter.VOICE)
         return mapwriter.draft(
-            llm, brief.idea, brief.length, sources_text(found), sources, voice, known
+            llm, brief.idea, brief.length, sources_text(found), sources, voice, known, checks
         )
     return _write(llm, draft_prompt(brief, found), brief, found, temperature=0.75)
 
 
-def change(llm, plan: Plan, request: str, brief: Brief, known=None) -> tuple[Plan, list[str]]:
+def change(
+    llm, plan: Plan, request: str, brief: Brief, known=None, checks=None
+) -> tuple[Plan, list[str]]:
     """`plan` changed as asked in plain words. The style, voice and sources stay unless
     the request is about them (the person changes those with the studio's own controls)."""
     if plan.style == mapwriter.STYLE:
-        return mapwriter.change(llm, plan, brief.idea, request, brief.length, known)
+        return mapwriter.change(llm, plan, brief.idea, request, brief.length, known, checks)
     keep = Brief(brief.idea, plan.kind, plan.style, plan.voice, brief.length)
     found = [Found(s.title, s.url, "") for s in plan.sources]
     changed, left = _write(
@@ -437,12 +440,12 @@ def change(llm, plan: Plan, request: str, brief: Brief, known=None) -> tuple[Pla
     ), left
 
 
-def redo_scene(llm, plan: Plan, index: int, request: str = "") -> Plan:
+def redo_scene(llm, plan: Plan, index: int, request: str = "", idea: str = "", checks=None) -> Plan:
     """`plan` with scene `index` written again."""
     if not 0 <= index < len(plan.scenes):
         raise PlannerError(f"there is no scene {index + 1}")
     if plan.style == mapwriter.STYLE and plan.scenes[index].visual.kind == "country":
-        return mapwriter.redo_country(llm, plan, index, request)
+        return mapwriter.redo_country(llm, plan, index, request, idea, checks)
     reply = llm.chat_json(scene_prompt(plan, index, request), SCENE_SCHEMA, temperature=0.8)
     scenes = list(plan.scenes)
     scenes[index] = Scene.model_validate(reply)

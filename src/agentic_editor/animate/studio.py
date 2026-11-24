@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -146,10 +147,12 @@ def paint_plan(
 def _paint_cards(
     plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint
 ) -> tuple[Plan, list[str]]:
-    """A World map reel's card pictures: each thing alone on white (the map itself is the
-    background, so scenes get no painting of their own)."""
+    """A World map reel's card pictures, in its look: each thing alone on white (cut out
+    of it for the neon look), or a dark photo for gold horror. A thing painted for an
+    earlier reel (same look, country and name, any wording of its picture) is used again,
+    never painted twice (images.CardIndex)."""
     wanted = [
-        (si, ii, item)
+        (si, ii, item, s.visual.text)
         for si, s in enumerate(plan.scenes)
         if s.visual.kind == "country"
         for ii, item in enumerate(s.visual.items)
@@ -157,15 +160,39 @@ def _paint_cards(
     ]
     if not wanted:
         return plan, []
-    if paint is images.paint and not images.available(settings):
-        return plan, [
+    style, size = images.card_style(plan.look)
+    index = images.CardIndex(images.folder(settings))
+    keys = [
+        images.card_key(style, item.text, country, item.art_seed) for *_, item, country in wanted
+    ]
+    known = [index.get(key) for key in keys]
+    todo = [n for n, name in enumerate(known) if not name]
+    unpainted: list[str] = []
+    if todo and paint is images.paint and not images.available(settings):
+        # Only the ones painted before (for this look) are shown; the rest show emoji.
+        unpainted = [
             "card pictures need the image model (installed on the Mac); the cards show emoji"
         ]
-    pictures = [images.Picture(item.art, _seed_of(item.art, 0)) for _, _, item in wanted]
+        todo = []
+    pictures = [
+        images.Picture(wanted[n][2].art, _seed_of(wanted[n][2].art, wanted[n][2].art_seed))
+        for n in todo
+    ]
     progress = lambda stage, message: _set(Session, animation_id, message=message)  # noqa: E731
-    names = paint(pictures, "map", settings, progress, size=images.CARD)
+    painted = paint(pictures, style, settings, progress, size=size) if pictures else []
+    names = list(known)
+    for n, name in zip(todo, painted, strict=True):
+        names[n] = name
+        if name:
+            index.put(keys[n], name)
+    index.save()
+    if plan.look == "neon":  # the dish on the map itself: its white background cut away
+        names = [images.cut_out(settings, name) if name else "" for name in names]
+    if len(todo) < len(wanted):
+        log.info("animation %s: %d of %d card pictures from earlier reels", animation_id,
+                 len(wanted) - len(todo), len(wanted))  # fmt: skip
     scenes = list(plan.scenes)
-    for (si, ii, _), name in zip(wanted, names, strict=True):
+    for (si, ii, *_), name in zip(wanted, names, strict=True):
         visual = scenes[si].visual
         items = list(visual.items)
         items[ii] = items[ii].model_copy(update={"image": name})
@@ -173,7 +200,9 @@ def _paint_cards(
             update={"visual": visual.model_copy(update={"items": items})}
         )
     missing = sum(1 for n in names if not n)
-    note = [f"{missing} of {len(names)} card pictures couldn't be painted"] if missing else []
+    note = unpainted or (
+        [f"{missing} of {len(names)} card pictures couldn't be painted"] if missing else []
+    )
     return plan.model_copy(update={"scenes": scenes}), note
 
 
@@ -199,12 +228,29 @@ def ensure_map(settings: Settings, say=None) -> list[str]:
     return []
 
 
-def known_country(settings: Settings):
-    """Whether a name is a country on the map (None when the map isn't here to ask)."""
+class Countries:
+    """The map's countries for the writer: whether a name is one (called), and where its
+    label sits (locate: lon, lat), to put a country added to a tour near its neighbours."""
+
+    def __init__(self, table: dict):
+        self.table = table
+
+    def __call__(self, name: str) -> bool:
+        return maps.find(name, self.table) is not None
+
+    def code(self, name: str) -> str | None:
+        """The map's code for a country however it is named ("England" is GBR)."""
+        return maps.find(name, self.table)
+
+    def locate(self, name: str) -> tuple[float, float] | None:
+        code = maps.find(name, self.table)
+        return tuple(self.table[code]["label"]) if code else None
+
+
+def known_country(settings: Settings) -> Countries | None:
+    """The map's countries (None when the map isn't here to ask)."""
     table = maps.table(settings.models_dir)
-    if not table:
-        return None
-    return lambda name: maps.find(name, table) is not None
+    return Countries(table) if table else None
 
 
 def player_of(plan: Plan, timeline: Timeline, settings: Settings) -> dict:
@@ -246,6 +292,7 @@ def run_task(
             say = lambda message: _set(Session, animation_id, message=message)  # noqa: E731
             notes += ensure_map(settings, say)
         known = known_country(settings) if wants_map else None
+        checks = mapwriter.Checks(settings.cache_dir / "map-checks.json") if wants_map else None
         if op in ("draft", "auto", "change", "scene"):
             router = router or ModelRouter(settings, get_backends(), lambda *args: None)
             if op in ("draft", "auto"):
@@ -275,7 +322,7 @@ def run_task(
                         query=query,
                     )
                     _set(Session, animation_id, message=f"writing the reel ({len(found)} sources)")
-                    plan, wrote = planner.draft(llm, brief, found, known)
+                    plan, wrote = planner.draft(llm, brief, found, known, checks)
                     notes = [*notes, *wrote]
                     if op == "auto":  # nobody reads it before it may post: check its facts
                         _set(Session, animation_id, message="checking the facts")
@@ -293,7 +340,7 @@ def run_task(
                 with router.planner() as llm:
                     planner.roomy(llm)
                     plan, wrote = planner.change(
-                        llm, current, task.get("request", ""), brief, known
+                        llm, current, task.get("request", ""), brief, known, checks
                     )
                     notes = [*notes, *wrote]
             else:
@@ -307,20 +354,31 @@ def run_task(
                 )
                 with router.planner() as llm:
                     planner.roomy(llm)
-                    plan = planner.redo_scene(llm, current, index, task.get("request", ""))
+                    plan = planner.redo_scene(
+                        llm, current, index, task.get("request", ""), brief.idea, checks
+                    )
         if plan is None:
             raise planner.PlannerError("there is no reel to voice")
         # Mended again every time: a reel made before a mend (a name's look, a prop too big
         # to hold) gets it when it is next voiced or restyled.
         plan = tidy(plan)
         if wants_pictures:
-            _set(Session, animation_id, status="painting", message="painting the pictures")
-            plan, painted = paint_plan(plan, animation_id, Session, settings, paint)
+            # The voice is recorded while the pictures are painted: neither needs the other
+            # (the voice is the narration's, the pictures the model's on the GPU).
+            _set(
+                Session, animation_id, status="painting",
+                message="painting the pictures (and recording the voice)",
+            )  # fmt: skip
+            with ThreadPoolExecutor(1, thread_name_prefix="voice") as voicing:
+                voiced = voicing.submit(timeline_of, plan, settings, speak)
+                plan, painted = paint_plan(plan, animation_id, Session, settings, paint)
+                _set(Session, animation_id, status="voicing", message="recording the voice-over")
+                timeline, _ = voiced.result()
             notes = [*notes, *painted]
         else:  # pictures off: the scenes are drawn
             plan = without_pictures(plan)
-        _set(Session, animation_id, status="voicing", message="recording the voice-over")
-        timeline, _ = timeline_of(plan, settings, speak)
+            _set(Session, animation_id, status="voicing", message="recording the voice-over")
+            timeline, _ = timeline_of(plan, settings, speak)
         data = player_of(plan, timeline, settings)
         lost = maps.missing(plan, settings.models_dir)
         if lost:

@@ -17,6 +17,7 @@ import json
 import logging
 import random
 import re
+from contextlib import contextmanager
 
 from agentic_editor.animate.plan import (
     MAP_WORDS,
@@ -312,19 +313,29 @@ def sentence(opening: str, items: list[Item], facts: list[str], said=None) -> st
     return f"{opening} has {said}."
 
 
-def tighten(plan: Plan, length: str) -> Plan:
+def counted(opening: str, value: str, unit: str, items: list[Item], said=None) -> str:
+    """A counted country's sentence: '<Country> has 5,580 nuclear bombs, including A and B.'"""
+    names = said or [i.text for i in items]
+    head = f"{opening} has {value} {unit}".rstrip()
+    if not names:
+        return head + "."
+    listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f" and {names[-1]}"
+    return f"{head}, including {listed}."
+
+
+def tighten(plan: Plan, length: str, unit: str = "") -> Plan:
     """A tour said the reference reels' way, whatever the writer wrote: each country's
     sentence made again from its cards ("<Country> has A, B, and C."), keeping at most one
     short fact a country and FACTS_PER_REEL in all (the first ones), then, while it runs
     past its length, fewer facts, at most ITEMS_WHEN_LONG things a country, fewer
     countries (never under MIN_COUNTRIES)."""
-    from agentic_editor.animate.plan import MIN_COUNTRIES, narration_words
+    from agentic_editor.animate.plan import MIN_COUNTRIES
 
     _, high = MAP_WORDS.get(length, MAP_WORDS["auto"])
     found = {
         n: parse(s)
         for n, s in enumerate(plan.scenes)
-        if s.visual.kind == "country" and s.visual.items
+        if s.visual.kind == "country" and (s.visual.items or (unit and s.visual.value))
     }
     kept: dict[int, list[str]] = {}
     budget = FACTS_PER_REEL
@@ -349,7 +360,10 @@ def tighten(plan: Plan, length: str) -> Plan:
                 items = scene.visual.items[:cap] if cap else scene.visual.items
                 facts = scenes_kept[n][: len(items)]
                 visual = scene.visual.model_copy(update={"items": items})
-                told = sentence(opening, items, facts, said[: len(items)])
+                if unit and re.search(r"\d", visual.value):
+                    told = counted(opening, visual.value, unit, items, said[: len(items)])
+                else:
+                    told = sentence(opening, items, facts, said[: len(items)])
                 scene = scene.model_copy(update={"narration": told, "visual": visual})
             scenes.append(scene)
         return plan.model_copy(update={"scenes": scenes})
@@ -403,12 +417,16 @@ def to_plan(reply: dict, sources: list[Source], voice: str) -> Plan:
             Item(text=str(i.get("name", "")), emoji=e, art=str(i.get("picture", "")))
             for i, e in zip(given, _emoji_of(given), strict=True)
         ]
+        number = str(c.get("number", "")).strip()
         scenes.append(
             Scene(
                 narration=str(c.get("narration", "")),
-                visual=Visual(kind="country", text=str(c.get("country", "")), items=items),
+                visual=Visual(
+                    kind="country", text=str(c.get("country", "")), items=items,
+                    value=number if re.fullmatch(r"\d[\d,.]*", number) else "",
+                ),
             )
-        )
+        )  # fmt: skip
     return tidy(
         Plan(
             title=str(reply.get("title", "")),
@@ -432,6 +450,7 @@ def to_reply(plan: Plan) -> dict:
             "country": s.visual.text,
             "narration": s.narration,
             "items": [{"name": i.text, "emoji": i.emoji, "picture": i.art} for i in s.visual.items],
+            **({"number": s.visual.value} if re.search(r"\d", s.visual.value) else {}),
         }
         for s in plan.scenes
         if s.visual.kind == "country"
@@ -503,13 +522,17 @@ def room(llm) -> None:
         llm.max_reply = max(llm.max_reply or 0, REPLY)
 
 
-def _ask(llm, messages, sources, voice, length, known, temperature) -> tuple[Plan, list[str]]:
+def _ask(
+    llm, messages, sources, voice, length, known, temperature, schema=None
+) -> tuple[Plan, list[str], dict]:
+    """The writer's tour, sent back once with what is off; and the answer it came from."""
+    schema = schema or SCHEMA
     room(llm)
-    reply = llm.chat_json(messages, SCHEMA, temperature=temperature)
+    reply = llm.chat_json(messages, schema, temperature=temperature)
     plan = tighten(to_plan(reply, sources, voice), length)
     wrong = _wrong(plan, length, known)
     if not wrong:
-        return plan, []
+        return plan, [], reply
     log.info("World map draft needs fixing: %s", "; ".join(wrong))
     fix = [
         *messages,
@@ -519,10 +542,10 @@ def _ask(llm, messages, sources, voice, length, known, temperature) -> tuple[Pla
             "content": "Fix these and answer with the whole reel again:\n- " + "\n- ".join(wrong),
         },
     ]
+    second = reply
     try:
-        again = tighten(
-            to_plan(llm.chat_json(fix, SCHEMA, temperature=0.4), sources, voice), length
-        )
+        second = llm.chat_json(fix, schema, temperature=0.4)
+        again = tighten(to_plan(second, sources, voice), length)
     except LLMError as exc:
         log.warning("fixing the World map draft failed: %s", exc)
         again = plan
@@ -532,7 +555,9 @@ def _ask(llm, messages, sources, voice, length, known, temperature) -> tuple[Pla
         from agentic_editor.animate.planner import PlannerError
 
         raise PlannerError("the writer didn't manage a World map reel: " + "; ".join(left or wrong))
-    return better, left if better is again else wrong
+    if better is again:
+        return better, left, second
+    return better, wrong, reply
 
 
 def _brief_text(idea: str, length: str) -> str:
@@ -544,24 +569,6 @@ def _brief_text(idea: str, length: str) -> str:
     )
 
 
-VET_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "lines": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "n": {"type": "integer"},
-                    "is_one": {"type": "boolean"},
-                    "from_there": {"type": "boolean"},
-                },
-                "required": ["n", "is_one", "from_there"],
-            },
-        }
-    },
-    "required": ["lines"],
-}
 # The kind of thing a topic is about: "inventions" in "Most famous inventions from every
 # country".
 KIND_OF = re.compile(
@@ -569,144 +576,888 @@ KIND_OF = re.compile(
     r"(.+?)\s+(?:from|in|of|around)\b",
     re.I,
 )
+HOW_MANY = re.compile(r"\bhow\s+many\s+(.+?)\s+(?:every|each|does|do|in|per)\b", re.I)
+TOP_N = re.compile(r"\btop\s*\d+\b|\branked\b|\branking\b|\bfrom\s+worst\s+to\s+best\b", re.I)
 
 
 def kind_of(idea: str) -> str:
-    found = KIND_OF.search(idea)
-    return found.group(1).strip() if found else idea.strip()
+    found = KIND_OF.search(idea) or HOW_MANY.search(idea)
+    if found:
+        return found.group(1).strip()
+    rest = re.sub(r"^\s*top\s*\d+\s+", "", idea.strip(), flags=re.I)
+    return rest.split(" from ")[0].split(" in ")[0].strip() or idea.strip()
 
 
-# A check that finds more than this share wrong has misread the question: it is ignored.
-VET_MOST = 0.6
+# ---- the look and the badges, by the topic -------------------------------------------------
+
+HORROR = re.compile(
+    r"haunt|scar(y|iest)|creep|ghost|horror|cursed|spook|terrif|eerie|monster|demon|"
+    r"abandoned|mysterious death|serial killer|nightmare",
+    re.I,
+)
+FOOD = re.compile(
+    r"food|dish|dessert|sweet|candy|candies|snack|breakfast|soup|bread|cheese|street eat|"
+    r"cuisine|meal|pastr|cake|cookie|biscuit|noodle|dumpling|sandwich|burger|pizza|curr(y|ies)|"
+    r"\bdrinks?\b|beverage|cocktail|juice|smoothie|tea\b|coffee|fruit|spice",
+    re.I,
+)
 
 
-def vet(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
-    """The tour with the things that don't belong left out, as the model sees it when
-    asked plainly line by line (a small model judges a list far better than it writes
-    one): a thing off the topic (a food in a reel about inventions), or not really from or
-    famous in its country. A country left with nothing goes too, never below
-    MIN_COUNTRIES. Returns what was left out, for the person."""
+def look_of(idea: str) -> str:
+    """The reference page's look for a topic: gold horror for haunted and scary ones, neon
+    labels for food and drink, white picture cards for the rest."""
+    if HORROR.search(idea):
+        return "horror"
+    if FOOD.search(kind_of(idea)) or FOOD.search(idea):
+        return "neon"
+    return "cards"
+
+
+def ranking(idea: str) -> str:
+    """How a topic numbers its countries: "count" for "How many X every country has" (a
+    badge with each country's number), "rank" for "Top 10 ..." (a badge with its place),
+    "" for none."""
+    if HOW_MANY.search(idea) or re.search(r"\bnumber of\b", idea, re.I):
+        return "count"
+    if TOP_N.search(idea):
+        return "rank"
+    return ""
+
+
+RANK_ICON = "🏆"
+COUNT_ICON = "🔢"
+RANK_GUIDE = """
+This topic is a ranking: list the countries from the one ranked lowest to number one
+(number one comes last). The tour order then follows the ranking, not the map."""
+COUNT_GUIDE = """
+This topic counts something in each country: give each country "number", how many it has,
+as digits with commas (e.g. "5,580"), only a number you are sure of from the sources or
+common knowledge (leave a country out when you aren't). Order the countries from the
+smallest number to the biggest. Its narration says the number: "<country> has <number>
+<what is counted>, including <thing> and <thing>." Name 0-2 things (e.g. a famous model),
+and give the reel one "badge_emoji" for what is counted."""
+
+
+def badges(plan: Plan, idea: str, reply: dict | None = None) -> Plan:
+    """The countries numbered as the topic asks (`ranking`): each country scene's badge
+    (Visual.value, its icon Visual.emoji) from its place in the tour or the writer's
+    number; none for other topics (and none kept from an earlier topic)."""
+    how = ranking(idea)
+    numbers: dict[str, str] = {}
+    icon = COUNT_ICON
+    if how == "count" and reply:
+        icon = _emoji_of([{"emoji": reply.get("badge_emoji", "")}])[0] or COUNT_ICON
+        for c in reply.get("countries", []):
+            if isinstance(c, dict) and re.fullmatch(r"\d[\d,.]*", str(c.get("number", "")).strip()):
+                numbers[_plain_name(str(c.get("country", "")))] = str(c["number"]).strip()
+    countries = [n for n, s in enumerate(plan.scenes) if s.visual.kind == "country"]
+    scenes = list(plan.scenes)
+    for place, n in enumerate(countries):
+        v = scenes[n].visual
+        if how == "rank":
+            value, emoji = f"#{len(countries) - place}", RANK_ICON
+        elif how == "count":
+            given = numbers.get(_plain_name(v.text), v.value if re.search(r"\d", v.value) else "")
+            value, emoji = (given, icon) if given else ("", v.emoji)
+        else:
+            value, emoji = "", v.emoji
+        scenes[n] = scenes[n].model_copy(
+            update={"visual": v.model_copy(update={"value": value, "emoji": emoji})}
+        )
+    return plan.model_copy(update={"scenes": scenes})
+
+
+def _plain_name(text: str) -> str:
+    return " ".join(w for w in _words(text) if w not in FILLER)
+
+
+# ---- the strict check: each thing on its own -------------------------------------------------
+
+# What a thing can be. The check asks for one; the topic's kind allows some (KIND_CATEGORIES).
+# The list is in the question too: a model that only has the reply's grammar starts its own
+# word and gets the nearest label ("animated" became "animal", "franchise" "fruit, ...").
+CATEGORIES = (
+    "food or dish", "dessert or sweet", "drink", "fruit, plant or spice", "animal",
+    "place, building or landmark", "natural wonder", "festival, holiday or event", "person",
+    "invention, technology or machine", "vehicle", "brand or company", "sports team or club",
+    "film, TV show, cartoon or anime", "book, comic or story", "painting or artwork", "video game",
+    "music, song, dance or instrument", "sport or game", "clothing",
+    "myth or legendary creature", "other",
+)  # fmt: skip
+CATEGORY_LIST = "; ".join(CATEGORIES)
+# The categories a topic's things may be in, by words of its kind: the first that matches.
+# (Brands before what they make: "sportswear brands" are brands, not sports.)
+KIND_CATEGORIES = (
+    (r"brand|compan|airline|chain|maker|label|manufacturer|platform|apps?\b",
+     {"brand or company"}),
+    (r"club|team", {"sports team or club"}),
+    (r"myth|legend|creature|monster|folklore|cryptid", {"myth or legendary creature"}),
+    (r"scientist|painter|artist|writer|author|poet|warrior|footballer|player|athlete|singer|"
+     r"actor|actress|people|person|leader|\bkings?\b|\bqueens?\b|inventor|celebrit|\bstars?\b|"
+     r"youtuber|chef|explorer|hero|villain|composer|director|billionaire|creator",
+     {"person"}),
+    (r"invent|discover|technolog|gadget|machine",
+     {"invention, technology or machine", "vehicle"}),
+    (r"dessert|sweet|cand(y|ies)|chocolate|cake|pastr|cookie|biscuit",
+     {"dessert or sweet", "food or dish"}),
+    (r"\bdrinks?\b|beverage|soda|juice|\btea\b|coffee|cocktail|smoothie", {"drink"}),
+    (r"food|dish|cuisine|breakfast|soup|bread|cheese|snack|meal|noodle|dumpling|sandwich|"
+     r"burger|curr(y|ies)|sauce|pizza",
+     {"food or dish", "dessert or sweet"}),
+    (r"fruit|spice|herb|flower|plant|vegetable|\btrees?\b", {"fruit, plant or spice"}),
+    (r"festival|holiday|celebration|carnival|tradition|ritual|parade",
+     {"festival, holiday or event"}),
+    (r"castle|palace|fort\b|fortress|cathedral|temple|church|mosque|bridge|tower|skyscraper",
+     {"place, building or landmark"}),
+    (r"mountain|river|lake|island|beach|waterfall|volcano|desert|forest|cave|natural",
+     {"natural wonder", "place, building or landmark"}),
+    (r"haunt|castle|palace|landmark|building|bridge|temple|church|cathedral|tower|monument|"
+     r"place|ruin|cit(y|ies)|wonder|stadium|museum|prison|hotel|street|square",
+     {"place, building or landmark", "natural wonder"}),
+    (r"video ?game", {"video game"}),
+    (r"cartoon|anime|animat|tv show|series|movie|film|\bshows?\b|sitcom|soap",
+     {"film, TV show, cartoon or anime", "book, comic or story"}),
+    (r"book|novel|stor(y|ies)|fairy tale|poem|comic|manga", {"book, comic or story"}),
+    (r"painting|artwork|sculpture|statue|\bart\b", {"painting or artwork"}),
+    (r"board game|card game|\bgames?\b|toy",
+     {"sport or game", "video game", "invention, technology or machine"}),
+    (r"\bcars?\b|vehicle|trains?\b|motorbike|motorcycle|plane|aircraft|ship|boat",
+     {"vehicle", "invention, technology or machine"}),
+    (r"animal|bird|dog|cats?\b|breed|fish|insect", {"animal"}),
+    (r"dance|instrument|music|song|anthem", {"music, song, dance or instrument"}),
+    (r"sport|martial art", {"sport or game"}),
+    (r"cloth|dress|costume|\bhats?\b|shoe|sneaker|fashion|wear", {"clothing", "brand or company"}),
+)  # fmt: skip
+YES_NO = ["yes", "no", "unsure"]
+CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "what": {"type": "string"},
+        "category": {"type": "string", "enum": list(CATEGORIES)},
+        "is_kind": {"type": "string", "enum": YES_NO},
+        "from_country": {"type": "string", "enum": YES_NO},
+        "famous": {"type": "string", "enum": YES_NO},
+    },
+    "required": ["what", "category", "is_kind", "from_country", "famous"],
+}
+KIND_SCHEMA = {
+    "type": "object",
+    "properties": {"plain": {"type": "string"}, "answer": {"type": "string", "enum": YES_NO}},
+    "required": ["plain", "answer"],
+}
+ALLOWED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "categories": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(CATEGORIES)},
+            "minItems": 1,
+            "maxItems": 4,
+        }
+    },
+    "required": ["categories"],
+}
+REFILL_SCHEMA = {
+    "type": "object",
+    "properties": {"items": {"type": "array", "items": _ITEM, "minItems": 1, "maxItems": 6}},
+    "required": ["items"],
+}
+MORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "countries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "items": {"type": "array", "items": _ITEM, "minItems": 1, "maxItems": 4},
+                },
+                "required": ["country", "items"],
+            },
+            "minItems": 1,
+            "maxItems": 8,
+        }
+    },
+    "required": ["countries"],
+}
+DUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "same": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"first": {"type": "integer"}, "second": {"type": "integer"}},
+                "required": ["first", "second"],
+            },
+        }
+    },
+    "required": ["same"],
+}
+ICONIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "examples": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"country": {"type": "string"}, **_ITEM["properties"]},
+                "required": ["country", *_ITEM["required"]],
+            },
+            "minItems": 3,
+            "maxItems": 5,
+        }
+    },
+    "required": ["examples"],
+}
+CHECK_TOKENS = 200  # a check's answer is short: a stuck model can't run for minutes
+MIN_KEPT = 2  # a country left with fewer things than this is filled up again
+REFILL_TO = 3  # ... to at most this many
+VERDICTS_KEPT = 5000
+
+
+def allowed_for(kind: str) -> set[str] | None:
+    """The categories a topic's things may be in, by its kind's words; None when no rule
+    knows the kind (the model is asked then)."""
+    for pattern, categories in KIND_CATEGORIES:
+        if re.search(pattern, kind, re.I):
+            return set(categories)
+    return None
+
+
+def _norm(text: str) -> str:
+    import unicodedata
+
+    flat = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return " ".join(w for w in _words(flat) if w not in {"the", "a", "an"})
+
+
+class Checks:
+    """Verdicts of the strict check by (kind, country, thing), kept in a JSON file across
+    reels: a thing judged once isn't asked about again, a known good one stays good."""
+
+    def __init__(self, path=None):
+        import threading
+
+        self.path = path
+        self.lock = threading.Lock()
+        self.found: dict[str, dict] = {}
+        if path is not None and path.is_file():
+            try:
+                self.found = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                self.found = {}
+
+    @staticmethod
+    def key(kind: str, country: str, thing: str) -> str:
+        return f"{_norm(kind)}|{_norm(country)}|{_norm(thing)}"
+
+    def get(self, key: str) -> dict | None:
+        return self.found.get(key)
+
+    def put(self, key: str, verdict: dict) -> None:
+        with self.lock:
+            self.found.pop(key, None)
+            self.found[key] = verdict
+            while len(self.found) > VERDICTS_KEPT:
+                self.found.pop(next(iter(self.found)))
+
+    def save(self) -> None:
+        if self.path is None:
+            return
+        with self.lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            part = self.path.with_suffix(".part")
+            part.write_text(json.dumps(self.found, ensure_ascii=False), encoding="utf-8")
+            part.replace(self.path)
+
+
+def _allowed(llm, idea: str, kind: str) -> set[str] | None:
+    known = allowed_for(kind)
+    if known is not None:
+        return known
+    try:
+        with short_answers(llm, 120):
+            reply = llm.chat_json(
+                [{"role": "user", "content": (
+                    f"A reel's topic: {idea}. Each thing it names must be one of the {kind}.\n"
+                    "Which of these categories can such a thing be in? Pick only the ones that "
+                    f"fit the topic exactly (1-3), written as shown: {CATEGORY_LIST}."
+                )}],
+                ALLOWED_SCHEMA,
+                temperature=0.0,
+            )  # fmt: skip
+    except LLMError as exc:
+        log.warning("asking what %s can be failed: %s", kind, exc)
+        return None
+    picked = {c for c in reply.get("categories", []) if c in CATEGORIES and c != "other"}
+    return picked or None
+
+
+@contextmanager
+def short_answers(llm, most: int = CHECK_TOKENS):
+    """The model's answers capped at `most` tokens while inside (a check, not a tour)."""
+    if not hasattr(llm, "max_reply"):
+        yield
+        return
+    before = llm.max_reply
+    llm.max_reply = most
+    try:
+        yield
+    finally:
+        llm.max_reply = before
+
+
+def judge(llm, idea: str, kind: str, country: str, thing: str, allowed, checks=None) -> dict:
+    """The strict check of one thing on its own: what it is, its category, whether it is
+    one of the topic's kind, from the country and famous. `keep` only when every answer
+    is a clear yes (and the category is one the topic allows); anything unsure goes."""
+    key = Checks.key(kind, country, thing)
+    known = checks.get(key) if checks else None
+    if known is not None:
+        return known
+    with short_answers(llm):
+        reply = llm.chat_json(
+            [{"role": "user", "content": (
+                "Check one thing a World map reel names.\n"
+                f"Topic: {idea}. Each thing must be one of the {kind}.\n"
+                f"Country: {country}. Thing: {thing}.\n"
+                "Answer about the thing itself, strictly; when you aren't sure, answer unsure.\n"
+                "what: what it is, in at most 8 words.\n"
+                f"category: the one it belongs to, written exactly as one of: {CATEGORY_LIST}.\n"
+                f"is_kind: is it truly one of the {kind} (not merely linked to them)?\n"
+                f"from_country: does it come from {country}: made, invented, founded, created, "
+                f"built or first done there (a place: is it in {country})?\n"
+                "famous: would a typical viewer anywhere in the world recognise it (yes only "
+                f"for one of the best known {kind} there are, known well outside {country})?"
+            )}],
+            CHECK_SCHEMA,
+            temperature=0.0,
+        )  # fmt: skip
+    category = str(reply.get("category", "other"))
+    answers = [str(reply.get(k, "unsure")).lower() for k in ("is_kind", "from_country", "famous")]
+    fits = allowed is None or category in allowed
+    what = " ".join(str(reply.get("what", "")).split())[:80]
+    keep = fits and all(a == "yes" for a in answers)
+    plain = ""
+    if keep:
+        # A second, separate look at the kind alone: asked with the rest, a small model
+        # passed near kinds (a palace for castles, a football final for festivals).
+        plain, again = _kind_again(llm, idea, kind, country, thing, what)
+        answers.append(again)
+        keep = again == "yes"
+    verdict = {"keep": keep, "what": what, "category": category, "answers": answers}
+    if plain:
+        verdict["plain"] = plain
+    if checks is not None:
+        checks.put(key, verdict)
+    return verdict
+
+
+def _kind_again(llm, idea, kind, country, thing, what) -> tuple[str, str]:
+    """What `thing` plainly is (one or two words) and whether that is one of the topic's
+    `kind`: yes, no or unsure."""
+    with short_answers(llm, 80):
+        reply = llm.chat_json(
+            [{"role": "user", "content": (
+                f"A reel about {idea} must show only {kind}. On the {country} card: {thing} "
+                f"({what}).\n"
+                f"plain: what {thing} is, in one or two plain words (like river, violin, "
+                "teapot).\n"
+                f"answer: is that one of the {kind}? No when it is another kind of thing that "
+                f"is only linked with {kind}; unsure when you aren't sure."
+            )}],
+            KIND_SCHEMA,
+            temperature=0.0,
+        )  # fmt: skip
+    plain = " ".join(str(reply.get("plain", "")).split())[:40]
+    return plain, str(reply.get("answer", "unsure")).lower()
+
+
+def _sorted_out(llm, idea, kind, country, items, allowed, checks):
+    """`items` split into the ones that pass the strict check and the rest. One the model
+    couldn't be asked about isn't kept (a wrong card is the worst outcome); when it
+    couldn't be asked about any, the model isn't answering: LLMError."""
+    kept, gone, failed, answered = [], [], 0, 0
+    for item in items:
+        if not item.text.strip():
+            continue
+        try:
+            verdict = judge(llm, idea, kind, country, item.text, allowed, checks)
+            answered += 1
+        except LLMError as exc:
+            log.warning("checking %s (%s) failed: %s", item.text, country, exc)
+            verdict, failed = {"keep": False}, failed + 1
+        (kept if verdict["keep"] else gone).append(item)
+    if failed and not answered:
+        raise LLMError(f"the check didn't answer for {country}")
+    return kept, gone
+
+
+# Words that say what kind of thing a name is, not which one: "Rio Carnival" and "Carnival
+# of Venice" are different things however many such words they share.
+GENERIC = {
+    "festival", "festivals", "day", "night", "fest", "celebration", "carnival", "parade",
+    "castle", "palace", "house", "hotel", "fort", "fortress", "tower", "national", "park",
+    "world", "great", "grand", "old", "new", "royal", "saint", "st", "of", "and", "de", "di",
+    "del", "la", "le", "el", "der", "des", "du", "il", "lo", "das", "die",
+}  # fmt: skip
+
+
+def _one(word: str) -> str:
+    """A word without its plural ending: "churros" is "churro", "pastries" "pastry"."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes")):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
+def _folded(text: str) -> str:
+    """A name as compared: _norm, each word without its plural ending."""
+    return " ".join(_one(w) for w in _norm(text).split())
+
+
+def same_by_name(a: str, b: str) -> bool:
+    """Whether two names are the same thing as written: the same words (plurals aside), or
+    the words of one inside the other's (leaving out GENERIC words): "Mardi Gras" and "New
+    Orleans Mardi Gras"."""
+    x, y = set(_folded(a).split()), set(_folded(b).split())
+    if x == y:
+        return True
+    x, y = x - GENERIC, y - GENERIC
+    return bool(x) and bool(y) and (x <= y or y <= x)
+
+
+def distinct(llm, idea: str, kind: str, country: str, items: list[Item]) -> tuple[list, list]:
+    """`items` without the ones that name a thing already there: the same words or one
+    inside the other (same_by_name), else by the model: another name, another language
+    ("the Venice Carnival" and "Carnevale di Venezia"). The first stays."""
+    kept, gone = [], []
+    for item in items:
+        (gone if any(same_by_name(item.text, k.text) for k in kept) else kept).append(item)
+    if len(kept) < 2:
+        return kept, gone
+    lines = "\n".join(f"{n}. {i.text}" for n, i in enumerate(kept, 1))
+    try:
+        with short_answers(llm):
+            reply = llm.chat_json(
+                [{"role": "user", "content": (
+                    f"The cards for {country} in a reel about {idea}:\n{lines}\n\n"
+                    f"Do any two of them name the same one of the {kind}: under another name, in "
+                    "another language, a nickname, or one is part of the other? List only "
+                    "clear pairs by number (first, second); none: an empty list."
+                )}],
+                DUP_SCHEMA,
+                temperature=0.0,
+            )  # fmt: skip
+    except LLMError as exc:
+        log.warning("asking which of %s's things are the same failed: %s", country, exc)
+        return kept, gone
+    second = set()
+    for pair in reply.get("same", []):
+        if not isinstance(pair, dict):
+            continue
+        a, b = pair.get("first"), pair.get("second")
+        numbers = isinstance(a, int) and isinstance(b, int) and a != b
+        if numbers and min(a, b) >= 1 and max(a, b) <= len(kept):
+            second.add(max(a, b) - 1)
+    return [i for n, i in enumerate(kept) if n not in second], [
+        *gone,
+        *(i for n, i in enumerate(kept) if n in second),
+    ]
+
+
+def iconic(llm, idea: str, kind: str) -> list[tuple[str, Item]]:
+    """The topic's headline things a viewer would miss if a tour left them out
+    (Oktoberfest for festivals), with their countries, as the model names them."""
+    try:
+        with short_answers(llm, 700):
+            reply = llm.chat_json(
+                [{"role": "user", "content": (
+                    f"Topic: {idea}. Name the 5 most famous {kind} in the whole world: the ones "
+                    "nearly everyone has heard of, that a viewer would be surprised to see left "
+                    "out. Each with its country (the usual English name), an emoji and its picture "
+                    "(at most 8 words, no logo, no writing)."
+                )}],
+                ICONIC_SCHEMA,
+                temperature=0.0,
+            )  # fmt: skip
+    except LLMError as exc:
+        log.warning("asking for the most famous %s failed: %s", kind, exc)
+        return []
+    found = []
+    for e in reply.get("examples", []):
+        if isinstance(e, dict) and str(e.get("country", "")).strip():
+            items = _items([e])
+            if items:
+                found.append((" ".join(str(e["country"]).split()), items[0]))
+    return found
+
+
+def same_country(a: str, b: str, known=None) -> bool:
+    """Whether two names are one country: by the map when it knows both ("England" and
+    "United Kingdom" are GBR), else by their words."""
+    code = getattr(known, "code", None)
+    if code is not None:
+        x, y = code(a), code(b)
+        if x is not None and y is not None:
+            return x == y
+    return _plain_name(a) == _plain_name(b)
+
+
+def _tour_items(scenes: list) -> list[Item]:
+    return [i for s in scenes if s.visual.kind == "country" for i in s.visual.items]
+
+
+def _near(scenes: list, name: str, locate) -> int:
+    """Where a country goes in the tour: right after the one nearest to it on the map (the
+    tour goes round the world region by region); without a map, before the last one."""
+    countries = [n for n, s in enumerate(scenes) if s.visual.kind == "country"]
+    if not countries:
+        return len(scenes)
+    spot = locate(name) if locate else None
+    if spot is None:
+        return countries[-1]
+    best, far = countries[-1] + 1, None
+    for n in countries:
+        there = locate(scenes[n].visual.country or scenes[n].visual.text)
+        if there is None:
+            continue
+        d = ((spot[0] - there[0]) ** 2 + (spot[1] - there[1]) ** 2) ** 0.5
+        if far is None or d < far:
+            best, far = n + 1, d
+    return best
+
+
+def headliners(llm, idea, kind, plan: Plan, allowed, checks, known=None) -> tuple[Plan, list[str]]:
+    """The topic's headline things put in when a tour left them out (each checked like
+    the rest): first on their country's cards, or their country added near its
+    neighbours."""
+    scenes = list(plan.scenes)
+    added = []
+    locate = getattr(known, "locate", None)
+    for country, item in iconic(llm, idea, kind):
+        if known is not None and not known(country):
+            continue
+        if any(same_by_name(item.text, i.text) for i in _tour_items(scenes)):
+            continue  # there already
+        home = next(
+            (n for n, s in enumerate(scenes) if s.visual.kind == "country"
+             and same_country(s.visual.text, country, known)),
+            None,
+        )  # fmt: skip
+        if home is not None:
+            country = scenes[home].visual.text  # the tour's own name for it
+        kept, _ = _sorted_out(llm, idea, kind, country, [item], allowed, checks)
+        if not kept:
+            continue
+        if home is not None:
+            v = scenes[home].visual
+            items = [kept[0], *v.items][:MAX_COUNTRY_ITEMS]
+            scenes[home] = scenes[home].model_copy(
+                update={"visual": v.model_copy(update={"items": items})}
+            )
+        else:
+            more = refill(
+                llm, idea, kind, country, kept, _tour_items(scenes), MIN_KEPT - 1, allowed,
+                checks,
+            )  # fmt: skip
+            items = [*kept, *more]
+            scene = Scene(
+                narration=sentence(country, items, ["" for _ in items]),
+                visual=Visual(kind="country", text=country, items=items),
+            )
+            scenes.insert(_near(scenes, country, locate), scene)
+        added.append(f"{country}: {item.text}")
+    notes = ["put in as the topic's best known: " + ", ".join(added)] if added else []
+    return plan.model_copy(update={"scenes": scenes}), notes
+
+
+def _items(given: list) -> list[Item]:
+    good = [i for i in given if isinstance(i, dict) and str(i.get("name", "")).strip()]
+    return [
+        Item(text=str(i.get("name", "")).strip(), emoji=e, art=str(i.get("picture", "")))
+        for i, e in zip(good, _emoji_of(good), strict=True)
+    ]
+
+
+def refill(llm, idea, kind, country, have, avoid, need, allowed, checks) -> list[Item]:
+    """Up to `need` more things for `country` that pass the strict check: the writer
+    names a few more (not `have`, not `avoid`), each is checked on its own."""
+    if need <= 0:
+        return []
+    named = ", ".join(i.text for i in [*have, *avoid]) or "none"
+    try:
+        with short_answers(llm, 700):
+            reply = llm.chat_json(
+                [{"role": "system", "content": GUIDE}, {"role": "user", "content": (
+                    f"Topic: {idea}. Name {need + 2} more {kind} that truly come from {country} "
+                    f"and are famous, the best known first, none of these: {named}. Only real "
+                    f"{kind} from {country}; fewer is better than a wrong one. Each: name, emoji, "
+                    "picture."
+                )}],
+                REFILL_SCHEMA,
+                temperature=0.3,
+            )  # fmt: skip
+    except LLMError as exc:
+        log.warning("filling %s up failed: %s", country, exc)
+        return []
+    taken = [*have, *avoid]
+    fresh = [
+        i for i in _items(reply.get("items", []))
+        if not any(same_by_name(i.text, t.text) for t in taken)
+    ]  # fmt: skip
+    kept, _ = _sorted_out(llm, idea, kind, country, fresh, allowed, checks)
+    return kept[:need]
+
+
+def more_countries(llm, idea, kind, plan: Plan, need: int, allowed, checks, known=None):
+    """Country scenes to add when too few are left: the writer names more, each thing is
+    checked; a country with nothing left isn't added."""
+    have = [s.visual.text for s in plan.scenes if s.visual.kind == "country"]
+    try:
+        with short_answers(llm, 1400):
+            reply = llm.chat_json(
+                [{"role": "system", "content": GUIDE}, {"role": "user", "content": (
+                    f"Topic: {idea}. Name {need + 2} more countries, none of these: "
+                    f"{', '.join(have)}; for each, 2-3 {kind} that truly come from it and are "
+                    f"famous. Only real {kind}; fewer is better than a wrong one."
+                )}],
+                MORE_SCHEMA,
+                temperature=0.3,
+            )  # fmt: skip
+    except LLMError as exc:
+        log.warning("finding more countries failed: %s", exc)
+        return []
+    taken = list(have)
+    named = _tour_items(plan.scenes)
+    scenes = []
+    for c in reply.get("countries", []):
+        if len(scenes) >= need or not isinstance(c, dict):
+            continue
+        name = " ".join(str(c.get("country", "")).split())
+        if not name or any(same_country(name, t, known) for t in taken):
+            continue
+        if known is not None and not known(name):
+            continue
+        fresh = [
+            i for i in _items(c.get("items", []))
+            if not any(same_by_name(i.text, t.text) for t in named)
+        ]  # fmt: skip
+        kept, _ = _sorted_out(llm, idea, kind, name, fresh, allowed, checks)
+        if not kept:
+            continue
+        taken.append(name)
+        named += kept
+        scenes.append(
+            Scene(
+                narration=sentence(name, kept, ["" for _ in kept]),
+                visual=Visual(kind="country", text=name, items=kept[:MAX_COUNTRY_ITEMS]),
+            )
+        )
+    return scenes
+
+
+def vet(llm, plan: Plan, idea: str, checks=None, known=None) -> tuple[Plan, list[str]]:
+    """The tour with only things that pass the strict check (`judge`, each thing on its
+    own: of the topic's kind, from its country, famous; anything unsure goes). A country
+    left with too few is filled up again with checked things; one left with none goes;
+    when too few countries are left, more are found and checked. Known verdicts
+    (`checks`) are used and kept. Returns what was left out, for the person."""
     from agentic_editor.animate.plan import MIN_COUNTRIES
 
-    where = [
-        (si, ii)
-        for si, s in enumerate(plan.scenes)
-        if s.visual.kind == "country"
-        for ii in range(len(s.visual.items))
-    ]
-    if not where:
-        return plan, []
-    lines = [
-        f"{n}. {plan.scenes[si].visual.text}: {plan.scenes[si].visual.items[ii].text}"
-        for n, (si, ii) in enumerate(where, 1)
-    ]
     kind = kind_of(idea)
-    reply = llm.chat_json(
-        [{"role": "user", "content": (
-            f"A reel's topic: {idea}. Its things must be {kind}.\n"
-            "Each line is a country and a thing the reel names for it:\n" + "\n".join(lines)
-            + f"\n\nFor every line answer: is_one: is the thing itself one of the {kind} "
-            f"(not just something the country is known for)? from_there: does it really come "
-            "from that country, or is it most famous there? Be strict."
-        )}],
-        VET_SCHEMA,
-        temperature=0.0,
-    )  # fmt: skip
-    wrong = set()
-    for line in reply.get("lines", []):
-        if not isinstance(line, dict) or not str(line.get("n", "")).lstrip("-").isdigit():
-            continue
-        if line.get("is_one") is False or line.get("from_there") is False:
-            wrong.add(int(line["n"]) - 1)
-    wrong = {n for n in wrong if 0 <= n < len(where)}
-    if not wrong or len(wrong) > VET_MOST * len(where):
+    if not any(s.visual.kind == "country" and s.visual.items for s in plan.scenes):
         return plan, []
-    gone = {where[n] for n in wrong}
-    scenes, left_out = [], []
-    countries = sum(1 for s in plan.scenes if s.visual.kind == "country")
-    for si, scene in enumerate(plan.scenes):
-        if scene.visual.kind != "country":
+    allowed = _allowed(llm, idea, kind)
+    counted = ranking(idea) == "count"
+    scenes, left_out, gone_countries = [], [], []
+    seen_whole: dict[str, list[str]] = {}  # each country's cards as the duplicates check saw them
+    for scene in plan.scenes:
+        v = scene.visual
+        if v.kind != "country":
             scenes.append(scene)
             continue
-        items = [i for ii, i in enumerate(scene.visual.items) if (si, ii) not in gone]
-        dropped = [i.text for ii, i in enumerate(scene.visual.items) if (si, ii) in gone]
-        opening = not any(s.visual.kind == "country" for s in scenes)
-        if not items and countries > MIN_COUNTRIES and not opening:
-            countries -= 1
-            left_out.append(scene.visual.text)
+        kept, gone = _sorted_out(llm, idea, kind, v.text, v.items, allowed, checks)
+        kept, twice = distinct(llm, idea, kind, v.text, kept)
+        seen_whole[v.text] = [i.text for i in kept]
+        gone += twice
+        if (len(kept) < MIN_KEPT and len(v.items) >= MIN_KEPT) or (not kept and v.items):
+            want = min(REFILL_TO, max(len(v.items), MIN_KEPT)) - len(kept)
+            elsewhere = [*_tour_items(plan.scenes), *_tour_items(scenes)]
+            kept += refill(
+                llm, idea, kind, v.text, kept, [*gone, *elsewhere], want, allowed, checks
+            )
+        left_out += [f"{v.text}: {g.text}" for g in gone]
+        if not kept and not (counted and v.value):
+            gone_countries.append(v.text)
             continue
-        if not items:  # the tour's opening country, or too few to lose one: as written
-            scenes.append(scene)
-            continue
-        left_out += [f"{scene.visual.text}: {d}" for d in dropped]
-        scenes.append(
-            scene.model_copy(update={"visual": scene.visual.model_copy(update={"items": items})})
+        scenes.append(scene.model_copy(update={"visual": v.model_copy(update={"items": kept})}))
+    scenes = _once_in_the_tour(scenes, left_out)
+    out = plan.model_copy(update={"scenes": scenes})
+    headline_notes = []
+    if not ranking(idea):  # a ranking or a count has its own order and its own countries
+        out, headline_notes = headliners(llm, idea, kind, out, allowed, checks, known)
+    countries = sum(1 for s in out.scenes if s.visual.kind == "country")
+    if countries < MIN_COUNTRIES:
+        extra = more_countries(
+            llm, idea, kind, out, MIN_COUNTRIES - countries, allowed, checks, known
         )
-    note = ["left out as not fitting the topic: " + ", ".join(left_out)] if left_out else []
-    return plan.model_copy(update={"scenes": scenes}), note
+        out = out.model_copy(update={"scenes": [*out.scenes, *extra]})
+    # Whatever was put in afterwards (refills, the best known things, more countries):
+    # still each thing once on a country's cards, and once in the tour.
+    out = out.model_copy(update={"scenes": _distinct_again(llm, idea, kind, out.scenes,
+                                                           seen_whole, left_out)})  # fmt: skip
+    out = out.model_copy(update={"scenes": _once_in_the_tour(list(out.scenes), left_out)})
+    if checks is not None:
+        checks.save()
+    notes = []
+    if left_out:
+        notes.append("left out as not sure to fit the topic: " + ", ".join(left_out))
+    if gone_countries:
+        notes.append("countries left out (nothing sure to show): " + ", ".join(gone_countries))
+    return out, [*notes, *headline_notes]
 
 
-def draft(llm, idea: str, length: str, sources_text: str, sources, voice: str, known=None):
-    """A first World map Plan for `idea`, and what is still off about it: written, checked
-    line by line (vet), and said the reference way again."""
+def _distinct_again(llm, idea, kind, scenes, seen_whole: dict, left_out: list[str]) -> list:
+    """The duplicates check again for each country whose cards changed after it ran
+    ("Día de los Muertos" refilled next to "Day of the Dead", the best known "Chinese New
+    Year" put in next to "Lunar New Year")."""
+    out = []
+    for scene in scenes:
+        v = scene.visual
+        if v.kind != "country" or [i.text for i in v.items] == seen_whole.get(v.text):
+            out.append(scene)
+            continue
+        kept, twice = distinct(llm, idea, kind, v.text, list(v.items))
+        left_out += [f"{v.text}: {t.text} (the same as another card)" for t in twice]
+        out.append(scene.model_copy(update={"visual": v.model_copy(update={"items": kept})}))
+    return out
+
+
+def _once_in_the_tour(scenes: list, left_out: list[str]) -> list:
+    """Each thing once in the whole tour (the telephone for both the US and the UK): a
+    later country loses its copy (and goes, with nothing left)."""
+    seen: list[str] = []
+    out = []
+    for scene in scenes:
+        v = scene.visual
+        if v.kind != "country" or not v.items:
+            out.append(scene)
+            continue
+        items = []
+        for item in v.items:
+            if any(_folded(item.text) == other for other in seen):
+                left_out.append(f"{v.text}: {item.text} (named for another country already)")
+                continue
+            seen.append(_folded(item.text))
+            items.append(item)
+        if items or v.value:
+            out.append(scene.model_copy(update={"visual": v.model_copy(update={"items": items})}))
+    return out
+
+
+def _brief_for(idea: str, length: str) -> str:
+    extra = {"rank": RANK_GUIDE, "count": COUNT_GUIDE}.get(ranking(idea), "")
+    return _brief_text(idea, length) + extra
+
+
+def _schema_for(idea: str) -> dict:
+    if ranking(idea) != "count":
+        return SCHEMA
+    country = {**_COUNTRY, "properties": {**_COUNTRY["properties"], "number": {"type": "string"}}}
+    country["required"] = [*_COUNTRY["required"], "number"]
+    country["properties"]["items"] = {**_COUNTRY["properties"]["items"], "minItems": 0}
+    return {
+        **SCHEMA,
+        "properties": {
+            **SCHEMA["properties"],
+            "countries": {**SCHEMA["properties"]["countries"], "items": country},
+            "badge_emoji": {"type": "string"},
+        },
+        "required": [*SCHEMA["required"], "badge_emoji"],
+    }
+
+
+def finish(plan: Plan, idea: str, length: str, reply: dict | None = None) -> Plan:
+    """The tour said the reference way, in the topic's look, numbered as the topic asks."""
+    numbered = badges(plan, idea, reply)
+    return tighten(numbered, length, unit=kind_of(idea) if ranking(idea) == "count" else "")
+
+
+def draft(
+    llm, idea: str, length: str, sources_text: str, sources, voice: str, known=None, checks=None
+):
+    """A first World map Plan for `idea`, and what is still off about it: written, every
+    thing checked on its own (vet, filled up where too little is left), and said the
+    reference way again; in the topic's look (look_of), its countries numbered when it is
+    a ranking or a count (badges)."""
     user = (
-        f"{_brief_text(idea, length)}\n\nSources (use their facts where they help; most of "
+        f"{_brief_for(idea, length)}\n\nSources (use their facts where they help; most of "
         f"a reel like this is common knowledge):\n{sources_text}"
     )
     messages = [{"role": "system", "content": GUIDE}, {"role": "user", "content": user}]
-    plan, _ = _ask(llm, messages, sources, voice, length, known, temperature=0.7)
-    plan, removed = _vetted(llm, plan, idea)
-    low = MAP_WORDS.get(length, MAP_WORDS["auto"])[0]
-    if removed and narration_words(plan) < low * 0.9:
-        # Much of it didn't belong: written once more with real ones instead, and checked.
-        ask = (
-            f"{removed[0]}. Write the whole reel again with real {kind_of(idea)} instead, the "
-            "things each country is truly famous for: 3-5 for each big country."
-        )
-        again = [
-            *messages,
-            {"role": "assistant", "content": json.dumps(to_reply(plan), ensure_ascii=False)},
-            {"role": "user", "content": ask},
-        ]
-        try:
-            second = tighten(
-                to_plan(llm.chat_json(again, SCHEMA, temperature=0.5), sources, voice), length
-            )
-            second, removed_again = _vetted(llm, second, idea)
-            if narration_words(second) > narration_words(plan) and len(
-                _wrong(second, length, known)
-            ) <= len(_wrong(plan, length, known)):
-                plan, removed = second, [*removed, *removed_again]
-        except LLMError as exc:
-            log.warning("writing the World map tour again failed: %s", exc)
-    plan = tighten(plan, length)
+    plan, _, reply = _ask(
+        llm, messages, sources, voice, length, known, temperature=0.7, schema=_schema_for(idea)
+    )
+    plan = badges(plan, idea, reply)  # before the check: a count may keep a country bare
+    plan, removed = _vetted(llm, plan, idea, checks, known)
+    plan = finish(plan, idea, length, reply).model_copy(update={"look": look_of(idea)})
     return plan, [*removed, *_wrong(plan, length, known)]
 
 
-def _vetted(llm, plan: Plan, idea: str) -> tuple[Plan, list[str]]:
+def _vetted(llm, plan: Plan, idea: str, checks=None, known=None) -> tuple[Plan, list[str]]:
     try:
-        return vet(llm, plan, idea)
-    except LLMError as exc:  # unchecked rather than lost
+        return vet(llm, plan, idea, checks, known)
+    except LLMError as exc:
+        # Not checked: every thing stays, said plainly to the person.
         log.warning("checking the World map tour failed: %s", exc)
-        return plan, []
+        return plan, ["the things on the cards couldn't be checked; look them over"]
 
 
-def change(llm, plan: Plan, idea: str, request: str, length: str, known=None):
+def _vet_new(llm, plan: Plan, old: Plan, idea: str, checks, known) -> tuple[Plan, list[str]]:
+    """`vet` for a changed tour: things it had before are known good (they were checked
+    then), so they are put in the verdicts before the new ones are judged."""
+    checks = checks if checks is not None else Checks(None)
+    kind = kind_of(idea)
+    for s in old.scenes:
+        if s.visual.kind != "country":
+            continue
+        for i in s.visual.items:
+            key = Checks.key(kind, s.visual.text, i.text)
+            if checks.get(key) is None:
+                checks.put(key, {"keep": True, "what": "", "category": "", "answers": []})
+    return _vetted(llm, plan, idea, checks, known)
+
+
+def change(llm, plan: Plan, idea: str, request: str, length: str, known=None, checks=None):
     """`plan` changed as asked in plain words, in the same shape; pictures that still fit
-    are kept."""
+    are kept, new things are checked like a draft's."""
     user = (
-        f"{_brief_text(idea, length)}\n\nHere is the reel as JSON:\n"
+        f"{_brief_for(idea, length)}\n\nHere is the reel as JSON:\n"
         f"{json.dumps(to_reply(plan), ensure_ascii=False)}\n\nChange it as asked: {request}\n"
         "Keep everything not asked about as it is. Answer with the whole reel."
     )
     messages = [{"role": "system", "content": GUIDE}, {"role": "user", "content": user}]
-    changed, left = _ask(llm, messages, plan.sources, plan.voice, length, known, temperature=0.5)
-    return _with_pictures(changed, plan), left
+    changed, left, reply = _ask(
+        llm, messages, plan.sources, plan.voice, length, known, temperature=0.5,
+        schema=_schema_for(idea),
+    )  # fmt: skip
+    changed = badges(changed, idea, reply) if ranking(idea) else changed
+    changed, removed = _vet_new(llm, changed, plan, idea, checks, known)
+    changed = finish(changed, idea, length, reply).model_copy(update={"look": plan.look})
+    return _with_pictures(changed, plan), [*removed, *left]
 
 
-def redo_country(llm, plan: Plan, index: int, request: str = "") -> Plan:
+def redo_country(
+    llm, plan: Plan, index: int, request: str = "", idea: str = "", checks=None
+) -> Plan:
     """`plan` with the country scene `index` written again (the same country unless the
-    request says otherwise)."""
+    request says otherwise); its things checked like a draft's."""
     scene = plan.scenes[index]
     ask = request.strip() or "make it better: the things it is most famous for, a sharper fact"
     user = (
@@ -724,6 +1475,35 @@ def redo_country(llm, plan: Plan, index: int, request: str = "") -> Plan:
         from agentic_editor.animate.planner import PlannerError
 
         raise PlannerError("the writer gave no country")
+    new = one[1].model_copy(update={"hold": scene.hold})
+    topic = idea or plan.title
+    if topic:
+        kind = kind_of(topic)
+        allowed = _allowed(llm, topic, kind)
+        kept, gone = _sorted_out(
+            llm, topic, kind, new.visual.text, new.visual.items, allowed, checks
+        )
+        if len(kept) < MIN_KEPT:
+            kept += refill(
+                llm, topic, kind, new.visual.text, kept, gone, MIN_KEPT - len(kept), allowed, checks
+            )
+        if checks is not None:
+            checks.save()
+        if not kept:
+            from agentic_editor.animate.planner import PlannerError
+
+            raise PlannerError(
+                f"nothing sure to show for {new.visual.text}; the country is as it was"
+            )
+        opening = parse(new)[0]
+        new = new.model_copy(
+            update={
+                "narration": sentence(opening, kept, ["" for _ in kept]),
+                "visual": new.visual.model_copy(
+                    update={"items": kept, "value": scene.visual.value, "emoji": scene.visual.emoji}
+                ),
+            }
+        )
     scenes = list(plan.scenes)
-    scenes[index] = one[1].model_copy(update={"hold": scene.hold})
+    scenes[index] = new
     return _with_pictures(tidy(plan.model_copy(update={"scenes": scenes})), plan)

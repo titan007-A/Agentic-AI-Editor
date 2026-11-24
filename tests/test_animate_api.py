@@ -3,7 +3,7 @@ import json
 import pytest
 
 from agentic_editor import jobs
-from agentic_editor.animate import planner, routes, studio
+from agentic_editor.animate import mapwriter, planner, routes, studio
 from agentic_editor.db import Animation, Setting
 from tests import test_api
 from tests.test_animate import Router, Writer, fake_speak, long_plan, reply_for
@@ -259,6 +259,15 @@ def test_world_map_reels_have_ideas_tiles_and_their_own_writer(env, monkeypatch,
     assert a["player"]["map"]["scenes"][1] is None  # no map here: the card shows, no flying
     for _ in range(5):  # a topic made is never offered again
         assert ideas[0] not in env.client.get("/api/animation-ideas?style=map").json()["ideas"]
+    look = mapwriter.look_of(ideas[0])  # by the topic
+    assert a["plan"]["look"] == look and a["player"]["look"] == look
+    # Its look is the studio's to change (the topic chose it): the cards are made again.
+    other = "neon" if look == "horror" else "horror"
+    switched = env.client.patch(f"/api/animations/{a['id']}", json={"look": other}).json()
+    assert switched["plan"]["look"] == other and switched["player"]["look"] == other
+    assert switched["can_undo"]
+    bad = env.client.patch(f"/api/animations/{a['id']}", json={"look": "gothic"})
+    assert bad.status_code == 422
     # A reel of another style can be shown on the map, and back.
     glow = env.client.patch(f"/api/animations/{a['id']}", json={"style": "glow"}).json()
     assert glow["plan"]["style"] == "glow" and "map" not in glow["player"]

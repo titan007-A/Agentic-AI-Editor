@@ -531,7 +531,32 @@
       }
     });
     const beats = beatsOf(scene, spans.length);
+    const drips = [];
+    if (theme.map && building && building.look === "horror") {
+      spans.forEach((s, i) => {
+        if (!s.classList.contains("hl")) return;
+        s.style.color = "#D8141C";
+        s.style.position = "relative";
+        s.style.zIndex = "3"; // its drips run over the line below
+        s.style.display = "inline-block";
+        s.style.textShadow = "0 0 18px rgba(216,20,28,0.55), 0 5px 0 #4a0005";
+        const r = rng(hash(s.textContent) + i);
+        for (let k = 0; k < 6; k++) {
+          const drip = el("span", "", s);
+          drip.style.position = "absolute";
+          drip.style.left = `${(8 + k * 15 + r() * 8).toFixed(1)}%`;
+          drip.style.top = "80%";
+          drip.style.width = `${(10 + r() * 8).toFixed(1)}px`;
+          drip.style.borderRadius = "0 0 10px 10px";
+          drip.style.zIndex = "3";
+          drip.style.background = "linear-gradient(#D8141C, #8a0008)";
+          drip.style.boxShadow = "0 0 10px rgba(216,20,28,0.5)";
+          drips.push({ node: drip, at: beats[i] + 0.2 + r() * 0.4, most: 50 + r() * 80 });
+        }
+      });
+    }
     return (t) => {
+      drips.forEach((d) => (d.node.style.height = `${(d.most * ease.out(prog(t, d.at, 1.8))).toFixed(1)}px`));
       parts.forEach((k) => {
         const p = ease.back(prog(t, scene.start, 0.45));
         show(k, clamp(p), `translateX(-50%) scale(${lerp(0.6, 1, p)})`);
@@ -1971,6 +1996,22 @@
   const RAD = Math.PI / 180;
   const CARD = { w: 376, h: 470, y: 790, label: 56 }; // y: where a new card's centre sits
   const OCEAN = "#00293b";
+  // A reel's look (Plan.look), as the reference page has them: white picture cards; gold
+  // horror (blood-red countries, photos in gold frames, gold names); neon labels (the dish
+  // cut out on the map, its name glowing in a colour of its own).
+  const LOOK_CARDS = {
+    cards: { w: 376, h: 470, gap: 14, label: 56 },
+    horror: { w: 420, h: 300, gap: 10, label: 66 },
+    neon: { w: 440, h: 360, gap: 2, label: 76 },
+  };
+  const NEON = ["#7CFF6B", "#FF6EC7", "#5CE1FF", "#FFE45C", "#B98CFF", "#FF9F43"];
+  // Where a caption may sit (its top), in order: its usual place low on the screen, then
+  // lower, higher, lowest, as cards leave room.
+  const CAPTION_BANDS = [1305, 1470, 1140, 1620];
+  const GOLD = "#F6C453";
+  const GOLD_EDGE = "#D9A441";
+  const BLOOD = "#8a0d12";
+  const mapLookOf = (data) => (data && LOOK_CARDS[data.look] ? data.look : "cards");
   let mapState = null; // the loaded reel's map (camera, projection) while scenes are built
   let building = null; // load()'s pending pictures and options, for the scene builders
 
@@ -2162,6 +2203,7 @@
     const base = /animation-map\/$/.test(options.mapBase || "") ? `${options.mapBase}v${m.version || 1}/` : options.mapBase;
     const store = m.tiles && base ? tileStore(base, m) : null;
     const camera = cameraPath(data, m);
+    const horror = mapLookOf(data) === "horror";
     const views = m.scenes || [];
     const cta = data.scenes.find((sc) => sc.kind === "cta");
     // How lit each scene's country is at t: as it is named, until the camera flies on.
@@ -2201,13 +2243,13 @@
         if (a <= 0.001 || !shape) return;
         ctx.beginPath();
         for (const ring of shape.rings) ringPath(ctx, ring, cam, pr);
-        ctx.globalAlpha = a * (m.fillAlpha || 0.74);
-        ctx.fillStyle = v.color;
+        ctx.globalAlpha = a * (horror ? 0.86 : m.fillAlpha || 0.74);
+        ctx.fillStyle = horror ? BLOOD : v.color;
         ctx.fill("evenodd");
         ctx.globalAlpha = a;
         ctx.lineJoin = "round";
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
-        ctx.shadowColor = "rgba(255,255,255,0.9)";
+        ctx.strokeStyle = horror ? "rgba(255,214,170,0.7)" : "rgba(255,255,255,0.95)";
+        ctx.shadowColor = horror ? "rgba(255,60,40,0.7)" : "rgba(255,255,255,0.9)";
         ctx.shadowBlur = 9;
         ctx.lineWidth = 2.6;
         ctx.stroke();
@@ -2223,6 +2265,16 @@
         if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
       });
       ctx.globalAlpha = 1;
+      if (horror) {
+        // Everything darker and redder, the edges darkest, as the haunted reels look.
+        ctx.fillStyle = "rgba(48,0,0,0.26)";
+        ctx.fillRect(0, 0, W, H);
+        const g = ctx.createRadialGradient(W / 2, H * 0.44, H * 0.16, W / 2, H * 0.5, H * 0.78);
+        g.addColorStop(0, "rgba(0,0,0,0)");
+        g.addColorStop(1, "rgba(0,0,0,0.74)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
       return wait;
     };
     return { draw, camera, ready: store ? store.ready : Promise.resolve() };
@@ -2231,17 +2283,31 @@
   // A thing's card pinned on its country: the painted picture (or its emoji) on white, its
   // name on a dark label below; it grows with the camera's zoom like the map under it.
   function mapCard(item, root) {
-    const wrap = place(el("div", "abs", root), 0, 0, CARD.w, CARD.h + 14 + CARD.label);
-    wrap.style.transformOrigin = `${CARD.w / 2}px ${CARD.h / 2}px`;
-    const card = place(el("div", "abs", wrap), 0, 0, CARD.w, CARD.h);
-    card.style.background = "#ffffff";
-    card.style.borderRadius = "18px";
-    card.style.overflow = "hidden";
-    card.style.boxShadow = "0 14px 34px rgba(0,0,0,0.42)";
+    const look = building ? building.look : "cards";
+    const d = LOOK_CARDS[look];
+    const wrap = place(el("div", "abs", root), 0, 0, d.w, d.h + d.gap + d.label);
+    wrap.style.transformOrigin = `${d.w / 2}px ${d.h / 2}px`;
+    wrap._dims = d;
+    const card = place(el("div", "abs", wrap), 0, 0, d.w, d.h);
+    if (look === "neon") {
+      // No card: the dish itself on the map, a soft shadow under it.
+      card.style.filter = "drop-shadow(0 18px 16px rgba(0,0,0,0.5))";
+    } else if (look === "horror") {
+      card.style.background = "radial-gradient(ellipse at 50% 40%, #3b1010, #0b0505)";
+      card.style.border = `3px solid ${GOLD_EDGE}`;
+      card.style.borderRadius = "6px";
+      card.style.overflow = "hidden";
+      card.style.boxShadow = "0 0 0 2px rgba(0,0,0,0.55), 0 16px 36px rgba(0,0,0,0.65), 0 0 22px rgba(217,164,65,0.35)";
+    } else {
+      card.style.background = "#ffffff";
+      card.style.borderRadius = "18px";
+      card.style.overflow = "hidden";
+      card.style.boxShadow = "0 14px 34px rgba(0,0,0,0.42)";
+    }
     const base = building && building.options.imageBase;
     if (item.image && base) {
-      const img = place(el("img", "abs", card), 0, 0, CARD.w, CARD.h);
-      img.style.objectFit = "cover";
+      const img = place(el("img", "abs", card), 0, 0, d.w, d.h);
+      img.style.objectFit = look === "neon" ? "contain" : "cover";
       img.alt = "";
       building.pending.push(
         new Promise((resolve) => {
@@ -2250,29 +2316,91 @@
         }).then(() => img.decode && img.decode().catch(() => undefined)),
       );
     } else {
-      const glyph = emoji(card, item.emoji || "🌍", 250);
-      place(glyph, 0, 0, CARD.w, CARD.h);
+      const glyph = emoji(card, item.emoji || "🌍", { neon: 270, horror: 170 }[look] || 250);
+      place(glyph, 0, 0, d.w, d.h);
       glyph.style.display = "flex";
       glyph.style.alignItems = "center";
       glyph.style.justifyContent = "center";
     }
-    const holder = place(el("div", "abs", wrap), -200, CARD.h + 14, CARD.w + 400, CARD.label);
+    const holder = place(el("div", "abs", wrap), -200, d.h + d.gap, d.w + 400, d.label);
     holder.style.textAlign = "center";
     // A name written all in small letters gets capitals, as a label would.
     const name = String(item.text || "");
     const shown = name === name.toLowerCase() ? name.replace(/(^|\s)(\p{L})/gu, (m, a, b) => a + b.toUpperCase()) : name;
-    const label = el("span", "", holder, shown);
-    font(label, "Poppins-SemiBold", 34, "#ffffff");
+    const label = el("span", "", holder, look === "cards" ? shown : shown.toUpperCase());
     label.style.display = "inline-block";
     label.style.whiteSpace = "nowrap";
-    label.style.background = "#16141d";
-    label.style.borderRadius = "10px";
-    label.style.padding = "3px 18px 5px";
     label.style.lineHeight = "1.3";
-    label.style.boxShadow = "0 6px 16px rgba(0,0,0,0.35)";
-    for (let size = 34; size > 18 && label.offsetWidth > CARD.w + 220; size -= 2) label.style.fontSize = size + "px";
+    let size = 34;
+    if (look === "horror") {
+      size = 46;
+      font(label, "Anton-Regular", size, GOLD);
+      label.style.background = "rgba(10,7,5,0.92)";
+      label.style.border = `2px solid ${GOLD_EDGE}`;
+      label.style.borderRadius = "6px";
+      label.style.padding = "1px 18px 3px";
+      label.style.letterSpacing = "0.03em";
+      label.style.textShadow = "0 0 8px rgba(246,196,83,0.85), 0 0 20px rgba(246,196,83,0.4)";
+      label.style.boxShadow = "0 6px 16px rgba(0,0,0,0.5)";
+    } else if (look === "neon") {
+      // Each name its own neon colour, in turn through the reel.
+      const c = NEON[building.neon++ % NEON.length];
+      size = 54;
+      font(label, "Anton-Regular", size, c);
+      label.style.background = "rgba(18,16,24,0.9)";
+      label.style.border = `2px solid ${c}55`;
+      label.style.borderRadius = "10px";
+      label.style.padding = "2px 18px 4px";
+      label.style.letterSpacing = "0.03em";
+      label.style.textShadow = `0 0 6px ${c}, 0 0 18px ${c}99`;
+      label.style.boxShadow = "0 6px 16px rgba(0,0,0,0.45)";
+    } else {
+      font(label, "Poppins-SemiBold", size, "#ffffff");
+      label.style.background = "#16141d";
+      label.style.borderRadius = "10px";
+      label.style.padding = "3px 18px 5px";
+      label.style.boxShadow = "0 6px 16px rgba(0,0,0,0.35)";
+    }
+    for (; size > 18 && label.offsetWidth > d.w + 220; size -= 2) label.style.fontSize = size + "px";
+    wrap._labelW = label.offsetWidth;
     wrap.style.display = "none";
     return wrap;
+  }
+
+  // A country's number (Visual.value: "#3" for a place in a ranking, "5,580" for a count),
+  // with its icon (Visual.emoji): a dark badge, the number big and yellow; a count counts
+  // up as it pops.
+  function mapBadge(v, root) {
+    const look = building ? building.look : "cards";
+    const wrap = place(el("div", "abs", root), 0, 0);
+    wrap.style.display = "flex";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "12px";
+    wrap.style.padding = "6px 24px 6px 14px";
+    wrap.style.whiteSpace = "nowrap";
+    wrap.style.borderRadius = "16px";
+    wrap.style.background = "rgba(16,16,20,0.92)";
+    wrap.style.border = `2px solid ${look === "horror" ? GOLD_EDGE : "rgba(255,255,255,0.22)"}`;
+    wrap.style.boxShadow = "0 10px 26px rgba(0,0,0,0.5)";
+    if (v.emoji && v.emoji !== "🌍") font(el("span", "", wrap, v.emoji), "NotoColorEmoji", 64);
+    const number = el("span", "", wrap, v.value);
+    font(number, "Anton-Regular", 96, look === "horror" ? GOLD : "#FFD23F");
+    number.style.lineHeight = "1.05";
+    number.style.textShadow = "0 0 10px rgba(255,210,63,0.7), 0 0 26px rgba(255,210,63,0.35)";
+    wrap._number = number;
+    wrap._count = /^#/.test(v.value) ? null : parseValue(v.value);
+    wrap.style.display = "flex";
+    wrap._w = wrap.offsetWidth;
+    wrap._h = wrap.offsetHeight;
+    wrap.style.display = "none";
+    return wrap;
+  }
+
+  function countTo(value, p) {
+    const n = value.num * p;
+    let text = n.toFixed(value.decimals);
+    if (value.commas) text = Number(text).toLocaleString("en-US", { minimumFractionDigits: value.decimals, maximumFractionDigits: value.decimals });
+    return value.head + text + value.tail;
   }
 
   function mapCountry(v, theme, root, scene, data) {
@@ -2281,38 +2409,106 @@
     const items = v.items || [];
     const cards = items.map((item) => mapCard(item, root));
     const beats = beatsOf(scene, items.length + 1).slice(1);
-    return (t) => {
+    const badge = v.value ? mapBadge(v, root) : null;
+    const named = (scene.beats && scene.beats[0]) || scene.start;
+    // Where each card (and the badge) is at t, or null while it isn't shown: a pure
+    // function of t, so the captions can keep out of the cards' way at any moment.
+    const layout = (t) => {
+      const on = t >= scene.start - 0.001 && t < scene.end + 0.6;
       const cam = mapState.camera(t);
       const pr = project(cam);
       const zoom = view ? view.close / cam.w : 1;
       const leave = 1 - ease.inOut(prog(t, scene.end + 0.05, 0.4));
-      cards.forEach((wrap, k) => {
+      const placed = cards.map((wrap, k) => {
         const at = beats[k];
         const next = beats[k + 1];
         // Off the map (no spot): one card at a time where cards pop.
         const gone = !view && next !== undefined && t >= next;
-        if (t < at - 0.02 || gone || leave <= 0.001) {
+        if (!on || t < at - 0.02 || gone || leave <= 0.001) return null;
+        const p = prog(t, at - 0.02, 0.4);
+        const spot = view && view.spots[k];
+        return {
+          x: spot ? pr.x(spot[0]) : W / 2,
+          y: spot ? pr.y(spot[1]) : CARD.y,
+          s: zoom * lerp(0.2, 1, ease.back(p)),
+          o: clamp(p * 3) * leave,
+        };
+      });
+      let pin = null;
+      if (badge && on && t >= named - 0.02 && leave > 0.001) {
+        const p = prog(t, named - 0.02, 0.45);
+        // Over the first card (the camera keeps it in view), else on the country itself;
+        // never past the frame's edges.
+        const spot = view && cards.length && view.spots[0];
+        const d = cards.length ? cards[0]._dims : LOOK_CARDS.cards;
+        const k = spot ? zoom : 1;
+        let cx = W / 2;
+        let bottom = CARD.y - d.h / 2 - 18;
+        if (spot) {
+          cx = pr.x(spot[0]);
+          bottom = pr.y(spot[1]) - (d.h / 2 + 18) * zoom;
+        } else if (view) {
+          cx = pr.x(view.fit[0]);
+          bottom = pr.y(view.fit[1]) + badge._h / 2;
+        }
+        const w = badge._w * k;
+        pin = {
+          x: clamp(cx - w / 2, 16, Math.max(16, W - 16 - w)),
+          y: bottom - badge._h * k,
+          k,
+          s: k * lerp(0.3, 1, ease.back(p)),
+          o: clamp(p * 3) * leave,
+        };
+      }
+      return { placed, pin };
+    };
+    // The screen boxes the cards (with their labels) and the badge take at t.
+    mapState.boxes.push((t) => {
+      const { placed, pin } = layout(t);
+      const out = [];
+      placed.forEach((c, k) => {
+        if (!c || c.o < 0.05) return;
+        const d = cards[k]._dims;
+        const half = (Math.max(d.w, cards[k]._labelW || d.w) / 2) * c.s;
+        out.push({ x0: c.x - half, x1: c.x + half, y0: c.y - (d.h / 2) * c.s, y1: c.y + (d.h / 2 + d.gap + d.label) * c.s });
+      });
+      if (pin && pin.o >= 0.05) out.push({ x0: pin.x, x1: pin.x + badge._w * pin.s, y0: pin.y, y1: pin.y + badge._h * pin.s });
+      return out;
+    });
+    return (t) => {
+      const { placed, pin } = layout(t);
+      cards.forEach((wrap, k) => {
+        const c = placed[k];
+        if (!c) {
           wrap.style.display = "none";
           return;
         }
+        const d = wrap._dims;
         wrap.style.display = "block";
-        const p = prog(t, at - 0.02, 0.4);
-        const pop = lerp(0.2, 1, ease.back(p));
-        const spot = view && view.spots[k];
-        const x = spot ? pr.x(spot[0]) : W / 2;
-        const y = spot ? pr.y(spot[1]) : CARD.y;
-        wrap.style.opacity = (clamp(p * 3) * leave).toFixed(4);
-        wrap.style.transform = `translate(${(x - CARD.w / 2).toFixed(1)}px, ${(y - CARD.h / 2).toFixed(1)}px) scale(${(zoom * pop).toFixed(4)})`;
+        wrap.style.opacity = c.o.toFixed(4);
+        wrap.style.transform = `translate(${(c.x - d.w / 2).toFixed(1)}px, ${(c.y - d.h / 2).toFixed(1)}px) scale(${c.s.toFixed(4)})`;
       });
+      if (!badge) return;
+      if (!pin) {
+        badge.style.display = "none";
+        return;
+      }
+      badge.style.display = "flex";
+      if (badge._count) badge._number.textContent = countTo(badge._count, ease.out(prog(t, named, 0.9)));
+      badge.style.transformOrigin = "50% 100%";
+      badge.style.opacity = pin.o.toFixed(4);
+      badge.style.transform = `translate(${pin.x.toFixed(1)}px, ${pin.y.toFixed(1)}px) scale(${pin.s.toFixed(4)})`;
     };
   }
 
   // Under any other visual on the map (a hook, a number, the ending): the map darkened so
   // the visual reads.
-  function mapVeil(root, kind) {
+  function mapVeil(root, kind, look) {
     const veil = place(el("div", "abs", root), 0, 0, W, H);
     veil.style.background =
-      kind === "title"
+      look === "horror"
+        ? "radial-gradient(ellipse at 50% 42%, rgba(30,0,0,0.55), rgba(8,0,0,0.78) 75%)"
+        : kind === "title"
         ? "radial-gradient(ellipse at 50% 42%, rgba(0,10,18,0.55), rgba(0,10,18,0.25) 70%)"
         : "linear-gradient(rgba(0,12,20,0.5), rgba(0,12,20,0.62))";
     return veil;
@@ -2323,11 +2519,11 @@
 
   // ---- subtitles and header -----------------------------------------------------------
 
-  function subtitles(theme, stage, captions) {
+  function subtitles(theme, stage, captions, data) {
     const layer = el("div", "layer", stage);
     // Bold kinetic text: the words are the picture already.
     if (theme.kinetic) return { chunks: [], update() {} };
-    if (theme.map) return mapSubtitles(theme, layer, captions);
+    if (theme.map) return mapSubtitles(theme, layer, captions, data);
     const chunks = captions.map((c) => {
       const box = place(el("div", "abs fit center", layer), (W - SUBS.w) / 2 - 20, SUBS.y, SUBS.w, SUBS.h);
       font(box, theme.caption, 78, theme.text);
@@ -2397,17 +2593,41 @@
   // World map captions: one word (or one name) at a time, low on the screen, white with a
   // soft shadow, the first letter a capital as the reference reels show them ("Has",
   // "Marine biologist"), punctuation off.
-  function mapSubtitles(theme, layer, captions) {
+  function mapSubtitles(theme, layer, captions, data) {
     const bare = (text) => text.replace(/^[^\p{L}\p{N}$£€]+|[^\p{L}\p{N}%)]+$/gu, "");
     const shown = (text) => text.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
+    // The horror look: captions in capitals, the things' names and numbers in gold.
+    const horror = mapLookOf(data) === "horror";
+    const names = new Set();
+    (data && data.scenes ? data.scenes : []).forEach((sc) => {
+      if (sc.kind === "country" && sc.visual) (sc.visual.items || []).forEach((i) => names.add(plain(i.text)));
+    });
     const chunks = captions.map((c) => {
       const box = place(el("div", "abs fit center", layer), 80, 1305, W - 160, 120);
       font(box, theme.caption, 60, theme.text);
       box.style.display = "none";
       box.style.whiteSpace = "nowrap";
       box.style.textShadow = "0 3px 10px rgba(0,0,0,0.65), 0 1px 2px rgba(0,0,0,0.6)";
-      box.textContent = shown(c.words.map((w) => bare(w.text)).filter(Boolean).join(" "));
+      const said = c.words.map((w) => bare(w.text)).filter(Boolean).join(" ");
+      box.textContent = horror ? said.toUpperCase() : shown(said);
+      if (horror && (names.has(plain(said)) || /\d/.test(said))) {
+        box.style.color = GOLD;
+        box.style.textShadow = "0 0 10px rgba(246,196,83,0.55), 0 3px 10px rgba(0,0,0,0.7)";
+      }
       box._fit = [60, 34];
+      // Clear of the cards: the first of these bands no card, label or badge takes while
+      // the words are shown (the reference keeps captions off the cards).
+      const boxes = mapState && mapState.boxes ? mapState.boxes : [];
+      const seen = [c.start, (c.start + c.end) / 2, Math.max(c.start, c.end - 0.02)].flatMap((t) => boxes.flatMap((f) => f(t)));
+      const takes = (top) =>
+        seen.reduce((sum, b) => {
+          const w = Math.min(b.x1, W - 80) - Math.max(b.x0, 80);
+          const h = Math.min(b.y1, top + 128) - Math.max(b.y0, top - 8);
+          return sum + (w > 0 && h > 0 ? w * h : 0);
+        }, 0);
+      const bands = CAPTION_BANDS.map((top) => ({ top, hit: takes(top) }));
+      const free = bands.find((b) => b.hit === 0) || bands.reduce((a, b) => (b.hit < a.hit ? b : a));
+      box.style.top = free.top + "px";
       return { c, box, spans: [] };
     });
     return {
@@ -2545,17 +2765,18 @@
     const theme = THEMES[data.style] || THEMES.glow;
     const seed = hash(data.title || "reel");
     const mapView = theme.map ? mapLayer(stage, data, options) : null;
+    if (mapView) mapView.boxes = [];
     mapState = mapView;
     const drawBg = mapView ? mapView.draw : background(theme, stage, seed);
     const sceneLayer = el("div", "layer", stage);
     const pending = mapView ? [mapView.ready] : [];
-    building = { pending, options };
+    building = { pending, options, look: mapLookOf(data), neon: 0 };
     const scenes = data.scenes.map((scene) => {
       const root = el("div", "scene", sceneLayer);
       const kind = theme.kinetic && !["cta", "stat"].includes(scene.kind) ? "kinetic" : scene.kind;
       const build = SCENES[kind] || SCENES.title;
       root.style.display = "block";
-      if (theme.map && kind !== "country") mapVeil(root, kind);
+      if (theme.map && kind !== "country") mapVeil(root, kind, building.look);
       // A painted picture behind it (animate/images.py), under everything the scene draws.
       const picture = paintedLayer(scene, theme, root, options.imageBase, pending);
       scene._picture = Boolean(picture);
@@ -2565,7 +2786,7 @@
     building = null;
     // Every picture is in before a frame is drawn: the first frames of a render too.
     await Promise.all(pending);
-    const subs = subtitles(theme, stage, data.captions || []);
+    const subs = subtitles(theme, stage, data.captions || [], data);
     const head = header(theme, stage, data);
     const guides = [
       [0, 0, W, SAFE.top],

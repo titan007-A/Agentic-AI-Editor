@@ -60,11 +60,13 @@ class ChangeRequest(BaseModel):
 
 
 class StudioChoice(BaseModel):
-    """Changes the studio's own controls make at once (no writing): style and voice."""
+    """Changes the studio's own controls make at once (no writing): style, voice, the
+    painted pictures and a World map reel's look."""
 
     style: Literal["glow", "paper", "story", "kinetic", "stick", "map"] | None = None
     voice: str | None = Field(default=None, max_length=32)
     images: bool | None = None
+    look: Literal["cards", "horror", "neon"] | None = None
 
 
 class AutopilotSettings(BaseModel):
@@ -252,6 +254,8 @@ def operations(
                 raise HTTPException(422, f"no voice {body.voice!r}")
             update["voice"] = voice.resolve(body.voice, plan.kind, plan.mood)
             found.voice = body.voice
+        if body.look and body.look != plan.look:
+            update["look"] = body.look  # its cards are painted (or cut out) for it again
         changed_pictures = body.images is not None and body.images != found.images
         if changed_pictures:
             found.images = body.images

@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -28,8 +29,10 @@ RUNNER = Path(__file__).parent / "paint_runner.py"
 STEPS = 9
 SIZE = (720, 1280)  # 9:16, shown at 1080x1920 (the player scales it to cover)
 # A World map card's picture: the card's own 4:5 shape, sized for a card 376 px wide (a
-# tour has thirty of them, so smaller paints faster).
+# tour has thirty of them, so smaller paints faster). A gold horror card is a landscape
+# photo, 4:3, shown 420 px wide.
 CARD = (512, 640)
+HORROR_CARD = (640, 480)
 # Pictures painted in one turn of the GPU; between turns a job waiting for it goes first.
 BATCH = 8
 # The most the model may take to load, and then each picture, before the painting is given
@@ -47,6 +50,9 @@ LOOKS = {
     # A World map card: the thing alone on white, so it sits in the white card like a cut-out.
     "map": "one single subject centred and filling most of the frame, isolated on a plain pure "
     "white background, bright clean studio product photo, vivid natural colours, soft shadow",
+    # A gold horror card: the place itself, as a dark and eerie photograph.
+    "map-horror": "a realistic photograph of the whole place, eerie and dark, dusk, fog, cold "
+    "moonlight, moody desaturated colours, cinematic wide shot",
 }
 # Styles that are their own look: drawn, never painted.
 UNPAINTED = ("stick", "kinetic")
@@ -88,6 +94,103 @@ def name_of(prompt: str, seed: int, model: str, size: tuple[int, int] = SIZE) ->
     """The file a picture is kept in, by everything that makes it."""
     raw = json.dumps([model, STEPS, list(size), prompt, seed], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()[:24] + ".png"
+
+
+def card_style(look: str) -> tuple[str, tuple[int, int]]:
+    """The LOOKS entry and size a World map reel's cards are painted in, by its look."""
+    return ("map-horror", HORROR_CARD) if look == "horror" else ("map", CARD)
+
+
+def card_key(style: str, text: str, country: str, seed: int = 0) -> str:
+    """A card picture's key across reels: what it shows by name (any case, accents or
+    articles), its country, its look, and the number asked to paint it again."""
+    import unicodedata
+
+    def plain(value: str) -> str:
+        flat = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().lower()
+        words = re.findall(r"[a-z0-9]+", flat)
+        return " ".join(w for w in words if w not in ("the", "a", "an"))
+
+    return f"{style}|{plain(country)}|{plain(text)}|{int(seed or 0)}"
+
+
+class CardIndex:
+    """Card pictures painted for earlier reels, by card_key: a thing that comes again
+    (the Eiffel Tower, sushi) is never painted twice, whatever words its picture was asked
+    in this time. Kept next to the pictures (cards.json)."""
+
+    _lock = threading.Lock()
+    MAX = 20000
+
+    def __init__(self, folder: Path):
+        self.path = folder / "cards.json"
+        self.folder = folder
+        try:
+            self.found = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self.found = {}
+
+    def get(self, key: str) -> str:
+        name = self.found.get(key, "")
+        return name if name and (self.folder / name).exists() else ""
+
+    def put(self, key: str, name: str) -> None:
+        self.found[key] = name
+
+    def save(self) -> None:
+        with CardIndex._lock:
+            try:  # others may have added theirs meanwhile
+                kept = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                kept = {}
+            kept.update(self.found)
+            while len(kept) > self.MAX:
+                kept.pop(next(iter(kept)))
+            self.folder.mkdir(parents=True, exist_ok=True)
+            part = self.path.with_suffix(".part")
+            part.write_text(json.dumps(kept, ensure_ascii=False), encoding="utf-8")
+            part.replace(self.path)
+
+
+# A neon card's dish sits on the map itself: the white it was painted on is cut away.
+WHITE = 236  # a pixel this light in every channel, joined to the border, is background
+FEATHER = 1.2  # the edge's softness, in pixels
+
+
+def cut_name(name: str) -> str:
+    return hashlib.sha256(f"{name}|cut".encode()).hexdigest()[:24] + ".png"
+
+
+def cut_out(settings: Settings, name: str) -> str:
+    """The picture `name` with the white background around its subject made see-through
+    (only white joined to the border: white inside the dish stays), kept once; "" when the
+    picture isn't there."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    from scipy import ndimage
+
+    out = folder(settings)
+    dest = out / cut_name(name)
+    if dest.exists():
+        return dest.name
+    src = out / name
+    if not src.exists():
+        return ""
+    picture = Image.open(src).convert("RGB")
+    pixels = np.asarray(picture)
+    light = (pixels >= WHITE).all(axis=2)
+    parts, _ = ndimage.label(light)
+    edge = set(np.unique(np.concatenate([parts[0], parts[-1], parts[:, 0], parts[:, -1]])))
+    edge.discard(0)
+    background = np.isin(parts, list(edge))
+    alpha = Image.fromarray(np.where(background, 0, 255).astype(np.uint8))
+    alpha = alpha.filter(ImageFilter.GaussianBlur(FEATHER))
+    cut = picture.convert("RGBA")
+    cut.putalpha(alpha)
+    part = dest.with_suffix(".part.png")
+    cut.save(part)
+    part.replace(dest)
+    return dest.name
 
 
 def paint(
