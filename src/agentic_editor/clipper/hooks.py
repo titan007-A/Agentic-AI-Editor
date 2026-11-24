@@ -365,7 +365,9 @@ heated argument or confrontation, a big win or loss with a big reaction, somethi
 hilarious, a prank, a stunt. false for: plain gameplay or a game's own scenes (driving, \
 walking, menus, cutscenes) without a strong reaction from the streamer, even when the chat \
 is busy; normal talk or chatting with the chat; quiet or mild moments; reading out \
-donations; waiting. True, for example: he screams and throws his headset after losing \
+donations; waiting. In a game stream, lines spoken by the game's own characters (a cutscene, \
+people in the game) are the game talking, not the streamer: they are never crazy by \
+themselves. True, for example: he screams and throws his headset after losing \
 $20,000; she tells a guest to get out and they shout at each other; he admits something \
 outrageous. False, for example: he drives around the game talking about the map; they chat \
 about where to eat; he reads a donation and says thanks; a game's cutscene plays.
@@ -610,7 +612,9 @@ heated argument or confrontation, a big win or loss with a big reaction, somethi
 hilarious, a prank, a stunt.
 Not crazy: plain gameplay or a game's own scenes (driving, walking, menus, cutscenes) without \
 a strong reaction, even when the chat is busy; normal talk or chatting with the chat; quiet \
-or mild moments; reading out donations; waiting.
+or mild moments; reading out donations; waiting. In a game stream, lines spoken by the \
+game's own characters (a cutscene, people in the game) are the game talking, not the \
+streamer.
 
 What is said in the clip, in order:
 {said}
