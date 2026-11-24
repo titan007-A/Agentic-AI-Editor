@@ -10,14 +10,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-from agentic_editor.presets import TextBlock
+from agentic_editor.presets import OneLiner, TextBlock
 from agentic_editor.render import fonts
 
 EDGE_MARGIN = 24
 BOX_PAD = 0.35  # of the size, around a banner's text inside its box
+# Of the size, kept clear at each side inside a box across the frame (a clips page's title
+# card: its widest line comes to about this near the card's sides).
+SIDE_ROOM = 0.45
 
 
 def font_file(fonts_dir: Path, name: str) -> Path:
@@ -393,14 +397,46 @@ def _filled(words: list[str], face: Face, size: float, max_width: int) -> list[l
     return lines
 
 
+class BoxShape(NamedTuple):
+    """A banner's box: across the frame with `margin` px left at each side (None: as wide
+    as the words), its corners' `radius` and the `pad` between the words and its top and
+    bottom (and sides when as wide as the words); None for each: BOX_PAD of the size."""
+
+    margin: int | None = None
+    radius: int | None = None
+    pad: int | None = None
+
+
+def line_shape(line: OneLiner) -> BoxShape:
+    return BoxShape(line.box_margin, line.box_radius, line.box_pad)
+
+
+def box_pad(size: int, shape: BoxShape | None) -> float:
+    return shape.pad if shape and shape.pad is not None else size * BOX_PAD
+
+
+def banner_room(frame_width: int, size: int, shape: BoxShape | None = None) -> int:
+    """The widest a banner's line may be: inside a box across the frame, its width less
+    SIDE_ROOM of the size at each side; else the frame's less 80 px at each side."""
+    if shape and shape.margin is not None:
+        return max(100, frame_width - 2 * shape.margin - round(2 * SIDE_ROOM * size))
+    return frame_width - 160
+
+
 def banner_extent(
-    text: str, font: Face | Path, size: int, box: str | None, frame_width: int
+    text: str,
+    font: Face | Path,
+    size: int,
+    box: str | None,
+    frame_width: int,
+    shape: BoxShape | None = None,
+    spacing: float = 1.0,
 ) -> tuple[float, float]:
     """Top and bottom of what draw_banner draws, box included, relative to its `top`."""
     lines = text.split("\n")
-    size = fit_width(lines, font, size, 24, frame_width - 160)
-    ink_top, ink_bottom = ink_extent(lines, font, size, 1.0)
-    pad = size * BOX_PAD if box else 0.0
+    size = fit_width(lines, font, size, 24, banner_room(frame_width, size, shape))
+    ink_top, ink_bottom = ink_extent(lines, font, size, spacing)
+    pad = box_pad(size, shape) if box else 0.0
     return ink_top - pad, ink_bottom + pad
 
 
@@ -413,28 +449,29 @@ def draw_banner(
     frame: tuple[int, int],
     top: int,
     dest: Path,
+    shape: BoxShape | None = None,
+    spacing: float = 1.0,
 ) -> Path:
-    """A centered title with an optional solid box behind it."""
+    """A centered title with an optional solid box behind it: as wide as the words, or
+    across the frame (see BoxShape)."""
     face = face_of(font)
     width, _ = frame
     lines = text.split("\n")
-    size = fit_width(lines, face, size, 24, width - 160)
-    step = line_height(face, size, 1.0)
+    size = fit_width(lines, face, size, 24, banner_room(width, size, shape))
+    step = line_height(face, size, spacing)
     image = Image.new("RGBA", frame, (0, 0, 0, 0))
     canvas = ImageDraw.Draw(image)
     if box:
-        ink_top, ink_bottom = ink_extent(lines, face, size, 1.0)
-        text_width = max(face.length(line, size) for line in lines)
-        pad = size * BOX_PAD
+        ink_top, ink_bottom = ink_extent(lines, face, size, spacing)
+        pad = box_pad(size, shape)
+        if shape and shape.margin is not None:
+            left, right = shape.margin, width - shape.margin
+        else:
+            text_width = max(face.length(line, size) for line in lines)
+            left, right = (width - text_width) / 2 - pad, (width + text_width) / 2 + pad
+        radius = shape.radius if shape and shape.radius is not None else pad
         canvas.rounded_rectangle(
-            (
-                (width - text_width) / 2 - pad,
-                top + ink_top - pad,
-                (width + text_width) / 2 + pad,
-                top + ink_bottom + pad,
-            ),
-            radius=pad,
-            fill=box,
+            (left, top + ink_top - pad, right, top + ink_bottom + pad), radius=radius, fill=box
         )
     for i, line in enumerate(lines):
         face.draw(canvas, ((width - face.length(line, size)) / 2, top + i * step), line, size,

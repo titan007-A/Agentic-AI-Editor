@@ -402,8 +402,12 @@ def line_rows(preset: Preset, face: Callable[..., text.Face]) -> tuple[float, fl
         return None
     words = " ".join(LONGEST_LINE.split()[: line.max_words])
     font = face(line.font, words)
-    wrapped = text.balance(words, font, line.size, preset.size[0] - 160)
-    above, below = text.banner_extent(wrapped, font, line.size, line.box_color, preset.size[0])
+    shape = text.line_shape(line)
+    room = text.banner_room(preset.size[0], line.size, shape)
+    wrapped = text.balance(words, font, line.size, room)
+    above, below = text.banner_extent(
+        wrapped, font, line.size, line.box_color, preset.size[0], shape, line.line_spacing
+    )
     if line.position == "top":
         # As off_picture measures it: from the offset, by the ink and box above and below.
         return max(0.0, line.offset + above), line.offset + below
@@ -509,6 +513,8 @@ def off_picture(
     position: str,
     offset: int,
     picture: tuple[float, float] | None,
+    shape: text.BoxShape | None = None,
+    spacing: float = 1.0,
 ) -> tuple[str, int, int]:
     """The banner's wrapped words, size and offset, made to keep off the rows of a picture
     shown whole with room around it: as set when it fits beside the picture, else smaller
@@ -516,8 +522,8 @@ def off_picture(
     Instagram's header or buttons). As set when nothing keeps it off: it can't."""
 
     def laid(s: int) -> tuple[str, float, float]:
-        wrapped = text.balance(words, font, s, frame[0] - 160)
-        return wrapped, *text.banner_extent(wrapped, font, s, box, frame[0])
+        wrapped = text.balance(words, font, s, text.banner_room(frame[0], s, shape))
+        return wrapped, *text.banner_extent(wrapped, font, s, box, frame[0], shape, spacing)
 
     wrapped, above, below = laid(size)
     if picture is None or position not in ("top", "bottom"):
@@ -556,13 +562,16 @@ def banner_top(
     rows: list[tuple[float, list[tuple[float, float]]]],
     until: float | None = None,
     taken: list[tuple[float, float]] = (),
+    fixed: bool = False,
 ) -> int:
     """Top edge for a banner: its usual position if faces stay clear of it, else a little
     nearer its own edge of the frame (up for a top banner, down for a bottom one, at most
     NUDGE px and not under Instagram's header or buttons), else stacked beside a banner
     already there on its own half. It never goes to the frame's other end: a top banner
     stays at the top, a bottom one at the bottom. `taken` are the bands of banners placed
-    before this one, which it must not cover."""
+    before this one, which it must not cover. A `fixed` banner sits where the preset puts
+    it unless it would really cover one: close beside another, as the preset lays them
+    out (a clips page's title card just under its channel line), it stays."""
     gap = BANNER_GAP
     top_end = position == "top"
     near = offset if top_end else frame_height - offset - height
@@ -587,7 +596,10 @@ def banner_top(
     def cost(top: int) -> tuple[float, int]:
         band = (top, top + height)
         faces = sum(subtitles.overlap(band, bands) > 0 for bands in seen) / max(1, len(seen))
-        blocked = subtitles.overlap(band, list(taken)) > 0
+        if fixed:
+            blocked = any(min(band[1], b) > max(band[0], a) for a, b in taken)
+        else:
+            blocked = subtitles.overlap(band, list(taken)) > 0
         # Covering another banner is never acceptable; a face only for a small share of time.
         return (blocked, faces > 0.3, faces), options.index(top)
 
@@ -810,16 +822,17 @@ def render(
     def banner(
         words: str, font_name: str, size: int, color: str, box: str | None,
         position: str, offset: int, until: float, name: str, fixed: bool = False,
+        shape: text.BoxShape | None = None, spacing: float = 1.0,
     ) -> int:  # fmt: skip
         font = face(font_name, words)
         # Off the picture shown whole (smaller or moved when the words run long), as the
         # preset preview shows it.
         wrapped, size, offset = off_picture(
-            words, font, size, box, frame, position, offset, picture_rows
+            words, font, size, box, frame, position, offset, picture_rows, shape, spacing
         )
         # Placed by the rows it really covers, box included, with `offset` still where the
         # first line starts.
-        above, below = text.banner_extent(wrapped, font, size, box, frame[0])
+        above, below = text.banner_extent(wrapped, font, size, box, frame[0], shape, spacing)
         height = math.ceil(below - above)
         start = max(0, round(offset + above)) if position == "top" else offset
         taken = [(top, bottom) for _, _, top, bottom in obstacles]
@@ -828,11 +841,12 @@ def render(
             # The picture counts like a face there all along: the banner moves a little
             # nearer its edge before it goes over it.
             clear = clear + [(t * 0.5, [picture_rows]) for t in range(int(until * 2) + 1)]
-        top = banner_top(position, start, height, frame[1], clear, until, taken)
+        top = banner_top(position, start, height, frame[1], clear, until, taken, fixed)
         obstacles.append((0.0, until, top, top + height))
         png = text.draw_banner(
-            wrapped, font, size, color, box, frame, round(top - above), work_dir / name
-        )
+            wrapped, font, size, color, box, frame, round(top - above), work_dir / name,
+            shape, spacing,
+        )  # fmt: skip
         return add_input(png)
 
     title = preset.title_overlay
@@ -857,6 +871,7 @@ def render(
         layers.line_overlay = banner(
             edl.one_liner, line.font, line.size, line.color, line.box_color,
             line.position, line.offset, line.duration or edl.duration, "line.png", line.fixed,
+            text.line_shape(line), line.line_spacing,
         )  # fmt: skip
 
     if preset.captions.enabled:

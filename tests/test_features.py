@@ -22,4 +22,5 @@ def test_a_feature_on_for_everyone_reaches_accounts_made_later(tmp_path):
         db.add(later)
         db.commit()
         assert all(features.enabled(a, "fun", db) for a in (siddhant, riya, later))
-        assert features.of(later, db) == ["fun"]  # the others still as they were
+        # The others still as they were (whole YouTube songs are everyone's by default).
+        assert features.of(later, db) == ["fun", "youtube_songs"]

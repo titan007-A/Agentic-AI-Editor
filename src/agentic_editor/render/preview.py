@@ -383,10 +383,14 @@ def render_checked(
             font = face(o.font, words)
             # Laid out as a render lays it out: kept off the picture shown whole.
             off = covered if preset.framing.mode == "none" and (y0, y1) != (0, frame[1]) else None
+            shape = text.line_shape(o)
             wrapped, size, offset = compose.off_picture(
-                words, font, o.size, o.box_color, frame, o.position, o.offset, off
+                words, font, o.size, o.box_color, frame, o.position, o.offset, off, shape,
+                o.line_spacing,
+            )  # fmt: skip
+            above, below = text.banner_extent(
+                wrapped, font, size, o.box_color, frame[0], shape, o.line_spacing
             )
-            above, below = text.banner_extent(wrapped, font, size, o.box_color, frame[0])
             top = offset
             if o.position == "bottom":
                 top = frame[1] - offset - round(below)
@@ -407,10 +411,10 @@ def render_checked(
                     "panel; move it to where the panels meet, or lower."
                 )
             dest = work / "line.png"
-            _lay(
-                image,
-                text.draw_banner(wrapped, font, size, o.color, o.box_color, frame, top, dest),
+            line = text.draw_banner(
+                wrapped, font, size, o.color, o.box_color, frame, top, dest, shape, o.line_spacing
             )
+            _lay(image, line)
 
     canvas = ImageDraw.Draw(image)
     if preset.captions.enabled:
