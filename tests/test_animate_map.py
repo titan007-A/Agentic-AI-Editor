@@ -254,8 +254,12 @@ class MapModel(Writer):
     "Country: name", any case); a refill names the next of `refills` (a list of names per
     refill), a search for more countries answers `more`."""
 
-    def __init__(self, *replies, wrong=(), refills=(), more=(), same=(), iconic=(), near=()):
+    def __init__(
+        self, *replies, wrong=(), refills=(), more=(), same=(), iconic=(), near=(), origins=None
+    ):
         super().__init__(*replies)
+        # where the second look says a thing comes from (else the card's own country)
+        self.origins = {k.lower(): v for k, v in (origins or {}).items()}
         self.near = {n.lower() for n in near}  # passed the first look, not the second
         self.second: list[str] = []  # the second looks, as asked
         self.wrong = {w.lower() for w in wrong}
@@ -284,7 +288,11 @@ class MapModel(Writer):
             text = messages[-1]["content"]
             self.second.append(text)
             thing = re.search(r"card: (.+?) \(", text).group(1)
-            return {"plain": thing, "answer": "no" if thing.lower() in self.near else "yes"}
+            home = re.search(r"On the (.+?) card", text).group(1)
+            return {
+                "plain": thing, "answer": "no" if thing.lower() in self.near else "yes",
+                "origin": self.origins.get(thing.lower(), home),
+            }  # fmt: skip
         if schema is mapwriter.ALLOWED_SCHEMA:
             return {"categories": ["other"]}
         if schema is mapwriter.REFILL_SCHEMA:
@@ -1244,3 +1252,53 @@ def test_what_is_put_in_later_is_checked_for_duplicates_too():
     assert cards["China"] == ["Chinese New Year", "Mid-Autumn Festival"]
     assert "Mexico: Día de los Muertos (the same as another card)" in notes[0]
     assert "China: Lunar New Year (the same as another card)" in notes[0]
+
+
+def test_a_thing_from_another_country_is_found_by_asking_where_it_is_from():
+    """Asked "is it from Canada?", the PC's model said yes to Dexter's Laboratory; asked
+    where it comes from, it names the United States, and the map tells the two apart (and
+    knows "England" is the United Kingdom)."""
+
+    class Atlas:
+        codes: typing.ClassVar = {"canada": "CAN", "united states": "USA", "japan": "JPN",
+                                  "united kingdom": "GBR", "england": "GBR", "india": "IND",
+                                  "australia": "AUS", "france": "FRA"}  # fmt: skip
+
+        def __call__(self, name):
+            return name.lower() in self.codes
+
+        def code(self, name):
+            return self.codes.get(name.lower())
+
+    tour = [
+        said("Canada", "Caillou", "Dexter's Laboratory"),
+        said("United Kingdom", "Wallace and Gromit", "Peppa Pig"),
+        said("Japan", "Doraemon", "Astro Boy"),
+        said("India", "Chhota Bheem", "Motu Patlu"),
+        said("Australia", "Bluey", "Blinky Bill"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(
+        origins={
+            "Dexter's Laboratory": "United States",
+            "Peppa Pig": "England",
+            "Blinky Bill": "unknown",
+        },
+        refills=[["PAW Patrol"], ["Dot."]],
+    )
+    vetted, notes = mapwriter.vet(model, plan, "Most famous cartoons from every country",
+                                  known=Atlas())  # fmt: skip
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    assert cards["Canada"] == ["Caillou", "PAW Patrol"]  # filled up with a Canadian one
+    assert cards["United Kingdom"] == ["Wallace and Gromit", "Peppa Pig"]
+    assert "Blinky Bill" not in cards["Australia"]  # where from not known: not a clear yes
+    assert "Canada: Dexter's Laboratory" in notes[0]
+    # Without the map the origin can't be told apart reliably: not asked to decide.
+    model = MapModel(origins={"Dexter's Laboratory": "United States"}, refills=[[], []])
+    vetted, _ = mapwriter.vet(model, plan, "Most famous cartoons from every country")
+    assert "Dexter's Laboratory" in str(vetted.scenes)
+    # A verdict from an earlier check (no version) is asked again.
+    checks = mapwriter.Checks(None)
+    key = mapwriter.Checks.key("cartoons", "Canada", "Dexter's Laboratory")
+    checks.found[key] = {"keep": True, "what": "", "category": "", "answers": []}
+    assert checks.get(key) is None

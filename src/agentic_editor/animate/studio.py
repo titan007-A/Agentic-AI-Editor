@@ -355,7 +355,7 @@ def run_task(
                 with router.planner() as llm:
                     planner.roomy(llm)
                     plan = planner.redo_scene(
-                        llm, current, index, task.get("request", ""), brief.idea, checks
+                        llm, current, index, task.get("request", ""), brief.idea, checks, known
                     )
         if plan is None:
             raise planner.PlannerError("there is no reel to voice")

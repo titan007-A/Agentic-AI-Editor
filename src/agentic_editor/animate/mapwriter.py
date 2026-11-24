@@ -742,8 +742,12 @@ CHECK_SCHEMA = {
 }
 KIND_SCHEMA = {
     "type": "object",
-    "properties": {"plain": {"type": "string"}, "answer": {"type": "string", "enum": YES_NO}},
-    "required": ["plain", "answer"],
+    "properties": {
+        "plain": {"type": "string"},
+        "answer": {"type": "string", "enum": YES_NO},
+        "origin": {"type": "string"},
+    },
+    "required": ["plain", "answer", "origin"],
 }
 ALLOWED_SCHEMA = {
     "type": "object",
@@ -815,6 +819,7 @@ CHECK_TOKENS = 200  # a check's answer is short: a stuck model can't run for min
 MIN_KEPT = 2  # a country left with fewer things than this is filled up again
 REFILL_TO = 3  # ... to at most this many
 VERDICTS_KEPT = 5000
+VERDICT_VERSION = 2  # verdicts from an earlier check (other questions) are asked again
 
 
 def allowed_for(kind: str) -> set[str] | None:
@@ -854,7 +859,8 @@ class Checks:
         return f"{_norm(kind)}|{_norm(country)}|{_norm(thing)}"
 
     def get(self, key: str) -> dict | None:
-        return self.found.get(key)
+        found = self.found.get(key)
+        return found if found and found.get("v") == VERDICT_VERSION else None
 
     def put(self, key: str, verdict: dict) -> None:
         with self.lock:
@@ -909,14 +915,17 @@ def short_answers(llm, most: int = CHECK_TOKENS):
         llm.max_reply = before
 
 
-def judge(llm, idea: str, kind: str, country: str, thing: str, allowed, checks=None) -> dict:
+def judge(
+    llm, idea: str, kind: str, country: str, thing: str, allowed, checks=None, known=None
+) -> dict:
     """The strict check of one thing on its own: what it is, its category, whether it is
-    one of the topic's kind, from the country and famous. `keep` only when every answer
-    is a clear yes (and the category is one the topic allows); anything unsure goes."""
+    one of the topic's kind, from the country and famous, then the kind and where it
+    comes from asked again apart (`known`: the map, to match the country). `keep` only
+    when every answer is a clear yes (and the category is one the topic allows)."""
     key = Checks.key(kind, country, thing)
-    known = checks.get(key) if checks else None
-    if known is not None:
-        return known
+    cached = checks.get(key) if checks else None
+    if cached is not None:
+        return cached
     with short_answers(llm):
         reply = llm.chat_json(
             [{"role": "user", "content": (
@@ -940,24 +949,30 @@ def judge(llm, idea: str, kind: str, country: str, thing: str, allowed, checks=N
     fits = allowed is None or category in allowed
     what = " ".join(str(reply.get("what", "")).split())[:80]
     keep = fits and all(a == "yes" for a in answers)
-    plain = ""
+    plain = origin = ""
     if keep:
-        # A second, separate look at the kind alone: asked with the rest, a small model
-        # passed near kinds (a palace for castles, a football final for festivals).
-        plain, again = _kind_again(llm, idea, kind, country, thing, what)
-        answers.append(again)
-        keep = again == "yes"
-    verdict = {"keep": keep, "what": what, "category": category, "answers": answers}
+        # A second, separate look: the kind alone (asked with the rest, a small model passed
+        # near kinds: a palace for castles, a football final for festivals), and where it
+        # comes from as an open question, matched to the card's country by the map (asked
+        # "is it from Canada?" the model said yes to American cartoons).
+        plain, again, origin = _kind_again(llm, idea, kind, country, thing, what)
+        home = known is None or same_country(origin, country, known)
+        answers += [again, "yes" if home else "no"]
+        keep = again == "yes" and home
+    verdict = {
+        "keep": keep, "what": what, "category": category, "answers": answers,
+        "v": VERDICT_VERSION,
+    }  # fmt: skip
     if plain:
-        verdict["plain"] = plain
+        verdict["plain"], verdict["origin"] = plain, origin
     if checks is not None:
         checks.put(key, verdict)
     return verdict
 
 
-def _kind_again(llm, idea, kind, country, thing, what) -> tuple[str, str]:
-    """What `thing` plainly is (one or two words) and whether that is one of the topic's
-    `kind`: yes, no or unsure."""
+def _kind_again(llm, idea, kind, country, thing, what) -> tuple[str, str, str]:
+    """What `thing` plainly is (one or two words), whether that is one of the topic's
+    `kind` (yes, no or unsure) and the country it comes from, as the model knows it."""
     with short_answers(llm, 80):
         reply = llm.chat_json(
             [{"role": "user", "content": (
@@ -966,16 +981,20 @@ def _kind_again(llm, idea, kind, country, thing, what) -> tuple[str, str]:
                 f"plain: what {thing} is, in one or two plain words (like river, violin, "
                 "teapot).\n"
                 f"answer: is that one of the {kind}? No when it is another kind of thing that "
-                f"is only linked with {kind}; unsure when you aren't sure."
+                f"is only linked with {kind}; unsure when you aren't sure.\n"
+                f"origin: the country {thing} comes from: where it was made, invented, founded, "
+                "created or first done (a place: where it is), as the country's usual English "
+                "name; unknown when you don't know."
             )}],
             KIND_SCHEMA,
             temperature=0.0,
         )  # fmt: skip
     plain = " ".join(str(reply.get("plain", "")).split())[:40]
-    return plain, str(reply.get("answer", "unsure")).lower()
+    origin = " ".join(str(reply.get("origin", "")).split())[:60]
+    return plain, str(reply.get("answer", "unsure")).lower(), origin
 
 
-def _sorted_out(llm, idea, kind, country, items, allowed, checks):
+def _sorted_out(llm, idea, kind, country, items, allowed, checks, known=None):
     """`items` split into the ones that pass the strict check and the rest. One the model
     couldn't be asked about isn't kept (a wrong card is the worst outcome); when it
     couldn't be asked about any, the model isn't answering: LLMError."""
@@ -984,7 +1003,7 @@ def _sorted_out(llm, idea, kind, country, items, allowed, checks):
         if not item.text.strip():
             continue
         try:
-            verdict = judge(llm, idea, kind, country, item.text, allowed, checks)
+            verdict = judge(llm, idea, kind, country, item.text, allowed, checks, known)
             answered += 1
         except LLMError as exc:
             log.warning("checking %s (%s) failed: %s", item.text, country, exc)
@@ -1106,7 +1125,7 @@ def same_country(a: str, b: str, known=None) -> bool:
         x, y = code(a), code(b)
         if x is not None and y is not None:
             return x == y
-    return _plain_name(a) == _plain_name(b)
+    return bool(_plain_name(a)) and _plain_name(a) == _plain_name(b)
 
 
 def _tour_items(scenes: list) -> list[Item]:
@@ -1152,7 +1171,7 @@ def headliners(llm, idea, kind, plan: Plan, allowed, checks, known=None) -> tupl
         )  # fmt: skip
         if home is not None:
             country = scenes[home].visual.text  # the tour's own name for it
-        kept, _ = _sorted_out(llm, idea, kind, country, [item], allowed, checks)
+        kept, _ = _sorted_out(llm, idea, kind, country, [item], allowed, checks, known)
         if not kept:
             continue
         if home is not None:
@@ -1164,7 +1183,7 @@ def headliners(llm, idea, kind, plan: Plan, allowed, checks, known=None) -> tupl
         else:
             more = refill(
                 llm, idea, kind, country, kept, _tour_items(scenes), MIN_KEPT - 1, allowed,
-                checks,
+                checks, known,
             )  # fmt: skip
             items = [*kept, *more]
             scene = Scene(
@@ -1185,7 +1204,7 @@ def _items(given: list) -> list[Item]:
     ]
 
 
-def refill(llm, idea, kind, country, have, avoid, need, allowed, checks) -> list[Item]:
+def refill(llm, idea, kind, country, have, avoid, need, allowed, checks, known=None) -> list[Item]:
     """Up to `need` more things for `country` that pass the strict check: the writer
     names a few more (not `have`, not `avoid`), each is checked on its own."""
     if need <= 0:
@@ -1211,7 +1230,7 @@ def refill(llm, idea, kind, country, have, avoid, need, allowed, checks) -> list
         i for i in _items(reply.get("items", []))
         if not any(same_by_name(i.text, t.text) for t in taken)
     ]  # fmt: skip
-    kept, _ = _sorted_out(llm, idea, kind, country, fresh, allowed, checks)
+    kept, _ = _sorted_out(llm, idea, kind, country, fresh, allowed, checks, known)
     return kept[:need]
 
 
@@ -1248,7 +1267,7 @@ def more_countries(llm, idea, kind, plan: Plan, need: int, allowed, checks, know
             i for i in _items(c.get("items", []))
             if not any(same_by_name(i.text, t.text) for t in named)
         ]  # fmt: skip
-        kept, _ = _sorted_out(llm, idea, kind, name, fresh, allowed, checks)
+        kept, _ = _sorted_out(llm, idea, kind, name, fresh, allowed, checks, known)
         if not kept:
             continue
         taken.append(name)
@@ -1282,7 +1301,7 @@ def vet(llm, plan: Plan, idea: str, checks=None, known=None) -> tuple[Plan, list
         if v.kind != "country":
             scenes.append(scene)
             continue
-        kept, gone = _sorted_out(llm, idea, kind, v.text, v.items, allowed, checks)
+        kept, gone = _sorted_out(llm, idea, kind, v.text, v.items, allowed, checks, known)
         kept, twice = distinct(llm, idea, kind, v.text, kept)
         seen_whole[v.text] = [i.text for i in kept]
         gone += twice
@@ -1290,7 +1309,7 @@ def vet(llm, plan: Plan, idea: str, checks=None, known=None) -> tuple[Plan, list
             want = min(REFILL_TO, max(len(v.items), MIN_KEPT)) - len(kept)
             elsewhere = [*_tour_items(plan.scenes), *_tour_items(scenes)]
             kept += refill(
-                llm, idea, kind, v.text, kept, [*gone, *elsewhere], want, allowed, checks
+                llm, idea, kind, v.text, kept, [*gone, *elsewhere], want, allowed, checks, known
             )
         left_out += [f"{v.text}: {g.text}" for g in gone]
         if not kept and not (counted and v.value):
@@ -1430,7 +1449,10 @@ def _vet_new(llm, plan: Plan, old: Plan, idea: str, checks, known) -> tuple[Plan
         for i in s.visual.items:
             key = Checks.key(kind, s.visual.text, i.text)
             if checks.get(key) is None:
-                checks.put(key, {"keep": True, "what": "", "category": "", "answers": []})
+                checks.put(
+                    key,
+                    {"keep": True, "what": "", "category": "", "answers": [], "v": VERDICT_VERSION},
+                )
     return _vetted(llm, plan, idea, checks, known)
 
 
@@ -1454,7 +1476,7 @@ def change(llm, plan: Plan, idea: str, request: str, length: str, known=None, ch
 
 
 def redo_country(
-    llm, plan: Plan, index: int, request: str = "", idea: str = "", checks=None
+    llm, plan: Plan, index: int, request: str = "", idea: str = "", checks=None, known=None
 ) -> Plan:
     """`plan` with the country scene `index` written again (the same country unless the
     request says otherwise); its things checked like a draft's."""
@@ -1481,12 +1503,13 @@ def redo_country(
         kind = kind_of(topic)
         allowed = _allowed(llm, topic, kind)
         kept, gone = _sorted_out(
-            llm, topic, kind, new.visual.text, new.visual.items, allowed, checks
+            llm, topic, kind, new.visual.text, new.visual.items, allowed, checks, known
         )
         if len(kept) < MIN_KEPT:
             kept += refill(
-                llm, topic, kind, new.visual.text, kept, gone, MIN_KEPT - len(kept), allowed, checks
-            )
+                llm, topic, kind, new.visual.text, kept, gone, MIN_KEPT - len(kept), allowed,
+                checks, known,
+            )  # fmt: skip
         if checks is not None:
             checks.save()
         if not kept:

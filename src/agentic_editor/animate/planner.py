@@ -440,12 +440,14 @@ def change(
     ), left
 
 
-def redo_scene(llm, plan: Plan, index: int, request: str = "", idea: str = "", checks=None) -> Plan:
+def redo_scene(
+    llm, plan: Plan, index: int, request: str = "", idea: str = "", checks=None, known=None
+) -> Plan:
     """`plan` with scene `index` written again."""
     if not 0 <= index < len(plan.scenes):
         raise PlannerError(f"there is no scene {index + 1}")
     if plan.style == mapwriter.STYLE and plan.scenes[index].visual.kind == "country":
-        return mapwriter.redo_country(llm, plan, index, request, idea, checks)
+        return mapwriter.redo_country(llm, plan, index, request, idea, checks, known)
     reply = llm.chat_json(scene_prompt(plan, index, request), SCENE_SCHEMA, temperature=0.8)
     scenes = list(plan.scenes)
     scenes[index] = Scene.model_validate(reply)
