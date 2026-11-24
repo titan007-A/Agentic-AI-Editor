@@ -218,7 +218,7 @@ def _hunt(
         look = client.playlist(kick.best(variants, hooks.LOOK_HEIGHT))
         found, judged = hooks.choose(
             found, count, lambda a, b, dest: preview(look, a, b, dest), (start, end), lines,
-            (name, plain_title(stream.title)), settings, told, avoid,
+            (fan_name(name), plain_title(stream.title)), settings, told, avoid,
         )  # fmt: skip
         if not found:
             _set(
@@ -455,12 +455,39 @@ def preview(light: kick.Playlist, start: float, end: float, dest: Path) -> float
     return pieces[0].start
 
 
-def notes_for(moment: moments.Moment) -> str:
-    """What the title and text writers are told about the clip."""
+# Streamers as their fans write them (owner: no "this streamer" or handle-like names);
+# others are worked out from the handle (fan_name).
+FAN_NAMES = {
+    "therealjuliannewman": "Julian Newman", "kaneljoseph": "Kanel", "sheismichaela": "Michaela",
+    "iamtiagz": "Tiagz", "jeanemarie": "Jeane Marie", "n3on": "N3on", "ddg": "DDG",
+    "sneako": "Sneako", "xqc": "xQc", "adinross": "Adin Ross", "kaicenat": "Kai Cenat",
+}  # fmt: skip
+HANDLE_BITS = re.compile(r"^(?:thereal|official|sheis|heis|iam|its)|official$", re.I)
+
+
+def fan_name(username: str) -> str:
+    """The streamer's name the way fans write it: "therealjuliannewman" is Julian Newman,
+    "iamsomeone_live" is Someone Live."""
+    plain = " ".join(username.split()).lstrip("@")
+    known = FAN_NAMES.get(re.sub(r"[\s_-]", "", plain).lower())
+    if known:
+        return known
+    stripped = HANDLE_BITS.sub("", plain) or plain
+    words = [w for w in re.split(r"[\s_.-]+", stripped) if w]
+    return " ".join(w if w[1:].lower() != w[1:] else w.capitalize() for w in words) or plain
+
+
+def notes_for(moment: moments.Moment, name: str = "") -> str:
+    """What the title and text writers are told about the clip: whose stream (the name fans
+    use), where it happens, what happens."""
     flash = hooks.flash_of(moment)
     at = moment.peak - moment.start + (flash[1] - flash[0] if flash else 0.0)
-    parts = [f"A clip of a moment from a Kick live stream; it happens around {clock(at)} into "
-             "this video."]  # fmt: skip
+    whose = (
+        f"A clip from {name}'s Kick stream; the streamer is {name}."
+        if name
+        else "A clip of a moment from a Kick live stream."
+    )
+    parts = [f"{whose} It happens around {clock(at)} into this video."]
     said = [w for w in moment.why if w.startswith('"')]
     if said:
         parts.append("The chat reacted with " + ", ".join(said) + ".")
@@ -650,14 +677,15 @@ def make_job(
     title = f"{name} · {stream_title[:60]} · {clock(moment.peak)}".strip()
     meta = {
         "path": str(dest), "title": title, "uploader": name, "url": link,
-        "description": about(name, stream_title, moment), "window": window,
+        "description": about(fan_name(name), stream_title, moment), "window": window,
     }  # fmt: skip
     (folder / "source.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     if layout != "fixed":
         preset = clip_preset(dest, preset, irl, user, settings)
     with Session() as db:
         job = Job(
-            source=SOURCE + key, title=title, presets=[preset], notes=notes_for(moment),
+            source=SOURCE + key, title=title, presets=[preset],
+            notes=notes_for(moment, fan_name(name)),
             trim=False, owner_id=owner,
         )  # fmt: skip
         db.add(job)

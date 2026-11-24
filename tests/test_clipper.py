@@ -461,6 +461,7 @@ def test_a_hunt_judges_more_moments_than_it_wants_and_makes_only_strong_hooks(wo
         assert moment["start"] <= moment["peak"] <= moment["end"]
         job = db.get(Job, queued[0])
         assert "What happens: He crashes his car." in job.notes and "into this video" in job.notes
+        assert job.notes.startswith("A clip from xQc's Kick stream; the streamer is xQc.")
     assert world.cuts[0][:2] == (moment["start"], moment["end"])
 
     none = ([], "0 of 6 likely moments were crazy, with a strong hook")
@@ -511,7 +512,7 @@ def test_a_moment_s_job_keeps_its_clip_whole(world, monkeypatch):
 
     jobs.run_job(queued[0], world.Session, world.settings, run)
     assert seen["source"] == f"kick:kick-{hunt_id}-0" and seen["trim"] is False
-    assert seen["notes"].startswith("A clip of a moment from a Kick live stream")
+    assert seen["notes"].startswith("A clip from xQc's Kick stream; the streamer is xQc.")
 
 
 def test_a_moment_s_clips_go_in_its_hunt_s_folder_and_its_video_is_kept(world):

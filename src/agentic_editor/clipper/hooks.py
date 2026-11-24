@@ -352,9 +352,13 @@ What the picture shows:
 {seen}
 The chat right after it: {chat}
 
+Write the way a fan would tell a friend: plain everyday words, {name} by name (never "the \
+streamer"), nobody else named unless the name is said here, no words like chaotic, explosive, \
+epic, intense or hilarious.
+
 Answer:
 - what_happens: one sentence: what happens in this moment, who does what and why it is funny, \
-wild or shocking. Only what is said or shown here; never guess names.
+wild or shocking. Only what is said or shown here.
 - crazy: true only when someone here, the streamer most of all, is DOING or SAYING something \
 crazy: a wild reaction (screaming, jumping up, losing it), a shocking or outrageous line, a \
 heated argument or confrontation, a big win or loss with a big reaction, something truly \

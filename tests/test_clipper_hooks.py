@@ -169,8 +169,8 @@ def test_notes_carry_the_hook_as_content_the_instruction_reader_leaves_alone():
     m = moments.Moment(990, 1010, 1000, 3.0, ['"kekw" ×9'])
     m.hook = {"what": "He bets he can win a race, then crashes.", "said": 'you "really" think',
               "tease": "whether he wins", "score": 8, "payoff": 8}  # fmt: skip
-    notes = hunt.notes_for(m)
-    assert notes.startswith("A clip of a moment from a Kick live stream")
+    notes = hunt.notes_for(m, "Kanel")
+    assert notes.startswith("A clip from Kanel's Kick stream; the streamer is Kanel. It happens")
     assert "What happens: He bets he can win a race, then crashes." in notes
     assert "First seconds: you really think." in notes  # no quotes: not taken as an example
     assert "The viewer waits to see: whether he wins." in notes
@@ -411,3 +411,20 @@ def test_moments_are_written_down_a_few_at_a_time_each_a_short_gpu_turn(tmp_path
     calls = []
     hooks.write_down(looks, lambda path: calls.append(path) or [], tmp_path)
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("handle", "fans_say"),
+    [("therealjuliannewman", "Julian Newman"), ("KanelJoseph", "Kanel"), ("n3on", "N3on"),
+     ("sheismichaela", "Michaela"), ("iamtiagz", "Tiagz"), ("xqc", "xQc"),
+     ("theRealSomebody", "Somebody"), ("iamjohn_smith", "John Smith"), ("bob-official", "Bob"),
+     ("plainname", "Plainname")],
+)  # fmt: skip
+def test_a_streamer_is_named_the_way_fans_write_them(handle, fans_say):
+    assert hunt.fan_name(handle) == fans_say
+
+
+def test_the_model_is_asked_for_plain_words_and_the_streamer_by_name():
+    prompt = hooks.read_prompt(a_look(said(*ROWS)), "Kanel", "IRL GTA 6")
+    assert "Kanel by name" in prompt and 'never "the streamer"' in prompt
+    assert "chaotic" in prompt  # named as a word not to use

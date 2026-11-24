@@ -91,7 +91,7 @@ def test_a_hunt_on_a_stream_s_stretch_makes_its_clips_as_jobs(env, kicked):
     assert first["link"] == f"https://kick.com/xqc/videos/{NEW_ID}?t={int(first['start'])}"
     assert first["job"]["status"] == "done" and first["job"]["outputs"]
     call = next(c for c in env.calls if c["source"] == f"kick:kick-{found['id']}-0")
-    assert call["presets"] == ["kick-clips"] and "Kick live stream" in call["notes"]
+    assert call["presets"] == ["kick-clips"] and "xQc's Kick stream" in call["notes"]
     job = env.client.get(f"/api/jobs/{first['job_id']}").json()
     assert job["status"] == "done"
     listed = env.client.get("/api/kick/hunts").json()
