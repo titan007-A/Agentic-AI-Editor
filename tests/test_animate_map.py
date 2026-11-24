@@ -1249,9 +1249,11 @@ def test_what_is_put_in_later_is_checked_for_duplicates_too():
     vetted, notes = mapwriter.vet(model, plan, "Most famous festivals from every country")
     cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
     assert cards["Mexico"] == ["Day of the Dead"]
-    assert cards["China"] == ["Chinese New Year", "Mid-Autumn Festival"]
+    # A best known thing the country has under another name isn't put in: the tour's
+    # own card stays ("Rio Carnival" stayed, not a bare "Carnival", on the Mac).
+    assert cards["China"] == ["Lunar New Year", "Mid-Autumn Festival"]
     assert "Mexico: Día de los Muertos (the same as another card)" in notes[0]
-    assert "China: Lunar New Year (the same as another card)" in notes[0]
+    assert not any("Chinese New Year" in n for n in notes)
 
 
 def test_a_thing_from_another_country_is_found_by_asking_where_it_is_from():
@@ -1302,3 +1304,18 @@ def test_a_thing_from_another_country_is_found_by_asking_where_it_is_from():
     key = mapwriter.Checks.key("cartoons", "Canada", "Dexter's Laboratory")
     checks.found[key] = {"keep": True, "what": "", "category": "", "answers": []}
     assert checks.get(key) is None
+
+
+def test_only_a_few_countries_are_put_in_for_the_best_known_things():
+    tour = [
+        said(c, f"{c} Fair", f"{c} Night") for c in ("France", "Italy", "Spain", "Japan", "India")
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    far = [("Peru", "Inti Raymi"), ("Thailand", "Songkran"), ("Germany", "Oktoberfest"),
+           ("Brazil", "Rio Carnival"), ("Mexico", "Day of the Dead")]  # fmt: skip
+    model = MapModel(iconic=far, refills=[[] for _ in far])
+    vetted, _ = mapwriter.vet(model, plan, "Most famous festivals from every country")
+    names = [s.visual.text for s in vetted.scenes if s.visual.kind == "country"]
+    assert len(names) == 5 + mapwriter.ADDED_COUNTRIES
+    assert {"Peru", "Thailand", "Germany"} <= set(names)  # the first ones named go in
+    assert "Mexico" not in names and "Brazil" not in names

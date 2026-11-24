@@ -729,6 +729,8 @@ KIND_CATEGORIES = (
     (r"cloth|dress|costume|\bhats?\b|shoe|sneaker|fashion|wear", {"clothing", "brand or company"}),
 )  # fmt: skip
 YES_NO = ["yes", "no", "unsure"]
+ICONIC = 8  # the topic's best known things asked for (5 left out Oktoberfest for festivals)
+ADDED_COUNTRIES = 3  # at most this many countries put in for them
 CHECK_SCHEMA = {
     "type": "object",
     "properties": {
@@ -810,7 +812,7 @@ ICONIC_SCHEMA = {
                 "required": ["country", *_ITEM["required"]],
             },
             "minItems": 3,
-            "maxItems": 5,
+            "maxItems": ICONIC,
         }
     },
     "required": ["examples"],
@@ -1097,9 +1099,10 @@ def iconic(llm, idea: str, kind: str) -> list[tuple[str, Item]]:
         with short_answers(llm, 700):
             reply = llm.chat_json(
                 [{"role": "user", "content": (
-                    f"Topic: {idea}. Name the 5 most famous {kind} in the whole world: the ones "
-                    "nearly everyone has heard of, that a viewer would be surprised to see left "
-                    "out. Each with its country (the usual English name), an emoji and its picture "
+                    f"Topic: {idea}. Name the {ICONIC} most famous {kind} in the whole world: the "
+                    "ones nearly everyone has heard of, that a viewer would be surprised to see "
+                    "left out. Each with its country (the usual English name), an emoji and its "
+                    "picture "
                     "(at most 8 words, no logo, no writing)."
                 )}],
                 ICONIC_SCHEMA,
@@ -1157,7 +1160,7 @@ def headliners(llm, idea, kind, plan: Plan, allowed, checks, known=None) -> tupl
     the rest): first on their country's cards, or their country added near its
     neighbours."""
     scenes = list(plan.scenes)
-    added = []
+    added, new_countries = [], 0
     locate = getattr(known, "locate", None)
     for country, item in iconic(llm, idea, kind):
         if known is not None and not known(country):
@@ -1171,6 +1174,13 @@ def headliners(llm, idea, kind, plan: Plan, allowed, checks, known=None) -> tupl
         )  # fmt: skip
         if home is not None:
             country = scenes[home].visual.text  # the tour's own name for it
+            # There already under another name ("Carnival" for Brazil's "Rio Carnival"):
+            # the tour's own card stays.
+            mine = list(scenes[home].visual.items)
+            if mine and distinct(llm, idea, kind, country, [*mine, item])[1]:
+                continue
+        elif new_countries >= ADDED_COUNTRIES:
+            continue
         kept, _ = _sorted_out(llm, idea, kind, country, [item], allowed, checks, known)
         if not kept:
             continue
@@ -1191,6 +1201,7 @@ def headliners(llm, idea, kind, plan: Plan, allowed, checks, known=None) -> tupl
                 visual=Visual(kind="country", text=country, items=items),
             )
             scenes.insert(_near(scenes, country, locate), scene)
+            new_countries += 1
         added.append(f"{country}: {item.text}")
     notes = ["put in as the topic's best known: " + ", ".join(added)] if added else []
     return plan.model_copy(update={"scenes": scenes}), notes
