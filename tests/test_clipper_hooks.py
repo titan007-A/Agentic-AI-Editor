@@ -32,7 +32,7 @@ def a_look(words=(), peak=PEAK, why=('"kekw" ×9', "loud")) -> hooks.Look:
 
 
 ROWS = (
-    (PEAK - 20, "yeah so okay chat"),
+    (PEAK - 20, "yeah so okay chat listen up"),
     (PEAK - 14, "you really think you can beat me in a race?"),
     (PEAK - 8, "watch this"),
     (PEAK - 1, "OH MY GOD HE CRASHED"),
@@ -70,7 +70,7 @@ def read(**fields) -> dict:
 def test_what_is_said_is_cut_into_lines_at_pauses_and_sentence_ends():
     lines = hooks.lines_of(said(*ROWS))
     assert [x.text for x in lines][:3] == [
-        "yeah so okay chat", "you really think you can beat me in a race?", "watch this",
+        "yeah so okay chat listen up", "you really think you can beat me in a race?", "watch this",
     ]  # fmt: skip
     long = hooks.lines_of(said((0, " ".join(["word"] * 30))))
     assert all(len(x.words) <= hooks.LINE_WORDS for x in long)
@@ -108,6 +108,10 @@ def test_an_opening_too_close_to_the_moment_or_too_early_is_not_taken():
     # and it isn't strong enough.
     assert judged is None
     assert "OH MY GOD" not in model.asked[1]
+    # An opening on a word or two (or a game's line, or silence) isn't one.
+    look = a_look(said((PEAK - 14, "watch this"), (PEAK - 1, "OH MY GOD HE CRASHED")))
+    model = FakeModel(read(openings=["L1"]), {"watch this": 9})
+    assert hooks.judge(model, look, "x", "t") is None and len(model.asked) == 1
 
 
 def test_a_strong_payoff_with_no_strong_opening_opens_cold_on_a_flash_of_it():
@@ -224,8 +228,11 @@ def test_a_hunt_s_likely_moments_are_judged_and_only_strong_hooks_kept(monkeypat
 
     settings = Settings(media_dir=tmp_path)
     model = FakeModel(read(), {"you really": 8})
+    again = []
+    monkeypatch.setattr(hooks, "heard_again", lambda judged, *a: again.append(judged) or judged)
     kept, note = hooks.choose(found, 2, fetch, (0, 4000), [], ("xQc", "GTA"), settings,
                               router=FakeRouter(model, words))  # fmt: skip
+    assert len(again) == 1 and len(again[0]) == 1  # each strong opening listened to again
     assert len(kept) == 1 and kept[0].peak == PEAK and kept[0].hook["score"] == 8
     assert kept[0].hook["what"].startswith("He bets") and "hook 8/10" in kept[0].why
     assert note == "1 of 2 likely moments had a strong hook"
@@ -319,9 +326,9 @@ def test_openings_are_rated_in_both_orders_and_averaged():
                                 for n, x in enumerate(letters)]}  # fmt: skip
 
     look = a_look(said(*ROWS))
-    model = FirstFavoured(read(openings=["L2", "L3"]), {})
-    rated = hooks.rate_openings(model, look, ["L2", "L3"], None)
-    assert [o.key for o in rated] == ["L2", "L3"] and [o.score for o in rated] == [7.5, 7.5]
+    model = FirstFavoured(read(openings=["L2", "L1"]), {})
+    rated = hooks.rate_openings(model, look, ["L2", "L1"], None)
+    assert [o.key for o in rated] == ["L2", "L1"] and [o.score for o in rated] == [7.5, 7.5]
     assert len([p for p in model.asked if "You are scrolling" in p]) == 2
 
 
@@ -350,3 +357,25 @@ def test_a_vision_model_that_gives_no_answer_for_six_frames_is_asked_about_three
 
     hooks.see(Vision(), look)
     assert asked == [6, 3] and len(look.frames) == 3 and look.seen == ["a car"] * 3
+
+
+def test_an_opening_not_heard_again_on_its_own_is_left_out(tmp_path):
+    def judged(peak, said_text):
+        look = a_look(peak=peak)
+        look.audio = np.zeros(int((look.end - look.start) * hooks.RATE), dtype=np.float32)
+        r = hooks.Read(what_happens="w", payoff_score=8, stands_alone=7)
+        opening = hooks.Opening(peak - 10, said_text, 8, "", "L1")
+        return hooks.Judged(look, r, opening, peak + 8, None)
+
+    real = judged(1000.0, "you really think you can beat me")
+    ghost = judged(2000.0, "he said I want to kill you")
+    heard = []
+
+    def transcribe(path):
+        heard.append(path)
+        # The first opening's words in its own stretch of the file, nothing in the second.
+        return [Word(text=w, start=0.4 + 0.2 * n, end=0.5 + 0.2 * n)
+                for n, w in enumerate(["really", "think", "you", "can", "beat"])]  # fmt: skip
+
+    assert hooks.heard_again([real, ghost], transcribe, tmp_path) == [real]
+    assert len(heard) == 1

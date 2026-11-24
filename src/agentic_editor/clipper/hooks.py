@@ -45,6 +45,10 @@ LEAD, TAIL = 32, 16  # seconds of stream looked at before and after a moment's p
 EARLIEST, LATEST = 25, 3  # a clip opens this far before the peak at most, and at least
 END_LEAST, END_MOST = 4, 15  # and ends this long after it: the reaction is in
 OPENING = 3.0  # seconds a clip has to grab someone scrolling past
+LEAST_WORDS = 5  # said in an opening's first seconds: hooks top clip pages open on talk
+HEARD_AGAIN = (
+    0.5  # of an opening's words, heard again when its first seconds are written down alone
+)
 HOOK_LEAST = 7.5  # its opening, rated cold (0-10, two looks averaged): it grabs
 PAYOFF_LEAST = 6  # its payoff (0-10)
 LEAD_IN, TAIL_OUT = 0.15, 0.5  # seconds kept before the first word and after the last
@@ -261,7 +265,6 @@ def write_down(looks: list[Look], transcribe: Callable[[Path], list[Word]], fold
             for w in words if a <= (w.start + w.end) / 2 < b
         ]  # fmt: skip
         look.lines = lines_of(look.words)
-        look.audio = None
 
 
 class _Seen(BaseModel):
@@ -452,6 +455,12 @@ def opening_start(look: Look, line: Line) -> float:
     return start
 
 
+def talks(look: Look, start: float, seconds: float) -> bool:
+    """Whether enough is said in the first `seconds` from `start` to open a clip on: an
+    opening on a word or two, a game's line or silence was the weakest kind seen."""
+    return len(first_words(look, start, seconds).split()) >= LEAST_WORDS * seconds / OPENING
+
+
 def mid_sentence(look: Look, start: float) -> bool:
     """Whether an opening at `start` joins speech already going: a word ends just before
     it and didn't end a sentence."""
@@ -475,8 +484,10 @@ def rate_openings(llm, look: Look, keys: list[str], flash: Line | None) -> list[
         line = line_by_key(look, key)
         if line is None or not may_open(look, line) or any(o[0] == line.key for o in options):
             continue
-        options.append((line.key, opening_start(look, line)))
-    if flash is not None:
+        start = opening_start(look, line)
+        if talks(look, start, OPENING):
+            options.append((line.key, start))
+    if flash is not None and talks(look, flash.start - LEAD_IN, FLASH):
         options.append(("FLASH", flash.start - LEAD_IN))
     if not options:
         return []
@@ -626,6 +637,50 @@ def _loud_value(look: Look, start: float) -> float:
     return float(part.max()) if part.size else 0.0
 
 
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def heard_again(judged: list[Judged], transcribe: Callable, folder: Path) -> list[Judged]:
+    """The judged moments whose opening is heard again: each opening's first seconds (the
+    flash first, for a cold open) written down on their own, and at least HEARD_AGAIN of
+    the words it was judged on found there. A long stretch written down in one go now and
+    then hears words in noise or quiet talk that aren't there, and an opening on them
+    would open on nothing."""
+    spans = []
+    for j in judged:
+        # From a little before: whisper misses a word that starts its sound.
+        at = (j.flash[0] if j.flash else j.opening.start) - 0.3
+        seconds = (FLASH if j.flash else OPENING) + 1.3
+        audio = j.look.audio if j.look.audio is not None else np.zeros(0, dtype=np.float32)
+        lo = max(0, int((at - j.look.start) * RATE))
+        spans.append(audio[lo : lo + int(seconds * RATE)])
+    gap = np.zeros(int(3 * RATE), dtype=np.float32)
+    joined, places, t = [], [], 0.0
+    for part in spans:
+        places.append((t, t + part.size / RATE))
+        joined += [part, gap]
+        t += part.size / RATE + 3
+    path = folder / "openings.wav"
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(RATE)
+        out.writeframes((np.clip(np.concatenate(joined), -1, 1) * 32767).astype("<i2").tobytes())
+    words = transcribe(path)
+    kept = []
+    for j, (a, b) in zip(judged, places, strict=True):
+        heard = set(_tokens(" ".join(w.text for w in words if a <= w.start < b)))
+        said = _tokens(j.opening.said)
+        share = sum(w in heard for w in said) / len(said) if said else 0.0
+        if share >= HEARD_AGAIN:
+            kept.append(j)
+        else:
+            log.info("moment at %.0f s: its opening %r wasn't heard again (%.0f%%)",
+                     j.look.moment.peak, j.opening.said[:60], 100 * share)  # fmt: skip
+    return kept
+
+
 def chosen(judged: list[Judged], count: int, avoid: list[tuple[float, float]]) -> list[Judged]:
     """The best `count`, none overlapping another or a clip made before."""
     taken = list(avoid)
@@ -724,8 +779,15 @@ def choose(
                 judged.append(found)
 
         failed = _each(router.planner, looks, read, told, "judging the hook of")
-    if failed == len(looks):
-        return as_found, "the hooks couldn't be judged; cut as found"
+        if failed == len(looks):
+            return as_found, "the hooks couldn't be judged; cut as found"
+        if judged:
+            told(f"listening again to the openings of {len(judged)} moments")
+            try:
+                with slots.behind():
+                    judged = heard_again(judged, lambda p: router.transcribe(p).words, folder)
+            except Exception as exc:  # whisper away now: the openings as first heard
+                log.warning("the openings couldn't be listened to again: %s", exc)
     kept = chosen(judged, count, list(avoid))
     took = time.monotonic() - started
     log.info("hooks: %d of %d moments strong enough, %d kept, in %.0f s",
