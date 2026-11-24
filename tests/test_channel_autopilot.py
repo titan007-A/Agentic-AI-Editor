@@ -355,7 +355,7 @@ def test_a_spare_copy_is_checked_only_when_the_better_one_fails(env, monkeypatch
     assert order == [best, other, spare]  # the spare last, after the others
 
 
-def test_a_spare_whose_better_copy_passed_isnt_checked(env, source):
+def test_a_spare_whose_better_copy_passed_isnt_checked(env):
     owner = page(env)
     with env.sessions() as db:
         make_pilot(db, owner)
