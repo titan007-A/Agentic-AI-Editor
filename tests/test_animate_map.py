@@ -1,7 +1,10 @@
 """The World map style: the map's data, the writer's tour, timing, captions and the studio."""
 
+import copy
 import hashlib
 import json
+import re
+import typing
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +12,7 @@ import pytest
 from PIL import Image
 
 from agentic_editor.animate import images, maps, mapwriter, planner, sound, studio, voice
-from agentic_editor.animate.plan import Plan, map_problems, problems, tidy
+from agentic_editor.animate.plan import Item, Plan, map_problems, problems, tidy
 from agentic_editor.animate.timeline import build, player_data
 from agentic_editor.db import Animation
 from agentic_editor.settings import Settings
@@ -146,11 +149,15 @@ def test_cards_go_inside_the_country_spread_apart(world):
     assert len(spots) == 5
     rings = [np.asarray(r, dtype=float).reshape(-1, 2) for r in usa["rings"]]
     assert maps.inside(np.asarray(spots), rings).all()
-    squash = np.cos(np.radians(37))
+    # No two overlap at any zoom: a card's width apart across, or its height (with its
+    # label) down, as the camera shows them close (cards grow and shrink with the map).
+    lat = (usa["main"][1] + usa["main"][3]) / 2
+    squash = max(0.2, np.cos(np.radians(lat)))
+    across, down = (close * share for share in maps.CARD_SPAN)
     for i, a in enumerate(spots):
         for b in spots[i + 1 :]:
-            gap = np.hypot((a[0] - b[0]) * squash, a[1] - b[1])
-            assert gap >= close * maps.SPACING * 0.45 - 1e-6
+            dx, dy = abs(a[0] - b[0]) * squash, abs(a[1] - b[1])
+            assert dx >= across - 1e-6 or dy >= down - 1e-6, (a, b)
     assert maps.spots(usa, 5, close, seed=3) == spots  # the same every time
     # A tiny country with many things still gets a spot for each.
     assert len(maps.spots(maps.table(world)["NLD"], 5, 4.0)) == 5
@@ -242,24 +249,76 @@ TOUR = [
 
 
 class MapModel(Writer):
-    """The planner model for World map reels: the writer's replies in turn, and the line
-    by line check (mapwriter.vet) answered with `wrong` (the lines it calls wrong, the same
-    each time, or one list per check)."""
+    """The planner model for World map reels: the writer's replies in turn; the strict
+    check (mapwriter.judge) says yes to every thing but those in `wrong` (a name, or
+    "Country: name", any case); a refill names the next of `refills` (a list of names per
+    refill), a search for more countries answers `more`."""
 
-    def __init__(self, *replies, wrong=()):
+    def __init__(
+        self, *replies, wrong=(), refills=(), more=(), same=(), iconic=(), near=(), origins=None
+    ):
         super().__init__(*replies)
-        self.wrong = list(wrong)
-        self.vetted: list[list[dict]] = []
+        # where the second look says a thing comes from (else the card's own country)
+        self.origins = {k.lower(): v for k, v in (origins or {}).items()}
+        self.home: dict[str, str] = {}  # each thing's card country, from the first look
+        self.near = {n.lower() for n in near}  # passed the first look, not the second
+        self.second: list[str] = []  # the second looks, as asked
+        self.wrong = {w.lower() for w in wrong}
+        self.refills = [list(r) for r in refills]
+        self.more = list(more)
+        self.same = list(same)  # pairs of names the duplicates check calls the same thing
+        self.iconic = list(iconic)  # the topic's best known things: (country, name)
+        self.judged: list[str] = []
+        self.checks: list[str] = []  # the check prompts, as asked
 
     def chat_json(self, messages, schema, temperature=0.3):
-        if schema is mapwriter.VET_SCHEMA:
-            self.vetted.append(messages)
-            each = self.wrong and isinstance(self.wrong[0], list)
-            wrong = (self.wrong.pop(0) if self.wrong else []) if each else self.wrong
-            count = messages[0]["content"].count("\n") + 1
+        if schema is mapwriter.CHECK_SCHEMA:
+            text = messages[-1]["content"]
+            self.checks.append(text)
+            country = re.search(r"Country: (.+?)\. Thing", text).group(1)
+            thing = re.search(r"Thing: (.+?)\.\n", text).group(1)
+            kind = re.search(r"must be one of the (.+?)\.\n", text).group(1)
+            self.judged.append(f"{country}: {thing}")
+            self.home[thing.lower()] = country
+            bad = {thing.lower(), f"{country}: {thing}".lower()} & self.wrong
+            allowed = sorted(mapwriter.allowed_for(kind) or {"other"})
             return {
-                "lines": [
-                    {"n": n, "is_one": n not in wrong, "from_there": True} for n in range(1, count)
+                "what": thing, "category": allowed[0], "is_kind": "no" if bad else "yes",
+                "from_country": "yes", "famous": "yes",
+            }  # fmt: skip
+        if schema is mapwriter.KIND_SCHEMA:
+            text = messages[-1]["content"]
+            self.second.append(text)
+            thing = re.search(r"One card shows: (.+?) \(", text).group(1)
+            assert " card:" not in text  # the card's country isn't given away
+            home = self.home[thing.lower()]
+            return {
+                "plain": thing, "answer": "no" if thing.lower() in self.near else "yes",
+                "origin": self.origins.get(thing.lower(), home),
+            }  # fmt: skip
+        if schema is mapwriter.ALLOWED_SCHEMA:
+            return {"categories": ["other"]}
+        if schema is mapwriter.REFILL_SCHEMA:
+            names = self.refills.pop(0) if self.refills else []
+            return {
+                "items": [{"name": n, "emoji": "🍰", "picture": f"a plate of {n}"} for n in names]
+            }
+        if schema is mapwriter.MORE_SCHEMA:
+            return {"countries": self.more}
+        if schema is mapwriter.DUP_SCHEMA:
+            lines = re.findall(r"^(\d+)\. (.+)$", messages[-1]["content"], re.M)
+            number = {name.lower(): int(n) for n, name in lines}
+            pairs = [
+                {"first": number[a.lower()], "second": number[b.lower()]}
+                for a, b in self.same
+                if a.lower() in number and b.lower() in number
+            ]
+            return {"same": pairs}
+        if schema is mapwriter.ICONIC_SCHEMA:
+            return {
+                "examples": [
+                    {"country": c, "name": n, "emoji": "⭐", "picture": f"a picture of {n}"}
+                    for c, n in self.iconic
                 ]
             }
         return super().chat_json(messages, schema, temperature)
@@ -271,7 +330,7 @@ def map_reply(countries=None, **changes):
         "hook": "The most famous desserts from every country.",
         "headline": "Most famous desserts in every country",
         "highlight": "desserts",
-        "countries": countries if countries is not None else TOUR,
+        "countries": copy.deepcopy(countries if countries is not None else TOUR),
         "caption": "Which one is your favourite? #maps #desserts",
     }
     reply.update(changes)
@@ -339,16 +398,19 @@ def test_a_change_keeps_the_card_pictures_that_still_fit():
     changed = [dict(c) for c in TOUR]
     changed[0] = country("The United States", "The United States has apple pie and cookies.",
                          "apple pie", "cookies")  # fmt: skip
-    writer = Writer(map_reply(countries=changed))
+    writer = MapModel(map_reply(countries=changed), map_reply(countries=changed))
     brief = planner.Brief("desserts", style="map", length="short")
     out, left = planner.change(writer, plan, "swap brownies for cookies", brief)
-    assert left == []
+    assert writer.judged == ["The United States: cookies"]  # only what the change brought
+    assert not any("left out" in n for n in left)
     items = out.scenes[1].visual.items
     assert items[0].image == "a" * 24 + ".png" and items[1].image == ""
     assert "swap brownies for cookies" in writer.asked[0][1]["content"]
     assert out.style == "map"
     # One country written again: its scene only, the same shape.
-    again = Writer(country("Italy", "Italy has panna cotta and cannoli.", "panna cotta", "cannoli"))
+    again = MapModel(
+        country("Italy", "Italy has panna cotta and cannoli.", "panna cotta", "cannoli")
+    )
     redone = planner.redo_scene(again, out, 4)
     assert redone.scenes[4].visual.text == "Italy"
     assert [i.text for i in redone.scenes[4].visual.items] == ["panna cotta", "cannoli"]
@@ -653,41 +715,132 @@ def test_a_line_asked_for_twice_at_once_is_spoken_once(tmp_path, monkeypatch):
     assert fake.calls == 1 and len(got) == 3 and got[0] == got[1] == got[2]
 
 
-def test_things_that_dont_belong_are_left_out_after_a_line_by_line_check():
+def test_each_thing_is_checked_on_its_own_and_a_thin_country_is_filled_up():
     tour = [*TOUR, country("Canada", "Canada has maple syrup.", "maple syrup")]
-    # Lines: 1-3 the US, 4-5 the UK, 6-7 France, 8-9 Italy, 10 Holland, 11-12 Japan, 13 Canada.
-    # (Short of words afterwards: written again, the same, so the first stays.)
-    model = MapModel(map_reply(countries=tour), map_reply(countries=tour), wrong=[2, 13])
+    model = MapModel(
+        map_reply(countries=tour),
+        map_reply(countries=tour),
+        wrong=["brownies", "cheesecake", "maple syrup"],
+        # The US kept only apple pie: two more asked for (brownies was turned down, so it
+        # isn't taken again); Canada kept nothing and gets nothing more.
+        refills=[["pecan pie", "brownies", "key lime pie"], []],
+    )
     brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
     plan, notes = planner.draft(model, brief, [])
-    asked = model.vetted[0][0]["content"]
-    assert "1. The United States: apple pie" in asked and "13. Canada: maple syrup" in asked
-    assert "Its things must be desserts." in asked
-    assert mapwriter.kind_of("Most haunted places from every country") == "places"
-    assert mapwriter.kind_of("Popular car brands in different countries") == "car brands"
+    first = model.checks[0]
+    assert "Each thing must be one of the desserts." in first
+    assert "Country: The United States. Thing: apple pie." in first
+    assert len(model.judged) == 13 + 2  # every thing on its own, the refills too
     usa = plan.scenes[1]
-    assert [i.text for i in usa.visual.items] == ["apple pie", "cheesecake"]
-    assert usa.narration == "The United States has apple pie and cheesecake."
+    assert [i.text for i in usa.visual.items] == ["apple pie", "pecan pie", "key lime pie"]
+    assert usa.narration == "The United States has apple pie, pecan pie, and key lime pie."
     assert "Canada" not in [s.visual.text for s in plan.scenes]
-    assert notes[0] == "left out as not fitting the topic: The United States: brownies, Canada"
-    # A check that calls most of it wrong has misread the question: nothing is left out.
-    model = MapModel(map_reply(), wrong=list(range(1, 10)))
-    plan, notes = planner.draft(model, brief, [])
-    assert sum(len(s.visual.items) for s in plan.scenes) == 12 and not notes
-    # Too little left: written once more with real ones, and that is checked too.
-    short = planner.Brief("Most famous desserts from every country", style="map", length="short")
-    better = [dict(c) for c in TOUR]
-    better[0] = country(
-        "The United States",
-        "The United States has apple pie, pecan pie, key lime pie, and cheesecake.",
-        "apple pie", "pecan pie", "key lime pie", "cheesecake",
+    assert notes[0] == (
+        "left out as not sure to fit the topic: The United States: brownies, "
+        "The United States: cheesecake, Canada: maple syrup"
+    )
+    assert notes[1] == "countries left out (nothing sure to show): Canada"
+    assert plan.look == "neon"  # a food topic
+
+
+def test_anything_short_of_a_clear_yes_never_reaches_a_card():
+    """The check's answers each have to be "yes", and the category one the topic allows:
+    pizza is a food, so it is no invention, however sure the model sounds."""
+
+    class Doubts(MapModel):
+        def chat_json(self, messages, schema, temperature=0.3):
+            got = super().chat_json(messages, schema, temperature)
+            if schema is mapwriter.CHECK_SCHEMA:
+                if "Thing: pizza." in messages[-1]["content"]:
+                    got["category"] = "food or dish"
+                if "Thing: kangaroo." in messages[-1]["content"]:
+                    got["famous"] = "unsure"
+            return got
+
+    tour = [
+        country("The United States", "The United States has the telephone.", "telephone"),
+        country("Italy", "Italy has pizza and the radio.", "pizza", "radio"),
+        country("Australia", "Australia has the kangaroo and the black box.", "kangaroo",
+                "black box"),
+    ]  # fmt: skip
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = Doubts()
+    vetted, notes = mapwriter.vet(model, plan, "Most famous inventions from every country")
+    kept = [i.text for s in vetted.scenes for i in s.visual.items]
+    assert kept == ["telephone", "radio", "black box"]
+    assert "Italy: pizza" in notes[0] and "Australia: kangaroo" in notes[0]
+    # A thing the model couldn't be asked about isn't kept either; when it can't be asked
+    # about anything at all, the tour stays as written and the person is told.
+
+    class Down(MapModel):
+        def chat_json(self, messages, schema, temperature=0.3):
+            if schema is mapwriter.CHECK_SCHEMA:
+                raise mapwriter.LLMError("no answer")
+            return super().chat_json(messages, schema, temperature)
+
+    same, notes = mapwriter._vetted(Down(), plan, "Most famous inventions from every country")
+    assert same == plan and notes == ["the things on the cards couldn't be checked; look them over"]
+
+
+def test_too_few_countries_left_are_made_up_with_more_checked_ones():
+    model = MapModel(
+        map_reply(),
+        map_reply(),
+        wrong=["The United States: apple pie", "brownies", "cheesecake", "macarons",
+               "crème brûlée", "stroopwafels"],
+        more=[
+            country("Spain", "", "churros", "flan"),
+            country("Japan", "", "mochi"),  # there already
+            country("Greece", "", "baklava"),
+        ],
     )  # fmt: skip
-    model = MapModel(map_reply(), map_reply(countries=better), wrong=[[2, 3, 4, 5, 6, 7], [3]])
-    plan, notes = planner.draft(model, short, [])
-    assert len(model.vetted) == 2
-    assert "Write the whole reel again with real desserts" in model.asked[-1][-1]["content"]
-    assert [i.text for i in plan.scenes[1].visual.items] == ["apple pie", "pecan pie", "cheesecake"]
-    assert notes[1] == "left out as not fitting the topic: The United States: key lime pie"
+    brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
+    plan, notes = planner.draft(model, brief, [])
+    countries = [s.visual.text for s in plan.scenes if s.visual.kind == "country"]
+    # The US, France and Holland had nothing sure left (the opening country goes too).
+    assert countries == ["the UK", "Italy", "Japan", "Spain", "Greece"]
+    assert plan.scenes[-1].narration == "Greece has baklava."
+    assert "countries left out (nothing sure to show): The United States, France, Holland" in notes
+
+
+def test_a_thing_judged_once_is_not_asked_about_again(tmp_path):
+    path = tmp_path / "map-checks.json"
+    model = MapModel(wrong=["brownies"])
+    plan = map_plan()
+    mapwriter.vet(model, plan, "Most famous desserts from every country",
+                             mapwriter.Checks(path))  # fmt: skip
+    asked = len(model.judged)
+    assert asked == 12 and path.is_file()
+    again = MapModel(wrong=[])  # a later reel: the verdicts are kept, brownies too
+    second, _ = mapwriter.vet(again, plan, "Most famous desserts from every country",
+                              mapwriter.Checks(path))  # fmt: skip
+    assert again.judged == []
+    assert [i.text for i in second.scenes[1].visual.items] == ["apple pie", "cheesecake"]
+
+
+def test_a_change_checks_only_the_things_it_brings():
+    plan = map_plan()
+    reply = map_reply()
+    reply["countries"][3] = country("Italy", "Italy has tiramisu, gelato, and pizza.",
+                                    "tiramisu", "gelato", "pizza")  # fmt: skip
+    model = MapModel(reply, reply, wrong=["pizza"])
+    changed, notes = mapwriter.change(
+        model, plan, "Most famous desserts from every country", "add pizza to Italy", "short"
+    )
+    assert model.judged == ["Italy: pizza"]
+    assert [i.text for i in changed.scenes[4].visual.items] == ["tiramisu", "gelato"]
+    assert "Italy: pizza" in notes[0]
+
+
+def test_a_country_written_again_has_its_things_checked():
+    plan = map_plan()
+    model = MapModel(
+        country("Italy", "Italy has tiramisu, pizza, and cannoli.", "tiramisu", "pizza", "cannoli"),
+        wrong=["pizza"],
+    )
+    redone = mapwriter.redo_country(model, plan, 4, idea="Most famous desserts from every country")
+    assert [i.text for i in redone.scenes[4].visual.items] == ["tiramisu", "cannoli"]
+    assert redone.scenes[4].narration == "Italy has tiramisu and cannoli."
 
 
 def test_a_busy_map_server_is_asked_again(tmp_path, monkeypatch):
@@ -735,13 +888,49 @@ def test_a_card_with_a_plain_emoji_shows_its_countrys_other_one():
     assert plan.scenes[6].visual.items[0].emoji == "🌍"  # none left: the default
 
 
-def test_the_tours_opening_country_is_never_left_out_whole():
-    model = MapModel(map_reply(), map_reply(), wrong=[1, 2, 3, 10])  # all the US, and Holland
-    brief = planner.Brief("Most famous desserts from every country", style="map", length="short")
-    plan, _ = planner.draft(model, brief, [])
-    countries = [s.visual.text for s in plan.scenes if s.visual.kind == "country"]
-    assert countries[0] == "The United States" and "Holland" not in countries
-    assert len(plan.scenes[1].visual.items) == 3  # kept as written
+def test_the_look_and_the_badges_come_from_the_topic():
+    assert mapwriter.look_of("Most haunted places from every country") == "horror"
+    assert mapwriter.look_of("Scariest legends from every country") == "horror"
+    assert mapwriter.look_of("Most famous street foods from every country") == "neon"
+    assert mapwriter.look_of("Most famous desserts from every country") == "neon"
+    assert mapwriter.look_of("Most famous castles from every country") == "cards"
+    assert mapwriter.ranking("Top 10 countries for pizza") == "rank"
+    assert mapwriter.ranking("How many castles every country has") == "count"
+    assert mapwriter.ranking("Most famous castles from every country") == ""
+    assert mapwriter.kind_of("Most haunted places from every country") == "places"
+    assert mapwriter.kind_of("Popular car brands in different countries") == "car brands"
+    assert mapwriter.kind_of("How many castles every country has") == "castles"
+    assert mapwriter.allowed_for("inventions") == {"invention, technology or machine", "vehicle"}
+    assert mapwriter.allowed_for("sportswear brands") == {"brand or company"}
+    assert mapwriter.allowed_for("castles") == {"place, building or landmark"}
+    assert mapwriter.allowed_for("inventors") == {"person"}
+    assert mapwriter.allowed_for("superstitions") is None  # the model is asked
+
+    # A ranking: the countries numbered by their place, number one last.
+    model = MapModel(map_reply(), map_reply())
+    ranked, _ = mapwriter.draft(model, "Top 6 countries for desserts", "short", "", [],
+                                mapwriter.VOICE)  # fmt: skip
+    badges = [(s.visual.value, s.visual.emoji) for s in ranked.scenes if s.visual.kind == "country"]
+    assert badges[0] == ("#6", "🏆") and badges[-1] == ("#1", "🏆")
+    assert "number one comes last" in model.asked[0][1]["content"]
+    # A count: each country's number as the writer gave it, said in its sentence.
+    counts = [{**c, "number": f"{n},000"} for n, c in enumerate(TOUR, 1)]
+    model = MapModel(
+        map_reply(countries=counts, badge_emoji="🏰"), map_reply(countries=counts, badge_emoji="🏰")
+    )
+    counted, _ = mapwriter.draft(model, "How many castles every country has", "short", "", [],
+                                 mapwriter.VOICE)  # fmt: skip
+    usa = counted.scenes[1]
+    assert (usa.visual.value, usa.visual.emoji) == ("1,000", "🏰")
+    assert usa.narration.startswith("The United States has 1,000 castles, including apple pie")
+    assert '"number"' in json.dumps(model.asked[0]) or "number" in model.asked[0][1]["content"]
+    # A topic that is neither keeps no badge, even one written by hand before.
+    plain = map_plan()
+    plain.scenes[1].visual.value = "#2"
+    assert (
+        mapwriter.badges(plain, "Most famous desserts from every country").scenes[1].visual.value
+        == ""
+    )
 
 
 def test_a_world_map_reel_is_encoded_lighter(monkeypatch, tmp_path):
@@ -753,3 +942,383 @@ def test_a_world_map_reel_is_encoded_lighter(monkeypatch, tmp_path):
     render._encoder(tmp_path / "b.mp4", 30)
     crf = [cmd[cmd.index("-crf") + 1] for cmd in asked]
     assert crf == ["22", "17"]
+
+
+def painter(asked):
+    """A stand-in for the image model: each picture a small white file, what it was asked
+    for noted."""
+
+    def paint(pictures, style, settings, progress, size=images.SIZE):
+        out = images.folder(settings)
+        out.mkdir(parents=True, exist_ok=True)
+        names = []
+        for p in pictures:
+            asked.append((p.prompt, style, size))
+            name = images.name_of(images.full_prompt(p, style), p.seed, "m", size)
+            Image.new("RGB", (8, 10), "white").save(out / name)
+            names.append(name)
+        return names
+
+    return paint
+
+
+def test_a_card_painted_once_is_never_painted_again_in_any_reel(tmp_path, world):
+    settings, Session = map_env(tmp_path, world)
+    asked = []
+    first, _ = studio.paint_plan(map_plan(), "m1", Session, settings, painter(asked))
+    assert len(asked) == 12 and len({a[0] for a in asked}) == 12
+    # A later reel names some of the same things (its pictures asked in other words, a
+    # name in other capitals) and one new thing: only that one is painted.
+    reply = map_reply()
+    reply["countries"][0]["items"][0]["picture"] = "a warm slice of apple pie, top view"
+    reply["countries"][3] = country("Italy", "Italy has Tiramisu and panna cotta.", "Tiramisu",
+                                    "panna cotta")  # fmt: skip
+    later = mapwriter.to_plan(reply, [], mapwriter.VOICE)
+    asked.clear()
+    second, notes = studio.paint_plan(later, "m2", Session, settings, painter(asked))
+    assert [a[0] for a in asked] == ["a plate of panna cotta"] and notes == []
+    assert second.scenes[1].visual.items[0].image == first.scenes[1].visual.items[0].image
+    assert second.scenes[4].visual.items[0].image == first.scenes[4].visual.items[0].image
+    # Asked to paint one again (Claude's repaint_pictures, a new number): that one only.
+    again = later.model_copy(deep=True)
+    again.scenes[1].visual.items[0].art_seed = 1
+    asked.clear()
+    third, _ = studio.paint_plan(again, "m3", Session, settings, painter(asked))
+    assert [a[0] for a in asked] == ["a warm slice of apple pie, top view"]
+    assert third.scenes[1].visual.items[0].image != second.scenes[1].visual.items[0].image
+    # The gold horror look paints its own: the place as a dark photo, 4:3.
+    asked.clear()
+    studio.paint_plan(map_plan().model_copy(update={"look": "horror"}), "m4", Session, settings,
+                      painter(asked))  # fmt: skip
+    assert {a[1:] for a in asked} == {("map-horror", images.HORROR_CARD)} and len(asked) == 12
+    assert "eerie and dark" in images.full_prompt(images.Picture("a castle", 1), "map-horror")
+    # Where nothing can be painted, the ones painted before for that look are still shown.
+    _, notes = studio.paint_plan(later, "m5", Session, settings)
+    assert notes == [] or "image model" in notes[0]
+
+
+def test_a_neon_card_is_its_dish_cut_out_of_the_white(tmp_path, world):
+    from PIL import ImageDraw
+
+    settings, Session = map_env(tmp_path, world)
+    out = images.folder(settings)
+    out.mkdir(parents=True)
+    picture = Image.new("RGB", (100, 100), "white")
+    draw = ImageDraw.Draw(picture)
+    draw.ellipse((20, 20, 80, 80), fill=(200, 40, 30))
+    draw.ellipse((45, 45, 55, 55), fill="white")  # white inside the dish stays
+    picture.save(out / ("c" * 24 + ".png"))
+    name = images.cut_out(settings, "c" * 24 + ".png")
+    assert name == images.cut_name("c" * 24 + ".png") and name != "c" * 24 + ".png"
+    alpha = Image.open(out / name).getchannel("A")
+    assert alpha.getpixel((2, 2)) == 0 and alpha.getpixel((97, 50)) == 0
+    assert alpha.getpixel((30, 50)) == 255 and alpha.getpixel((50, 50)) == 255
+    assert images.cut_out(settings, "c" * 24 + ".png") == name  # made once
+    assert images.cut_out(settings, "d" * 24 + ".png") == ""
+    # A neon reel's cards get the cut-outs; the same things in the cards look the whole.
+    asked = []
+    neon, _ = studio.paint_plan(map_plan().model_copy(update={"look": "neon"}), "n1", Session,
+                                settings, painter(asked))  # fmt: skip
+    cards, _ = studio.paint_plan(map_plan(), "n2", Session, settings, painter(asked))
+    assert len(asked) == 12  # painted once for both looks
+    whole = cards.scenes[1].visual.items[0].image
+    assert neon.scenes[1].visual.items[0].image == images.cut_name(whole)
+    assert tidy(neon).scenes[1].visual.items[0].image == images.cut_name(whole)  # a valid name
+
+
+def test_the_voice_is_recorded_while_the_cards_are_painted(tmp_path, world, monkeypatch):
+    import threading
+    import time
+
+    settings, Session = map_env(tmp_path, world)
+    monkeypatch.setattr(maps, "ready", lambda models_dir: True)
+    events = []
+
+    def paint(pictures, style, settings, progress, size=images.SIZE):
+        events.append(("painting", time.monotonic()))
+        time.sleep(0.6)
+        events.append(("painted", time.monotonic()))
+        return [""] * len(pictures)
+
+    def speak(text, voice_id, cache, speed=None):
+        time.sleep(0.08)  # Kokoro takes its time over each line
+        events.append(("spoke", time.monotonic(), threading.current_thread().name))
+        return spoken(text)
+
+    with Session() as db:
+        plan = map_plan().model_dump(mode="json")
+        db.add(Animation(id="v1", owner_id="u1", idea="desserts", style="map", images=True,
+                         plan=plan, task={"op": "voice"}))  # fmt: skip
+        db.commit()
+    studio.run_task("v1", Session, settings, speak=speak, paint=paint)
+    with Session() as db:
+        assert db.get(Animation, "v1").status == "ready"
+    began = next(e[1] for e in events if e[0] == "painting")
+    ended = next(e[1] for e in events if e[0] == "painted")
+    voiced = [e for e in events if e[0] == "spoke"]
+    assert voiced and all(e[2].startswith("voice") for e in voiced[:3])
+    assert any(began <= e[1] <= ended for e in voiced)  # spoken while painting
+
+
+def said(name, *items):
+    """A country as the writer would say it: "<country> has A, B, and C."."""
+    return country(name, mapwriter.sentence(name, [Item(text=i) for i in items], [""] * len(items)),
+                   *items)  # fmt: skip
+
+
+def test_the_same_thing_twice_is_named_once():
+    tour = [
+        said("The United States", "Mardi Gras", "New Orleans Mardi Gras", "Coachella"),
+        said("Italy", "the Venice Carnival", "Carnevale di Venezia", "Palio di Siena"),
+        said("Brazil", "Rio Carnival"),
+        said("Spain", "La Tomatina", "Rio Carnival"),  # another country's already
+        said("Japan", "Gion Matsuri", "Hanami"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(same=[("the Venice Carnival", "Carnevale di Venezia")])
+    vetted, notes = mapwriter.vet(model, plan, "Most famous festivals from every country")
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    assert cards["The United States"] == ["Mardi Gras", "Coachella"]  # by its words
+    assert cards["Italy"] == ["the Venice Carnival", "Palio di Siena"]  # by the model
+    assert cards["Spain"] == ["La Tomatina"]  # once in the whole tour
+    assert "Italy: Carnevale di Venezia" in notes[0]
+    assert "Spain: Rio Carnival (named for another country already)" in notes[0]
+    assert mapwriter.same_by_name("Lunar New Year", "Chinese New Year") is False
+    assert mapwriter.same_by_name("Rio Carnival", "Venice Carnival") is False
+    assert mapwriter.same_by_name("the Telephone", "telephone") is True
+
+
+def test_a_tour_never_leaves_out_the_topics_best_known_things():
+    """The live festivals reel had no Germany: Oktoberfest is put in, its country next to
+    its neighbours on the map; one already there isn't added twice."""
+
+    class Atlas:
+        spots: typing.ClassVar = {"united states": (-98, 39), "france": (2, 46), "italy": (12, 43),
+                 "germany": (10, 51), "japan": (138, 36), "brazil": (-52, -10)}  # fmt: skip
+
+        def __call__(self, name):
+            return name.lower() in self.spots
+
+        def locate(self, name):
+            return self.spots.get(name.lower())
+
+    tour = [
+        said("The United States", "Mardi Gras", "Coachella"),
+        said("France", "Bastille Day", "Fête de la Musique"),
+        said("Italy", "the Venice Carnival", "Palio di Siena"),
+        said("Japan", "Gion Matsuri", "Hanami"),
+        said("Brazil", "Rio Carnival"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(
+        iconic=[("Germany", "Oktoberfest"), ("Brazil", "Rio Carnival"), ("India", "Diwali")],
+        refills=[["Christmas markets"]],
+    )
+    vetted, notes = mapwriter.vet(model, plan, "Most famous festivals from every country",
+                                  known=Atlas())  # fmt: skip
+    countries = [s.visual.text for s in vetted.scenes if s.visual.kind == "country"]
+    # Right after its nearest neighbour on the map (Italy, here).
+    assert countries == ["The United States", "France", "Italy", "Germany", "Japan", "Brazil"]
+    germany = next(s for s in vetted.scenes if s.visual.text == "Germany")
+    assert [i.text for i in germany.visual.items] == ["Oktoberfest", "Christmas markets"]
+    assert germany.narration == "Germany has Oktoberfest and Christmas markets."
+    assert "put in as the topic's best known: Germany: Oktoberfest" in notes[-1]
+    assert "India" not in countries  # not on this map
+    # A ranking keeps its own order and countries: nothing is put in.
+    model = MapModel(iconic=[("Germany", "Oktoberfest")])
+    ranked, _ = mapwriter.vet(model, plan, "Top 5 festivals in the world", known=Atlas())
+    assert "Germany" not in [s.visual.text for s in ranked.scenes]
+
+
+def test_a_thing_only_its_own_country_knows_is_not_famous_enough():
+    model = MapModel()
+    mapwriter.judge(model, "Most famous festivals from every country", "festivals", "Turkey",
+                    "Istanbul Kite Festival", None)  # fmt: skip
+    asked = model.checks[0]
+    assert "would a typical viewer anywhere in the world recognise it" in asked
+    assert "known well outside Turkey" in asked
+
+
+def test_a_field_name_left_in_a_text_is_taken_out():
+    plan = map_plan(headline="Most famous festivals in every country; highlight: festivals",
+                    highlight="")  # fmt: skip
+    title = plan.scenes[0].visual
+    assert title.text == "Most famous festivals in every country"
+    assert title.highlight == "festivals"
+    plan = map_plan(headline="Most famous castles, kicker: World tour", title="Castles; hook: x")
+    assert plan.scenes[0].visual.text == "Most famous castles" and plan.title == "Castles"
+    assert tidy(map_plan(headline="highlight: festivals")).scenes[0].visual.text == (
+        "highlight: festivals"
+    )  # nothing left without it: kept as written
+
+
+def test_a_best_known_thing_goes_to_its_country_however_it_is_named():
+    """The castles tour got an "England" next to its "United Kingdom" (the map calls both
+    GBR), and England's refill named Windsor Castle a second time. A best known thing goes
+    on its country's own cards; one the tour has (plurals aside) isn't put in again; what
+    a new country is filled with is never a thing the tour has."""
+
+    class Atlas:
+        codes: typing.ClassVar = {"united kingdom": "GBR", "england": "GBR", "france": "FRA",
+                                  "spain": "ESP", "mexico": "MEX", "japan": "JPN",
+                                  "italy": "ITA"}  # fmt: skip
+
+        def __call__(self, name):
+            return name.lower() in self.codes
+
+        def code(self, name):
+            return self.codes.get(name.lower())
+
+        def locate(self, name):
+            return {"GBR": (-2, 54), "FRA": (2, 46), "ESP": (-4, 40), "MEX": (-102, 23),
+                    "JPN": (138, 36), "ITA": (12, 43)}.get(self.code(name))  # fmt: skip
+
+    tour = [
+        said("United Kingdom", "Windsor Castle", "Edinburgh Castle"),
+        said("France", "Château de Chambord", "Mont-Saint-Michel"),
+        said("Spain", "Alcázar of Segovia", "churro"),
+        said("Japan", "Himeji Castle", "Matsumoto Castle"),
+        said("Italy", "Castel Sant'Angelo", "Castello Sforzesco"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(
+        iconic=[("England", "Tower of London"), ("Mexico", "Churros"), ("Spain", "Alhambra")],
+        refills=[],
+    )
+    vetted, _ = mapwriter.vet(model, plan, "Most famous castles from every country",
+                              known=Atlas())  # fmt: skip
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    assert "England" not in cards and "Mexico" not in cards
+    assert cards["United Kingdom"][0] == "Tower of London"  # on the UK's own cards
+    assert cards["Spain"][0] == "Alhambra"
+    assert "Churros" not in str(cards)  # Spain's "churro" is the same thing
+    assert mapwriter.same_by_name("churro", "Churros") is True
+    assert mapwriter.same_country("England", "United Kingdom", Atlas()) is True
+    assert mapwriter.same_country("The UK", "United Kingdom") is False  # no map: by words
+    # A country put in is filled with nothing another country has already.
+    model = MapModel(iconic=[("Mexico", "Chapultepec Castle")],
+                     refills=[["Windsor Castle", "Castillo de San Juan de Ulúa"]])  # fmt: skip
+    vetted, _ = mapwriter.vet(model, plan, "Most famous castles from every country",
+                              known=Atlas())  # fmt: skip
+    mexico = next(s for s in vetted.scenes if s.visual.text == "Mexico")
+    assert [i.text for i in mexico.visual.items] == [
+        "Chapultepec Castle", "Castillo de San Juan de Ulúa"
+    ]  # fmt: skip
+    asked = model.checks
+    assert not any("Thing: Windsor Castle" in a and "Country: Mexico" in a for a in asked)
+
+
+def test_a_near_kind_that_passes_the_first_look_fails_the_second():
+    """Asked with everything else, the PC's model passed the Palace of Versailles as a
+    castle; a second question on the kind alone turns it down."""
+    tour = [
+        said("France", "Palace of Versailles", "Château de Chambord"),
+        said("Germany", "Neuschwanstein Castle", "Hohenzollern Castle"),
+        said("Japan", "Himeji Castle", "Matsumoto Castle"),
+        said("Italy", "Castel Sant'Angelo", "Castello Sforzesco"),
+        said("Spain", "Alcázar of Segovia", "Alhambra"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(near=["Palace of Versailles"], refills=[[]])
+    vetted, notes = mapwriter.vet(model, plan, "Most famous castles from every country")
+    france = next(s for s in vetted.scenes if s.visual.text == "France")
+    assert [i.text for i in france.visual.items] == ["Château de Chambord"]
+    assert "France: Palace of Versailles" in notes[0]
+    assert len(model.second) == 10  # only things the first look passed are looked at again
+    asked = model.second[0]
+    assert "is that one of the castles?" in asked and "Palace of Versailles" in asked
+
+
+def test_what_is_put_in_later_is_checked_for_duplicates_too():
+    """Measured on the PC: a refill named "Día de los Muertos" next to "Day of the Dead",
+    and the best known "Chinese New Year" went next to "Lunar New Year"."""
+    tour = [
+        said("Mexico", "Day of the Dead", "Royal Wedding"),
+        said("China", "Lunar New Year", "Mid-Autumn Festival"),
+        said("Spain", "La Tomatina", "Las Fallas"),
+        said("Italy", "Carnevale di Venezia", "Palio di Siena"),
+        said("Japan", "Gion Matsuri", "Sapporo Snow Festival"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(
+        wrong=["Royal Wedding"],
+        refills=[["Día de los Muertos"]],
+        same=[
+            ("Day of the Dead", "Día de los Muertos"),
+            ("Chinese New Year", "Lunar New Year"),
+        ],
+        iconic=[("China", "Chinese New Year")],
+    )
+    vetted, notes = mapwriter.vet(model, plan, "Most famous festivals from every country")
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    assert cards["Mexico"] == ["Day of the Dead"]
+    # A best known thing the country has under another name isn't put in: the tour's
+    # own card stays ("Rio Carnival" stayed, not a bare "Carnival", on the Mac).
+    assert cards["China"] == ["Lunar New Year", "Mid-Autumn Festival"]
+    assert "Mexico: Día de los Muertos (the same as another card)" in notes[0]
+    assert not any("Chinese New Year" in n for n in notes)
+
+
+def test_a_thing_from_another_country_is_found_by_asking_where_it_is_from():
+    """Asked "is it from Canada?", the PC's model said yes to Dexter's Laboratory; asked
+    where it comes from, it names the United States, and the map tells the two apart (and
+    knows "England" is the United Kingdom)."""
+
+    class Atlas:
+        codes: typing.ClassVar = {"canada": "CAN", "united states": "USA", "japan": "JPN",
+                                  "united kingdom": "GBR", "england": "GBR", "india": "IND",
+                                  "australia": "AUS", "france": "FRA"}  # fmt: skip
+
+        def __call__(self, name):
+            return name.lower() in self.codes
+
+        def code(self, name):
+            return self.codes.get(name.lower())
+
+    tour = [
+        said("Canada", "Caillou", "Dexter's Laboratory"),
+        said("United Kingdom", "Wallace and Gromit", "Peppa Pig"),
+        said("Japan", "Doraemon", "Astro Boy"),
+        said("India", "Chhota Bheem", "Motu Patlu"),
+        said("Australia", "Bluey", "Blinky Bill"),
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    model = MapModel(
+        origins={
+            "Dexter's Laboratory": "United States",
+            "Peppa Pig": "England",
+            "Blinky Bill": "unknown",
+        },
+        refills=[["PAW Patrol"], ["Dot."]],
+    )
+    vetted, notes = mapwriter.vet(model, plan, "Most famous cartoons from every country",
+                                  known=Atlas())  # fmt: skip
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    assert cards["Canada"] == ["Caillou", "PAW Patrol"]  # filled up with a Canadian one
+    assert cards["United Kingdom"] == ["Wallace and Gromit", "Peppa Pig"]
+    assert "Blinky Bill" not in cards["Australia"]  # where from not known: not a clear yes
+    assert "Canada: Dexter's Laboratory" in notes[0]
+    # Without the map the origin can't be told apart reliably: not asked to decide.
+    model = MapModel(origins={"Dexter's Laboratory": "United States"}, refills=[[], []])
+    vetted, _ = mapwriter.vet(model, plan, "Most famous cartoons from every country")
+    assert "Dexter's Laboratory" in str(vetted.scenes)
+    # A verdict from an earlier check (no version) is asked again.
+    checks = mapwriter.Checks(None)
+    key = mapwriter.Checks.key("cartoons", "Canada", "Dexter's Laboratory")
+    checks.found[key] = {"keep": True, "what": "", "category": "", "answers": []}
+    assert checks.get(key) is None
+
+
+def test_only_a_few_countries_are_put_in_for_the_best_known_things():
+    tour = [
+        said(c, f"{c} Fair", f"{c} Night") for c in ("France", "Italy", "Spain", "Japan", "India")
+    ]
+    plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
+    far = [("Peru", "Inti Raymi"), ("Thailand", "Songkran"), ("Germany", "Oktoberfest"),
+           ("Brazil", "Rio Carnival"), ("Mexico", "Day of the Dead")]  # fmt: skip
+    model = MapModel(iconic=far, refills=[[] for _ in far])
+    vetted, _ = mapwriter.vet(model, plan, "Most famous festivals from every country")
+    names = [s.visual.text for s in vetted.scenes if s.visual.kind == "country"]
+    assert len(names) == 5 + mapwriter.ADDED_COUNTRIES
+    assert {"Peru", "Thailand", "Germany"} <= set(names)  # the first ones named go in
+    assert "Mexico" not in names and "Brazil" not in names

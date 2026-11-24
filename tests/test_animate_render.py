@@ -241,3 +241,161 @@ def test_a_world_map_reel_flies_lights_the_country_and_pins_its_cards(tmp_path, 
     made = frame_at(video, card_at, tmp_path / "made.png")
     diff = np.abs(np.asarray(shown, dtype=float) - np.asarray(made, dtype=float)).mean()
     assert diff < 4.0, f"the video differs from the preview by {diff:.1f}"
+
+
+def spans_at(data: dict, opts: dict, t: float, texts: list[str]) -> dict:
+    """Each of `texts` as a span draws it at `t`: its box, colour and opacity (with its
+    parents')."""
+
+    async def look() -> dict:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(executable_path=render.chromium())
+            page = await browser.new_page(viewport={"width": 1080, "height": 1920})
+            await page.goto((render.PLAYER / "player.html").as_uri())
+            await page.evaluate("([d, o]) => window.Player.load(d, o)", [data, opts])
+            await page.evaluate("t => window.Player.seek(t)", t)
+            found = await page.evaluate(
+                """texts => Object.fromEntries(texts.map((text) => {
+                    const node = [...document.querySelectorAll("span")].find(
+                        (n) => n.textContent === text);
+                    if (!node) return [text, null];
+                    let o = 1;
+                    for (let n = node; n; n = n.parentElement) {
+                        const st = getComputedStyle(n);
+                        if (st.display === "none") o = 0;
+                        o *= Number(st.opacity);
+                    }
+                    const r = node.getBoundingClientRect();
+                    return [text, { x: r.x, y: r.y, w: r.width, h: r.height, o,
+                                    color: getComputedStyle(node).color }];
+                }))""",
+                texts,
+            )
+            await browser.close()
+            return found
+
+    return asyncio.run(look())
+
+
+@pytest.mark.parametrize("look", ["horror", "neon", "badge"])
+def test_each_map_look_is_drawn_and_the_video_is_its_preview(tmp_path, monkeypatch, look):
+    from agentic_editor.animate import maps
+    from tests.test_animate_map import WORLD, map_plan
+
+    monkeypatch.setattr(maps, "LEVELS", 1)
+    models = tmp_path / "models"
+    source = tmp_path / "world.geojson"
+    source.write_text(json.dumps(WORLD))
+    maps.table_path(models).parent.mkdir(parents=True)
+    maps.build_table(source, maps.table_path(models))
+    earth = tmp_path / "earth.jpg"
+    Image.new("RGB", (3000, 1500), (120, 130, 80)).save(earth)
+    maps.build_tiles(earth, maps.tiles_dir(models))
+    (models / "fonts").mkdir()
+    plan = map_plan()
+    if look == "badge":  # a ranking: the United States third
+        plan.scenes[1].visual.value, plan.scenes[1].visual.emoji = "#3", "🏆"
+    else:
+        plan = plan.model_copy(update={"look": look})
+    data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, models)
+    usa = data["scenes"][1]
+    card_at = round(usa["beats"][1] + 0.3, 1)  # the first card is up; on a frame of the video
+    data["duration"] = round(card_at + 0.5, 2)
+    opts = render.options(ROOT / "fonts", models)
+    shown = Image.open(render.frame(data, opts, card_at, tmp_path / "shown.jpg")).convert("RGB")
+    r, g, b = shown.getpixel((90, 1650))  # the lit country
+    found = spans_at(data, opts, card_at, ["APPLE PIE", "Apple pie", "#3"])
+    if look == "horror":
+        assert r > g + 25 and r > b + 10, (r, g, b)  # blood red, not the palette's purple
+        label = found["APPLE PIE"]
+        assert label and label["o"] > 0.9 and label["color"] == "rgb(246, 196, 83)"  # gold
+    elif look == "neon":
+        label = found["APPLE PIE"]
+        assert label and label["o"] > 0.9 and label["color"] == "rgb(124, 255, 107)"  # the first
+        r, g, b = shown.getpixel((390, 590))
+        assert min(r, g, b) < 225, (r, g, b)  # no white card: the dish on the map
+    else:
+        badge = found["#3"]
+        assert badge and badge["o"] > 0.9 and badge["color"] == "rgb(255, 210, 63)"
+        assert 0 < badge["x"] < 1080 and 0 < badge["y"] < 1920
+        assert b > g + 20 and r > g, (r, g, b)  # the cards look keeps the palette
+    video = tmp_path / "picture.mp4"
+    assert render.frames_to_video(data, opts, video, fps=10) == []
+    made = frame_at(video, card_at, tmp_path / "made.png")
+    diff = np.abs(np.asarray(shown, dtype=float) - np.asarray(made, dtype=float)).mean()
+    assert diff < 4.0, f"the video differs from the preview by {diff:.1f}"
+
+
+def test_captions_keep_off_the_cards_and_cards_off_each_other(tmp_path, monkeypatch):
+    """The live festivals reel had a caption over a card's name and one card half over
+    another. At every caption of a country, no caption box meets a card (or its label),
+    and no two cards meet."""
+    from agentic_editor.animate import maps
+    from tests.test_animate_map import WORLD, map_plan
+
+    monkeypatch.setattr(maps, "LEVELS", 1)
+    models = tmp_path / "models"
+    source = tmp_path / "world.geojson"
+    source.write_text(json.dumps(WORLD))
+    maps.table_path(models).parent.mkdir(parents=True)
+    maps.build_table(source, maps.table_path(models))
+    earth = tmp_path / "earth.jpg"
+    Image.new("RGB", (3000, 1500), (120, 130, 80)).save(earth)
+    maps.build_tiles(earth, maps.tiles_dir(models))
+    (models / "fonts").mkdir()
+    plan = map_plan()
+    data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, models)
+    opts = render.options(ROOT / "fonts", models)
+    usa = data["scenes"][1]
+    times = [round((c["start"] + c["end"]) / 2, 2) for c in data["captions"]
+             if usa["start"] <= c["start"] < usa["end"] + 0.4]  # fmt: skip
+
+    async def look() -> list:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(executable_path=render.chromium())
+            page = await browser.new_page(viewport={"width": 1080, "height": 1920})
+            await page.goto((render.PLAYER / "player.html").as_uri())
+            await page.evaluate("([d, o]) => window.Player.load(d, o)", [data, opts])
+            found = []
+            for t in times:
+                await page.evaluate("t => window.Player.seek(t)", t)
+                found.append(await page.evaluate(
+                    """() => {
+                        const shown = (n) => {
+                            for (let e = n; e; e = e.parentElement) {
+                                const st = getComputedStyle(e);
+                                if (st.display === "none") return false;
+                                if (Number(st.opacity) < 0.05) return false;
+                            }
+                            return true;
+                        };
+                        const box = (n) => { const r = n.getBoundingClientRect();
+                            return [r.left, r.top, r.right, r.bottom]; };
+                        const cards = [...document.querySelectorAll(".scene > div.abs")]
+                            .filter((n) => n.children.length === 2 && shown(n)).map(box);
+                        const caps = [...document.querySelectorAll(".layer > div.fit")]
+                            .filter((n) => shown(n) && n.textContent).map((n) => {
+                                const r = document.createRange(); r.selectNodeContents(n);
+                                const b = r.getBoundingClientRect();
+                                return [b.left, b.top, b.right, b.bottom]; });
+                        return { cards, caps };
+                    }"""
+                ))  # fmt: skip
+            await browser.close()
+            return found
+
+    def meet(a, b) -> bool:
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    seen = asyncio.run(look())
+    assert times and any(f["cards"] for f in seen)
+    for t, f in zip(times, seen, strict=True):
+        for cap in f["caps"]:
+            assert not any(meet(cap, card) for card in f["cards"]), (t, cap, f["cards"])
+        for i, a in enumerate(f["cards"]):
+            for b in f["cards"][i + 1 :]:
+                assert not meet(a, b), (t, a, b)

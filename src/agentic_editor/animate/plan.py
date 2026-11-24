@@ -26,6 +26,11 @@ MAP_WORDS = {"short": (55, 90), "medium": (90, 150), "long": (150, 230), "auto":
 Kind = Literal["facts", "lesson", "story", "news"]
 Style = Literal["glow", "paper", "story", "kinetic", "stick", "map"]
 Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious", "upbeat"]
+# A World map reel's look, as the reference page has them: white picture cards (most
+# topics), gold horror (haunted and scary topics: blood-red countries, photos in gold
+# frames, gold names) and neon labels (food: the dish cut out on the map, its name glowing).
+LOOKS = ("cards", "horror", "neon")
+Look = Literal["cards", "horror", "neon"]
 VisualKind = Literal[
     "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots",
     "scene", "country",
@@ -130,10 +135,11 @@ class Item(Loose):
     year: str = ""
     value: str = ""
     motion: str = "pop"
-    # A World map card's picture: what it shows, as the writer put it, and its file once
-    # painted (animate/images.py).
+    # A World map card's picture: what it shows, as the writer put it, its file once
+    # painted (animate/images.py), and a number to paint it again.
     art: str = ""
     image: str = ""
+    art_seed: int = 0
 
 
 class Actor(Loose):
@@ -201,11 +207,29 @@ class Plan(Loose):
     cta: str = CTA
     caption: str = ""
     sources: list[Source] = Field(default_factory=list)
+    look: Look = "cards"  # a World map reel's (LOOKS); the other styles ignore it
 
 
 # ---- mending ---------------------------------------------------------------------------
 
 _PICTURE = re.compile(r"[0-9a-f]{24}\.png")  # images.name_of
+
+# A field's name and value a writer left in a text: "Most famous festivals in every country;
+# highlight: festivals" (a hook card showed "...; HIGHLIGHT:").
+_LEAK = re.compile(
+    r"\s*[;,|/-]?\s*\b(highlight|kicker|headline|hook|caption|emoji|subtitle|narration)\s*:\s*(.*)$",
+    re.I,
+)
+
+
+def no_leak(text: str) -> tuple[str, dict[str, str]]:
+    """`text` without a field name and value left at its end, and what was left there."""
+    found = _LEAK.search(text or "")
+    if not found or not text[: found.start()].strip():
+        return text, {}
+    value = found.group(2).strip().strip("\"'.;,")
+    return text[: found.start()].strip(" ;,|/-"), {found.group(1).lower(): value}
+
 
 _ASKS_TO_FOLLOW = re.compile(r"\bfollow (for|us|me|the page)\b|\bsubscribe\b|\blike and\b", re.I)
 _STALE_OPENERS = re.compile(r"\b(did you know|in this video|today we)\b", re.I)
@@ -258,6 +282,7 @@ def tidy(plan: Plan) -> Plan:
                 motion=i.motion if i.motion in MOTIONS else "pop",
                 art=_one_line(i.art, 240) if v.kind == "country" else "",
                 image=i.image if v.kind == "country" and _PICTURE.fullmatch(i.image or "") else "",
+                art_seed=max(0, min(10_000, int(i.art_seed or 0))) if v.kind == "country" else 0,
             )
             for i in v.items[:cap]
         ]
@@ -271,8 +296,9 @@ def tidy(plan: Plan) -> Plan:
             )
             for x in v.actors[:MAX_ACTORS]
         ]
-        text = _one_line(v.text, 200 if v.kind == "quote" else 90)
-        highlight = v.highlight.strip()
+        text, leaked = no_leak(" ".join(v.text.split()))
+        text = _one_line(text, 200 if v.kind == "quote" else 90)
+        highlight = v.highlight.strip() or leaked.get("highlight", "")
         if highlight and highlight.lower() not in text.lower():
             highlight = ""
         visual = v.model_copy(
@@ -305,7 +331,7 @@ def tidy(plan: Plan) -> Plan:
             scenes.append(scene.model_copy(update={"narration": narration, "visual": visual}))
     return plan.model_copy(
         update={
-            "title": _one_line(plan.title, 70),
+            "title": _one_line(no_leak(plan.title)[0], 70),
             "scenes": scenes,
             "cast": _cast(plan.cast, scenes),
             "cta": _one_line(plan.cta or CTA, 60),
@@ -429,7 +455,9 @@ def problems(plan: Plan, length: str = "auto") -> list[str]:
         if v.kind == "scene" and not v.actors:
             found.append(f"{where}: needs at least one actor from the cast")
         lows = {"compare": 2, "list": 2, "timeline": 2, "icons": 1, "country": 1}
-        if v.kind in lows and len(v.items) < lows[v.kind]:
+        # A country with a number badge ("How many ... every country has") may show only it.
+        counted = v.kind == "country" and bool(v.value)
+        if v.kind in lows and len(v.items) < lows[v.kind] and not counted:
             found.append(f"{where}: needs at least {lows[v.kind]} items")
     if plan.style == "map":
         found += map_problems(plan)

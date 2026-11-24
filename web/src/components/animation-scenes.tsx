@@ -103,6 +103,8 @@ const FIELDS: Record<AnimationVisualKind, Field[]> = {
   country: [
     { key: "text", label: "Country (as the voice says it)" },
     { key: "country", label: "Country on the map, if the voice says it another way (optional)" },
+    { key: "value", label: "Number badge: #3 for a ranking, 5,580 for a count (optional)" },
+    { key: "emoji", label: "Badge icon (one emoji, optional)" },
   ],
   scene: [
     { key: "text", label: "Title of this part (a name, a place, Years later...)" },
@@ -127,6 +129,7 @@ const ITEM_LABEL: Record<keyof AnimationItem, string> = {
   motion: "Motion",
   art: "Card picture (what the AI paints)",
   image: "Picture file",
+  art_seed: "Paint again",
 };
 const MOTIONS = [
   "pop",

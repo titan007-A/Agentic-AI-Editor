@@ -73,7 +73,11 @@ CLOSE_MAX = 14.0
 WIDE = 1.8
 WIDE_MIN = 16.0
 WIDE_MAX = 95.0
-SPACING = 0.42  # cards on a country at least this share of the close view apart
+# A card with its name label, as a share of the close view's width (1080 px): the widest
+# look's card (440 px) and label line with a margin, and the tallest card with its label. Two
+# cards on a country are at least this far apart across or down, at any zoom (cards grow
+# and shrink with the map, so apart at one zoom is apart at all).
+CARD_SPAN = (480 / 1080, 580 / 1080)
 ASPECT = 1920 / 1080
 DIGITS = 3  # of a coordinate in the player's data
 
@@ -446,9 +450,10 @@ def views(entry: dict) -> dict:
 
 
 def spots(entry: dict, count: int, close: float, seed: int = 0) -> list[list[float]]:
-    """Where `count` cards go on a country: inside it where it can, spread so no two are
-    nearer than SPACING of the close view, the first near its label, then each the
-    nearest of the rest (the camera's path from card to card stays short)."""
+    """Where `count` cards go on a country: inside it where it can, spread so no two
+    overlap (a card's width apart across, or its height with its label down: CARD_SPAN),
+    the first near its label, then each the nearest of the rest (the camera's path from
+    card to card stays short). Only a country too small for them gets them closer."""
     if count <= 0:
         return []
     x0, y0, x1, y1 = entry["main"]
@@ -468,25 +473,31 @@ def spots(entry: dict, count: int, close: float, seed: int = 0) -> list[list[flo
         d = a - b
         return np.hypot(d[..., 0] * squash, d[..., 1])
 
-    gap = close * SPACING
+    across, down = close * CARD_SPAN[0], close * CARD_SPAN[1]
+
+    def clear(a: np.ndarray, b: np.ndarray, room: float) -> bool:
+        return abs(a[0] - b[0]) * squash >= across * room or abs(a[1] - b[1]) >= down * room
+
     chosen: list[np.ndarray] = []
     pool = cand[within] if within.sum() >= count else cand
     order = np.argsort(apart(pool, label))
     for ok in (True, False):  # inside it first, then anywhere near, then closer together
-        for want in (gap, gap * 0.7, gap * 0.45):
+        for room in (1.0, 0.85, 0.7):
+            chosen = []  # each try places them all afresh, so none sits too near another
             for i in order:
                 if len(chosen) >= count:
                     break
                 p = pool[i]
-                if all(apart(p, c) >= want for c in chosen):
+                if all(clear(p, c, room) for c in chosen):
                     chosen.append(p)
             if len(chosen) >= count:
                 break
         if len(chosen) >= count or not ok:
             break
         pool, order = cand, np.argsort(apart(cand, label))
+    gap = down * 0.6
     while len(chosen) < count:  # a tiny country with many things: stacked near the label
-        chosen.append(label + np.array([0.0, -gap * 0.3 * len(chosen)]))
+        chosen.append(label + np.array([0.0, -gap * len(chosen)]))
     # A short path: start nearest the label, then always the nearest one left.
     path = [chosen.pop(0)]
     while chosen:

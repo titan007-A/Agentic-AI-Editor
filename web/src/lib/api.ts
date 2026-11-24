@@ -861,9 +861,11 @@ export type AnimationItem = {
   year: string;
   value: string;
   motion: string;
-  /** A World map card's picture: what it shows, and its file once painted. */
+  /** A World map card's picture: what it shows, its file once painted, and a number to
+   * paint it again. */
   art?: string;
   image?: string;
+  art_seed?: number;
 };
 
 export type AnimationVisualKind =
@@ -933,7 +935,11 @@ export type AnimationPlan = {
   cta: string;
   caption: string;
   sources: { title: string; url: string }[];
+  /** A World map reel's look: white picture cards, gold horror or neon food labels. */
+  look?: MapLook;
 };
+
+export type MapLook = "cards" | "horror" | "neon";
 
 /** player.js load() data, scenes with their times (animate/timeline.py player_data). */
 export type AnimationPlayerData = {
@@ -1191,8 +1197,10 @@ export const api = {
   createAnimation: (body: AnimationBrief) => request<Animation>("POST", "/animations", body),
   editAnimation: (id: string, plan: AnimationPlan) =>
     request<Animation>("PUT", `/animations/${id}`, { plan }),
-  setAnimation: (id: string, body: { style?: string; voice?: string; images?: boolean }) =>
-    request<Animation>("PATCH", `/animations/${id}`, body),
+  setAnimation: (
+    id: string,
+    body: { style?: string; voice?: string; images?: boolean; look?: MapLook },
+  ) => request<Animation>("PATCH", `/animations/${id}`, body),
   changeAnimation: (id: string, body: { request: string; scene?: number }) =>
     request<Animation>("POST", `/animations/${id}/change`, body),
   retryAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/retry`),

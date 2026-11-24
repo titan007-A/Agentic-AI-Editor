@@ -94,8 +94,11 @@ def visual_of(visual: dict) -> dict:
     }
     if visual.get("items"):
         shown["items"] = [
-            {k: v for k, v in i.items() if v and k != "motion"} for i in visual["items"]
+            {k: v for k, v in i.items() if v and k not in ("motion", "art_seed")}
+            for i in visual["items"]
         ]
+    if visual.get("kind") == "country" and visual.get("value"):
+        shown["badge"] = f"{visual.get('emoji', '')} {visual['value']}".strip()
     if visual.get("actors"):
         shown["actors"] = [{k: v for k, v in a.items() if v} for a in visual["actors"]]
     if visual.get("art"):
@@ -110,6 +113,7 @@ def script_of(plan: dict) -> dict:
         "kind": plan.get("kind"),
         "style": plan.get("style"),
         "style_name": studio.STYLE_NAMES.get(plan.get("style", ""), plan.get("style")),
+        **({"map_look": plan.get("look", "cards")} if plan.get("style") == "map" else {}),
         "voice": plan.get("voice"),
         "mood": plan.get("mood"),
         "cast": plan.get("cast") or [],
@@ -486,10 +490,19 @@ class Studio:
             painted_pictures: Annotated[
                 bool | None, Field(description="Turn the painted pictures on or off.")
             ] = None,
+            map_look: Annotated[
+                Literal["cards", "horror", "neon"] | None,
+                Field(
+                    description="A World map reel's look: cards = white picture cards, horror = "
+                    "gold horror (blood-red countries, gold frames), neon = neon food labels "
+                    "(the dish cut out on the map). Chosen by the topic at first."
+                ),
+            ] = None,
         ) -> dict:
-            """Changes the look, the narration voice (records it again) or the painted
-            pictures, without writing anything new. Call wait_for_animation next."""
-            body = StudioChoice(style=style, voice=voice, images=painted_pictures)
+            """Changes the look, the narration voice (records it again), the painted
+            pictures or a World map reel's look, without writing anything new. Call
+            wait_for_animation next."""
+            body = StudioChoice(style=style, voice=voice, images=painted_pictures, look=map_look)
             return await self.shown(
                 ctx, lambda a, s, r: ops.set_animation(animation_id, body, a, s), queues="writing"
             )
@@ -522,9 +535,15 @@ class Studio:
                 again = 0
                 for n, scene in enumerate(plan["scenes"], 1):
                     visual = scene.setdefault("visual", {})
-                    if n in wanted and visual.get("art"):
+                    if n not in wanted:
+                        continue
+                    if visual.get("art"):
                         visual["art_seed"] = int(visual.get("art_seed") or 0) + 1
                         again += 1
+                    for item in visual.get("items") or []:  # a World map country's cards
+                        if visual.get("kind") == "country" and item.get("art"):
+                            item["art_seed"] = int(item.get("art_seed") or 0) + 1
+                            again += 1
                 if not again:
                     raise ToolError("none of those scenes has a painted picture")
                 return ops.edit_animation(animation_id, PlanEdit(plan=plan), account, session)

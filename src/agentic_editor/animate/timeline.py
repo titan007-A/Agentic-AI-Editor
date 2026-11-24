@@ -392,6 +392,7 @@ def player_data(plan: Plan, timeline: Timeline) -> dict:
     word = lambda w: {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}  # noqa: E731
     return {
         "style": plan.style,
+        "look": plan.look,
         "title": plan.title,
         "duration": round(timeline.duration, 3),
         "header": {
