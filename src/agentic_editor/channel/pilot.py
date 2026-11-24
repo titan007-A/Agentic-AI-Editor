@@ -101,6 +101,7 @@ WORK_AGING = timedelta(minutes=30)  # then it goes on anyway
 WAITING = ("queued", "checking", "editing", "reviewing", "awaiting", "ready", "due", "posting")
 PASSED = ("editing", "reviewing", "awaiting", "ready", "due", "posting")
 PICKED = ("queued", "checking")  # picked, not checked yet
+OWN_DOUBT = "Autopilot "  # what starts the doubts a review writes on the reel
 HOLDS_SONG = (*WAITING, "look", "posted", "failed")  # its song is never found again
 PERMISSION = {10, 200}  # Graph API: the login lacks the permission
 BEFORE_EDIT = {"posted before", "original", "length", "download", "one song", "named", "vocals",
@@ -825,6 +826,8 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
             return post.status
         path, edl = Path(output.path), EDL.model_validate(output.edl)
         score, doubts, issues = output.confidence, list(output.doubts), list(output.issues)
+        # Its own doubts from an earlier review aren't the edit's: a review again judges afresh.
+        doubts = [d for d in doubts if not d.startswith(OWN_DOUBT)]
         text, status, notes = output.caption, output.caption_status, list(output.caption_notes)
         work_dir = Path(post.work_dir)
     rows = [
@@ -899,7 +902,7 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
             post.reason = f"{failed[0].name}: {failed[0].detail}"
             output = db.get(Output, post.output_id)
             if output is not None:  # the piles say so too
-                said = [f"Autopilot {c.name}: {c.detail}" for c in failed]
+                said = [f"{OWN_DOUBT}{c.name}: {c.detail}" for c in failed]
                 output.doubts = [*output.doubts, *(s for s in said if s not in output.doubts)]
         else:
             post.status = "ready" if pilot.approved >= pilot.needs else "awaiting"

@@ -798,6 +798,14 @@ def test_any_doubt_about_the_reel_leaves_it_for_a_person_and_on_the_piles(env, s
         output = db.get(Output, output_id)
         assert output.pile == "look"
         assert any(d.startswith("Autopilot leak: instruments about") for d in output.doubts)
+        # Once the caption is written, a review again judges afresh: its own doubts from the
+        # last review don't count as the edit's (the confidence check stays clean).
+        output.caption, output.caption_status = "🎵 Song — Artist - 1978\n\nA fact.", "done"
+        db.commit()
+    assert pilot.review(post_id, env.sessions, env.settings, router) == "look"
+    with env.sessions() as db:
+        row = db.get(ChannelPost, post_id)
+        assert {c["name"] for c in row.checks if not c["ok"]} == {"leak"}
 
 
 def test_an_edit_that_failed_or_was_deleted_is_a_skip_and_a_caption_is_waited_for(env):
