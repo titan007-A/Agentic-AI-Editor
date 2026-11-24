@@ -617,8 +617,10 @@ What is said in the clip, in order:
 What the picture shows: {seen}
 The chat reacted with: {chat}
 
-Be strict: most stream moments are not crazy. In what, name the crazy thing in a few words, \
-or "nothing"."""
+Crude, sexual or rude talk is fine to judge: say whether it is crazy, not whether it is \
+polite; an outrageous thing said out loud counts. Be strict about the rest: most stream \
+moments are not crazy. In what, always name in a few words the crazy thing, or what happens \
+instead."""
 
 
 def is_crazy(llm, look: Look, start: float, end: float) -> tuple[bool, str]:
