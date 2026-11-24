@@ -283,10 +283,14 @@ def test_a_cold_open_is_cut_as_the_flash_then_the_clip(monkeypatch, tmp_path):
     cmd = " ".join(ran[0])
     assert cmd.count(" -i ") == 3 and "concat=n=2:v=1:a=1" in cmd
     assert "whoosh.wav" in cmd and "adelay=2250|2250" in cmd  # over the cut back
-    first, second = [i for i, x in enumerate(ran[0]) if x == "-ss"]
-    assert ran[0][first + 1] == "5.000" and ran[0][second + 1] == "0.000"  # flash, then clip
+    # Each part decoded from a piece before it (its key frame) and trimmed: flash, then clip.
+    assert "[0:v:0]trim=start=5.000:duration=2.500" in cmd
+    assert "[1:v:0]trim=start=10.000:duration=20.000" in cmd and "-ss" not in ran[0]
     hunt.cut(full, 100.0, 120.0, tmp_path / "b.mp4")
-    assert " ".join(ran[1]).count(" -i ") == 1 and "concat" not in " ".join(ran[1])
+    plain = ran[1]
+    assert " ".join(plain).count(" -i ") == 1 and "concat" not in " ".join(plain)
+    # Seeking happens after the input (decoded, then dropped), never in the playlist.
+    assert plain.index("-ss") > plain.index("-i") and plain[plain.index("-ss") + 1] == "10.000"
 
 
 def test_the_whoosh_is_a_short_stereo_sound_that_fades(tmp_path):
@@ -328,3 +332,21 @@ def test_an_opening_that_joins_a_sentence_already_going_is_called_so():
     fresh = a_look(said((PEAK - 20, "Okay."), (PEAK - 14, "You really think so?")))
     second = fresh.lines[1]
     assert not hooks.mid_sentence(fresh, hooks.opening_start(fresh, second))
+
+
+def test_a_vision_model_that_gives_no_answer_for_six_frames_is_asked_about_three(tmp_path):
+    look = a_look()
+    look.frames = [(PEAK + t, tmp_path / f"{n}.jpg") for n, t in enumerate(hooks.FRAMES_AT)]
+    for _, path in look.frames:
+        path.write_bytes(b"jpg")
+    asked = []
+
+    class Vision:
+        def chat_json(self, messages, schema, images=(), **kwargs):
+            asked.append(len(images))
+            if len(images) > 3:
+                raise LLMError("qwen did not return JSON")
+            return {"frames": ["a car"] * len(images), "sudden": "a crash"}
+
+    hooks.see(Vision(), look)
+    assert asked == [6, 3] and len(look.frames) == 3 and look.seen == ["a car"] * 3

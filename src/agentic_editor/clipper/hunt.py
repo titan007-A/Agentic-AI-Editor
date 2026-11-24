@@ -49,6 +49,7 @@ LIVE_FIRST = 600  # following a stream already under way starts this far back
 LIVE_LAST = 60  # what's left when a stream ends is clipped when at least this long
 BUSY = ("reading", "listening", "cutting")
 HLS_PROTOCOLS = "file,http,https,tcp,tls,crypto"
+PRE_ROLL = 5.0  # seconds read before a cut's start: decoding needs the key frame before it
 
 
 def clock(seconds: float) -> str:
@@ -381,40 +382,47 @@ def cut(
 ) -> None:
     """`start`-`end` of the stream in full quality, encoded again so it begins and ends
     on the second asked (a copy would begin at the key frame before). With `flash` (a
-    cold open), that stretch of the stream plays first, then the clip."""
+    cold open), that stretch of the stream plays first, then the clip.
+
+    Each part is decoded from the start of its first piece and trimmed after decoding: a
+    seek in the stream's playlist was seen to land on the key frame after the time asked,
+    so a clip began up to two seconds late with nothing to show or hear before it."""
     spans = [flash, (start, end)] if flash else [(start, end)]
-    found = [full.between(a, b) for a, b in spans]
+    found = [full.between(max(0.0, a - PRE_ROLL), b) for a, b in spans]
     if not all(found):
         raise RuntimeError("the stream's video has nothing there")
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(".part.mp4")
     with tempfile.TemporaryDirectory() as folder:
         inputs: list[str] = []
-        for n, ((a, b), pieces) in enumerate(zip(spans, found, strict=True)):
+        for n, pieces in enumerate(found):
             sub = Path(folder) / str(n)
             sub.mkdir()
             playlist = _local_playlist(pieces, sub)
-            inputs += [
-                "-protocol_whitelist", HLS_PROTOCOLS, "-ss", f"{max(0.0, a - pieces[0].start):.3f}",
-                "-t", f"{b - a:.3f}", "-i", str(playlist),
-            ]  # fmt: skip
+            inputs += ["-protocol_whitelist", HLS_PROTOCOLS, "-i", str(playlist)]
+        at = [max(0.0, a - pieces[0].start) for (a, _), pieces in zip(spans, found, strict=True)]
         if flash:
             # The two parts (one quality of one stream) joined, picture and sound, with a
             # whoosh over the cut back, as clip pages mark a cold open.
             hooks.whoosh(Path(folder) / "whoosh.wav")
             inputs += ["-i", str(Path(folder) / "whoosh.wav")]
-            at = int(max(0.0, flash[1] - flash[0] - hooks.WHOOSH_BEFORE) * 1000)
+            delay = int(max(0.0, flash[1] - flash[0] - hooks.WHOOSH_BEFORE) * 1000)
+            parts = "".join(
+                f"[{n}:v:0]trim=start={at[n]:.3f}:duration={b - a:.3f},setpts=PTS-STARTPTS[v{n}];"
+                f"[{n}:a:0]atrim=start={at[n]:.3f}:duration={b - a:.3f},"
+                f"asetpts=PTS-STARTPTS[a{n}];"
+                for n, (a, b) in enumerate(spans)
+            )
             maps = [
                 "-filter_complex",
-                "[0:v:0]setpts=PTS-STARTPTS[v0];[0:a:0]asetpts=PTS-STARTPTS[a0];"
-                "[1:v:0]setpts=PTS-STARTPTS[v1];[1:a:0]asetpts=PTS-STARTPTS[a1];"
-                "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][joined];"
-                f"[2:a]adelay={at}|{at}[w];"
+                parts + "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][joined];"
+                f"[2:a]adelay={delay}|{delay}[w];"
                 "[joined][w]amix=inputs=2:duration=first:normalize=0[a]",
                 "-map", "[v]", "-map", "[a]",
             ]  # fmt: skip
         else:
-            maps = ["-map", "0:v:0", "-map", "0:a:0?"]
+            maps = ["-ss", f"{at[0]:.3f}", "-t", f"{end - start:.3f}",
+                    "-map", "0:v:0", "-map", "0:a:0?"]  # fmt: skip
         cmd = [
             get_settings().ffmpeg_bin, "-hide_banner", "-nostdin", "-v", "error", "-y",
             *inputs, *maps,

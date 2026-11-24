@@ -219,7 +219,7 @@ def gather(
                 frame = folder / f"look-{look.moment.peak:.0f}-{len(look.frames)}.jpg"
                 subprocess.run(
                     [ffmpeg, "-nostdin", "-v", "error", "-y", "-ss", f"{t - offset:.3f}",
-                     "-i", str(dest), "-frames:v", "1", "-vf", "scale=512:-2", "-q:v", "4",
+                     "-i", str(dest), "-frames:v", "1", "-vf", "scale=448:-2", "-q:v", "4",
                      str(frame)],
                     capture_output=True, timeout=120,
                 )  # fmt: skip
@@ -280,19 +280,27 @@ SEE_PROMPT = (
 
 
 def see(vision, look: Look) -> None:
-    """The frames described by the vision model."""
-    if not look.frames:
+    """The frames described by the vision model; when it gives no answer for all of them
+    (a small model runs on and on now and then), every other frame."""
+    frames = look.frames
+    for attempt in (frames, frames[::2]) if len(frames) > 3 else (frames,):
+        times = ", ".join(f"{t - look.moment.peak:+.0f}" for t, _ in attempt)
+        try:
+            reply = vision.chat_json(
+                [{"role": "user", "content": SEE_PROMPT.format(n=len(attempt), times=times)}],
+                _Seen.model_json_schema(),
+                images=[p for _, p in attempt],
+                temperature=0,
+            )
+            seen = parse(_Seen, reply)
+        except LLMError:
+            if attempt is not frames or len(frames) <= 3:
+                raise
+            continue
+        look.frames = attempt
+        look.seen = [" ".join(x.split())[:140] for x in seen.frames][: len(attempt)]
+        look.sudden = " ".join(seen.sudden.split())[:140]
         return
-    times = ", ".join(f"{t - look.moment.peak:+.0f}" for t, _ in look.frames)
-    reply = vision.chat_json(
-        [{"role": "user", "content": SEE_PROMPT.format(n=len(look.frames), times=times)}],
-        _Seen.model_json_schema(),
-        images=[p for _, p in look.frames],
-        temperature=0,
-    )
-    seen = parse(_Seen, reply)
-    look.seen = [" ".join(s.split())[:140] for s in seen.frames][: len(look.frames)]
-    look.sudden = " ".join(seen.sudden.split())[:140]
 
 
 # -- the model's read of a moment
