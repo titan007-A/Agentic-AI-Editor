@@ -976,6 +976,19 @@ export type KickClipJob = {
   outputs: { id: number; duration: number; title: string; preset: string }[];
 };
 
+/** What a moment's clip opens on, once its hook was judged (scores 0-10). */
+export type KickHook = {
+  said?: string;
+  grabs?: string;
+  score?: number;
+  payoff?: number;
+  alone?: number;
+  what?: string;
+  tease?: string;
+  /** A cold open: this stretch of the stream plays first. */
+  flash?: [number, number];
+};
+
 /** A moment a hunt found: the window cut from the stream (seconds into it) and its clip. */
 export type KickMoment = {
   start: number;
@@ -984,6 +997,7 @@ export type KickMoment = {
   score: number;
   why: string[];
   chat_at: number | null;
+  hook?: KickHook;
   job_id: string | null;
   error?: string;
   link: string;

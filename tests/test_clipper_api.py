@@ -27,7 +27,7 @@ def kicked(env, monkeypatch):
     fake = FakeKick(seconds=3600, burst=(1810, 1822))
     monkeypatch.setattr(kick, "Client", lambda: fake)
 
-    def fake_cut(full, start, end, dest):
+    def fake_cut(full, start, end, dest, flash=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"window")
 
@@ -153,8 +153,8 @@ def test_a_failed_hunt_is_tried_again(env, kicked, monkeypatch):
     assert found["status"] == "failed" and "503" in found["error"]
     monkeypatch.undo()
     monkeypatch.setattr(kick, "Client", lambda: kicked)
-    monkeypatch.setattr(hunt, "cut", lambda full, s, e, dest: (dest.parent.mkdir(parents=True,
-                        exist_ok=True), dest.write_bytes(b"w")))  # fmt: skip
+    monkeypatch.setattr(hunt, "cut", lambda full, s, e, dest, flash=None: (
+        dest.parent.mkdir(parents=True, exist_ok=True), dest.write_bytes(b"w")))  # fmt: skip
     monkeypatch.setattr(hunt, "listen", lambda light, start, end: np.zeros(0))
     monkeypatch.setattr(
         jobs, "hunt", lambda hunt_id: hunt.run(hunt_id, env.sessions, env.settings, client=kicked)
