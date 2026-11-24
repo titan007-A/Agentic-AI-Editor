@@ -167,6 +167,10 @@ class PostCaption(Strict):
     style: str = Field(default="", description="how to write it; empty for the default")
     min_words: int = Field(default=150, ge=10, le=1000)
     max_words: int = Field(default=220, ge=10, le=1000)
+    # A line put above a song's caption, then a blank line: {song}, {artist} and {year}
+    # filled in ("🎵 {song} — {artist} - {year}"); a year that can't be found goes with what
+    # stands before it. Empty: none. Not counted in min_words and max_words.
+    first_line: str = Field(default="", max_length=200)
 
     @property
     def copies(self) -> bool:

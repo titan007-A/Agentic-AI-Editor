@@ -618,6 +618,8 @@ class ResearchItem(Base):
     matches: Mapped[str] = mapped_column(Text, default="")
     preset: Mapped[str] = mapped_column(Text, default="")
     preset_why: Mapped[str] = mapped_column(Text, default="")
+    # The singer or band the model named (`song` is "Title - Artist" when it named both).
+    artist: Mapped[str] = mapped_column(Text, default="")
     per_day: Mapped[float | None]  # likes and comments a day since it was posted
     virality: Mapped[float] = mapped_column(default=0.0)
     score: Mapped[float] = mapped_column(default=0.0)
@@ -697,6 +699,94 @@ class InstagramComment(Base):
     sent_by: Mapped[str] = mapped_column(String(8), default="")  # "auto" or "person"
     created_at: Mapped[datetime] = mapped_column(default=_now)
     sent_at: Mapped[datetime | None]
+
+
+class ChannelPilot(Base):
+    """A connected Instagram account that runs itself (channel/pilot.py): each day its
+    research account's research finds videos for it, the best are checked, edited with
+    its preset, checked again and posted at its post times, through the app's own
+    Instagram connection. The first `needs` reels wait for a person's approval; in dry run
+    nothing is really posted."""
+
+    __tablename__ = "channel_pilots"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True, default=_new_id)
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    # The InstagramChannel; no link to it: a page disconnected and connected again keeps
+    # its autopilot and what it posted (nothing runs while the page is missing).
+    channel_id: Mapped[str] = mapped_column(String(32), unique=True)
+    active: Mapped[bool] = mapped_column(default=True)  # off: paused, by a person or itself
+    # Everything but the post itself: what would be posted is marked so, nothing goes out.
+    dry_run: Mapped[bool] = mapped_column(default=True)
+    research_account_id: Mapped[str | None] = mapped_column(String(12))
+    preset: Mapped[str] = mapped_column(String(64), default="")
+    # What its researches look for besides what the account's best posts show.
+    focus: Mapped[str] = mapped_column(Text, default="")
+    research_hour: Mapped[int] = mapped_column(default=7)  # local time
+    posts_per_day: Mapped[int] = mapped_column(default=1)
+    post_times: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["19:00"])  # "HH:MM"
+    needs: Mapped[int] = mapped_column(default=20)  # reels a person approves first
+    approved: Mapped[int] = mapped_column(default=0)
+    # The site's address as people reach it, for the link Instagram fetches a video from.
+    base_url: Mapped[str] = mapped_column(Text, default="")
+    # Why it paused itself (a post that failed), shown on its page until it is resumed.
+    paused_reason: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(Text, default="")  # what it did last
+    research_on: Mapped[date | None]  # the day its last research started
+    research_id: Mapped[str | None] = mapped_column(String(12))  # that research
+    picked_id: Mapped[str | None] = mapped_column(String(12))  # the research it picked from
+    # The account's own posts as Instagram gave them when last read: id, caption, likes,
+    # comments, time, link and whatever insights its login allows (channel/pilot.learn).
+    history: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    learned_at: Mapped[datetime | None]
+    learn_note: Mapped[str] = mapped_column(Text, default="")
+    # Whether Meta gives the account's insights (views, reach, saves) to the app's login;
+    # None until asked. Without them, likes and comments are the measure.
+    insights_allowed: Mapped[bool | None]
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class ChannelPost(Base):
+    """One video a channel autopilot found, through its checks, edit and post."""
+
+    __tablename__ = "channel_posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pilot_id: Mapped[str] = mapped_column(
+        ForeignKey("channel_pilots.id", ondelete="CASCADE"), index=True
+    )
+    owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    research_id: Mapped[str | None] = mapped_column(String(12))
+    code: Mapped[str] = mapped_column(String(64), index=True)  # research.code_of
+    url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text, default="")  # the video's caption or title
+    # The song as the research named it, then as Shazam heard it.
+    song: Mapped[str] = mapped_column(Text, default="")
+    artist: Mapped[str] = mapped_column(Text, default="")
+    heard_song: Mapped[str] = mapped_column(Text, default="")
+    heard_artist: Mapped[str] = mapped_column(Text, default="")
+    score: Mapped[float] = mapped_column(default=0.0)  # the research's
+    relevance: Mapped[float | None]
+    duration: Mapped[float | None]  # the source's seconds
+    work_dir: Mapped[str] = mapped_column(Text, default="")  # its analysis cache folder
+    # queued -> checking -> skipped, or editing -> reviewing -> look (needs a look), or
+    # awaiting (a person approves) / ready -> due (its post time came) -> posting -> posted,
+    # or failed; unused: picked but not needed, once enough others passed.
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")  # why skipped, failed or looked at
+    checks: Mapped[list[dict]] = mapped_column(JSON, default=list)  # {name, ok, detail}
+    approved: Mapped[bool] = mapped_column(default=False)  # by a person
+    job_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    output_id: Mapped[int | None]
+    caption: Mapped[str] = mapped_column(Text, default="")  # as posted
+    post_id: Mapped[str | None] = mapped_column(String(64))  # Instagram's media id
+    permalink: Mapped[str] = mapped_column(Text, default="")
+    dry_run: Mapped[bool] = mapped_column(default=False)  # "posted" in dry run: never sent
+    posted_at: Mapped[datetime | None]  # UTC: when its post time came, then when it went out
+    insights: Mapped[dict] = mapped_column(JSON, default=dict)
+    insights_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
 class BufferKey(Base):

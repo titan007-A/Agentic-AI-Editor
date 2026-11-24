@@ -343,6 +343,17 @@ The Autopilot page in the web app watches feeds and edits each new video once:
   Needs a look, with its doubts listed. "Looks fine" moves a video to Ready, "Posted"
   and "Dismiss" take it off the piles.
 
+## Channel autopilot
+
+The Channel autopilot tab runs a connected Instagram page by itself: each day its research
+finds videos like the page's best posts, the best are checked (one song Shazam knows by the
+singer the post names, never a song posted before, vocals that separate cleanly), edited
+with the page's preset, checked again on the reel (panels, labels, where the sound changes,
+instruments left in the vocals, loudness, caption) and posted at the page's post times
+through the app's own Instagram connection. Anything in doubt waits for a person; the first
+20 reels wait for approval; dry run (the default) posts nothing. See
+[docs/channel-autopilot.md](docs/channel-autopilot.md).
+
 ## Researcher
 
 The Researcher page finds Instagram reels and YouTube Shorts like those of an Instagram
@@ -569,6 +580,11 @@ preset's `style` then says what the page wants from the caption, on top of a def
 (three paragraphs, a few emojis, no hashtags). On Vanshaj's beach reel it wrote about the
 two AH-64 Apaches over Myrtle Beach on 4 July 2026 and the Semiquincentennial, in 58 s on
 the Mac, with nothing left to check.
+
+`post_caption.first_line` puts a line above a song's caption and a blank line after it:
+`"🎵 {song} — {artist} - {year}"` fills in the song and artist the caption is about and the
+song's year (from the post, else MusicBrainz; without one the line ends at the artist). It
+isn't counted in the caption's words.
 
 ### Upscaling only
 

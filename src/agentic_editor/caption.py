@@ -723,6 +723,18 @@ def _check(llm, text: str, sources: Sources, headline: str) -> list[str]:
     return found
 
 
+FIRST_LINE_YEAR = re.compile(r"\s*[-–—,|·:]?\s*\(?\{year\}\)?")
+
+
+def first_line(template: str, song: str, artist: str, year: str | None) -> str:
+    """A caption's first line (PostCaption.first_line) for the song: without a year, the
+    year and the mark before it go ("🎵 Song — Artist")."""
+    if not year:
+        template = FIRST_LINE_YEAR.sub("", template)
+    filled = template.replace("{song}", song).replace("{artist}", artist)
+    return " ".join(filled.replace("{year}", year or "").split())
+
+
 def emoji(ch: str) -> bool:
     return ord(ch) >= 0x1F300 or 0x2600 <= ord(ch) <= 0x27BF
 

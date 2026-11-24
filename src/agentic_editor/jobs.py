@@ -21,6 +21,7 @@ from agentic_editor import (
     comments,
     features,
     fun,
+    names,
     niche,
     pipeline,
     research,
@@ -30,10 +31,13 @@ from agentic_editor import (
 )
 from agentic_editor.animate import schedule, studio
 from agentic_editor.backends import get_backends
+from agentic_editor.channel import pilot as channel_pilot
 from agentic_editor.clipper import hunt as kick_hunt
 from agentic_editor.db import (
     AccountSnapshot,
     Animation,
+    ChannelPilot,
+    ChannelPost,
     Event,
     FeedItem,
     HiddenAccount,
@@ -144,8 +148,9 @@ Turn = tuple[str, str | int]  # ("job", job id) or ("caption", output id)
 
 
 def automatic_jobs(db, ids: list[str]) -> set[str]:
-    """The jobs among `ids` no person is waiting on: a feed's, and the Kick clips a schedule
-    (the morning clips) or a live follow made. They go after people's own (next_turn)."""
+    """The jobs among `ids` no person is waiting on: a feed's, the Kick clips a schedule (the
+    morning clips) or a live follow made, and a channel autopilot's. They go after people's
+    own (next_turn)."""
     automatic = set(db.scalars(select(FeedItem.job_id).where(FeedItem.job_id.in_(ids))))
     kicked = {
         job_id: kick_hunt.hunt_of_source(source)
@@ -163,6 +168,8 @@ def automatic_jobs(db, ids: list[str]) -> set[str]:
             )
         )
         automatic |= {job_id for job_id, h in kicked.items() if h in background}
+    # A channel autopilot's edits (channel/pilot.py).
+    automatic |= set(db.scalars(select(ChannelPost.job_id).where(ChannelPost.job_id.in_(ids))))
     return automatic
 
 
@@ -635,6 +642,9 @@ def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, ro
                 router, settings, named, (title, description, headline), wanted, source_ref,
                 edl, path, save_name,
             )  # fmt: skip
+            if wanted.first_line.strip():
+                with_first_line(written, wanted.first_line, Session, output_id, title,
+                                description)  # fmt: skip
         with Session() as db:
             output = db.get(Output, output_id)
             if output is None:
@@ -653,6 +663,23 @@ def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, ro
             if output is not None:
                 output.caption_status, output.caption_notes = "failed", [reason]
                 db.commit()
+
+
+def with_first_line(
+    written: caption.Written, template: str, Session, output_id: int, title: str, description: str
+) -> None:
+    """Put the preset's first line (PostCaption.first_line) above a song's caption, for the
+    song as the caption was written about it (Output.caption_song); its year from the post,
+    else MusicBrainz. Without the song's name there is no line, and a note says so."""
+    with Session() as db:
+        output = db.get(Output, output_id)
+        song, artist = (output.caption_song, output.caption_artist) if output else ("", "")
+    if not song or not artist:
+        written.notes.insert(0, "the song isn't known, so the caption has no first line")
+        return
+    year = names.year_in(f"{title}\n{description}", song) or shazam.first_year(song, artist)
+    line = caption.first_line(template, song, artist, year)
+    written.text = f"{line}\n\n{written.text.strip()}"
 
 
 def unused_name(base: str, taken: set[str]) -> str:
@@ -708,7 +735,8 @@ def taste(db, found: Research) -> dict:
     """What a person's feedback teaches a research (see research.Context): for an account,
     the reels of its earlier researches they liked or edited and those they didn't want;
     for a description alone only those they didn't want, as its topic is another each
-    time; and the accounts they hid, always."""
+    time; and the accounts they hid, always. For an account a channel autopilot runs, its
+    best liked posts and every song it posted or has waiting (channel/pilot.py)."""
     owner = found.owner_id
     used = reel_codes(db.scalars(select(Job.source).where(Job.owner_id == owner)))
     items = db.scalars(
@@ -735,6 +763,7 @@ def taste(db, found: Research) -> dict:
         "liked": list(liked.values())[:TASTE],
         "disliked": list(disliked.values())[:TASTE],
         "hidden": set(hidden),
+        **channel_pilot.context_for(db, found.account_id),
     }
 
 
@@ -1047,6 +1076,7 @@ def item_of(reel: research.Reel, rank: int, entry: int | None = None) -> Researc
         relevance=reel.relevance,
         why=reel.why,
         song=reel.song,
+        artist=reel.artist,
         matches=reel.matches,
         preset=reel.preset,
         preset_why=reel.preset_why,
@@ -1176,13 +1206,19 @@ def hunt_may_start(db, found: KickHunt, now: datetime, workers: int) -> bool:
         return False
     if now - _utc(found.created_at) >= HUNT_AGING:
         return True
+    return not people_waiting(db, workers)
+
+
+def people_waiting(db, workers: int) -> bool:
+    """Whether people's own jobs wait and taking a worker now would take the last free one:
+    background work (a hunt, a channel autopilot's checks) waits then."""
     queued = list(db.scalars(select(Job.id).where(Job.status == "queued")))
     waiting = set(queued) - automatic_jobs(db, queued)
     running = db.scalar(select(func.count()).select_from(Job).where(Job.status == "running"))
     running += db.scalar(
         select(func.count()).select_from(Output).where(Output.caption_status == "writing")
     )
-    return not (waiting and running + 1 >= workers)
+    return bool(waiting and running + 1 >= workers)
 
 
 def claim_hunt(Session: sessionmaker, hunt_id: str, now: datetime | None = None) -> str | None:
@@ -1318,6 +1354,40 @@ def answer_chat(message_id: int) -> None:
     run_chat(message_id, sessions(), get_settings())
 
 
+@huey.task()
+def channel_work(pilot_id: str) -> None:
+    """A channel autopilot's checks of its picked videos and finished reels (channel/
+    pilot.py): while people's own jobs need the workers it comes back a minute later."""
+    if channel_pilot.work(pilot_id, sessions(), get_settings()) == "later":
+        channel_work.schedule((pilot_id,), delay=channel_pilot.WORK_RETRY)
+
+
+@huey.task()
+def channel_post(post_id: int) -> None:
+    channel_pilot.post(post_id, sessions(), get_settings())
+
+
+@huey.task()
+def channel_read(pilot_id: str) -> None:
+    channel_pilot.read_numbers(pilot_id, sessions())
+
+
+@huey.task()
+def channel_learn(pilot_id: str, research_id: str | None = None) -> None:
+    """Read a channel autopilot's page (its posts and their numbers), then start its
+    research, which learns from them; the research starts whatever came of the reading."""
+    settings = get_settings()
+    try:
+        router = ModelRouter(settings, get_backends(), lambda *args: None)
+        with slots.behind():
+            note = channel_pilot.learn(pilot_id, sessions(), router.planner)
+        log.info("channel autopilot %s: %s", pilot_id, note)
+    except Exception:
+        log.exception("reading channel autopilot %s's page failed", pilot_id)
+    if research_id:
+        find_reels(research_id)
+
+
 PROCESS, LEARN = process.task_class.__name__, learn_style.task_class.__name__
 CAPTION, RESEARCH = write_caption.task_class.__name__, find_reels.task_class.__name__
 ACCOUNT, QUESTIONS = read_account.task_class.__name__, ask_questions.task_class.__name__
@@ -1357,6 +1427,21 @@ def recover(Session: sessionmaker) -> None:
         posting = select(Animation).where(Animation.post_status == "posting")
         for animated in db.scalars(posting).all():
             animated.post_status, animated.post_error = "awaiting", INTERRUPTED
+        # A channel autopilot's: a check is made again, a post not yet sent waits for its
+        # next time, one stopped while sending pauses its autopilot for a person to look.
+        for found in db.scalars(select(ChannelPost).where(ChannelPost.status == "checking")):
+            found.status = "queued"
+        for found in db.scalars(select(ChannelPost).where(ChannelPost.status == "due")):
+            found.status, found.posted_at = "ready", None
+        for found in db.scalars(select(ChannelPost).where(ChannelPost.status == "posting")):
+            found.status, found.reason = "failed", f"posting {INTERRUPTED.split(';')[0]}"
+            pilot = db.get(ChannelPilot, found.pilot_id)
+            if pilot is not None:
+                pilot.active = False
+                pilot.paused_reason = (
+                    "Paused: the server stopped while a reel was being posted. Look on "
+                    "Instagram whether it went out, then resume."
+                )
         lost_animations = [
             a
             for a in db.scalars(select(Animation.id).where(Animation.status == "queued"))

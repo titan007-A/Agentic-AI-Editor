@@ -422,6 +422,12 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "post_caption.style", label: "How to write it (empty: default)", kind: "textarea" },
       { path: "post_caption.min_words", label: "Min words", kind: "number" },
       { path: "post_caption.max_words", label: "Max words", kind: "number" },
+      {
+        path: "post_caption.first_line",
+        label:
+          "First line above a song's caption, e.g. 🎵 {song} — {artist} - {year} (empty: none)",
+        kind: "text",
+      },
     ],
   },
   {

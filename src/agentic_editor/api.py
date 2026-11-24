@@ -53,6 +53,8 @@ from agentic_editor.animate import routes as animate_routes
 from agentic_editor.animate import schedule as animate_schedule
 from agentic_editor.auth import LoginGuard, verify_password
 from agentic_editor.backends import get_backends
+from agentic_editor.channel import pilot as channel_pilot
+from agentic_editor.channel import routes as channel_routes
 from agentic_editor.clipper import daily as kick_daily
 from agentic_editor.clipper import hunt as kick_hunt
 from agentic_editor.clipper import routes as kick_routes
@@ -815,6 +817,10 @@ def create_app(
                 await asyncio.to_thread(jobs.start_comment_turns, make_session)
             except Exception:
                 log.exception("starting the comment answering failed")
+            try:
+                await asyncio.to_thread(channel_pilot.tick, make_session)
+            except Exception:
+                log.exception("running the channel autopilots failed")
             try:
                 await asyncio.to_thread(cleanup.sweep, make_session, settings)
             except Exception:
@@ -3610,6 +3616,9 @@ def create_app(
         app, User=User, DB=DB, renders_of=renders_of, sees_every_render=sees_every_render,
         presets_of=presets,
     )  # fmt: skip
+    channel_routes.install(
+        app, User=User, DB=DB, presets_of=presets, public_base=public_base, settings=settings
+    )
 
     if settings.web_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")

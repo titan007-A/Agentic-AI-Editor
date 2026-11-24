@@ -616,6 +616,107 @@ export type IgChannel = {
   waiting: number;
 };
 
+/** What a channel autopilot is set to (channel/routes.py PilotSettings). */
+export type ChannelPilotSettings = {
+  active: boolean;
+  /** Everything but the post itself: nothing goes out to Instagram. */
+  dry_run: boolean;
+  /** A research account's id; "new": one made for the page's own name; null: none. */
+  research_account_id: string | null;
+  preset: string;
+  /** What its researches look for besides what the page's best posts show. */
+  focus: string;
+  research_hour: number;
+  posts_per_day: number;
+  /** "HH:MM", local time on the server. */
+  post_times: string[];
+  /** Reels a person approves before it posts alone. */
+  needs: number;
+};
+
+export type ChannelPilot = ChannelPilotSettings & {
+  id: string;
+  channel_id: string;
+  username: string;
+  approved: number;
+  /** Why it paused itself (a post failed); empty otherwise. */
+  paused_reason: string;
+  note: string;
+  research_handle: string | null;
+  research: {
+    id: string;
+    status: string;
+    message: string;
+    progress: number;
+    found: number;
+    created_at: string;
+  } | null;
+  counts: Record<string, number>;
+  posted_today: number;
+  next_post: string | null;
+  learned_at: string | null;
+  learn_note: string;
+  posts_read: number;
+  /** Whether Meta gives the page's insights (views, reach, saves); null: not asked yet. */
+  insights_allowed: boolean | null;
+  best: { caption: string; likes: number | null; comments: number | null; link: string }[];
+};
+
+export type ChannelPilots = {
+  channels: { id: string; username: string; avatar: string | null; pilot: ChannelPilot | null }[];
+  presets: { name: string; label: string; split: boolean }[];
+  research_accounts: { id: string; handle: string }[];
+  defaults: ChannelPilotSettings;
+};
+
+export type ChannelCheck = { name: string; ok: boolean; detail: string };
+
+export type ChannelPostStatus =
+  | "queued"
+  | "checking"
+  | "skipped"
+  | "unused"
+  | "editing"
+  | "reviewing"
+  | "look"
+  | "awaiting"
+  | "ready"
+  | "due"
+  | "posting"
+  | "posted"
+  | "failed";
+
+export type ChannelPost = {
+  id: number;
+  status: ChannelPostStatus;
+  reason: string;
+  code: string;
+  url: string;
+  title: string;
+  song: string;
+  artist: string;
+  heard_song: string;
+  heard_artist: string;
+  score: number;
+  relevance: number | null;
+  duration: number | null;
+  checks: ChannelCheck[];
+  approved: boolean;
+  job_id: string | null;
+  job_status: string | null;
+  output_id: number | null;
+  has_thumbnail: boolean;
+  caption: string;
+  post_id: string | null;
+  permalink: string;
+  dry_run: boolean;
+  posted_at: string | null;
+  /** The post's numbers, as far as Meta gives them: likes, comments, views, reach, saved... */
+  insights: Record<string, number>;
+  insights_at: string | null;
+  created_at: string;
+};
+
 export type IgComment = {
   id: string;
   channel_id: string;
@@ -1200,6 +1301,18 @@ export const api = {
   hosting: () => request<Hosting>("GET", "/admin/hosting"),
   setHosting: (form: HostingForm) => request<Hosting>("PUT", "/admin/hosting", form),
   switchHosting: (on: boolean) => request<Hosting>("POST", `/admin/hosting/${on ? "on" : "off"}`),
+  channelPilots: () => request<ChannelPilots>("GET", "/channel-autopilot"),
+  saveChannelPilot: (channelId: string, body: ChannelPilotSettings) =>
+    request<ChannelPilot>("PUT", `/channel-autopilot/${channelId}`, body),
+  channelFindNow: (channelId: string) =>
+    request<ChannelPilot>("POST", `/channel-autopilot/${channelId}/find`),
+  channelLearnNow: (channelId: string) =>
+    request<ChannelPilot>("POST", `/channel-autopilot/${channelId}/learn`),
+  channelPosts: (channelId: string, show: "queue" | "posted" | "skipped") =>
+    request<ChannelPost[]>("GET", `/channel-autopilot/${channelId}/posts?show=${show}`),
+  approveChannelPost: (id: number) => request<ChannelPost>("POST", `/channel-posts/${id}/approve`),
+  skipChannelPost: (id: number) => request<ChannelPost>("POST", `/channel-posts/${id}/skip`),
+  retryChannelPost: (id: number) => request<ChannelPost>("POST", `/channel-posts/${id}/retry`),
   igChannels: () => request<IgChannel[]>("GET", "/instagram/channels"),
   removeIgChannel: (id: string) => request<{ ok: boolean }>("DELETE", `/instagram/channels/${id}`),
   changeIgChannel: (

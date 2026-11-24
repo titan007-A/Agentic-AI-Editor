@@ -65,6 +65,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       ? [{ href: "/animations/", label: "Animations" }]
       : []),
     ...(me?.features?.includes("kick_clipper") ? [{ href: "/clipper/", label: "Clipper" }] : []),
+    ...(me?.features?.includes("channel_autopilot")
+      ? [{ href: "/channel/", label: "Channel autopilot" }]
+      : []),
   ];
   const failed = useFailedPosts(me);
   const links = [...LINKS, ...extra, ...(me?.role === "admin" ? ADMIN_LINKS : [])].map((link) =>

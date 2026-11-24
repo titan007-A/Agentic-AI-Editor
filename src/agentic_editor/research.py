@@ -32,6 +32,7 @@ they didn't want (with why) go to planning and rating, and accounts they hid are
 import logging
 import math
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -289,6 +290,12 @@ class Context:
     liked: list[str] = field(default_factory=list)
     disliked: list[str] = field(default_factory=list)
     hidden: set[str] = field(default_factory=set)
+    # For an account its channel autopilot runs (channel/pilot.py): its best liked posts, a
+    # line each with their likes; the songs it posted or has waiting, (song, artist); and
+    # its posts' captions. A song posted before is never given again (see Posted).
+    best: list[str] = field(default_factory=list)
+    avoid: list[tuple[str, str]] = field(default_factory=list)
+    posted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -859,7 +866,113 @@ def _taste(context: Context, rating: bool = False) -> str:
             "Reels they didn't want, with why when they said (find fewer like these):\n"
             + "\n".join(f"- {line}" for line in context.disliked)
         )
+    if context.best:
+        parts.append(
+            "The account's best liked posts, which show what works on it. It never posts a "
+            "song twice: find other songs like these, never these songs"
+            + (":\n" if rating else " (so don't search for them):\n")
+            + "\n".join(f"- {line}" for line in context.best)
+        )
+    if not rating and (named := Posted(context.avoid, context.posted).names(AVOID_LISTED)):
+        parts.append(
+            "Songs the account already posted or has waiting, never to be posted again: "
+            "don't search for these, find other songs.\n" + "; ".join(named)
+        )
     return "\n\n".join(parts)
+
+
+AVOID_LISTED = 60  # songs posted before the planning model is told of, at most
+NAMED_LINE = 80  # characters of a caption's first line that names a song, at most
+SEPARATED = re.compile(r"\s[-–—]\s|\sby\s", re.IGNORECASE)
+# What makes a group in a song's name a note about the take, not its name (shazam.NOTE).
+TAKE = re.compile(r"\s*[(\[{][^)\]}]*[)\]}]|\s+[-–—]\s+.*$|\s+(?:feat\.?|ft\.?|featuring)\s.*$",
+                  re.IGNORECASE)  # fmt: skip
+ARTISTS = re.compile(r"\s*(?:,|&|\+|/|\band\b|\bx\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*",
+                     re.IGNORECASE)  # fmt: skip
+
+
+def plain(text: str) -> str:
+    """A name as compared: no accents, case or punctuation ("Céline Dion" is "celine dion",
+    "Lovin’ You" "lovin you"); "&" is "and"."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold().replace("&", " and "))
+    bare = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[\W_]+", " ", bare).split())
+
+
+def title_key(song: str) -> str:
+    """A song's title as compared, without what says which take it is ("(Live)", "-
+    Remastered 2011", "feat. ...") or a bracket ("Gimme! Gimme! Gimme! (A Man After
+    Midnight)" is "gimme gimme gimme")."""
+    return plain(TAKE.sub("", song)) or plain(song)
+
+
+def artist_keys(artist: str) -> list[str]:
+    """Each singer or band named in `artist`, as compared, without a leading "the"."""
+    names = (plain(a) for a in ARTISTS.split(artist))
+    return [re.sub(r"^the ", "", n) for n in names if len(n) >= 2]
+
+
+def song_title(reel: Reel) -> str:
+    """The song's title alone: the rating names a reel's song "Title - Artist"."""
+    tail = f" - {reel.artist}"
+    return reel.song.removesuffix(tail) if reel.artist and reel.song.endswith(tail) else reel.song
+
+
+class Posted:
+    """The songs an account posted or has waiting: (song, artist) pairs, and its posts'
+    captions, which name them in any of the ways the account wrote them ("🎵 Song — Artist -
+    1984", "Artist - Song", a story). A song is posted before when its title is one of
+    theirs with an artist in common (or one side doesn't say), or when a caption names its
+    title and its artist, or its title of two words or more on its first line."""
+
+    def __init__(self, pairs: list[tuple[str, str]], captions: list[str]):
+        self.pairs = [(title_key(s), artist_keys(a), s, a) for s, a in pairs if title_key(s)]
+        self.captions = [
+            (f" {plain(c)} ", f" {plain(c.strip().split(chr(10), 1)[0])} ", c)
+            for c in captions
+            if c.strip()
+        ]
+
+    def has(self, song: str, artist: str) -> bool:
+        title, artists = title_key(song), artist_keys(artist)
+        if not title:
+            return False
+        for known, theirs, _, _ in self.pairs:
+            if known != title:
+                continue
+            if not theirs or not artists:
+                return True
+            if any(a in b or b in a for a in artists for b in theirs):
+                return True
+        named = f" {title} "
+        long_title = len(title.split()) >= 2
+        for text, first, _ in self.captions:
+            if named not in text:
+                continue
+            if any(f" {a} " in text for a in artists):
+                return True
+            if long_title and named in first:
+                return True
+        return False
+
+    def add(self, song: str, artist: str) -> None:
+        if title_key(song):
+            self.pairs.append((title_key(song), artist_keys(artist), song, artist))
+
+    def names(self, limit: int) -> list[str]:
+        """The songs, each once, as the model is told them: the pairs, then the captions'
+        first lines that name a song and its artist ("Toto - Africa", "🎵 Africa — Toto -
+        1982"; a story's first sentence says too little for its length)."""
+        found: dict[str, str] = {}
+        for _, _, song, artist in self.pairs:
+            found.setdefault(title_key(song), f"{song} - {artist}" if artist else song)
+        for _, _, caption in self.captions:
+            line = " ".join(
+                re.sub(r"[🎵🎶🎤_]|\ben\b", " ", caption.strip().split("\n", 1)[0]).split()
+            )
+            if len(line) <= NAMED_LINE and SEPARATED.search(line):
+                found.setdefault(plain(re.sub(r"\s*[-–—]\s*\d{4}\s*$", "", line)), line)
+        return [n for n in found.values() if n][:limit]
 
 
 def plan(llm, description: str, context: Context | None = None) -> Planned:
@@ -1679,6 +1792,11 @@ def run(
     unfit.update(r.unfit for r in reels if r.unfit)
     reels = [r for r in reels if not r.unfit]
     left_out.update(unfit)
+    if context.avoid or context.posted:  # an account that never posts a song twice
+        posted = Posted(context.avoid, context.posted)
+        again = {id(r) for r in reels if posted.has(song_title(r), r.artist)}
+        left_out["posted before"] = len(again)
+        reels = [r for r in reels if id(r) not in again]
     # A reel the model couldn't rate isn't shown (the owner: no junk), unless it rated none:
     # then they all are, as half relevant, rather than nothing.
     rated = any(r.relevance is not None for r in reels)
