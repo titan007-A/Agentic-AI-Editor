@@ -152,6 +152,7 @@ def test_a_failed_hunt_is_tried_again(env, kicked, monkeypatch):
     found = env.client.post("/api/kick/hunts", json={"link": f"kick.com/video/{UUID}"}).json()
     assert found["status"] == "failed" and "503" in found["error"]
     monkeypatch.undo()
+    monkeypatch.setattr(hunt, "JUDGE_HOOKS", False)  # undone above with the rest
     monkeypatch.setattr(kick, "Client", lambda: kicked)
     monkeypatch.setattr(hunt, "cut", lambda full, s, e, dest, flash=None: (
         dest.parent.mkdir(parents=True, exist_ok=True), dest.write_bytes(b"w")))  # fmt: skip

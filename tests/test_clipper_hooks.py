@@ -244,6 +244,13 @@ def test_without_its_models_a_hunt_cuts_its_moments_as_found(monkeypatch, tmp_pa
                               router=no_whisper)  # fmt: skip
     assert kept == found[:2] and "cut as found" in note
 
+    def no_backends():
+        raise RuntimeError("ffmpeg has no subtitles filter")
+
+    monkeypatch.setattr("agentic_editor.backends.get_backends", no_backends)
+    kept, note = hooks.choose(found, 2, lambda a, b, d: a, (0, 4000), [], ("x", "t"), settings)
+    assert kept == found[:2] and note == "no models to judge the hooks with; cut as found"
+
     class Away:
         def chat_json(self, *a, **k):
             raise LLMError("qwen could not be reached")

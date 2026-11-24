@@ -689,8 +689,12 @@ def choose(
              chat=chat_near(chat, m.peak))
         for m in found
     ]  # fmt: skip
-    router = router or ModelRouter(settings, get_backends())
     as_found = found[:count]
+    try:
+        router = router or ModelRouter(settings, get_backends())
+    except Exception as exc:  # no models here at all: the moments as found
+        log.warning("no models to judge the hooks with: %s", exc)
+        return as_found, "no models to judge the hooks with; cut as found"
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp)
         told(f"listening to {len(looks)} likely moments for their hooks")
