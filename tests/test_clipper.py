@@ -360,7 +360,7 @@ def world(tmp_path, monkeypatch):
         db.commit()
     cuts = []
 
-    def fake_cut(full, start, end, dest):
+    def fake_cut(full, start, end, dest, flash=None):
         cuts.append((start, end, full.pieces[0].url))
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"window")
@@ -433,6 +433,48 @@ def test_a_long_stream_is_sampled_then_read_again_around_its_likely_moments(worl
     assert any(a <= 9010 < b for a, b in heard)  # heard only around the likely moments
 
 
+def test_a_hunt_judges_more_moments_than_it_wants_and_makes_only_strong_hooks(world, monkeypatch):
+    monkeypatch.setattr(hunt, "JUDGE_HOOKS", True)
+    client = FakeKick(seconds=3600, burst=(1810, 1822))
+    hunt_id = add_hunt(world, client, start=1500, end=2400, count=2)
+    asked = {}
+
+    def choose(found, count, fetch, stretch, chat, about, settings, told, avoid):
+        asked.update(found=len(found), count=count, stretch=stretch, about=about)
+        best = found[0]
+        best.start, best.end = best.peak - 6, best.peak + 10
+        best.hook = {"what": "He crashes his car.", "said": "watch this", "score": 8}
+        best.why.append("hook 8/10")
+        return [best], f"1 of {len(found)} likely moments had a strong hook"
+
+    monkeypatch.setattr(hunt.hooks, "choose", choose)
+    queued = []
+    hunt.run(hunt_id, world.Session, world.settings, client=client, queue=queued.append)
+    with world.Session() as db:
+        found = db.get(KickHunt, hunt_id)
+        assert found.status == "done", found.error
+        assert asked["count"] == 2 and asked["found"] > 2  # more looked at than wanted
+        assert asked["stretch"] == (1500, 2400) and asked["about"] == ("xQc", "GTA 6 playthrough")
+        assert len(queued) == 1 and found.message.endswith("likely moments had a strong hook")
+        moment = found.moments[0]
+        assert moment["hook"]["said"] == "watch this" and "hook 8/10" in moment["why"]
+        assert moment["start"] <= moment["peak"] <= moment["end"]
+        job = db.get(Job, queued[0])
+        assert "What happens: He crashes his car." in job.notes and "into this video" in job.notes
+        assert job.notes.startswith("A clip from xQc's Kick stream; the streamer is xQc.")
+    assert world.cuts[0][:2] == (moment["start"], moment["end"])
+
+    none = ([], "0 of 6 likely moments were crazy, with a strong hook")
+    monkeypatch.setattr(hunt.hooks, "choose", lambda *a: none)
+    hunt_id = add_hunt(world, client, start=1500, end=2400, count=2)
+    queued.clear()
+    hunt.run(hunt_id, world.Session, world.settings, client=client, queue=queued.append)
+    with world.Session() as db:
+        found = db.get(KickHunt, hunt_id)
+        assert found.status == "done" and not queued and found.moments == []
+        assert found.message.startswith("nothing crazy in 25:00-40:00: no clips made")
+
+
 def test_regions_around_likely_moments_join_where_they_meet():
     near = [moments.Moment(0, 0, peak, 1.0) for peak in (500, 600, 2000)]
     assert hunt.regions_of(near, 0, 2030) == [(410, 660), (1910, 2030)]
@@ -470,7 +512,7 @@ def test_a_moment_s_job_keeps_its_clip_whole(world, monkeypatch):
 
     jobs.run_job(queued[0], world.Session, world.settings, run)
     assert seen["source"] == f"kick:kick-{hunt_id}-0" and seen["trim"] is False
-    assert seen["notes"].startswith("A clip of a moment from a Kick live stream")
+    assert seen["notes"].startswith("A clip from xQc's Kick stream; the streamer is xQc.")
 
 
 def test_a_moment_s_clips_go_in_its_hunt_s_folder_and_its_video_is_kept(world):

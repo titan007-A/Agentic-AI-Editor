@@ -65,6 +65,17 @@ def no_ocr(request, monkeypatch):
     monkeypatch.setattr(ocr, "available", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def no_hook_judging(request, monkeypatch):
+    """A Kick hunt judges its moments' hooks with whisper and the planning model: in a test
+    it cuts them as found, unless the test judges them itself (with fake models)."""
+    from agentic_editor.clipper import hunt
+
+    if request.module.__name__.endswith("test_clipper_hooks"):
+        return
+    monkeypatch.setattr(hunt, "JUDGE_HOOKS", False)
+
+
 @pytest.fixture
 def make_analysis():
     def build(words: list[Word], duration: float, energy: list[float] | None = None, **extra):
