@@ -57,6 +57,7 @@ CAPTIONS = [
         ("Girls Just Want to Have Fun", "Cyndi Lauper"),
         ("My Heart Will Go On", "Celine Dion"),  # no accent
         ("Lonely", "Akon"),
+        ("Girls Just Want to Have Fun", "Lauper, Cyndi"),  # long enough to need no artist
     ],
 )
 def test_a_song_the_page_posted_in_any_caption_style_counts_as_posted(song, artist):
@@ -70,10 +71,12 @@ def test_a_song_the_page_posted_in_any_caption_style_counts_as_posted(song, arti
         ("Wuthering Heights", "Kate Bush"),
         ("Control", "Janet Jackson"),  # a word of "Self Control"
         ("", "Laura Branigan"),
+        ("Daft Punk", "Pentatonix"),  # named like the artist of a song posted
     ],
 )
 def test_other_songs_are_not_posted(song, artist):
-    assert not research.Posted([], CAPTIONS).has(song, artist)
+    posted = [*CAPTIONS, "🎵 get lucky(daft punk) — Daft Punk - 2013\n\nReleased in 2013."]
+    assert not research.Posted([], posted).has(song, artist)
 
 
 def test_a_song_waiting_or_posted_by_the_autopilot_counts_whoever_names_it():

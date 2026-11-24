@@ -882,6 +882,7 @@ def _taste(context: Context, rating: bool = False) -> str:
 
 
 AVOID_LISTED = 60  # songs posted before the planning model is told of, at most
+COMMON = {"band", "with", "from", "orchestra", "group", "music", "official"}
 NAMED_LINE = 80  # characters of a caption's first line that names a song, at most
 SEPARATED = re.compile(r"\s[-–—]\s|\sby\s", re.IGNORECASE)
 # What makes a group in a song's name a note about the take, not its name (shazam.NOTE).
@@ -923,7 +924,7 @@ class Posted:
     captions, which name them in any of the ways the account wrote them ("🎵 Song — Artist -
     1984", "Artist - Song", a story). A song is posted before when its title is one of
     theirs with an artist in common (or one side doesn't say), or when a caption names its
-    title and its artist, or its title of two words or more on its first line."""
+    title and its artist, or its title of three words or more on its first line."""
 
     def __init__(self, pairs: list[tuple[str, str]], captions: list[str]):
         self.pairs = [(title_key(s), artist_keys(a), s, a) for s, a in pairs if title_key(s)]
@@ -945,11 +946,17 @@ class Posted:
             if any(a in b or b in a for a in artists for b in theirs):
                 return True
         named = f" {title} "
-        long_title = len(title.split()) >= 2
+        # A title this long names the song by itself; a shorter one may be another song's
+        # artist ("Daft Punk" on "🎵 Get Lucky — Daft Punk - 2013").
+        long_title = len(title.split()) >= 3
+        # A word of the artist's name long enough to be theirs ("jackson" of "M. Jackson").
+        names = [f" {a} " for a in artists] + [
+            f" {w} " for a in artists for w in a.split() if len(w) >= 4 and w not in COMMON
+        ]
         for text, first, _ in self.captions:
             if named not in text:
                 continue
-            if any(f" {a} " in text for a in artists):
+            if any(n in text for n in names):
                 return True
             if long_title and named in first:
                 return True
