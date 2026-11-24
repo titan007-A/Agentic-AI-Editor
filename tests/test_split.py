@@ -61,15 +61,24 @@ def test_the_sound_changes_in_the_widest_pause_near_the_share_asked():
 
 def test_the_sound_changes_in_the_singers_silence_before_a_gap_whisper_heard():
     sung = words((0, 9.5), (10.0, 12.0), (13.5, 20.0), (20.2, 40))
-    # A real silence of the voice near 14 s wins over the words' widest gap.
-    assert split.switch_time(40.0, Split(enabled=True), sung, [(15.0, 15.4)]) == (
-        pytest.approx(15.2)
-    )
-    # The widest of the silences within the snap; one past it doesn't count.
-    quiet = [(12.2, 12.4), (15.0, 15.6), (19.0, 21.0)]
-    assert split.switch_time(40.0, Split(enabled=True), sung, quiet) == pytest.approx(15.3)
+    on = Split(enabled=True)  # 35% of 40 s: 14 s
+    # A real silence of the voice near 14 s wins over the words' widest gap, at its
+    # nearest point a little in from its edge.
+    assert split.switch_time(40.0, on, sung, [(15.0, 15.4)]) == pytest.approx(15.1)
+    # A silence that holds 14 s: right there.
+    assert split.switch_time(40.0, on, sung, [(13.0, 16.0)]) == pytest.approx(14.0)
+    # A long silence whose start is near, though its middle is past the snap.
+    assert split.switch_time(40.0, on, sung, [(15.6, 17.8)]) == pytest.approx(15.7)
+    # One of 0.3 s or more before a shorter one nearer; one out of reach doesn't count.
+    quiet = [(13.6, 13.75), (15.0, 15.6), (19.0, 21.0)]
+    assert split.switch_time(40.0, on, sung, quiet) == pytest.approx(15.1)
     # None near: the words' gap, as before.
-    assert split.switch_time(40.0, Split(enabled=True), sung, [(30, 31)]) == pytest.approx(12.75)
+    assert split.switch_time(40.0, on, sung, [(30, 31)]) == pytest.approx(12.75)
+    # A silence no word's timing spans before one inside a word.
+    inside = [(13.8, 14.2), (15.5, 15.9)]
+    assert split.switch_time(40.0, on, words((0, 14.6), (16.0, 40)), inside) == (
+        pytest.approx(15.6)
+    )
 
 
 @needs_ffmpeg

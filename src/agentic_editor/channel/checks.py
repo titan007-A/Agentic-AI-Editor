@@ -75,6 +75,7 @@ LABEL_DIFF = 40.0  # mean difference (of 255) of a label's pixels from how it is
 SWITCH_AGREE = 0.25  # seconds between where the picture and the sound change, at most
 WORD_EDGE = 0.05  # seconds a word may overlap the change at its ends (timings are rough)
 VOICE_GAP = 12.0  # dB under its loudest the voice must be where the sound changes
+SILENT_THERE = split_render.SILENT  # and this far under, it is silent whatever the words say
 VOICE_AROUND = 0.06  # seconds either side of the change listened to
 VOICE_SHARE = 0.6  # of the vocals part the singer is heard in, at least
 # Instruments left in the vocals part keep playing where the singer stops and carry bass
@@ -412,22 +413,24 @@ def labels(frame: np.ndarray, preset: Preset, fonts_dir: Path) -> Check:
 def switch(
     at_seen: float, at_words: float, words: list[Word], voice: np.ndarray, rate: int
 ) -> Check:
-    """Whether the sound changes where the picture does, between two words: none spans it,
-    and the voice (`voice`: the isolated vocals of the reel's stretch, `rate` a second)
-    is VOICE_GAP dB under its loudest there."""
+    """Whether the sound changes where the picture does, between two words: the voice
+    (`voice`: the isolated vocals of the reel's stretch, `rate` a second) is VOICE_GAP dB
+    under its loudest there, and no word spans it unless the voice is silent there
+    (SILENT_THERE: whisper's timings run a sung word over the breath after it)."""
     if abs(at_seen - at_words) > SWITCH_AGREE:
         return Check("switch", False, f"the picture changes at {at_seen:.2f} s, the words "
                      f"say {at_words:.2f} s")  # fmt: skip
-    for w in words:
-        if w.start + WORD_EDGE < at_words < w.end - WORD_EDGE:
-            said = (f"mid-word: “{w.text.strip()}” is sung {w.start:.2f}-{w.end:.2f} s, "
-                    f"the change is at {at_words:.2f} s")  # fmt: skip
-            return Check("switch", False, said)
     loud = float(np.percentile(window_levels(voice, rate, 0.05), 95))
     a = max(0, int((at_words - VOICE_AROUND) * rate))
     b = max(a + 1, int((at_words + VOICE_AROUND) * rate))
     there = levels(voice[a:b])[0]
     gap = loud - there
+    for w in words:
+        if w.start + WORD_EDGE < at_words < w.end - WORD_EDGE and gap < SILENT_THERE:
+            said = (f"mid-word: “{w.text.strip()}” is sung {w.start:.2f}-{w.end:.2f} s, "
+                    f"the change is at {at_words:.2f} s, {gap:.0f} dB under the voice's "
+                    "loudest")  # fmt: skip
+            return Check("switch", False, said)
     before = [w for w in words if w.end <= at_words + WORD_EDGE]
     after = [w for w in words if w.start >= at_words - WORD_EDGE]
     between = (f"between “{before[-1].text.strip()}” and “{after[0].text.strip()}”"

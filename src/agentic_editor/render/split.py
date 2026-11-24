@@ -32,6 +32,8 @@ SEAM = 0.04  # seconds each side fades over where the sound changes, so it doesn
 SILENT = 25.0
 WINDOW = 0.02
 PAUSE = 0.12
+INSIDE = 0.1  # seconds the change keeps from a silence's edges
+STEADY = 0.3  # seconds of silence preferred over a shorter one nearer
 
 
 def voice_pauses(vocals: Path, start: float, end: float) -> list[tuple[float, float]]:
@@ -61,25 +63,35 @@ def switch_time(
     duration: float, split: Split, words: list[Word], pauses: list[tuple[float, float]] = ()
 ) -> float:
     """Seconds into the reel where the vocals take over: `split.switch` of the reel, moved
-    to the middle of the widest of the singer's silences (`pauses`, see voice_pauses)
-    within SNAP seconds of it, else of the widest gap between words there (the nearest
-    when two are as wide), else left where it is."""
+    into the nearest of the singer's silences (`pauses`, see voice_pauses) that reaches
+    within SNAP seconds of it, a little in from its edges (one no word's timing spans
+    first, then one of STEADY seconds or more); else to the middle of the widest gap
+    between words there (the nearest when two are as wide); else left where it is."""
     if duration <= 2 * EDGE:
         return duration / 2
     wanted = split.switch * duration
+    found: tuple[bool, bool, float, float] | None = None  # (in a word, short, distance, at)
+    for start, end in pauses:
+        inside = min(INSIDE, (end - start) / 2)
+        at = min(max(wanted, start + inside), end - inside)
+        if end <= start or abs(at - wanted) > SNAP:
+            continue
+        sung = any(w.start < at < w.end for w in words)  # by whisper's rough timings
+        key = (sung, end - start < STEADY, round(abs(at - wanted), 3), at)
+        found = min(found, key) if found else key
+    if found:
+        return min(max(found[3], EDGE), duration - EDGE)
     timed = sorted(words, key=lambda w: w.start)
-    gaps = [(a.end, b.start) for a, b in itertools.pairwise(timed)]
-    for spans in (pauses, gaps):
-        best: tuple[float, float, float] | None = None  # (-width, distance, middle)
-        for start, end in spans:
-            width, middle = end - start, (start + end) / 2
-            if width <= 0 or abs(middle - wanted) > SNAP:
-                continue
-            key = (-round(width, 2), abs(middle - wanted), middle)
-            best = min(best, key) if best else key
-        if best:
-            return min(max(best[2], EDGE), duration - EDGE)
-    return min(max(wanted, EDGE), duration - EDGE)
+    best: tuple[float, float, float] | None = None  # (-width, distance, middle)
+    for before, after in itertools.pairwise(timed):
+        width = after.start - before.end
+        middle = (before.end + after.start) / 2
+        if width <= 0 or abs(middle - wanted) > SNAP:
+            continue
+        key = (-round(width, 2), abs(middle - wanted), middle)
+        best = min(best, key) if best else key
+    at = best[2] if best else wanted
+    return min(max(at, EDGE), duration - EDGE)
 
 
 def _label(split: Split, words: str, fonts_dir: Path) -> Image.Image:

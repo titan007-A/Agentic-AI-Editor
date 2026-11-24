@@ -279,6 +279,9 @@ def test_the_change_must_fall_between_words_where_the_voice_is_low():
     assert not apart.ok and "picture changes at 5.00" in apart.detail
     mid_word = checks.switch(3.6, 3.6, words, voice, rate)
     assert not mid_word.ok and "mid-word: “love”" in mid_word.detail
+    # Whisper runs a word over the silence after it: the voice says it is silent there.
+    over = [Word(text="love", start=3.2, end=4.4), Word(text="me", start=4.55, end=5.2)]
+    assert checks.switch(4.25, 4.25, over, voice, rate).ok
     # The words say a pause, but the voice holds a note there.
     held = checks.switch(2.0, 2.0, words, voice, rate)
     assert not held.ok and "mid-note" in held.detail
