@@ -40,8 +40,8 @@ from agentic_editor.transcript import Word
 
 log = logging.getLogger(__name__)
 
-MORE = 3  # likely moments looked at for each clip wanted
-MOST_LOOKED = 24  # at most, in one hunt
+MORE = 4  # likely moments looked at for each clip wanted: few are crazy
+MOST_LOOKED = 30  # at most, in one hunt
 LEAD, TAIL = 32, 16  # seconds of stream looked at before and after a moment's peak
 EARLIEST, LATEST = 25, 3  # a clip opens this far before the peak at most, and at least
 END_LEAST, END_MOST = 4, 15  # and ends this long after it: the reaction is in

@@ -291,8 +291,8 @@ def test_without_its_models_a_hunt_cuts_its_moments_as_found(monkeypatch, tmp_pa
 
 
 def test_more_moments_are_looked_at_than_clips_wanted():
-    assert hooks.wanted(1) == 3 and hooks.wanted(5) == 15
-    assert hooks.wanted(8) == hooks.MOST_LOOKED and hooks.wanted(30) == 30
+    assert hooks.wanted(1) == 4 and hooks.wanted(5) == 20
+    assert hooks.wanted(8) == hooks.MOST_LOOKED == 30 and hooks.wanted(40) == 40
 
 
 def test_a_cold_open_is_cut_as_the_flash_then_the_clip(monkeypatch, tmp_path):
