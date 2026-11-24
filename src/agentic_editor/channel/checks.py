@@ -15,7 +15,8 @@ Before the edit:
 
 After the edit, on the reel itself:
 - confidence: the edit's own doubts and issues (none) and its confidence;
-- caption: written, with nothing left for a person to check;
+- caption: written, with nothing left for a person to check (a song without its own
+  Wikipedia article, written from the artist's and the web's, counts as checked);
 - length: within the preset's;
 - labels: both panels' labels, where the preset puts them;
 - panels: the top panel plays and then holds, the bottom holds and then plays, changing at
@@ -274,11 +275,23 @@ def _length_only(note: str) -> bool:
     return least * (1 - WORDS_SLACK) <= count <= most * (1 + WORDS_SLACK)
 
 
+# The caption feature's note for a song Wikipedia has no article on, written from the
+# artist's article and the web instead: it passed the same fact check as any caption, so it
+# doesn't hold a reel (owner, 2026-11-24: post them). A fact its sources don't state still does.
+NO_ARTICLE = re.compile(
+    r"^Wikipedia has no article on “.+”: written from .+ Check it before posting\.$"
+)
+
+
+def _not_a_doubt(note: str) -> bool:
+    return _length_only(note) or bool(NO_ARTICLE.match(note.strip()))
+
+
 def caption(text: str, status: str | None, notes: list[str]) -> Check:
     if status != "done" or not text.strip():
         why = "; ".join(notes) or status or "not written"
         return Check("caption", False, f"no caption: {why}")
-    doubts = [n for n in notes if not _length_only(n)]
+    doubts = [n for n in notes if not _not_a_doubt(n)]
     if doubts:
         return Check("caption", False, "to check before posting: " + "; ".join(doubts))
     said = f"written, {len(text.split())} words, checked by its sources"
