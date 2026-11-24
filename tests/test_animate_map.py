@@ -1322,3 +1322,18 @@ def test_only_a_few_countries_are_put_in_for_the_best_known_things():
     assert len(names) == 5 + mapwriter.ADDED_COUNTRIES
     assert {"Peru", "Thailand", "Germany"} <= set(names)  # the first ones named go in
     assert "Mexico" not in names and "Brazil" not in names
+
+
+def test_markdown_emphasis_never_shows_on_a_card_and_names_the_highlight():
+    from agentic_editor.animate import plan as plans
+
+    # The live festivals reel's title card read "MOST FAMOUS **FESTIVALS** IN EVERY COUNTRY".
+    text, found = plans.no_leak("Most famous **festivals** in every country")
+    assert text == "Most famous festivals in every country" and found == {"highlight": "festivals"}
+    assert plans.no_leak("The __best__ castles; highlight: castles") == (
+        "The best castles",
+        {"highlight": "castles"},
+    )
+    assert plans.plain("A *truly* famous dish") == "A truly famous dish"
+    # A lone star or a multiplication isn't emphasis.
+    assert plans.plain("5 * 3 stars and a * on its own") == "5 * 3 stars and a * on its own"

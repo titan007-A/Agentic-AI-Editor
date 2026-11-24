@@ -222,13 +222,29 @@ _LEAK = re.compile(
 )
 
 
+# Markdown emphasis a model writes around the word it means to stand out ("Most famous
+# **festivals** in every country"): drawn as it is, the asterisks show on the card.
+_EMPHASIS = re.compile(r"(\*\*|__)(.+?)\1|(?<![\w*])\*(?!\s)([^*]+?)(?<!\s)\*(?![\w*])")
+
+
+def plain(text: str) -> str:
+    """`text` without markdown emphasis marks around its words."""
+    return _EMPHASIS.sub(lambda m: m.group(2) or m.group(3), text or "")
+
+
 def no_leak(text: str) -> tuple[str, dict[str, str]]:
-    """`text` without a field name and value left at its end, and what was left there."""
-    found = _LEAK.search(text or "")
+    """`text` without markdown emphasis or a field name and value left at its end, and what
+    was found: the emphasised words count as the highlight."""
+    text = text or ""
+    leaked: dict[str, str] = {}
+    if marked := _EMPHASIS.search(text):
+        leaked["highlight"] = (marked.group(2) or marked.group(3)).strip()
+        text = plain(text)
+    found = _LEAK.search(text)
     if not found or not text[: found.start()].strip():
-        return text, {}
+        return text, leaked
     value = found.group(2).strip().strip("\"'.;,")
-    return text[: found.start()].strip(" ;,|/-"), {found.group(1).lower(): value}
+    return text[: found.start()].strip(" ;,|/-"), {**leaked, found.group(1).lower(): value}
 
 
 _ASKS_TO_FOLLOW = re.compile(r"\bfollow (for|us|me|the page)\b|\bsubscribe\b|\blike and\b", re.I)
@@ -323,7 +339,7 @@ def tidy(plan: Plan) -> Plan:
                 "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
             }
         )
-        narration = " ".join(scene.narration.split())
+        narration = " ".join(plain(scene.narration).split())
         # A scene that only asks people to follow: the system's own ending does that.
         if _ASKS_TO_FOLLOW.search(narration) and len(narration.split()) <= 12:
             continue
