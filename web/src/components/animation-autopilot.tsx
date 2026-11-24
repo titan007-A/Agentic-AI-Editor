@@ -123,10 +123,18 @@ export function AnimationAutopilotCard({
           />
         </label>
         <div className="space-y-1">
-          <Label htmlFor="pilot-niche">Page niche (new topics come from it)</Label>
+          <Label htmlFor="pilot-niche">
+            Page niche (new topics come from it
+            {pilot.style === "map"
+              ? "; World map has its own topic list, so it may stay empty"
+              : ""}
+            )
+          </Label>
           <Input
             id="pilot-niche"
-            placeholder="e.g. History & mysteries"
+            placeholder={
+              pilot.style === "map" ? "e.g. Countries of the world" : "e.g. History & mysteries"
+            }
             value={pilot.niche}
             onChange={(e) => set({ niche: e.target.value })}
           />
@@ -294,7 +302,7 @@ export function AnimationAutopilotCard({
           <Button
             variant="outline"
             onClick={now}
-            disabled={busy || (!pilot.niche.trim() && !topics.trim())}
+            disabled={busy || (!pilot.niche.trim() && !topics.trim() && pilot.style !== "map")}
           >
             <Play className="size-4" /> Make one now
           </Button>

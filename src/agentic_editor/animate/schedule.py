@@ -70,8 +70,8 @@ def start_due(Session: sessionmaker, now: datetime | None = None, queue=None) ->
             owner = db.get(User, pilot.owner_id) if pilot.owner_id else None
             if owner is None or not features.enabled(owner, FEATURE, db):
                 continue
-            if not pilot.topics and not pilot.niche.strip():
-                continue  # nothing to make a reel about
+            if not pilot.topics and not pilot.niche.strip() and pilot.style != "map":
+                continue  # nothing to make a reel about (a World map one has its own ideas)
             started.append(new_animation(db, pilot, now.date()).id)
         db.commit()
     for animation_id in started:

@@ -8,6 +8,7 @@ import pytest
 
 from agentic_editor import cli, logs, upscale
 from agentic_editor.analysis import faces, separation, transcribe
+from agentic_editor.animate import maps
 from agentic_editor.backends import Backends
 from agentic_editor.router import ModelRouter
 from agentic_editor.settings import Settings
@@ -90,6 +91,7 @@ def test_fetch_models_gets_every_model_a_run_loads(tmp_path, monkeypatch, transc
     monkeypatch.setattr(separation, "fetch_model", lambda m, d: got.append(("separation", d)))
     monkeypatch.setattr(faces, "model_file", lambda d: got.append(("faces", d)))
     monkeypatch.setattr(upscale, "fetch_models", lambda d: got.append(("upscale", d)))
+    monkeypatch.setattr(maps, "fetch", lambda d: got.append(("maps", d)))
     settings = Settings(models_dir=tmp_path)
     ModelRouter(settings, Backends("cuda", transcriber, "x264", "h264")).fetch_models()
     whisper = (
@@ -102,6 +104,7 @@ def test_fetch_models_gets_every_model_a_run_loads(tmp_path, monkeypatch, transc
         ("separation", tmp_path / "separation"),
         ("faces", tmp_path),
         ("upscale", tmp_path),
+        ("maps", tmp_path),
     ]
 
 

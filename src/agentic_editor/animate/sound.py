@@ -51,6 +51,13 @@ MOODS: dict[str, dict] = {
         "chords": [(0, 4, 7), (-3, 0, 4), (-7, -3, 0), (-5, -1, 2)],
         "layers": ("pad", "marimba", "kick", "shaker"),
     },
+    # The World map reels' bed: a bright pop loop at 123 bpm, a little louder under the voice.
+    "upbeat": {
+        "root": 52, "bpm": 123,
+        "chords": [(0, 4, 7), (-5, -1, 2), (-3, 0, 4), (-7, -3, 0)],
+        "layers": ("pad", "plucks", "kick", "shaker", "bass"),
+        "gain": -28.0,
+    },
 }  # fmt: skip
 
 
@@ -244,7 +251,7 @@ def music(mood: str, seconds: float, seed: int = 1) -> np.ndarray:
                 _add(track, _noise_hit(rnd, 0.05, 8000, 0.012), at + k * beat / 4, 0.06)
     track = reverb(track, 0.32)[: int(seconds * RATE)]
     track *= _env(len(track), 1.2, 1.8)[:, None]
-    return track * (_db(MUSIC_RMS_DB) / max(_rms(track), 1e-9))
+    return track * (_db(spec.get("gain", MUSIC_RMS_DB)) / max(_rms(track), 1e-9))
 
 
 # ---- sound effects ---------------------------------------------------------------------

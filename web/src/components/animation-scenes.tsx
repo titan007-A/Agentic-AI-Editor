@@ -31,6 +31,7 @@ export const VISUALS: Record<AnimationVisualKind, string> = {
   reveal: "Mystery reveal",
   dots: "Glowing dots",
   scene: "Characters acting",
+  country: "Country on the map",
 };
 
 const SETTINGS = ["room", "street", "park", "office", "night", "school", "shop", "stage", "plain"];
@@ -99,6 +100,10 @@ const FIELDS: Record<AnimationVisualKind, Field[]> = {
     { key: "value", label: "Word or number (max 8)" },
     { key: "text", label: "Caption" },
   ],
+  country: [
+    { key: "text", label: "Country (as the voice says it)" },
+    { key: "country", label: "Country on the map, if the voice says it another way (optional)" },
+  ],
   scene: [
     { key: "text", label: "Title of this part (a name, a place, Years later...)" },
     { key: "detail", label: "Red note with an arrow at the first person (optional)" },
@@ -112,6 +117,7 @@ const ITEMS: Partial<Record<AnimationVisualKind, { keys: (keyof AnimationItem)[]
     compare: { keys: ["emoji", "text", "value"], max: 2 },
     list: { keys: ["emoji", "text"], max: 5 },
     timeline: { keys: ["year", "text"], max: 5 },
+    country: { keys: ["text", "emoji", "art"], max: 5 },
   };
 const ITEM_LABEL: Record<keyof AnimationItem, string> = {
   emoji: "Emoji",
@@ -119,6 +125,8 @@ const ITEM_LABEL: Record<keyof AnimationItem, string> = {
   year: "Year",
   value: "Value",
   motion: "Motion",
+  art: "Card picture (what the AI paints)",
+  image: "Picture file",
 };
 const MOTIONS = [
   "pop",
@@ -330,7 +338,11 @@ export function AnimationScenes({
                     {items.keys.map((key) => (
                       <div
                         key={key}
-                        className={key === "text" ? "min-w-40 flex-1 space-y-1" : "w-28 space-y-1"}
+                        className={
+                          key === "text" || key === "art"
+                            ? "min-w-40 flex-1 space-y-1"
+                            : "w-28 space-y-1"
+                        }
                       >
                         <Label htmlFor={`${key}-${i}-${k}`} className="text-xs">
                           {ITEM_LABEL[key]} {k + 1}
@@ -356,7 +368,7 @@ export function AnimationScenes({
                         ) : (
                           <Input
                             id={`${key}-${i}-${k}`}
-                            value={item[key]}
+                            value={String(item[key] ?? "")}
                             onChange={(e) => {
                               const next = v.items.map((it, j) =>
                                 j === k ? { ...it, [key]: e.target.value } : it,
@@ -367,6 +379,14 @@ export function AnimationScenes({
                         )}
                       </div>
                     ))}
+                    {item.image && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`/api/animation-images/${item.image}`}
+                        alt={`${item.text}'s card picture`}
+                        className="h-14 w-11 shrink-0 rounded border-[1.5px] border-foreground object-cover"
+                      />
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"
@@ -395,36 +415,40 @@ export function AnimationScenes({
                 )}
               </div>
             )}
-            <div className="flex items-start gap-3">
-              {v.image && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={`/api/animation-images/${v.image}`}
-                  alt={`Scene ${i + 1}'s painting`}
-                  className="h-28 w-16 shrink-0 rounded border-[1.5px] border-foreground object-cover"
-                />
-              )}
-              <div className="min-w-0 flex-1 space-y-1">
-                <Label htmlFor={`art-${i}`}>Painting behind it (what the AI paints)</Label>
-                <Textarea
-                  id={`art-${i}`}
-                  rows={2}
-                  value={v.art ?? ""}
-                  onChange={(e) => setScene(i, { ...scene, visual: { ...v, art: e.target.value } })}
-                />
-                {v.art && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      setScene(i, { ...scene, visual: { ...v, art_seed: (v.art_seed ?? 0) + 1 } })
-                    }
-                  >
-                    Paint it again
-                  </Button>
+            {plan.style !== "map" && (
+              <div className="flex items-start gap-3">
+                {v.image && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`/api/animation-images/${v.image}`}
+                    alt={`Scene ${i + 1}'s painting`}
+                    className="h-28 w-16 shrink-0 rounded border-[1.5px] border-foreground object-cover"
+                  />
                 )}
+                <div className="min-w-0 flex-1 space-y-1">
+                  <Label htmlFor={`art-${i}`}>Painting behind it (what the AI paints)</Label>
+                  <Textarea
+                    id={`art-${i}`}
+                    rows={2}
+                    value={v.art ?? ""}
+                    onChange={(e) =>
+                      setScene(i, { ...scene, visual: { ...v, art: e.target.value } })
+                    }
+                  />
+                  {v.art && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setScene(i, { ...scene, visual: { ...v, art_seed: (v.art_seed ?? 0) + 1 } })
+                      }
+                    >
+                      Paint it again
+                    </Button>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
             {v.kind === "scene" && (
               <ActorsEditor
                 index={i}
@@ -439,7 +463,7 @@ export function AnimationScenes({
           </div>
         );
       })}
-      <Button variant="outline" onClick={add} disabled={plan.scenes.length >= 16}>
+      <Button variant="outline" onClick={add} disabled={plan.scenes.length >= 24}>
         <Plus className="size-4" /> Add a scene
       </Button>
       <div className="space-y-1">

@@ -72,7 +72,7 @@ POST = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_h
 
 AnimationId = Annotated[str, Field(description="The animation's id (from list_animations).")]
 Kind = Literal["auto", "facts", "lesson", "story", "news"]
-Style = Literal["glow", "paper", "story", "kinetic", "stick"]
+Style = Literal["glow", "paper", "story", "kinetic", "stick", "map"]
 Length = Literal["auto", "short", "medium", "long"]
 VOICE_HELP = (
     "'auto', a kind of voice ('narrator', 'calm', 'energetic'), or a voice id from list_voices"
@@ -398,10 +398,11 @@ class Studio:
             ],
             kind: Annotated[Kind, Field(description="'auto' lets the writer choose.")] = "auto",
             style: Annotated[
-                Literal["auto", "glow", "paper", "story", "kinetic", "stick"],
+                Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map"],
                 Field(
                     description="glow = Neon Glow, paper = Clean Paper, story = Character "
-                    "story, kinetic = Bold kinetic text, stick = Stick figure; 'auto' by the "
+                    "story, kinetic = Bold kinetic text, stick = Stick figure, map = World map "
+                    "(a tour of countries: 'Most famous X from every country'); 'auto' by the "
                     "content."
                 ),
             ] = "auto",

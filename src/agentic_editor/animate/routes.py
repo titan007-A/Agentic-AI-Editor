@@ -18,8 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentic_editor import features, instagram, jobs
-from agentic_editor.animate import images, render, schedule, studio, voice
-from agentic_editor.animate.plan import Plan
+from agentic_editor.animate import images, maps, mapwriter, render, schedule, studio, voice
+from agentic_editor.animate.plan import MAX_SCENES, Plan
 from agentic_editor.db import Animation, AnimationAutopilot, InstagramChannel, Job, Output
 from agentic_editor.render import fonts
 
@@ -32,7 +32,7 @@ PLAYER_FILES = {
 FONT_NAMES = {
     "Montserrat-ExtraBold", "Montserrat-Bold", "Inter-SemiBold", "Inter-Bold", "Inter-Medium",
     "Anton-Regular", "SourceSerif4-Bold", "SourceSerif4-Semibold", "Rubik-ExtraBold",
-    "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular",
+    "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular", "Poppins-SemiBold",
 }  # fmt: skip
 # The player page only runs its own script and shows what it is sent as text.
 PLAYER_CSP = (
@@ -44,7 +44,7 @@ PLAYER_CSP = (
 class AnimationRequest(BaseModel):
     idea: str = Field(min_length=3, max_length=300)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
     images: bool = True  # painted pictures behind the scenes
@@ -56,13 +56,13 @@ class PlanEdit(BaseModel):
 
 class ChangeRequest(BaseModel):
     request: str = Field(default="", max_length=500)
-    scene: int | None = Field(default=None, ge=0, le=20)
+    scene: int | None = Field(default=None, ge=0, le=MAX_SCENES)
 
 
 class StudioChoice(BaseModel):
     """Changes the studio's own controls make at once (no writing): style and voice."""
 
-    style: Literal["glow", "paper", "story", "kinetic", "stick"] | None = None
+    style: Literal["glow", "paper", "story", "kinetic", "stick", "map"] | None = None
     voice: str | None = Field(default=None, max_length=32)
     images: bool | None = None
 
@@ -74,7 +74,7 @@ class AutopilotSettings(BaseModel):
     hour: int = Field(default=10, ge=0, le=23)
     per_day: int = Field(default=1, ge=1, le=3)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
     channel_id: str | None = Field(default=None, max_length=32)
@@ -119,6 +119,8 @@ ROUTES = (
     ("POST", "/api/animations/{animation_id}/approve", "approve_animation"),
     ("POST", "/api/animations/{animation_id}/skip", "skip_animation"),
     ("GET", "/api/animation-images/{name}", "animation_image"),
+    ("GET", "/api/animation-ideas", "animation_ideas"),
+    ("GET", "/api/animation-map/v{version}/{level}/{name}", "map_tile"),
 )
 
 
@@ -442,7 +444,7 @@ def operations(
         """One of the autopilot's reels now, whatever the hour."""
         studio_user(account, session)
         pilot = pilot_of(account, session)
-        if pilot is None or (not pilot.topics and not pilot.niche.strip()):
+        if pilot is None or (not pilot.topics and not pilot.niche.strip() and pilot.style != "map"):
             raise HTTPException(409, "give the autopilot a niche or some topics first")
         found = schedule.new_animation(session, pilot, datetime.now().date())
         session.commit()
@@ -472,6 +474,30 @@ def operations(
         found.post_status = "skipped"
         session.commit()
         return view(found, session, full=True)
+
+    def animation_ideas(account: User, session: DB, style: str = "map", count: int = 6) -> dict:
+        """Topics for a new reel in a style's own kind (World map reels: "Most famous X
+        from every country"), leaving out those this account has made."""
+        studio_user(account, session)
+        if style != "map":
+            return {"ideas": []}
+        made = session.scalars(select(Animation.idea).where(Animation.owner_id == account.id)).all()
+        pilot = pilot_of(account, session)
+        used = [*made, *((pilot.used or []) if pilot else [])]
+        return {"ideas": mapwriter.ideas(used, max(1, min(count, 12)))}
+
+    def map_tile(version: int, level: int, name: str, account: User, session: DB) -> FileResponse:
+        """A tile of the World map style's picture of the Earth (animate/maps.py)."""
+        studio_user(account, session)
+        if version != maps.VERSION or not 0 <= level < maps.LEVELS:
+            raise HTTPException(404, "no such tile")
+        if not re.fullmatch(r"\d{1,3}_\d{1,3}\.jpg", name):
+            raise HTTPException(404, "no such tile")
+        path = maps.tiles_dir(settings.models_dir) / str(level) / name
+        if not path.is_file():
+            raise HTTPException(404, "no such tile")
+        kept = {"Cache-Control": "private, max-age=31536000, immutable"}
+        return FileResponse(path, media_type="image/jpeg", headers=kept)
 
     def animation_image(name: str, account: User, session: DB) -> FileResponse:
         """A painted picture (images.name_of: named by what it shows, so kept for good)."""

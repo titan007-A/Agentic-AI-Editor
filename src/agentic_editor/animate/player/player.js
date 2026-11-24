@@ -35,6 +35,7 @@
     "Rubik-Bold",
     "Rubik-SemiBold",
     "PatrickHand-Regular",
+    "Poppins-SemiBold",
   ];
 
   const THEMES = {
@@ -125,6 +126,26 @@
       quote: "Anton-Regular",
       glow: false,
       kinetic: true,
+      palette: "glow",
+    },
+    // World map: a satellite map under everything (see "the World map style" below); other
+    // visuals on it are drawn the Neon Glow way over a darkened map.
+    map: {
+      bg: "#00293b",
+      text: "#FFFFFF",
+      muted: "rgba(255,255,255,0.8)",
+      accent: "#FFD23F",
+      accent2: "#FF5A5F",
+      accent3: "#FFD23F",
+      card: "rgba(8,18,28,0.72)",
+      ink: "#08121c",
+      display: "Anton-Regular",
+      body: "Poppins-SemiBold",
+      number: "Anton-Regular",
+      caption: "Poppins-SemiBold",
+      quote: "Poppins-SemiBold",
+      glow: true,
+      map: true,
       palette: "glow",
     },
   };
@@ -243,6 +264,11 @@
   }
 
   function glowText(node, theme, color, strength = 1) {
+    if (theme.map) {
+      // On a map a shadow reads better than a glow.
+      node.style.textShadow = "0 6px 18px rgba(0,0,0,0.7), 0 2px 0 rgba(0,0,0,0.45)";
+      return;
+    }
     if (!theme.glow) return;
     const c = color || theme.accent;
     node.style.textShadow = `0 0 ${18 * strength}px ${c}55, 0 0 ${48 * strength}px ${c}33`;
@@ -487,7 +513,7 @@
     head.style.lineHeight = "1.06";
     head._fit = [132, 64];
     const hl = plain(v.highlight);
-    const spans = words(head, v.text || "");
+    const spans = words(head, theme.map ? String(v.text || "").toUpperCase() : v.text || "");
     spans.forEach((s) => {
       if (hl && hl.includes(plain(s.textContent)) && plain(s.textContent)) {
         s.classList.add("hl");
@@ -1935,12 +1961,373 @@
     };
   };
 
+  // ---- the World map style ------------------------------------------------------------
+  // A camera flies over a satellite picture of the Earth (animate/maps.py tiles, an
+  // equirectangular picture shown with the camera's own latitude squeeze), lights each
+  // country as it is named and pins a card on it for every thing it names. The camera is a
+  // pure function of t, worked out from the scenes' beats; tiles a frame needs are loaded
+  // before it is called done (seek returns a promise the renderer waits for).
+
+  const RAD = Math.PI / 180;
+  const CARD = { w: 376, h: 470, y: 790, label: 56 }; // y: where a new card's centre sits
+  const OCEAN = "#00293b";
+  let mapState = null; // the loaded reel's map (camera, projection) while scenes are built
+  let building = null; // load()'s pending pictures and options, for the scene builders
+
+  const wrapLon = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+
+  function project(cam) {
+    const s = W / cam.w; // pixels per degree of arc
+    const k = Math.max(0.05, Math.cos(cam.lat * RAD));
+    return {
+      s,
+      k,
+      x: (lon) => W / 2 + wrapLon(lon - cam.lon) * k * s,
+      y: (lat) => H / 2 - (lat - cam.lat) * s,
+    };
+  }
+
+  // The camera between two views: centre and zoom eased together, and on a long flight a
+  // pull back in the middle so the way there is seen.
+  function between(a, b, p, fly) {
+    const e = ease.inOut(clamp(p));
+    let dlon = b.lon - a.lon;
+    if (dlon > 180) dlon -= 360;
+    if (dlon < -180) dlon += 360;
+    let lw = lerp(Math.log(a.w), Math.log(b.w), e);
+    if (fly) {
+      const k = Math.cos(((a.lat + b.lat) / 2) * RAD);
+      const dist = Math.hypot(dlon * k, b.lat - a.lat);
+      lw += Math.log(1 + dist / Math.max(a.w, b.w)) * 0.85 * Math.sin(Math.PI * e);
+    }
+    return { lon: wrapLon(a.lon + dlon * e), lat: lerp(a.lat, b.lat, e), w: Math.exp(lw) };
+  }
+
+  // Where the camera looks so a card's spot sits where new cards pop (CARD.y).
+  function onCard(spot, close) {
+    return { lon: spot[0], lat: spot[1] - ((H / 2 - CARD.y) * close) / W, w: close };
+  }
+
+  function cameraPath(data, m) {
+    const views = m.scenes || [];
+    const first = views.find(Boolean);
+    const world = () => {
+      const lit = views.filter(Boolean);
+      if (!lit.length) return { lon: 10, lat: 25, w: 150 };
+      const lon = lit.reduce((a, v) => a + v.fit[0], 0) / lit.length;
+      const lat = lit.reduce((a, v) => a + v.fit[1], 0) / lit.length;
+      return { lon, lat: clamp(lat, -30, 50), w: 150 };
+    };
+    const keys = [];
+    keys.push({ t: 0, dur: 0, to: first ? { lon: first.fit[0], lat: first.fit[1], w: Math.min(110, first.wide * 1.5) } : world() });
+    data.scenes.forEach((sc, i) => {
+      if (sc.kind === "cta") {
+        keys.push({ t: sc.start, dur: 1.1, to: world(), fly: true });
+        return;
+      }
+      const v = views[i];
+      if (!v) return;
+      const [lon, lat, fit] = v.fit;
+      const beats = sc.beats || [];
+      const arrive = Math.max(0, sc.start - 0.05);
+      keys.push({ t: arrive, dur: 0.8, to: { lon, lat, w: v.wide }, fly: true });
+      const cards = beats.slice(1);
+      let last = arrive + 0.35;
+      cards.forEach((b, k) => {
+        if (!v.spots[k]) return;
+        const before = k ? cards[k - 1] : beats[0] || sc.start;
+        const dur = clamp((b - before) * 0.75, 0.32, 0.55);
+        const at = Math.max(b - dur * 0.8, last);
+        keys.push({ t: at, dur, to: onCard(v.spots[k], v.close) });
+        last = at + 0.2;
+      });
+      // All of it once more, every card small on it, before flying on.
+      const end = cards.length ? cards[cards.length - 1] : beats[0] || sc.start;
+      const back = Math.max(end + 0.85, sc.end - 0.75, last);
+      // Close enough that its cards still read, as the reference pulls back (the whole
+      // country is all but in view).
+      if (back < sc.end - 0.15) keys.push({ t: back, dur: Math.min(0.6, sc.end - back), to: { lon, lat, w: fit * 0.86 } });
+    });
+    keys.sort((a, b) => a.t - b.t);
+    // Each move starts from wherever the camera is when it starts (mid-move or drifting).
+    const at = (k, t) => {
+      const p = k.dur > 0 ? (t - k.t) / k.dur : 1;
+      const cam = p < 1 ? between(k.from, k.to, p, k.fly) : { ...k.to };
+      const settled = Math.max(0, t - k.t - k.dur);
+      cam.w *= 1 - 0.035 * clamp(settled / 4); // a slow push in while it holds
+      return cam;
+    };
+    keys[0].from = keys[0].to;
+    for (let i = 1; i < keys.length; i++) keys[i].from = at(keys[i - 1], keys[i].t);
+    return (t) => {
+      let k = keys[0];
+      for (const key of keys) {
+        if (key.t <= t) k = key;
+        else break;
+      }
+      return at(k, t);
+    };
+  }
+
+  // Tiles of the Earth's picture: level 0 (the whole Earth, 18 tiles) is kept loaded under
+  // everything; the level a frame's zoom needs is loaded as frames ask for it.
+  function tileStore(base, m) {
+    const cache = new Map();
+    const MAX = 96;
+    let clock = 0;
+    const size = m.tile || 500;
+    const levels = m.levels || 4;
+    const get = (l, x, y) => {
+      const key = `${l}/${x}_${y}`;
+      let e = cache.get(key);
+      if (!e) {
+        const img = new Image();
+        e = { img, ok: false, level: l };
+        e.promise = new Promise((resolve) => {
+          img.onload = () => {
+            const done = () => {
+              e.ok = true;
+              resolve();
+            };
+            img.decode ? img.decode().then(done, done) : done();
+          };
+          img.onerror = () => resolve();
+        });
+        img.src = `${base}${l}/${x}_${y}.jpg`;
+        cache.set(key, e);
+        if (cache.size > MAX) {
+          const old = [...cache.entries()].filter(([, v]) => v.level > 0 && v.ok).sort((a, b) => a[1].used - b[1].used);
+          for (const [k] of old.slice(0, cache.size - MAX)) cache.delete(k);
+        }
+      }
+      e.used = ++clock;
+      return e;
+    };
+    const perDegree = (l) => (3000 * Math.pow(2, l)) / 360;
+    const cols = (l) => 6 * Math.pow(2, l);
+    const rows = (l) => 3 * Math.pow(2, l);
+    const base0 = [];
+    for (let y = 0; y < rows(0); y++) for (let x = 0; x < cols(0); x++) base0.push(get(0, x, y).promise);
+    return { get, perDegree, cols, rows, size, levels, ready: Promise.all(base0) };
+  }
+
+  function drawTiles(ctx, store, cam, pr, level, wait) {
+    const ppd = store.perDegree(level);
+    const span = store.size / ppd; // degrees a tile covers
+    const halfLon = W / 2 / (pr.s * pr.k);
+    const halfLat = H / 2 / pr.s;
+    const lon0 = cam.lon - halfLon;
+    const lon1 = cam.lon + halfLon;
+    const lat0 = Math.max(-90, cam.lat - halfLat);
+    const lat1 = Math.min(90, cam.lat + halfLat);
+    const x0 = Math.floor((lon0 + 180) / span);
+    const x1 = Math.floor((lon1 + 180) / span);
+    const y0 = Math.max(0, Math.floor((90 - lat1) / span));
+    const y1 = Math.min(store.rows(level) - 1, Math.floor((90 - lat0) / span));
+    const n = store.cols(level);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const e = store.get(level, ((x % n) + n) % n, y);
+        if (!e.ok) {
+          if (wait) wait.push(e.promise);
+          continue;
+        }
+        const tileLon = -180 + x * span;
+        const sx = W / 2 + (tileLon - cam.lon) * pr.k * pr.s;
+        const sy = H / 2 - (90 - y * span - cam.lat) * pr.s;
+        const w = span * pr.k * pr.s;
+        const h = span * pr.s;
+        ctx.drawImage(e.img, sx - 0.5, sy - 0.5, w + 1, h + 1);
+      }
+    }
+  }
+
+  function ringPath(ctx, flat, cam, pr) {
+    // The whole ring moved by whole turns to the camera's side (rings never cross 180).
+    const shift = 360 * Math.round((cam.lon - flat[0]) / 360);
+    ctx.moveTo(W / 2 + (flat[0] + shift - cam.lon) * pr.k * pr.s, H / 2 - (flat[1] - cam.lat) * pr.s);
+    for (let i = 2; i < flat.length; i += 2) {
+      ctx.lineTo(W / 2 + (flat[i] + shift - cam.lon) * pr.k * pr.s, H / 2 - (flat[i + 1] - cam.lat) * pr.s);
+    }
+    ctx.closePath();
+  }
+
+  function mapLayer(stage, data, options) {
+    const canvas = el("canvas", "layer", stage);
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    const m = data.map || { scenes: [], countries: {} };
+    // The studio's address for tiles names their version (the renderer's is their folder).
+    const base = /animation-map\/$/.test(options.mapBase || "") ? `${options.mapBase}v${m.version || 1}/` : options.mapBase;
+    const store = m.tiles && base ? tileStore(base, m) : null;
+    const camera = cameraPath(data, m);
+    const views = m.scenes || [];
+    const cta = data.scenes.find((sc) => sc.kind === "cta");
+    // How lit each scene's country is at t: as it is named, until the camera flies on.
+    const lit = data.scenes.map((sc, i) => {
+      const v = views[i];
+      if (!v) return null;
+      const on = (sc.beats && sc.beats[0]) || sc.start;
+      return (t) => {
+        const end = ease.inOut(prog(t, sc.end + 0.1, 0.45));
+        const finale = cta ? ease.out(prog(t, cta.start + 0.35, 0.6)) : 0;
+        return Math.max(ease.out(prog(t, on - 0.1, 0.35)) * (1 - end), finale);
+      };
+    });
+    const draw = (t) => {
+      const cam = camera(t);
+      const pr = project(cam);
+      const wait = [];
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = OCEAN;
+      ctx.fillRect(0, 0, W, H);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      if (store) {
+        drawTiles(ctx, store, cam, pr, 0, null);
+        let level = 0;
+        while (level < store.levels - 1 && store.perDegree(level) < pr.s * 0.8) level++;
+        if (level > 0) drawTiles(ctx, store, cam, pr, level, wait);
+      }
+      // The lit countries: a see-through colour, a bright edge with a glow, the name
+      // spread wide and faint across it.
+      views.forEach((v, i) => {
+        if (!v || !lit[i]) return;
+        const a = lit[i](t);
+        const shape = m.countries[v.code];
+        if (a <= 0.001 || !shape) return;
+        ctx.beginPath();
+        for (const ring of shape.rings) ringPath(ctx, ring, cam, pr);
+        ctx.globalAlpha = a * (m.fillAlpha || 0.74);
+        ctx.fillStyle = v.color;
+        ctx.fill("evenodd");
+        ctx.globalAlpha = a;
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.shadowColor = "rgba(255,255,255,0.9)";
+        ctx.shadowBlur = 9;
+        ctx.lineWidth = 2.6;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        const size = clamp(0.17 * v.fit[2] * pr.s, 40, 900);
+        ctx.font = `${size.toFixed(0)}px "Poppins-SemiBold", sans-serif`;
+        if ("letterSpacing" in ctx) ctx.letterSpacing = `${(size * 0.42).toFixed(0)}px`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.globalAlpha = a * 0.14;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(shape.short || shape.name || "", pr.x(shape.label[0]), pr.y(shape.label[1]));
+        if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
+      });
+      ctx.globalAlpha = 1;
+      return wait;
+    };
+    return { draw, camera, ready: store ? store.ready : Promise.resolve() };
+  }
+
+  // A thing's card pinned on its country: the painted picture (or its emoji) on white, its
+  // name on a dark label below; it grows with the camera's zoom like the map under it.
+  function mapCard(item, root) {
+    const wrap = place(el("div", "abs", root), 0, 0, CARD.w, CARD.h + 14 + CARD.label);
+    wrap.style.transformOrigin = `${CARD.w / 2}px ${CARD.h / 2}px`;
+    const card = place(el("div", "abs", wrap), 0, 0, CARD.w, CARD.h);
+    card.style.background = "#ffffff";
+    card.style.borderRadius = "18px";
+    card.style.overflow = "hidden";
+    card.style.boxShadow = "0 14px 34px rgba(0,0,0,0.42)";
+    const base = building && building.options.imageBase;
+    if (item.image && base) {
+      const img = place(el("img", "abs", card), 0, 0, CARD.w, CARD.h);
+      img.style.objectFit = "cover";
+      img.alt = "";
+      building.pending.push(
+        new Promise((resolve) => {
+          img.onload = img.onerror = () => resolve();
+          img.src = base + item.image;
+        }).then(() => img.decode && img.decode().catch(() => undefined)),
+      );
+    } else {
+      const glyph = emoji(card, item.emoji || "🌍", 250);
+      place(glyph, 0, 0, CARD.w, CARD.h);
+      glyph.style.display = "flex";
+      glyph.style.alignItems = "center";
+      glyph.style.justifyContent = "center";
+    }
+    const holder = place(el("div", "abs", wrap), -200, CARD.h + 14, CARD.w + 400, CARD.label);
+    holder.style.textAlign = "center";
+    // A name written all in small letters gets capitals, as a label would.
+    const name = String(item.text || "");
+    const shown = name === name.toLowerCase() ? name.replace(/(^|\s)(\p{L})/gu, (m, a, b) => a + b.toUpperCase()) : name;
+    const label = el("span", "", holder, shown);
+    font(label, "Poppins-SemiBold", 34, "#ffffff");
+    label.style.display = "inline-block";
+    label.style.whiteSpace = "nowrap";
+    label.style.background = "#16141d";
+    label.style.borderRadius = "10px";
+    label.style.padding = "3px 18px 5px";
+    label.style.lineHeight = "1.3";
+    label.style.boxShadow = "0 6px 16px rgba(0,0,0,0.35)";
+    for (let size = 34; size > 18 && label.offsetWidth > CARD.w + 220; size -= 2) label.style.fontSize = size + "px";
+    wrap.style.display = "none";
+    return wrap;
+  }
+
+  function mapCountry(v, theme, root, scene, data) {
+    const index = data.scenes.indexOf(scene);
+    const view = data.map && data.map.scenes ? data.map.scenes[index] : null;
+    const items = v.items || [];
+    const cards = items.map((item) => mapCard(item, root));
+    const beats = beatsOf(scene, items.length + 1).slice(1);
+    return (t) => {
+      const cam = mapState.camera(t);
+      const pr = project(cam);
+      const zoom = view ? view.close / cam.w : 1;
+      const leave = 1 - ease.inOut(prog(t, scene.end + 0.05, 0.4));
+      cards.forEach((wrap, k) => {
+        const at = beats[k];
+        const next = beats[k + 1];
+        // Off the map (no spot): one card at a time where cards pop.
+        const gone = !view && next !== undefined && t >= next;
+        if (t < at - 0.02 || gone || leave <= 0.001) {
+          wrap.style.display = "none";
+          return;
+        }
+        wrap.style.display = "block";
+        const p = prog(t, at - 0.02, 0.4);
+        const pop = lerp(0.2, 1, ease.back(p));
+        const spot = view && view.spots[k];
+        const x = spot ? pr.x(spot[0]) : W / 2;
+        const y = spot ? pr.y(spot[1]) : CARD.y;
+        wrap.style.opacity = (clamp(p * 3) * leave).toFixed(4);
+        wrap.style.transform = `translate(${(x - CARD.w / 2).toFixed(1)}px, ${(y - CARD.h / 2).toFixed(1)}px) scale(${(zoom * pop).toFixed(4)})`;
+      });
+    };
+  }
+
+  // Under any other visual on the map (a hook, a number, the ending): the map darkened so
+  // the visual reads.
+  function mapVeil(root, kind) {
+    const veil = place(el("div", "abs", root), 0, 0, W, H);
+    veil.style.background =
+      kind === "title"
+        ? "radial-gradient(ellipse at 50% 42%, rgba(0,10,18,0.55), rgba(0,10,18,0.25) 70%)"
+        : "linear-gradient(rgba(0,12,20,0.5), rgba(0,12,20,0.62))";
+    return veil;
+  }
+
+  SCENES.country = (v, theme, root, scene, data) =>
+    theme.map ? mapCountry(v, theme, root, scene, data) : SCENES.list(v, theme, root, scene);
+
   // ---- subtitles and header -----------------------------------------------------------
 
   function subtitles(theme, stage, captions) {
     const layer = el("div", "layer", stage);
     // Bold kinetic text: the words are the picture already.
     if (theme.kinetic) return { chunks: [], update() {} };
+    if (theme.map) return mapSubtitles(theme, layer, captions);
     const chunks = captions.map((c) => {
       const box = place(el("div", "abs fit center", layer), (W - SUBS.w) / 2 - 20, SUBS.y, SUBS.w, SUBS.h);
       font(box, theme.caption, 78, theme.text);
@@ -2007,8 +2394,38 @@
     };
   }
 
+  // World map captions: one word (or one name) at a time, low on the screen, white with a
+  // soft shadow, the first letter a capital as the reference reels show them ("Has",
+  // "Marine biologist"), punctuation off.
+  function mapSubtitles(theme, layer, captions) {
+    const bare = (text) => text.replace(/^[^\p{L}\p{N}$£€]+|[^\p{L}\p{N}%)]+$/gu, "");
+    const shown = (text) => text.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
+    const chunks = captions.map((c) => {
+      const box = place(el("div", "abs fit center", layer), 80, 1305, W - 160, 120);
+      font(box, theme.caption, 60, theme.text);
+      box.style.display = "none";
+      box.style.whiteSpace = "nowrap";
+      box.style.textShadow = "0 3px 10px rgba(0,0,0,0.65), 0 1px 2px rgba(0,0,0,0.6)";
+      box.textContent = shown(c.words.map((w) => bare(w.text)).filter(Boolean).join(" "));
+      box._fit = [60, 34];
+      return { c, box, spans: [] };
+    });
+    return {
+      chunks,
+      update(t) {
+        for (const ch of chunks) {
+          const on = t >= ch.c.start && t < ch.c.end && ch.box.textContent;
+          ch.box.style.display = on ? "flex" : "none";
+          if (!on) continue;
+          const p = ease.out(prog(t, ch.c.start, 0.12));
+          show(ch.box, clamp(p * 1.4), `scale(${lerp(0.94, 1, p).toFixed(4)})`);
+        }
+      },
+    };
+  }
+
   function header(theme, stage, data) {
-    if (theme.kinetic) return { fits: [], update() {} };
+    if (theme.kinetic || theme.map) return { fits: [], update() {} };
     if (theme.stick) {
       // A big title on top for each part: the scene's own (who or where), else the reel's.
       const titles = new Map();
@@ -2072,7 +2489,7 @@
   // its loading is added to `pending`. None for styles drawn as themselves.
   function paintedLayer(scene, theme, root, base, pending) {
     const name = scene.visual && scene.visual.image;
-    if (!name || !base || theme.stick || theme.kinetic) return null;
+    if (!name || !base || theme.stick || theme.kinetic || theme.map) return null;
     const box = el("div", "abs", root);
     place(box, 0, 0, W, H);
     box.style.overflow = "hidden";
@@ -2127,20 +2544,25 @@
     shrunk.length = 0;
     const theme = THEMES[data.style] || THEMES.glow;
     const seed = hash(data.title || "reel");
-    const drawBg = background(theme, stage, seed);
+    const mapView = theme.map ? mapLayer(stage, data, options) : null;
+    mapState = mapView;
+    const drawBg = mapView ? mapView.draw : background(theme, stage, seed);
     const sceneLayer = el("div", "layer", stage);
-    const pending = [];
+    const pending = mapView ? [mapView.ready] : [];
+    building = { pending, options };
     const scenes = data.scenes.map((scene) => {
       const root = el("div", "scene", sceneLayer);
       const kind = theme.kinetic && !["cta", "stat"].includes(scene.kind) ? "kinetic" : scene.kind;
       const build = SCENES[kind] || SCENES.title;
       root.style.display = "block";
+      if (theme.map && kind !== "country") mapVeil(root, kind);
       // A painted picture behind it (animate/images.py), under everything the scene draws.
       const picture = paintedLayer(scene, theme, root, options.imageBase, pending);
       scene._picture = Boolean(picture);
       const update = build(scene.visual || {}, theme, root, scene, data);
-      return { scene, root, update, picture };
+      return { scene, root, update, picture, pinned: theme.map && kind === "country" };
     });
+    building = null;
     // Every picture is in before a frame is drawn: the first frames of a render too.
     await Promise.all(pending);
     const subs = subtitles(theme, stage, data.captions || []);
@@ -2164,17 +2586,30 @@
     head.fits.forEach((node) => fit(node, node._fit[0], node._fit[1], "title"));
     scenes.forEach((s) => (s.root.style.display = "none"));
     state = { data, theme, drawBg, scenes, subs, head, guides, t: 0 };
-    seek(0);
+    await seek(0);
     return { duration: data.duration, problems: shrunk.slice() };
   }
 
+  // Draws the frame at t. When the frame needs map tiles still loading, it is drawn with
+  // what is there and a promise is returned that draws it again once they are in (the
+  // renderer waits for it; the preview just gets the sharper frame a moment later).
   function seek(t) {
     if (!state) return;
     state.t = t;
-    state.drawBg(t);
+    const waiting = state.drawBg(t);
     const last = state.scenes[state.scenes.length - 1];
     for (const s of state.scenes) {
       const { start, end } = s.scene;
+      if (s.pinned) {
+        // A country's cards sit on the map: no slide of their own, on until the camera
+        // has flown on.
+        const pinnedOn = t >= start - 0.001 && t < end + 0.6;
+        s.root.style.display = pinnedOn ? "block" : "none";
+        if (!pinnedOn) continue;
+        show(s.root, 1, "none");
+        s.update(t);
+        continue;
+      }
       // The closing scene stays to the very end; the others hand over to the next.
       const stays = s === last;
       const on = t >= start - 0.001 && (stays || t < end + EXIT);
@@ -2196,6 +2631,12 @@
     }
     state.subs.update(t);
     state.head.update(t);
+    if (waiting && waiting.length) {
+      return Promise.all(waiting).then(() => {
+        if (state && state.t === t) state.drawBg(t);
+      });
+    }
+    return undefined;
   }
 
   function guides(on) {
@@ -2217,7 +2658,12 @@
       if (event.origin !== location.origin || !event.data || typeof event.data !== "object") return;
       const msg = event.data;
       if (msg.type === "load") {
-        const info = await load(msg.data, { fontBase: msg.fontBase, emojiFont: msg.emojiFont, imageBase: msg.imageBase });
+        const info = await load(msg.data, {
+          fontBase: msg.fontBase,
+          emojiFont: msg.emojiFont,
+          imageBase: msg.imageBase,
+          mapBase: msg.mapBase,
+        });
         seek(msg.t || 0);
         window.parent.postMessage({ type: "ready", duration: info.duration, problems: info.problems }, location.origin);
       } else if (msg.type === "seek") {

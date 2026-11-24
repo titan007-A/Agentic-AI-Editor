@@ -225,6 +225,59 @@ def test_painted_pictures_are_served_by_name_and_switched_per_reel(
     assert on["images"] is True and on["status"] == "ready"
 
 
+def test_world_map_reels_have_ideas_tiles_and_their_own_writer(env, monkeypatch, tmp_path):
+    from PIL import Image
+
+    from agentic_editor.animate import maps
+    from tests.test_animate_map import MapModel, map_reply
+
+    # No map on this machine: nothing to fetch in a test, no country checked or flown to.
+    monkeypatch.setattr(studio, "ensure_map", lambda settings, say=None: [])
+    monkeypatch.setattr(maps, "table", lambda models_dir: {})
+    monkeypatch.setattr(maps, "tiles_dir", lambda models_dir: tmp_path / "tiles")
+    model = MapModel(map_reply(), map_reply())
+    monkeypatch.setattr(planner, "gather", lambda *a, **k: [])
+    monkeypatch.setattr(planner, "subject", lambda llm, idea: ("", ""))
+    monkeypatch.setattr(
+        jobs,
+        "animate",
+        lambda animation_id: studio.run_task(
+            animation_id, env.sessions, env.settings, Router(model), speak=fake_speak
+        ),
+    )
+    studio_on(env)
+    ideas = env.client.get("/api/animation-ideas?style=map").json()["ideas"]
+    assert len(ideas) == 6 and all("every country" in i for i in ideas)
+    assert env.client.get("/api/animation-ideas?style=glow").json() == {"ideas": []}
+    made = env.client.post(
+        "/api/animations", json={"idea": ideas[0], "style": "map", "length": "short"}
+    )
+    assert made.status_code == 200, made.text
+    a = made.json()
+    assert a["status"] == "ready" and a["plan"]["style"] == "map", a["error"]
+    assert a["plan"]["scenes"][1]["visual"]["kind"] == "country"
+    assert a["player"]["map"]["scenes"][1] is None  # no map here: the card shows, no flying
+    for _ in range(5):  # a topic made is never offered again
+        assert ideas[0] not in env.client.get("/api/animation-ideas?style=map").json()["ideas"]
+    # A reel of another style can be shown on the map, and back.
+    glow = env.client.patch(f"/api/animations/{a['id']}", json={"style": "glow"}).json()
+    assert glow["plan"]["style"] == "glow" and "map" not in glow["player"]
+    # The Earth's tiles: by version, level and name only.
+    (tmp_path / "tiles" / "0").mkdir(parents=True)
+    Image.new("RGB", (8, 8)).save(tmp_path / "tiles" / "0" / "3_1.jpg")
+    tile = env.client.get(f"/api/animation-map/v{maps.VERSION}/0/3_1.jpg")
+    assert tile.status_code == 200 and tile.headers["content-type"] == "image/jpeg"
+    assert "immutable" in tile.headers["cache-control"]
+    for bad in (
+        f"v{maps.VERSION + 1}/0/3_1.jpg",
+        f"v{maps.VERSION}/9/3_1.jpg",
+        f"v{maps.VERSION}/0/3_1.png",
+        f"v{maps.VERSION}/0/4_1.jpg",
+        f"v{maps.VERSION}/0/..%2F0%2F3_1.jpg",
+    ):
+        assert env.client.get(f"/api/animation-map/{bad}").status_code == 404, bad
+
+
 def test_every_studio_operation_is_a_route(env):
     served = {
         (method, route.path)

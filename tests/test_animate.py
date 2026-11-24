@@ -268,7 +268,8 @@ def test_music_is_as_long_as_asked_and_quiet_under_the_voice(mood):
     x = sound.music(mood, 6.0, seed=3)
     assert x.shape == (6 * sound.RATE, 2)
     rms_db = 20 * np.log10(np.sqrt(np.mean(x**2)))
-    assert rms_db == pytest.approx(sound.MUSIC_RMS_DB, abs=0.5)
+    level = sound.MOODS[mood].get("gain", sound.MUSIC_RMS_DB)  # under the voice either way
+    assert rms_db == pytest.approx(level, abs=0.5) and level <= sound.MUSIC_RMS_DB + 3
     assert np.array_equal(x, sound.music(mood, 6.0, seed=3))  # the same reel, the same music
 
 

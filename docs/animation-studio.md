@@ -231,6 +231,55 @@ Subtitles sit at y 1180-1420; visuals in y 250-1120.
 - Measured on the M5 Mac: the model loads in 5 s, then 24-27 s a picture; a 6-scene reel
   paints in about 2.5 minutes before its voice is recorded.
 
+## World map style (owner's reference, 2026-11-23)
+
+The reference page posts one format every day: "Most famous X from every country". Its
+reels (55-118 s, 1080x1920) fly a camera over a satellite map of the Earth; the country
+being talked about is lit in a strong colour with a bright white edge and its name spread
+wide and faint across it; a white card with a picture and a dark name label pops up for
+each thing named, pinned on the country, so earlier cards slide away as the camera moves
+on and all of them show small when it pulls back before flying to the next country.
+Captions come one word at a time (a name stays whole) in white Poppins with a soft
+shadow, low on the screen. The voice is a clear American man; a bright pop loop sits
+about 9 dB under it. The script is always: an optional one-line hook, then one sentence a
+country, "<Country> has <thing>, <thing>, and <thing>.", the most famous first, a short
+surprising fact after one or two of them, touring from the United States through Europe
+and Asia to Australia and Latin America, and no call to action.
+
+Ours (style `map`, "World map"):
+
+- `animate/maps.py`: NASA's Blue Marble (public domain, 24000x12000) cut into tiles at
+  four sizes with the ocean turned the reference's deep teal (#00293b) and the land toned
+  down; Natural Earth's countries (public domain, 1:10m) as a table of names people say
+  ("the UK", "Holland"), label points, main landmass and simplified outlines. Both are
+  fetched once into `models/maps` (about 33 MB, then a minute of cutting; `aiedit
+  fetch-models` does it too). `attach` adds to the player's data each country scene's
+  outline, colour (purple first, then red, green, blue... as the reference), where its
+  cards go (inside it, spread apart) and how close the camera comes.
+- Visual `country` (text: the country as said; items: the things, each with an emoji and
+  `art`, what its card's picture shows). The writer for this style (`animate/mapwriter.py`)
+  answers a schema made for the format and checks: at least 5 countries, each once, each
+  named in its sentence with every card's name, and every country on the map (a name the
+  map doesn't know is sent back once).
+- Player: the camera is a pure function of t built from the beats (fly in wide as the
+  country is named, move to each card as it is said, pull back to the whole country, fly
+  on, with a zoom-out bump on long flights); tiles a frame needs are awaited before the
+  renderer takes it, so preview and video match. Captions are timeline.word_captions.
+- Pictures: on the Mac each card's picture is painted alone on white (Z-Image, 720x896);
+  without the model the card shows the item's emoji. Never a logo, writing or someone's
+  character: for a brand, film or character the card shows an object of its kind.
+- Sound: mood `upbeat` (123 bpm pop loop, -28 dB); voice Michael (American man).
+- The studio offers topic ideas for this style (50 family-friendly "Most famous X from
+  every country" topics, those made left out); a World map autopilot takes them in turn,
+  then asks the model for more in the same shape, so it needs no niche.
+- Every style still draws every visual: a country scene in another style is a list (the
+  country, its things with their emoji); other visuals on the map sit on a darkened map.
+
+What stays different on purpose: the reference shows real cartoon characters, brand logos
+and photos, and its own watermark; ours paints generic pictures (or emoji) and writes its
+own scripts. We keep the system's "Follow for more" ending (a world view with every
+country lit), which the reference doesn't have.
+
 ## Phase 3: autopilot
 
 - One autopilot per account (`animation_autopilots`): niche, topics (one per line, first

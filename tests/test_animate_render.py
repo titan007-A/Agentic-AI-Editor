@@ -205,3 +205,39 @@ def test_a_scene_note_never_sits_on_a_speech_bubble(actors):
         assert note["o"] < 0.05
         early = boxes_at(data, opts, first["start"] + 1.2, ["Trembling hands", "It's a map!"])
         assert early["Trembling hands"]["o"] > 0.9 and early["It's a map!"]["o"] < 0.05
+
+
+def test_a_world_map_reel_flies_lights_the_country_and_pins_its_cards(tmp_path, monkeypatch):
+    from agentic_editor.animate import maps
+    from tests.test_animate_map import WORLD, map_plan
+
+    # A small world: the countries' table and an Earth of one land colour, one tile level.
+    monkeypatch.setattr(maps, "LEVELS", 1)
+    models = tmp_path / "models"
+    source = tmp_path / "world.geojson"
+    source.write_text(json.dumps(WORLD))
+    maps.table_path(models).parent.mkdir(parents=True)
+    maps.build_table(source, maps.table_path(models))
+    earth = tmp_path / "earth.jpg"
+    Image.new("RGB", (3000, 1500), (120, 130, 80)).save(earth)
+    maps.build_tiles(earth, maps.tiles_dir(models))
+    (models / "fonts").mkdir()
+    plan = map_plan()
+    data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, models)
+    assert data["map"]["tiles"] and data["map"]["levels"] == 1
+    usa = data["scenes"][1]
+    card_at = usa["beats"][1] + 0.22  # the first card has popped, the camera is on it
+    data["duration"] = round(card_at + 0.5, 2)
+    opts = render.options(ROOT / "fonts", models)
+    shown = Image.open(render.frame(data, opts, card_at, tmp_path / "shown.jpg")).convert("RGB")
+    r, g, b = shown.getpixel((390, 590))  # the card, white (beside its picture)
+    assert min(r, g, b) > 225, (r, g, b)
+    r, g, b = shown.getpixel((90, 1650))  # the lit country: the land under purple
+    assert b > g + 20 and r > g, (r, g, b)
+    caption = boxes_at(data, opts, card_at, ["Apple pie"])["Apple pie"]
+    assert caption is not None and 1280 < caption["y"] < 1420
+    video = tmp_path / "picture.mp4"
+    assert render.frames_to_video(data, opts, video, fps=10) == []
+    made = frame_at(video, card_at, tmp_path / "made.png")
+    diff = np.abs(np.asarray(shown, dtype=float) - np.asarray(made, dtype=float)).mean()
+    assert diff < 4.0, f"the video differs from the preview by {diff:.1f}"

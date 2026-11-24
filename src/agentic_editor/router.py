@@ -118,8 +118,10 @@ class ModelRouter:
         if ocr.available():
             ocr.fetch_model(s.models_dir)
         from agentic_editor import upscale
+        from agentic_editor.animate import maps
 
         upscale.fetch_models(s.models_dir)
+        maps.fetch(s.models_dir)  # the World map animations' Earth and countries
 
     def planner(self) -> OllamaClient:
         """The planning model, holding the GPU while open."""

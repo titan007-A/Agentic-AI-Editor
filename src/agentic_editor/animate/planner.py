@@ -13,16 +13,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentic_editor import caption, websearch
-from agentic_editor.animate import voice
+from agentic_editor.animate import mapwriter, voice
 from agentic_editor.animate.plan import (
     ACTIONS,
     CATALOGUE,
     FEELINGS,
     KINDS,
     LOOKS,
+    MAP_WORDS,
     MOODS,
     MOTIONS,
     SETTINGS,
+    STYLES,
     WORDS,
     CastMember,
     Plan,
@@ -334,9 +336,11 @@ def scene_prompt(plan: Plan, index: int, request: str) -> list[dict]:
 # ---- writing ---------------------------------------------------------------------------
 
 
-def _voice_for(choice: str, voice_kind: str, kind: str, mood: str) -> str:
+def _voice_for(choice: str, voice_kind: str, kind: str, mood: str, default: str = "") -> str:
     if choice not in ("", "auto"):
         return voice.resolve(choice, kind, mood)
+    if default:
+        return default
     if voice_kind == "narrator":
         return "bm_fable" if kind == "story" else "bm_george"
     if voice_kind == "energetic":
@@ -349,7 +353,7 @@ def _voice_for(choice: str, voice_kind: str, kind: str, mood: str) -> str:
 def _style_for(choice: str, kind: str, acted: bool = False) -> str:
     """The style asked for, else by the content: characters for stories and lessons told
     with them, Neon Glow for facts and news."""
-    if choice in ("glow", "paper", "story", "kinetic", "stick"):
+    if choice in STYLES:
         return choice
     if kind in ("lesson", "story"):
         return "story" if acted else "paper"
@@ -406,14 +410,23 @@ def _write(
     return better, left if better is again else wrong
 
 
-def draft(llm, brief: Brief, found: list[Found]) -> tuple[Plan, list[str]]:
-    """A first Plan for `brief`, and what is still off about it (shown to the person)."""
+def draft(llm, brief: Brief, found: list[Found], known=None) -> tuple[Plan, list[str]]:
+    """A first Plan for `brief`, and what is still off about it (shown to the person).
+    `known(name)` says whether a country is on the map (World map reels)."""
+    if brief.style == mapwriter.STYLE:
+        sources = [Source(title=f.title, url=f.url) for f in found if f.url]
+        voice = _voice_for(brief.voice, "", "facts", mapwriter.MOOD, mapwriter.VOICE)
+        return mapwriter.draft(
+            llm, brief.idea, brief.length, sources_text(found), sources, voice, known
+        )
     return _write(llm, draft_prompt(brief, found), brief, found, temperature=0.75)
 
 
-def change(llm, plan: Plan, request: str, brief: Brief) -> tuple[Plan, list[str]]:
+def change(llm, plan: Plan, request: str, brief: Brief, known=None) -> tuple[Plan, list[str]]:
     """`plan` changed as asked in plain words. The style, voice and sources stay unless
     the request is about them (the person changes those with the studio's own controls)."""
+    if plan.style == mapwriter.STYLE:
+        return mapwriter.change(llm, plan, brief.idea, request, brief.length, known)
     keep = Brief(brief.idea, plan.kind, plan.style, plan.voice, brief.length)
     found = [Found(s.title, s.url, "") for s in plan.sources]
     changed, left = _write(
@@ -428,6 +441,8 @@ def redo_scene(llm, plan: Plan, index: int, request: str = "") -> Plan:
     """`plan` with scene `index` written again."""
     if not 0 <= index < len(plan.scenes):
         raise PlannerError(f"there is no scene {index + 1}")
+    if plan.style == mapwriter.STYLE and plan.scenes[index].visual.kind == "country":
+        return mapwriter.redo_country(llm, plan, index, request)
     reply = llm.chat_json(scene_prompt(plan, index, request), SCENE_SCHEMA, temperature=0.8)
     scenes = list(plan.scenes)
     scenes[index] = Scene.model_validate(reply)
@@ -435,7 +450,8 @@ def redo_scene(llm, plan: Plan, index: int, request: str = "") -> Plan:
 
 
 def words_note(plan: Plan, length: str) -> str:
-    low, high = WORDS.get(length, WORDS["auto"])
+    words = MAP_WORDS if plan.style == mapwriter.STYLE else WORDS
+    low, high = words.get(length, words["auto"])
     return f"{narration_words(plan)} words of narration (aim {low}-{high})"
 
 
@@ -483,9 +499,16 @@ def fact_check(llm, plan: Plan, found: list[Found]) -> list[str]:
     everything is in doubt."""
     if plan.kind in ("story", "lesson"):
         return []
+    claims = mapwriter.asides(plan) if plan.style == mapwriter.STYLE else None
+    if claims == []:  # a World map tour that only names things: nothing to check
+        return []
     if not any(f.text for f in found):
+        if claims:
+            return [f"no source to check: {c}" for c in claims]
         return ["no sources were found to check the facts against"]
     narration = "\n".join(f"{i + 1}. {s.narration}" for i, s in enumerate(plan.scenes))
+    if claims:  # its short facts are what can be wrong
+        narration = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
     reply = llm.chat_json(
         [{"role": "user", "content": (
             f"Sources:\n{sources_text(found)}\n\nA reel's narration:\n{narration}\n\n"

@@ -27,6 +27,18 @@ def shazam_hears_nothing(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_map_download(monkeypatch):
+    """The world map is 33 MB from other people's servers: never fetched by a test (one
+    that wants it gives its own `download`)."""
+    from agentic_editor.animate import maps
+
+    def offline(url, dest):
+        raise ConnectionError(f"no map download in tests ({url})")
+
+    monkeypatch.setattr(maps, "DOWNLOAD", offline)
+
+
+@pytest.fixture(autouse=True)
 def no_web_search(monkeypatch):
     """Web search is third parties' servers: in a test every engine fails (a test that wants
     results gives its own engines or `find`), and nothing is kept in the cache folder."""
