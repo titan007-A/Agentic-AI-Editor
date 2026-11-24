@@ -90,6 +90,9 @@ const NULLABLE = new Set([
   "one_liner.box_color",
   "one_liner.duration",
   "one_liner.language",
+  "one_liner.box_margin",
+  "one_liner.box_radius",
+  "one_liner.box_pad",
   "grade.lut",
   "audio.language",
   "framing.background_image",
@@ -363,6 +366,18 @@ export const SECTIONS: { title: string; fields: Field[] }[] = [
       { path: "one_liner.size", label: "Size", kind: "number" },
       { path: "one_liner.color", label: "Color", kind: "color" },
       { path: "one_liner.box_color", label: "Box color", kind: "color" },
+      {
+        path: "one_liner.box_margin",
+        label: "Box across the frame: px from each side (empty: as wide as the words)",
+        kind: "number",
+      },
+      {
+        path: "one_liner.box_radius",
+        label: "Box corner radius (px, empty: auto)",
+        kind: "number",
+      },
+      { path: "one_liner.box_pad", label: "Room inside the box (px, empty: auto)", kind: "number" },
+      { path: "one_liner.line_spacing", label: "Line spacing", kind: "number" },
       {
         path: "one_liner.position",
         label: "Position",

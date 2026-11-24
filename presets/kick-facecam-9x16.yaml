@@ -16,38 +16,45 @@ title_overlay:
   enabled: false
 one_liner:
   enabled: true
-  font: Inter-SemiBold
-  size: 44
+  font: Figtree-SemiBold
+  size: 70
   color: '#000000'
   box_color: '#FFFFFF'
+  # A clips page's title card: white, across the frame (25 px each side), over the game's top.
+  box_margin: 25
+  box_radius: 35
+  box_pad: 42
+  line_spacing: 0.82
   position: top
-  offset: 892
+  offset: 719
   max_words: 14
   hint: >-
-    Like a Kick streamer clips page: say the funny or wild moment in this clip in a few
-    words (a name only when it is written on screen or said in the clip, never a guessed
-    one; else "this streamer", "she", "the chat"), with one to three words in CAPITALS for
-    the punch, and end with one or two fitting emoji such as 😭 😂 👀 💀 🔥. Only what this
-    clip shows. No hashtags, no quotation marks.
+    Like a Kick streamer clips page's title card: a curiosity headline about the funny or
+    wild moment in this clip, 8 to 14 words in Title Case, with one to three words in
+    CAPITALS for the punch (a name only when it is written on screen or said in the clip,
+    never a guessed one; else "this streamer", "she", "the chat"), often a question or a
+    claim that makes people watch to the end, and end with one or two fitting emoji such as
+    😭 😂 👀 💀 🔥 😳. Only what this clip shows. No hashtags, no quotation marks.
   fixed: true
   language: en
-# The band between the camera and the game: Kick's logo at its left, the channel at its right.
+# The band between the camera and the game: Kick's logo at its left (rising into the
+# camera), the channel at its right.
 text_blocks:
 - text: KICK.COM/{CHANNEL}
-  font: Anton-Regular
-  size: 66
-  min_size: 30
+  font: BarlowSemiCondensed-ExtraBold
+  size: 36
+  min_size: 24
   color: '#FFFFFF'
   anchor: top
-  offset: 791
-  max_width: 560
-  align: right
-  inset: 48
+  offset: 645
+  max_width: 528
+  align: left
+  inset: 530
 images:
-- file: assets/kick-logo.png
-  x: 44
-  y: 770
-  width: 380
+- file: assets/kick-logo-band.png
+  x: 45
+  y: 586
+  width: 274
 auto_name: false
 post_caption:
   enabled: true
@@ -61,8 +68,9 @@ post_caption:
 facecam:
   enabled: true
   top: 0
-  camera: 760
-  gap: 110
+  camera: 621
+  gap: 74
+  game: 1197
   focus: 0.5
 framing:
   mode: face
