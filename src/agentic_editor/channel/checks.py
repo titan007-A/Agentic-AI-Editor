@@ -23,7 +23,8 @@ After the edit, on the reel itself:
 - switch: the sound changes where the picture does, between two sung words: no word spans
   it and the voice is low there;
 - voice: the singer is heard in most of the vocals part;
-- leak: the vocals part has no instruments left, by the separation model's own measure;
+- leak: no instruments left in the vocals part: it falls silent between phrases and has
+  no bass, as clean vocals do and a band doesn't;
 - loudness: the reel at the preset's loudness, both parts alike.
 """
 
@@ -37,8 +38,7 @@ from pathlib import Path
 import numpy as np
 
 from agentic_editor import ffmpeg, research, shazam
-from agentic_editor.analysis import separation
-from agentic_editor.analysis.audio import levels, loudest_window_db, to_db
+from agentic_editor.analysis.audio import levels, to_db
 from agentic_editor.presets import Preset
 from agentic_editor.render import split as split_render
 from agentic_editor.render.audio import measure_loudness
@@ -66,20 +66,27 @@ HELD = 0.35  # mean difference (of 255) from the frame before: a panel holding i
 PLAYING = 0.35  # and above it, one that plays; a held copy measures about 0.0-0.1
 HELD_SHARE = 0.97  # of the frames where a panel holds, at least, it measures as held
 FROZEN = 1.0  # seconds a playing panel may show one picture (a still shot)
-BLACK_LUMA = 16  # mean luma (of 255) of a black picture
+# A black picture has nothing bright in it: its 99.5th percentile luma (of 255) under this.
+# A video's dark scene isn't black: one with a figure on navy measured 160-190.
+BLACK_PEAK = 40
 BLACK = 0.3  # seconds of black a playing panel may show
-BLANK_LUMA, BLANK_SPREAD = 20, 8  # a held picture this dark, or this even, is blank
+BLANK_SPREAD = 4  # a held picture this even (luma's standard deviation) is blank
 LABEL_DIFF = 40.0  # mean difference (of 255) of a label's pixels from how it is drawn
 SWITCH_AGREE = 0.25  # seconds between where the picture and the sound change, at most
 WORD_EDGE = 0.05  # seconds a word may overlap the change at its ends (timings are rough)
 VOICE_GAP = 12.0  # dB under its loudest the voice must be where the sound changes
 VOICE_AROUND = 0.06  # seconds either side of the change listened to
 VOICE_SHARE = 0.6  # of the vocals part the singer is heard in, at least
-# The vocals part separated again: its instruments' stem this far under it. Calibrated as
-# the edit's own "instrument-free" test (analysis/separation.py): clean vocals leave the
-# stem 27-45 dB down, a full mix 1-4 dB.
-LEAK_RMS = separation.INSTRUMENT_FREE_RMS_MARGIN_DB
-LEAK_LOUDEST = separation.INSTRUMENT_FREE_LOUDEST_MARGIN_DB
+# Instruments left in the vocals part keep playing where the singer stops and carry bass
+# the voice hasn't: the part must fall this far under its loudest between phrases (its
+# quietest tenth of 50 ms stretches against its loudest twentieth) and keep this little of
+# its energy under BASS Hz. On four real reels the vocals parts fell 44-57 dB with 0.00%
+# bass, their instruments parts 8-17 dB with 12-36%. (Separating the vocals part again
+# measures the model splitting the voice instead: that stem followed the voice exactly
+# and was silent wherever the singer was.)
+LEAK_FLOOR = 30.0
+LEAK_BASS = 0.005
+BASS = 120.0
 LOUDNESS_OFF = 1.0  # LU the reel may be from the preset's loudness
 PEAK_OVER = 0.5  # dB its peak may be over the preset's
 PARTS_APART = 3.0  # LU the two parts may differ
@@ -290,13 +297,13 @@ def grab(path: Path, at: float, size: tuple[int, int]) -> np.ndarray:
 
 @dataclass
 class Panels:
-    """Each panel's motion (mean difference from the frame before), mean luma and spread,
-    frame by frame, FPS a second."""
+    """Each panel's motion (mean difference from the frame before), brightest luma (its
+    99.5th percentile) and spread, frame by frame, FPS a second."""
 
     top: np.ndarray
     bottom: np.ndarray
-    top_luma: np.ndarray
-    bottom_luma: np.ndarray
+    top_peak: np.ndarray
+    bottom_peak: np.ndarray
     top_spread: np.ndarray
     bottom_spread: np.ndarray
 
@@ -312,9 +319,9 @@ def panels_of(frames: np.ndarray, preset: Preset) -> Panels:
     # A pixel row or two in from each edge: the panels' borders blur into each other.
     parts = [frames[:, a + 1 : b - 1].astype(np.float32) for a, b in rows]
     moved = [np.concatenate([[0.0], np.abs(np.diff(p, axis=0)).mean(axis=(1, 2))]) for p in parts]
+    peaks = [np.percentile(p.reshape(len(p), -1), 99.5, axis=1) for p in parts]
     return Panels(
-        top=moved[0], bottom=moved[1],
-        top_luma=parts[0].mean(axis=(1, 2)), bottom_luma=parts[1].mean(axis=(1, 2)),
+        top=moved[0], bottom=moved[1], top_peak=peaks[0], bottom_peak=peaks[1],
         top_spread=parts[0].std(axis=(1, 2)), bottom_spread=parts[1].std(axis=(1, 2)),
     )  # fmt: skip
 
@@ -344,9 +351,9 @@ def panels(p: Panels, at: int, fps: int = FPS) -> Check:
     if not 1 <= at < p.count - 1:
         return Check("panels", False, "couldn't see where the picture changes panels")
     first, second = slice(1, at), slice(at + 1, p.count)
-    for name, held, playing, played_luma, part in (
-        ("bottom", p.bottom[first], p.top[first], p.top_luma[first], "first"),
-        ("top", p.top[second], p.bottom[second], p.bottom_luma[second], "second"),
+    for name, held, playing, played_peak, part in (
+        ("bottom", p.bottom[first], p.top[first], p.top_peak[first], "first"),
+        ("top", p.top[second], p.bottom[second], p.bottom_peak[second], "second"),
     ):
         if len(held) and np.mean(held <= HELD) < HELD_SHARE:
             wrong.append(f"the {name} panel doesn't hold its picture in the {part} part")
@@ -355,17 +362,17 @@ def panels(p: Panels, at: int, fps: int = FPS) -> Check:
         frozen = _longest(playing <= HELD) / fps
         if frozen > FROZEN:
             wrong.append(f"the picture stands still for {frozen:.1f} s in the {part} part")
-        black = _longest(played_luma < BLACK_LUMA) / fps
+        black = _longest(played_peak < BLACK_PEAK) / fps
         if black > BLACK:
             wrong.append(f"{black:.1f} s of black in the {part} part")
     # The held pictures: the bottom's first (shown all through the first part), the top's
     # last (all through the second).
-    for name, luma, spread in (
-        ("bottom", p.bottom_luma[at], p.bottom_spread[at]),
-        ("top", p.top_luma[at - 1], p.top_spread[at - 1]),
+    for name, peak, spread in (
+        ("bottom", p.bottom_peak[at], p.bottom_spread[at]),
+        ("top", p.top_peak[at - 1], p.top_spread[at - 1]),
     ):
-        if luma < BLANK_LUMA or spread < BLANK_SPREAD:
-            wrong.append(f"the {name} panel holds a blank picture (luma {luma:.0f})")
+        if peak < BLACK_PEAK or spread < BLANK_SPREAD:
+            wrong.append(f"the {name} panel holds a blank picture (brightest {peak:.0f})")
     if wrong:
         return Check("panels", False, "; ".join(wrong))
     return Check("panels", True, f"top plays then holds, bottom holds then plays, change at "
@@ -448,25 +455,32 @@ def cut(path: Path, start: float, length: float, dest: Path) -> Path:
     return dest
 
 
-def leak(part: Path, separate, work_dir: Path) -> Check:
-    """Instruments left in the vocals part (`part`, a wav of it): separated once more, its
-    instruments' stem must be as far under it as clean vocals leave it. `separate(wav,
-    out_dir)` is the edit's separation (router.separate_vocals)."""
-    out = work_dir / "leak-stems"
-    out.mkdir(parents=True, exist_ok=True)
-    stems = separate(part, out)
-    try:
-        rate = 22050
-        sound = ffmpeg.read_audio(part, rate)
-        rest = ffmpeg.read_audio(stems.instrumental, rate)
-        rms = levels(sound)[0] - levels(rest)[0]
-        loudest = loudest_window_db(sound, rate) - loudest_window_db(rest, rate)
-    finally:
-        stems.vocals.unlink(missing_ok=True)
-        stems.instrumental.unlink(missing_ok=True)
-    ok = rms >= LEAK_RMS and loudest >= LEAK_LOUDEST
-    return Check("leak", ok, f"instruments {rms:.0f} dB under the vocals, {loudest:.0f} dB at "
-                 f"their loudest (needs {LEAK_RMS:.0f} and {LEAK_LOUDEST:.0f})")  # fmt: skip
+def floor(samples: np.ndarray, rate: int) -> float:
+    """How far a sound falls under its loudest at its quietest (dB): its quietest tenth of
+    50 ms stretches against its loudest twentieth."""
+    found = window_levels(samples, rate, 0.05)
+    return float(np.percentile(found, 95) - np.percentile(found, 10))
+
+
+def bass(samples: np.ndarray, rate: int) -> float:
+    """The share of a sound's energy under BASS Hz."""
+    power = np.abs(np.fft.rfft(samples.astype(np.float64))) ** 2
+    hz = np.fft.rfftfreq(len(samples), 1 / rate)
+    total = power.sum()
+    return float(power[hz < BASS].sum() / total) if total else 0.0
+
+
+def leak(part: np.ndarray, rate: int, mix: np.ndarray | None = None) -> Check:
+    """Instruments left in the vocals part (`part`): it must fall LEAK_FLOOR dB between
+    phrases and have at most LEAK_BASS of its energy under BASS Hz. `mix`, the first part,
+    is measured too, for comparison."""
+    fell, low = floor(part, rate), bass(part, rate)
+    ok = fell >= LEAK_FLOOR and low <= LEAK_BASS
+    detail = (f"between phrases the vocals fall {fell:.0f} dB (needs {LEAK_FLOOR:.0f}); "
+              f"{low:.2%} of them under {BASS:.0f} Hz (needs {LEAK_BASS:.1%} at most)")  # fmt: skip
+    if mix is not None:
+        detail += f"; the instruments part: {floor(mix, rate):.0f} dB, {bass(mix, rate):.0%}"
+    return Check("leak", ok, detail)
 
 
 def loudness(path: Path, first: Path, second: Path, preset: Preset) -> Check:

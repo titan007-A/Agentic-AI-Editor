@@ -59,6 +59,34 @@ def test_the_sound_changes_in_the_widest_pause_near_the_share_asked():
     assert split.switch_time(3.0, Split(enabled=True, switch=0.1), []) == pytest.approx(1.0)
 
 
+def test_the_sound_changes_in_the_singers_silence_before_a_gap_whisper_heard():
+    sung = words((0, 9.5), (10.0, 12.0), (13.5, 20.0), (20.2, 40))
+    # A real silence of the voice near 14 s wins over the words' widest gap.
+    assert split.switch_time(40.0, Split(enabled=True), sung, [(15.0, 15.4)]) == (
+        pytest.approx(15.2)
+    )
+    # The widest of the silences within the snap; one past it doesn't count.
+    quiet = [(12.2, 12.4), (15.0, 15.6), (19.0, 21.0)]
+    assert split.switch_time(40.0, Split(enabled=True), sung, quiet) == pytest.approx(15.3)
+    # None near: the words' gap, as before.
+    assert split.switch_time(40.0, Split(enabled=True), sung, [(30, 31)]) == pytest.approx(12.75)
+
+
+@needs_ffmpeg
+def test_the_singers_silences_are_found_in_the_isolated_voice(tmp_path):
+    voice = tmp_path / "vocals.wav"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=10",
+         "-af", "volume=enable='between(t,4,4.5)+between(t,7,7.05)':volume=0", str(voice)],
+        check=True,
+    )  # fmt: skip
+    # From 2 s on: the 0.5 s silence at 4 s; the 50 ms one at 7 s is too short to count.
+    found = split.voice_pauses(voice, 2.0, 10.0)
+    assert len(found) == 1
+    assert found[0][0] == pytest.approx(2.0, abs=0.03)
+    assert found[0][1] == pytest.approx(2.5, abs=0.03)
+
+
 def test_the_panels_play_one_after_the_other_holding_their_frames():
     parts = split.graph_parts("base", "backdrop", Split(enabled=True), FRAME, 12.5, 40.0)
     joined = ";".join(parts)

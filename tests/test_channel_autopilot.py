@@ -15,7 +15,6 @@ import yaml
 from sqlalchemy import select
 
 from agentic_editor import autopilot, download, instagram, jobs, research
-from agentic_editor.analysis.separation import Stems
 from agentic_editor.analyze import transcript_file
 from agentic_editor.channel import pilot
 from agentic_editor.db import (
@@ -548,18 +547,11 @@ def analysed(env, work_dir: Path, router) -> None:
     )
 
 
-def fake_router(env, level=-35.0):
-    def separate(wav, out):
-        vocals, rest = out / "v.wav", out / "i.wav"
-        shutil.copy(wav, vocals)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-af",
-                        f"volume={level}dB", str(rest)], check=True)  # fmt: skip
-        return Stems(vocals=vocals, instrumental=rest)
-
+def fake_router(env):
+    """What the reel checks ask of the models' router: where the edit kept its words."""
     return SimpleNamespace(
-        backends=SimpleNamespace(transcriber="faster-whisper"), settings=env.settings,
-        separate_vocals=separate,
-    )  # fmt: skip
+        backends=SimpleNamespace(transcriber="faster-whisper"), settings=env.settings
+    )
 
 
 @pytest.fixture
@@ -609,8 +601,9 @@ def test_a_reel_that_passes_every_check_waits_for_approval_then_its_post_time(
 @needs_ffmpeg
 def test_any_doubt_about_the_reel_leaves_it_for_a_person_and_on_the_piles(env, short_vs, tmp_path):
     owner = short_vs
-    reel = split_reel(tmp_path, vs_preset(min_duration=5, max_duration=15), 3.5, 10.0)
-    router = fake_router(env, level=-8)  # instruments left in the vocals
+    preset = vs_preset(min_duration=5, max_duration=15)
+    reel = split_reel(tmp_path, preset, 3.5, 10.0, leaky=True)  # instruments left in
+    router = fake_router(env)
     work_dir = env.settings.cache_dir / ("e" * 20)
     analysed(env, work_dir, router)
     with env.sessions() as db:
@@ -630,7 +623,7 @@ def test_any_doubt_about_the_reel_leaves_it_for_a_person_and_on_the_piles(env, s
         assert row.reason.startswith("caption: no caption")
         output = db.get(Output, output_id)
         assert output.pile == "look"
-        assert any(d.startswith("Autopilot leak: instruments 8 dB") for d in output.doubts)
+        assert any(d.startswith("Autopilot leak: between phrases") for d in output.doubts)
 
 
 def test_an_edit_that_failed_or_was_deleted_is_a_skip_and_a_caption_is_waited_for(env):

@@ -745,8 +745,10 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
             transcript_file(work_dir, "vocals", router, language).read_text(encoding="utf-8")
         )
         words = words_of(heard, edl)
-        at = split_render.switch_time(edl.duration, preset.split, words)
         clip, rate = edl.clips[0], 16000
+        # As the render chose it (render.compose.split_soundtrack).
+        quiet = split_render.voice_pauses(work_dir / "vocals.wav", clip.start, clip.end)
+        at = split_render.switch_time(edl.duration, preset.split, words, quiet)
         voice = ffmpeg.read_audio(work_dir / "vocals.wav", rate)
         voice = voice[int(clip.start * rate) : int(clip.end * rate)]
         found = [
@@ -755,8 +757,11 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
         ]
         rest = edl.duration - at - 0.2 - preset.audio.fade_out - 0.1
         part = checks.cut(path, at + 0.2, rest, scratch / "vocals-part.wav")
-        found.append(_attempt("leak", lambda: checks.leak(part, router.separate_vocals, scratch)))
         first = checks.cut(path, 0.0, max(0.5, at - 0.05), scratch / "whole-part.wav")
+        heard = 22050
+        found.append(_attempt("leak", lambda: checks.leak(
+            ffmpeg.read_audio(part, heard), heard, ffmpeg.read_audio(first, heard)
+        )))  # fmt: skip
         second = checks.cut(path, at + 0.05, edl.duration - at - 0.05, scratch / "second.wav")
         found.append(_attempt("loudness", lambda: checks.loudness(path, first, second, preset)))
         return found

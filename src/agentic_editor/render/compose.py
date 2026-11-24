@@ -637,7 +637,13 @@ def split_soundtrack(
 ) -> tuple[float, Path]:
     """Where the vocals take over in a split preset's reel, and its soundtrack: the whole
     sound until then, the vocals after."""
-    at = split.switch_time(edl.duration, preset.split, timeline_words(edl, analysis))
+    clip = edl.clips[0]
+    quiet = (
+        []
+        if analysis.instrument_free or analysis.audio_source != "vocals"
+        else split.voice_pauses(analysis.audio_path, clip.start, clip.end)
+    )
+    at = split.switch_time(edl.duration, preset.split, timeline_words(edl, analysis), quiet)
     mix = analysis.mix_path or analysis.audio_path
     return at, split.soundtrack(edl, preset, mix, analysis.audio_path, at, work_dir)
 

@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 
 from agentic_editor import caption, research
-from agentic_editor.analysis.separation import Stems
 from agentic_editor.channel import checks
 from agentic_editor.presets import Preset
 from agentic_editor.render import split as split_render
@@ -225,12 +224,12 @@ def test_the_edit_must_have_no_doubts_and_its_caption_nothing_to_check():
     assert not checks.reel_length(20.0, preset).ok
 
 
-def motion(top: list[float], bottom: list[float], **lumas) -> checks.Panels:
+def motion(top: list[float], bottom: list[float], **peaks) -> checks.Panels:
     n = len(top)
     return checks.Panels(
         top=np.array(top), bottom=np.array(bottom),
-        top_luma=np.array(lumas.get("top_luma", [80.0] * n)),
-        bottom_luma=np.array(lumas.get("bottom_luma", [80.0] * n)),
+        top_peak=np.array(peaks.get("top_peak", [180.0] * n)),
+        bottom_peak=np.array(peaks.get("bottom_peak", [180.0] * n)),
         top_spread=np.full(n, 30.0), bottom_spread=np.full(n, 30.0),
     )  # fmt: skip
 
@@ -255,11 +254,15 @@ def test_a_panel_that_doesnt_hold_or_a_frozen_picture_is_a_doubt():
 
 def test_black_while_playing_or_a_blank_held_picture_is_a_doubt():
     playing, held = [3.0] * 30, [0.05] * 30
-    dark = [80.0] * 10 + [5.0] * 5 + [80.0] * 46
-    p = motion([0.0, *playing, *held], [0.0, *held, *playing], top_luma=dark)
+    black = [180.0] * 10 + [18.0] * 5 + [180.0] * 46
+    p = motion([0.0, *playing, *held], [0.0, *held, *playing], top_peak=black)
     assert "0.5 s of black" in checks.panels(p, 31).detail
-    blank = [80.0] * 31 + [4.0] + [80.0] * 29
-    p = motion([0.0, *playing, *held], [0.0, *held, *playing], bottom_luma=blank)
+    # A dark scene with something bright in it (a figure on navy) isn't black.
+    night = [180.0] * 10 + [160.0] * 20 + [180.0] * 31
+    p = motion([0.0, *playing, *held], [0.0, *held, *playing], top_peak=night)
+    assert checks.panels(p, 31).ok
+    blank = [180.0] * 31 + [12.0] + [180.0] * 29
+    p = motion([0.0, *playing, *held], [0.0, *held, *playing], bottom_peak=blank)
     assert "bottom panel holds a blank picture" in checks.panels(p, 31).detail
 
 
@@ -286,34 +289,28 @@ def test_the_singer_must_be_heard_in_most_of_the_vocals_part():
     assert not check.ok and "40%" in check.detail
 
 
-@needs_ffmpeg
-def test_instruments_left_in_the_vocals_part_are_measured_by_separating_it_again(tmp_path):
-    part = tmp_path / "part.wav"
-    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                    "sine=frequency=440:duration=8", "-ac", "2", str(part)],
-                   check=True)  # fmt: skip
-
-    def separate(level: float):
-        def run(wav, out):
-            vocals, rest = out / "v.wav", out / "i.wav"
-            shutil.copy(wav, vocals)
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-af",
-                            f"volume={level}dB", str(rest)], check=True)  # fmt: skip
-            return Stems(vocals=vocals, instrumental=rest)
-
-        return run
-
-    clean = checks.leak(part, separate(-35), tmp_path)
-    assert clean.ok and "35 dB under" in clean.detail
-    leaky = checks.leak(part, separate(-10), tmp_path)
-    assert not leaky.ok and "10 dB under" in leaky.detail
-    assert not list((tmp_path / "leak-stems").iterdir())  # the stems are cleaned up
+def test_instruments_left_in_the_vocals_part_keep_playing_between_phrases():
+    rate = 16000
+    clean = sung(rate, [True, True, False] * 8)  # the singer and silence between phrases
+    t = np.arange(len(clean)) / rate
+    band = 0.05 * np.sin(2 * np.pi * 70 * t) + 0.02 * np.sin(2 * np.pi * 900 * t)
+    check = checks.leak(clean, rate, mix=(clean + 6 * band).astype(np.float32))
+    assert check.ok, check.detail
+    assert "the instruments part" in check.detail
+    # A bass line under the voice: never silent between phrases, and low.
+    leaky = checks.leak((clean + band).astype(np.float32), rate)
+    assert not leaky.ok and "needs 30" in leaky.detail
+    # A voice that never stops isn't taken as clean.
+    assert not checks.leak(sung(rate, [True] * 24), rate).ok
 
 
-def split_reel(tmp_path: Path, preset: Preset, at: float, duration: float, labels=True):
+def split_reel(
+    tmp_path: Path, preset: Preset, at: float, duration: float, labels=True, leaky=False
+):
     """A real split reel as the render lays it out: a moving picture played in the top
     panel until `at`, then in the bottom one, each holding its frame while the other plays;
-    a low hum with noise (the band) then a tone (the voice), each at -14 LUFS."""
+    a low hum with noise (the band) then a tone with silences between its phrases (the
+    voice; `leaky`: with the band's hum under it), each at -14 LUFS."""
     frame = preset.size
     layer = split_render.labels_layer(preset.split, frame, FONTS, tmp_path / "labels.png")
     parts = split_render.graph_parts("0:v", "1:v", preset.split, frame, at, duration)
@@ -321,7 +318,13 @@ def split_reel(tmp_path: Path, preset: Preset, at: float, duration: float, label
     loud = "loudnorm=I=-14:TP=-1.5:LRA=11"
     audio = (
         f"[3:a]atrim=end={at},asetpts=PTS-STARTPTS,{loud}[a1];"
-        f"[4:a]atrim=start={at},asetpts=PTS-STARTPTS,{loud}[a2];"
+        "[4:a]volume='if(lt(mod(t,0.9),0.6),1,0)':eval=frame[sung];"
+        + (
+            "[5:a][sung]amix=inputs=2:weights=0.2 1:normalize=0[voice];"
+            if leaky
+            else "[sung]anull[voice];"
+        )
+        + f"[voice]atrim=start={at},asetpts=PTS-STARTPTS,{loud}[a2];"
         "[a1][a2]concat=n=2:v=0:a=1,aresample=48000[aout]"
     )
     dest = tmp_path / "reel.mp4"
@@ -332,6 +335,7 @@ def split_reel(tmp_path: Path, preset: Preset, at: float, duration: float, label
          "-loop", "1", "-i", str(layer),
          "-f", "lavfi", "-i", f"anoisesrc=d={duration}:a=0.2,lowpass=f=300",
          "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
+         "-f", "lavfi", "-i", f"sine=frequency=70:duration={duration}",
          "-filter_complex", ";".join([*parts, over, audio]),
          "-map", "[out]", "-map", "[aout]", "-t", str(duration),
          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",

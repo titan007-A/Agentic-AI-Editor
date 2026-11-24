@@ -51,20 +51,25 @@ On the tab, for each connected page:
      there are instruments to take away (not voice alone), and the singer is heard in 30%
      of the video or more.
 5. **The edit**: an ordinary job with the preset and Shazam's song and artist as its notes,
-   behind people's own jobs (`jobs.automatic_jobs`), with the preset's post caption.
+   behind people's own jobs (`jobs.automatic_jobs`), with the preset's post caption. Every
+   split reel (the autopilot's or a person's) now changes from the band to the voice in a
+   real silence of the isolated voice (25 dB under its loudest, 0.12 s or more) near the
+   preset's share when there is one, the words' widest gap otherwise (render/split.py).
 6. **Checks on the reel** (any doubt leaves it under "needs a look", on the piles too, never
    posted):
    - the edit's own confidence, doubts and issues;
    - the caption written, with nothing to check before posting;
    - the reel's length within the preset's;
    - panels: the top panel plays then holds, the bottom holds then plays, changing at one
-     moment; no black or frozen stretch in the playing one, no blank held picture;
+     moment; no black (nothing bright in it) or frozen stretch in the playing one, no blank
+     held picture;
    - labels: both panels' labels where the preset draws them;
    - switch: the picture and the sound change together, no sung word spans the change and
      the voice is 12 dB or more under its loudest there;
    - voice: the singer is heard in 60% of the vocals part or more;
-   - leak: the vocals part separated again leaves its instruments' stem 20 dB under it (and
-     8 dB at their loudest), the edit's own test for clean vocals;
+   - leak: no instruments left in the vocals part: it falls 30 dB or more under its loudest
+     between phrases and has at most 0.5% of its energy under 120 Hz (four real reels: 44-57
+     dB and 0.00%; their instruments parts 8-17 dB and 12-36%);
    - loudness: the preset's loudness within 1 LU, its peak, both parts within 3 LU.
 7. **Posting**: at each post time (an hour late at most) the oldest ready reel is posted
    with its caption, at most "posts a day" a day. The post's id and link are kept and the
