@@ -327,6 +327,18 @@ def test_a_banner_box_can_span_the_frame_whatever_the_words(tmp_path):
     assert text.banner_room(1080, 70) == 920
 
 
+def test_a_fixed_banner_stays_close_under_the_preset_s_text():
+    from agentic_editor.render import compose
+
+    text_line = [(645.0, 670.0)]  # the channel line's ink, 23 px over the card
+    assert compose.banner_top("top", 693, 217, 1920, [], 10.0, text_line, fixed=True) == 693
+    # Not fixed, it keeps a banner's gap from other text, as before.
+    assert compose.banner_top("top", 693, 217, 1920, [], 10.0, text_line) != 693
+    # Fixed, it still never covers another's ink.
+    covering = compose.banner_top("top", 660, 217, 1920, [], 10.0, text_line, fixed=True)
+    assert covering + 217 <= 645 or covering >= 670
+
+
 def test_text_can_stand_at_the_left_or_the_right(tmp_path):
     settings = get_settings()
     font = text.font_file(settings.fonts_dir, "Anton-Regular")

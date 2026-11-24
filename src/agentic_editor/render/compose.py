@@ -562,13 +562,16 @@ def banner_top(
     rows: list[tuple[float, list[tuple[float, float]]]],
     until: float | None = None,
     taken: list[tuple[float, float]] = (),
+    fixed: bool = False,
 ) -> int:
     """Top edge for a banner: its usual position if faces stay clear of it, else a little
     nearer its own edge of the frame (up for a top banner, down for a bottom one, at most
     NUDGE px and not under Instagram's header or buttons), else stacked beside a banner
     already there on its own half. It never goes to the frame's other end: a top banner
     stays at the top, a bottom one at the bottom. `taken` are the bands of banners placed
-    before this one, which it must not cover."""
+    before this one, which it must not cover. A `fixed` banner sits where the preset puts
+    it unless it would really cover one: close beside another, as the preset lays them
+    out (a clips page's title card just under its channel line), it stays."""
     gap = BANNER_GAP
     top_end = position == "top"
     near = offset if top_end else frame_height - offset - height
@@ -593,7 +596,10 @@ def banner_top(
     def cost(top: int) -> tuple[float, int]:
         band = (top, top + height)
         faces = sum(subtitles.overlap(band, bands) > 0 for bands in seen) / max(1, len(seen))
-        blocked = subtitles.overlap(band, list(taken)) > 0
+        if fixed:
+            blocked = any(min(band[1], b) > max(band[0], a) for a, b in taken)
+        else:
+            blocked = subtitles.overlap(band, list(taken)) > 0
         # Covering another banner is never acceptable; a face only for a small share of time.
         return (blocked, faces > 0.3, faces), options.index(top)
 
@@ -835,7 +841,7 @@ def render(
             # The picture counts like a face there all along: the banner moves a little
             # nearer its edge before it goes over it.
             clear = clear + [(t * 0.5, [picture_rows]) for t in range(int(until * 2) + 1)]
-        top = banner_top(position, start, height, frame[1], clear, until, taken)
+        top = banner_top(position, start, height, frame[1], clear, until, taken, fixed)
         obstacles.append((0.0, until, top, top + height))
         png = text.draw_banner(
             wrapped, font, size, color, box, frame, round(top - above), work_dir / name,
