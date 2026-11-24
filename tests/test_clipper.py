@@ -463,7 +463,7 @@ def test_a_hunt_judges_more_moments_than_it_wants_and_makes_only_strong_hooks(wo
         assert "What happens: He crashes his car." in job.notes and "into this video" in job.notes
     assert world.cuts[0][:2] == (moment["start"], moment["end"])
 
-    none = ([], "0 of 6 likely moments had a strong hook")
+    none = ([], "0 of 6 likely moments were crazy, with a strong hook")
     monkeypatch.setattr(hunt.hooks, "choose", lambda *a: none)
     hunt_id = add_hunt(world, client, start=1500, end=2400, count=2)
     queued.clear()
@@ -471,7 +471,7 @@ def test_a_hunt_judges_more_moments_than_it_wants_and_makes_only_strong_hooks(wo
     with world.Session() as db:
         found = db.get(KickHunt, hunt_id)
         assert found.status == "done" and not queued and found.moments == []
-        assert "had a strong enough hook" in found.message
+        assert found.message.startswith("nothing crazy in 25:00-40:00: no clips made")
 
 
 def test_regions_around_likely_moments_join_where_they_meet():

@@ -223,7 +223,7 @@ def _hunt(
         if not found:
             _set(
                 Session, hunt_id, status="done", moments=[],
-                message=f"no moment in {clock(start)}-{clock(end)} had a strong enough hook "
+                message=f"nothing crazy in {clock(start)}-{clock(end)}: no clips made "
                 f"({judged})",
             )  # fmt: skip
             return []

@@ -43,12 +43,14 @@ ROWS = (
 class FakeModel:
     """The planning model: its read of a moment, then its ratings of the openings."""
 
-    def __init__(self, read: dict, scores: dict[str, int]):
-        self.read, self.scores, self.asked = read, scores, []
+    def __init__(self, read: dict, scores: dict[str, int], crazy: bool = True):
+        self.read, self.scores, self.crazy, self.asked = read, scores, crazy, []
 
     def chat_json(self, messages, schema, **kwargs):
         prompt = messages[-1]["content"]
         self.asked.append(prompt)
+        if "Is the streamer" in prompt:
+            return {"crazy": self.crazy, "what": "he crashes" if self.crazy else "nothing"}
         if "You are scrolling" in prompt:
             options = re.findall(r"Option ([A-Z]): you hear: (.*?)\. Sound", prompt)
             ratings = []
@@ -62,6 +64,7 @@ class FakeModel:
 def read(**fields) -> dict:
     return {
         "what_happens": "He bets he can win a race, then crashes into a wall.",
+        "crazy": True, "crazy_kind": "wild_reaction", "crazy_what": "he crashes and screams",
         "payoff": "L4", "openings": ["L2", "L1"], "end": "L5", "payoff_score": 8,
         "stands_alone": 7, "flash": "", "tease": "whether he wins the race", **fields,
     }  # fmt: skip
@@ -96,7 +99,27 @@ def test_the_clip_opens_on_the_opening_rated_strongest_cold_and_keeps_the_moment
 def test_a_weak_opening_or_a_weak_payoff_is_not_made():
     look = a_look(said(*ROWS))
     assert hooks.judge(FakeModel(read(), {"you really": 5}), look, "x", "t") is None
-    assert hooks.judge(FakeModel(read(payoff_score=4), {"you really": 9}), look, "x", "t") is None
+    # Only a deep impact: a payoff of 7 is not enough.
+    assert hooks.judge(FakeModel(read(payoff_score=7), {"you really": 9}), look, "x", "t") is None
+
+
+def test_only_a_moment_where_someone_does_or_says_something_crazy_is_made():
+    look = a_look(said(*ROWS))
+    # Plain gameplay or chatting, however busy the chat: not read further.
+    model = FakeModel(read(crazy=False, crazy_kind="none", crazy_what=""), {"you really": 9})
+    assert hooks.judge(model, look, "x", "t") is None and len(model.asked) == 1
+    model = FakeModel(read(crazy_kind="none"), {"you really": 9})
+    assert hooks.judge(model, look, "x", "t") is None
+    # A second look at the clip as it will be cut must agree.
+    model = FakeModel(read(), {"you really": 9}, crazy=False)
+    assert hooks.judge(model, look, "x", "t") is None
+    crazy = model.asked[-1]
+    assert "Is the streamer" in crazy and "OH MY GOD HE CRASHED" in crazy
+    assert "yeah so okay chat" not in crazy  # only what the clip holds
+    judged = hooks.judge(FakeModel(read(), {"you really": 9}), look, "x", "t")
+    m = hooks.moment_of(judged)
+    assert m.hook["crazy"] == "he crashes and screams" and "wild reaction" in m.why
+    assert "What makes it wild: he crashes and screams." in hunt.notes_for(m)
 
 
 def test_an_opening_too_close_to_the_moment_or_too_early_is_not_taken():
@@ -126,7 +149,7 @@ def test_a_strong_payoff_with_no_strong_opening_opens_cold_on_a_flash_of_it():
     assert hooks.flash_of(m) == pytest.approx(judged.flash, abs=0.01) and "cold open" in m.why
     assert judged.end - judged.opening.start + hooks.FLASH <= moments.LONGEST
     # Without a strong enough payoff, no cold open rescues it.
-    model = FakeModel(read(flash="L4", payoff_score=6), {"you really": 5, "OH MY GOD": 9})
+    model = FakeModel(read(flash="L4", payoff_score=7), {"you really": 5, "OH MY GOD": 9})
     assert hooks.judge(model, look, "x", "t") is None
 
 
@@ -235,7 +258,7 @@ def test_a_hunt_s_likely_moments_are_judged_and_only_strong_hooks_kept(monkeypat
     assert len(again) == 1 and len(again[0]) == 1  # each strong opening listened to again
     assert len(kept) == 1 and kept[0].peak == PEAK and kept[0].hook["score"] == 8
     assert kept[0].hook["what"].startswith("He bets") and "hook 8/10" in kept[0].why
-    assert note == "1 of 2 likely moments had a strong hook"
+    assert note == "1 of 2 likely moments were crazy, with a strong hook"
     assert fetched == [
         (PEAK - hooks.LEAD, PEAK + hooks.TAIL),
         (3000 - hooks.LEAD, 3000 + hooks.TAIL),

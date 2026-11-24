@@ -985,6 +985,9 @@ export type KickHook = {
   alone?: number;
   what?: string;
   tease?: string;
+  /** The crazy thing done or said, and its kind (wild_reaction, argument, ...). */
+  crazy?: string;
+  kind?: string;
   /** A cold open: this stretch of the stream plays first. */
   flash?: [number, number];
 };

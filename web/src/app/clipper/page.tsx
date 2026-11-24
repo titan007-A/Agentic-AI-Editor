@@ -142,6 +142,7 @@ function MomentRow({ moment, index }: { moment: KickMoment; index: number }) {
       {moment.hook?.what && (
         <div className="space-y-0.5 text-xs" data-testid="moment-hook">
           <p>{moment.hook.what}</p>
+          {moment.hook.crazy && <p className="font-semibold">Crazy: {moment.hook.crazy}</p>}
           {moment.hook.said && (
             <p className="text-muted-foreground">
               {moment.hook.flash ? "Opens cold on" : "Opens on"} “{moment.hook.said}”

@@ -28,6 +28,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -50,7 +51,7 @@ HEARD_AGAIN = (
     0.5  # of an opening's words, heard again when its first seconds are written down alone
 )
 HOOK_LEAST = 7.5  # its opening, rated cold (0-10, two looks averaged): it grabs
-PAYOFF_LEAST = 6  # its payoff (0-10)
+PAYOFF_LEAST = 8  # its payoff (0-10): it must land hard (owner: "deep impact")
 LEAD_IN, TAIL_OUT = 0.15, 0.5  # seconds kept before the first word and after the last
 FLASH = 2.5  # a cold open's flash of the payoff
 LATE_PAYOFF = 10  # seconds after the opening: a payoff later is worth flashing first
@@ -314,6 +315,10 @@ def see(vision, look: Look) -> None:
 
 class Read(BaseModel):
     what_happens: str
+    crazy: bool = False
+    crazy_kind: Literal["wild_reaction", "outrageous_line", "argument", "big_win_or_loss",
+                        "hilarious", "prank", "stunt", "none"] = "none"  # fmt: skip
+    crazy_what: str = ""
     payoff: str = ""
     openings: list[str] = Field(default_factory=list)
     end: str = ""
@@ -350,6 +355,19 @@ The chat right after it: {chat}
 Answer:
 - what_happens: one sentence: what happens in this moment, who does what and why it is funny, \
 wild or shocking. Only what is said or shown here; never guess names.
+- crazy: true only when someone here, the streamer most of all, is DOING or SAYING something \
+crazy: a wild reaction (screaming, jumping up, losing it), a shocking or outrageous line, a \
+heated argument or confrontation, a big win or loss with a big reaction, something truly \
+hilarious, a prank, a stunt. false for: plain gameplay or a game's own scenes (driving, \
+walking, menus, cutscenes) without a strong reaction from the streamer, even when the chat \
+is busy; normal talk or chatting with the chat; quiet or mild moments; reading out \
+donations; waiting. True, for example: he screams and throws his headset after losing \
+$20,000; she tells a guest to get out and they shout at each other; he admits something \
+outrageous. False, for example: he drives around the game talking about the map; they chat \
+about where to eat; he reads a donation and says thanks; a game's cutscene plays.
+- crazy_kind: what kind of crazy it is (wild_reaction, outrageous_line, argument, \
+big_win_or_loss, hilarious, prank, stunt), or none.
+- crazy_what: in a few words, the crazy thing done or said; "" when there is none.
 - payoff: the id of the line where it pays off (the punchline, the reveal, the big reaction).
 - openings: up to three ids of lines the clip could open on, the best first. The clip opens \
 between -{earliest} s and -{latest} s, right on the line that starts the tension, so that the \
@@ -363,8 +381,8 @@ nothing said.
 - end: the id of the last line, after the payoff and the reaction to it (between +{end_least} \
 s and +{end_most} s); never cut a sentence off.
 - payoff_score, 0-10: how strong the payoff is to a stranger. 0-3 nothing really happens; 4-6 \
-mildly funny or only for fans of the stream; 7-8 clearly funny, wild or shocking; 9-10 \
-people would send it to their friends.
+mildly funny or only for fans of the stream; 7 clearly funny, wild or shocking; 8-10 a deep \
+impact: people would send it to their friends.
 - stands_alone, 0-10: does a stranger get it without having watched the stream?
 - flash: the id of the line with the punchline or the biggest reaction, to show for two \
 or three seconds before the clip as a cold open when the payoff comes late; "" when none is \
@@ -575,6 +593,47 @@ class Judged:
         return self.opening.score + self.read.payoff_score + 0.3 * self.read.stands_alone
 
 
+class _Crazy(BaseModel):
+    crazy: bool
+    what: str = ""
+
+
+CRAZY_PROMPT = """A clip from a Kick livestream, as it will be posted. Is the streamer (or \
+someone with them) DOING or SAYING something crazy in it?
+
+Crazy: a wild reaction (screaming, jumping up, losing it), a shocking or outrageous line, a \
+heated argument or confrontation, a big win or loss with a big reaction, something truly \
+hilarious, a prank, a stunt.
+Not crazy: plain gameplay or a game's own scenes (driving, walking, menus, cutscenes) without \
+a strong reaction, even when the chat is busy; normal talk or chatting with the chat; quiet \
+or mild moments; reading out donations; waiting.
+
+What is said in the clip, in order:
+{said}
+What the picture shows: {seen}
+The chat reacted with: {chat}
+
+Be strict: most stream moments are not crazy. In what, name the crazy thing in a few words, \
+or "nothing"."""
+
+
+def is_crazy(llm, look: Look, start: float, end: float) -> tuple[bool, str]:
+    """A second, separate look at the clip as it will be cut: is someone in it doing or
+    saying something crazy (owner: "deep impact jisme streamer kuchh crazy kar rha ho")."""
+    said = " ".join(w.text for w in look.words if start <= w.start < end) or "(nothing)"
+    seen = "; ".join(
+        s for (t, _), s in zip(look.frames, look.seen, strict=False) if start - 2 <= t <= end
+    )
+    reply = llm.chat_json(
+        [{"role": "user", "content": CRAZY_PROMPT.format(
+            said=said, seen=seen or "(not seen)", chat=" | ".join(look.chat) or "(not read)")}],
+        _Crazy.model_json_schema(),
+        temperature=0,
+    )  # fmt: skip
+    found = parse(_Crazy, reply)
+    return found.crazy, " ".join(found.what.split())[:120]
+
+
 def judge(llm, look: Look, name: str, title: str) -> Judged | None:
     """The model's read of one moment and its openings rated; None when it isn't strong
     enough to be made (or couldn't be read)."""
@@ -584,6 +643,13 @@ def judge(llm, look: Look, name: str, title: str) -> Judged | None:
         temperature=0,
     )
     read = parse(Read, reply)
+    if not read.crazy or read.crazy_kind == "none" or read.payoff_score < PAYOFF_LEAST:
+        log.info(
+            "moment at %.0f s: not crazy enough (%s, %s; payoff %d)", look.moment.peak,
+            read.crazy_kind if read.crazy else "not crazy", read.crazy_what[:60],
+            read.payoff_score,
+        )  # fmt: skip
+        return None
     keys = list(read.openings)
     # Lines the model didn't name but that may open the clip, so a good one isn't missed
     # for want of a pick: the loudest start in reach when the model named none that fits.
@@ -616,7 +682,7 @@ def judge(llm, look: Look, name: str, title: str) -> Judged | None:
         and best.start + 1 <= cold.start <= end - FLASH  # it plays again in its place
         and cold.score >= HOOK_LEAST
         and (best.score < HOOK_LEAST or (late and cold.score > best.score))
-        and read.payoff_score >= PAYOFF_LEAST + 1
+        and read.payoff_score >= PAYOFF_LEAST
         and end - best.start + FLASH <= moments.LONGEST
     ):
         flash_span = (cold.start, cold.start + FLASH)
@@ -627,7 +693,12 @@ def judge(llm, look: Look, name: str, title: str) -> Judged | None:
         look.moment.peak, best.score, best.grabs, best.said[:60], read.payoff_score,
         read.stands_alone, ", cold open" if flash_span else "",
     )  # fmt: skip
-    if best.score < HOOK_LEAST or read.payoff_score < PAYOFF_LEAST:
+    if best.score < HOOK_LEAST:
+        return None
+    crazy, what = is_crazy(llm, look, flash_span[0] if flash_span else best.start, end)
+    if not crazy:
+        log.info("moment at %.0f s: its clip isn't crazy on a second look (%s)",
+                 look.moment.peak, what)  # fmt: skip
         return None
     return found
 
@@ -711,10 +782,13 @@ def moment_of(j: Judged) -> moments.Moment:
         "alone": j.read.stands_alone,
         "what": " ".join(j.read.what_happens.split())[:300],
         "tease": " ".join(j.read.tease.split())[:120],
+        "crazy": " ".join(j.read.crazy_what.split())[:120],
+        "kind": j.read.crazy_kind,
     }
     if j.flash:
         hook["flash"] = [round(j.flash[0], 2), round(j.flash[1], 2)]
-    why = [*m.why, f"hook {j.opening.score:g}/10", f"payoff {j.read.payoff_score}/10"]
+    why = [*m.why, j.read.crazy_kind.replace("_", " "), f"hook {j.opening.score:g}/10",
+           f"payoff {j.read.payoff_score}/10"]  # fmt: skip
     if j.flash:
         why.append("cold open")
     return moments.Moment(
@@ -795,7 +869,7 @@ def choose(
     took = time.monotonic() - started
     log.info("hooks: %d of %d moments strong enough, %d kept, in %.0f s",
              len(judged), len(looks), len(kept), took)  # fmt: skip
-    note = f"{len(judged)} of {len(looks)} likely moments had a strong hook"
+    note = f"{len(judged)} of {len(looks)} likely moments were crazy, with a strong hook"
     return [moment_of(j) for j in kept], note
 
 
@@ -836,6 +910,8 @@ def notes_line(hook: dict) -> str:
     parts = []
     if hook.get("what"):
         parts.append("What happens: " + sentence(hook["what"]))
+    if hook.get("crazy"):
+        parts.append("What makes it wild: " + sentence(hook["crazy"]))
     if hook.get("said"):
         lead = "First seconds (a flash of the payoff)" if hook.get("flash") else "First seconds"
         parts.append(f"{lead}: " + sentence(hook["said"]))
