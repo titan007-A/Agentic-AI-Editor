@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -180,14 +181,62 @@ def first_year(song: str, artist: str, transport=None) -> str | None:
     return str(min(years)) if years else None
 
 
+class Busy(RuntimeError):
+    """Shazam asked to slow down (or did lately): ask again after `until` (time.monotonic())."""
+
+    def __init__(self, until: float):
+        super().__init__(
+            f"Shazam asked to slow down; again in {max(0, until - time.monotonic()):.0f} s"
+        )
+        self.until = until
+
+
+# Shazam turns away a client asking too fast ("RateLimited", HTTP 429): every recognition
+# here waits SPACING seconds after the one before, and after a refusal none is sent for
+# COOL_DOWN seconds, twice as long each refusal in a row (up to COOL_DOWN_MOST).
+SPACING = 8.0
+COOL_DOWN = 300.0
+COOL_DOWN_MOST = 1800.0
+_pace = threading.Lock()
+_last = [0.0]  # when Shazam was last asked (time.monotonic())
+_cool = [0.0, 0.0]  # no asking before this; the length of the last cool-down
+
+
+def paced(ask: Callable[[Path], dict | None], clip: Path, clock=time.monotonic, sleep=time.sleep):
+    """`ask(clip)` at Shazam's pace (SPACING, COOL_DOWN). Raises Busy while it cools down,
+    or when this ask was refused."""
+    with _pace:
+        now = clock()
+        if now < _cool[0]:
+            raise Busy(_cool[0])
+        sleep(max(0.0, _last[0] + SPACING - now))
+        _last[0] = clock()
+        try:
+            found = ask(clip)
+        except Exception as exc:
+            if type(exc).__name__ != "RateLimited":
+                raise
+            _cool[1] = min(COOL_DOWN_MOST, _cool[1] * 2 if _cool[1] else COOL_DOWN)
+            _cool[0] = clock() + _cool[1]
+            log.warning("Shazam asked to slow down: none asked for %.0f s", _cool[1])
+            raise Busy(_cool[0]) from exc
+        _cool[1] = 0.0  # it answered: the next refusal cools down from the start
+        return found
+
+
 def _recognise(clip: Path) -> dict | None:
+    return paced(_ask_shazam, clip)
+
+
+def _ask_shazam(clip: Path) -> dict | None:
     from aiohttp_retry import ExponentialRetry
     from shazamio import Shazam
     from shazamio.client import HTTPClient
 
     # shazamio's own client retries 20 times for up to a minute each: a job would wait
-    # minutes on a busy Shazam, where asking for the name takes a second.
-    retry = ExponentialRetry(attempts=3, max_timeout=10, statuses={429, 500, 502, 503, 504})
+    # minutes on a busy Shazam, where asking for the name takes a second. A refusal for
+    # asking too fast isn't retried at once: paced() waits a while.
+    retry = ExponentialRetry(attempts=3, max_timeout=10, statuses={500, 502, 503, 504})
 
     async def ask() -> dict | None:
         async with HTTPClient(retry_options=retry) as client:

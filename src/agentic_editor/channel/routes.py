@@ -46,6 +46,8 @@ class PilotSettings(BaseModel):
     research_account_id: str | None = Field(default=None, max_length=12)
     preset: str = Field(default="", max_length=64)
     focus: str = Field(default="", max_length=600)
+    # Rate a recognisable but less obvious song over an artist's most famous hit.
+    surprise: bool = True
     research_hour: int = Field(default=7, ge=0, le=23)
     posts_per_day: int = Field(default=autopilot.DEFAULT_PER_DAY, ge=1, le=autopilot.MOST_PER_DAY)
     post_times: list[str] = Field(

@@ -4,8 +4,9 @@ edits, checks again and posts its own reels, with Meta's Graph API faked."""
 import json
 import shutil
 import subprocess
+import time
 from contextlib import nullcontext
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ import pytest
 import yaml
 from sqlalchemy import select
 
-from agentic_editor import autopilot, download, instagram, jobs, research
+from agentic_editor import autopilot, download, instagram, jobs, research, shazam
 from agentic_editor.analyze import transcript_file
 from agentic_editor.channel import pilot
 from agentic_editor.db import (
@@ -284,12 +285,160 @@ def test_the_best_fitting_new_songs_are_picked_and_the_rest_noted(env):
         assert rows["yt:AAAAAAAAAA2"].status == "skipped"
         assert "posted or is waiting" in rows["yt:AAAAAAAAAA2"].reason
         assert rows["yt:AAAAAAAAAA3"].reason == "fits 6/10; needs 8"
-        assert rows["yt:AAAAAAAAAA5"].status == "skipped"  # the same song as one picked
+        spare = rows["yt:AAAAAAAAAA5"]  # the same song as one picked: kept as a spare
+        assert spare.status == "queued" and spare.spare
         assert db.get(ChannelPilot, "p1").picked_id == "r1"
     queue.calls.clear()
     pilot.tick(env.sessions, datetime(2026, 11, 25, 9, 5), queue)  # picked once
     with env.sessions() as db:
         assert len(db.scalars(select(ChannelPost)).all()) == 5
+
+
+def test_the_best_fitting_are_picked_first_whatever_their_reach(env):
+    owner = page(env)
+    with env.sessions() as db:
+        p = make_pilot(db, owner, posts_per_day=1)  # two wanted: six picked
+        found = Research(id="r3", description="", owner_id=owner, status="done")
+        found.items = [
+            item(n, f"FIT{n:08d}", f"Song {n}", f"Singer {n}", fit, score)
+            for n, (fit, score) in enumerate([(0.8, 0.9), (1.0, 0.3), (0.9, 0.5)])
+        ]
+        db.add(found)
+        db.flush()
+        pilot.pick(db, p, found)
+        db.flush()
+        order = db.scalars(select(ChannelPost.code).order_by(ChannelPost.id)).all()
+        assert order == ["yt:FIT00000001", "yt:FIT00000002", "yt:FIT00000000"]
+
+
+def test_a_video_known_too_short_isnt_picked(env):
+    owner = page(env)
+    with env.sessions() as db:
+        p = make_pilot(db, owner, posts_per_day=1)
+        found = Research(id="r4", description="", owner_id=owner, status="done")
+        found.items = [
+            item(0, "UMBRELLA001", "Umbrella", "Rihanna", 1.0, 0.9, duration=30.0),
+            item(1, "UMBRELLA002", "Umbrella", "Rihanna", 1.0, 0.5, duration=275.0),
+        ]
+        db.add(found)
+        db.flush()
+        assert pilot.pick(db, p, found, env.settings) == 1
+        db.flush()
+        rows = {r.code: r for r in db.scalars(select(ChannelPost))}
+        assert rows["yt:UMBRELLA001"].reason == "30 s: too short for a reel (needs 40 s)"
+        assert rows["yt:UMBRELLA002"].status == "queued" and not rows["yt:UMBRELLA002"].spare
+
+
+def test_a_spare_copy_is_checked_only_when_the_better_one_fails(env, monkeypatch):
+    owner = page(env)
+    with env.sessions() as db:
+        make_pilot(db, owner, posts_per_day=1)
+        best = queued_post(db, owner, code="yt:VALERIE0001", song="Valerie", artist="Amy Winehouse")
+        other = queued_post(db, owner, code="yt:OTHER000001", song="Rehab", artist="Amy Winehouse")
+        spare = queued_post(
+            db, owner, code="yt:VALERIE0002", song="Valerie", artist="Amy Winehouse"
+        )
+        db.get(ChannelPost, spare).spare = True
+        db.commit()
+    order = []
+
+    def check(post_id, Session, settings, router, enqueue, *rest):
+        order.append(post_id)
+        with Session() as db:
+            row = db.get(ChannelPost, post_id)
+            # The best copy of Valerie is too short; Rehab passes.
+            row.status = "skipped" if post_id == best else "editing"
+            db.commit()
+
+    monkeypatch.setattr(pilot, "check_video", check)
+    pilot.work("p1", env.sessions, env.settings, router=object(), workers=2)
+    assert order == [best, other, spare]  # the spare last, after the others
+
+
+def test_a_spare_whose_better_copy_passed_isnt_checked(env):
+    owner = page(env)
+    with env.sessions() as db:
+        make_pilot(db, owner)
+        passed = queued_post(
+            db, owner, code="yt:VALERIE0001", song="Valerie", artist="Amy Winehouse"
+        )
+        db.get(ChannelPost, passed).status = "editing"
+        spare = queued_post(
+            db, owner, code="yt:VALERIE0002", song="Valerie", artist="Amy Winehouse"
+        )
+        db.get(ChannelPost, spare).spare = True
+        db.commit()
+    never = lambda *a: pytest.fail("downloaded")  # noqa: E731
+    assert pilot.check_video(spare, env.sessions, env.settings, None, never, fetch=never) == (
+        "unused"
+    )
+    with env.sessions() as db:
+        assert db.get(ChannelPost, spare).reason == "another copy of “Valerie” passed its checks"
+
+
+@needs_ffmpeg
+def test_a_video_shazam_turns_away_goes_back_in_line_not_out(env, source, monkeypatch):
+    owner = page(env)
+    with env.sessions() as db:
+        post_id = queued_post(db, owner)
+        db.commit()
+
+    def busy(clip):
+        raise shazam.Busy(time.monotonic() + 600)
+
+    status = pilot.check_video(post_id, env.sessions, env.settings, None,
+                               lambda job: pytest.fail("edited"), fetch=fetching(source),
+                               ask=busy, look=lambda s, a: None)  # fmt: skip
+    assert status == "queued"
+    with env.sessions() as db:
+        row = db.get(ChannelPost, post_id)
+        assert row.retry_at > datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=9)
+        assert row.reason.startswith("Shazam asked to slow down")
+        # Not taken again before then.
+        assert pilot.next_unit(db, "p1") is None
+
+
+def test_too_few_passed_brings_another_research_the_same_day_up_to_three(env):
+    owner = page(env)
+    queue = Queue()
+    with env.sessions() as db:
+        p = make_pilot(db, owner, posts_per_day=2)
+        first = Research(
+            id="rA",
+            description="",
+            owner_id=owner,
+            status="done",
+            created_at=datetime(2026, 11, 25, 7, 0) - pilot_offset(),
+        )
+        db.add(first)
+        p.research_id, p.picked_id = "rA", "rA"
+        p.research_on, p.researches_on = date(2026, 11, 25), 1
+        db.add(ChannelPost(pilot_id="p1", code="yt:x", url="u", status="queued"))
+        db.commit()
+    pilot.tick(env.sessions, datetime(2026, 11, 25, 9, 0), queue)  # one still to check
+    assert not [c for c in queue.calls if c[0] == "learn"]
+    with env.sessions() as db:
+        db.query(ChannelPost).update({"status": "skipped"})
+        db.commit()
+    pilot.tick(env.sessions, datetime(2026, 11, 25, 9, 5), queue)
+    learned = [c for c in queue.calls if c[0] == "learn"]
+    assert len(learned) == 1
+    with env.sessions() as db:
+        p = db.get(ChannelPilot, "p1")
+        assert p.researches_on == 2 and p.research_id == learned[0][2]
+        assert "research 2 of today" in p.note
+        db.get(Research, p.research_id).status = "done"
+        p.picked_id = p.research_id
+        p.researches_on = pilot.MOST_RESEARCHES
+        db.commit()
+    queue.calls.clear()
+    pilot.tick(env.sessions, datetime(2026, 11, 25, 23, 0), queue)  # three a day at most
+    assert not [c for c in queue.calls if c[0] == "learn"]
+
+
+def pilot_offset() -> timedelta:
+    """Local time minus UTC here: stored times are UTC."""
+    return datetime.now() - datetime.now(UTC).replace(tzinfo=None)
 
 
 def test_a_singer_fills_two_places_at_most(env):
@@ -332,7 +481,7 @@ def test_a_research_gives_no_song_the_page_posted_or_has_waiting():
 
     context = research.Context(
         handle="vocalvsinstrument", posted=[HISTORY[0]["caption"]], avoid=[("Africa", "Toto")],
-        best=["🎵 Self Control — Laura Branigan - 1984 (4047 likes)"],
+        best=["🎵 Self Control — Laura Branigan - 1984 (4047 likes)"], surprise=True,
     )  # fmt: skip
     llm = Rater()
     result = research.run("", lambda: nullcontext(llm), set(), set(), lambda m, v: None,
@@ -341,6 +490,27 @@ def test_a_research_gives_no_song_the_page_posted_or_has_waiting():
     assert result.left_out["posted before"] == 2
     told = research._taste(context)
     assert "never these songs" in told and "Africa - Toto" in told
+    # The focus, the best posts and surprise reach both the planning and the rating.
+    llm.prompts = []
+    research.run("Iconic distinctive voices", lambda: nullcontext(Recorder(llm)), set(), set(),
+                 lambda m, v: None, find=find, info=info, pause=0, context=context)  # fmt: skip
+    planned, rated = llm.prompts[0], llm.prompts[-1]
+    for prompt in (planned, rated):
+        assert "Iconic distinctive voices" in prompt
+        assert "Self Control — Laura Branigan - 1984 (4047 likes)" in prompt
+    assert research.SURPRISE_PLAN in planned and research.SURPRISE_RATE in rated
+    assert "Africa - Toto" in planned
+
+
+class Recorder:
+    """The model, with each prompt kept."""
+
+    def __init__(self, llm):
+        self.llm = llm
+
+    def chat_json(self, messages, schema, **kwargs):
+        self.llm.prompts.append(messages[-1]["content"])
+        return self.llm.chat_json(messages, schema, **kwargs)
 
 
 # ---- the checks before the edit --------------------------------------------------------
@@ -540,6 +710,10 @@ def analysed(env, work_dir: Path, router) -> None:
                     "sine=frequency=440:duration=10", "-af",
                     "volume=enable='between(t,3.25,3.75)':volume=0", str(work_dir / "vocals.wav")],
                    check=True)  # fmt: skip
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(work_dir / "vocals.wav"), "-f",
+                    "lavfi", "-i", "sine=frequency=70:duration=10", "-filter_complex",
+                    "[0:a][1:a]amix=inputs=2:normalize=0[m]", "-map", "[m]",
+                    str(work_dir / "audio.wav")], check=True)  # fmt: skip  # the mix
     words = [Word(text="out", start=0.5, end=3.2), Word(text="on", start=3.8, end=6.0),
              Word(text="the", start=6.2, end=9.0)]  # fmt: skip
     transcript_file(work_dir, "vocals", router, None).write_text(
@@ -623,7 +797,7 @@ def test_any_doubt_about_the_reel_leaves_it_for_a_person_and_on_the_piles(env, s
         assert row.reason.startswith("caption: no caption")
         output = db.get(Output, output_id)
         assert output.pile == "look"
-        assert any(d.startswith("Autopilot leak: between phrases") for d in output.doubts)
+        assert any(d.startswith("Autopilot leak: instruments about") for d in output.doubts)
 
 
 def test_an_edit_that_failed_or_was_deleted_is_a_skip_and_a_caption_is_waited_for(env):

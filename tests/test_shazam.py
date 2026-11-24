@@ -154,3 +154,44 @@ def test_a_songs_year_is_its_earliest_release(monkeypatch):
     assert shazam.first_year("Nada", "Yuri", httpx.MockTransport(reply)) is None
     down = httpx.MockTransport(lambda request: httpx.Response(503))
     assert shazam.first_year("Maldita primavera", "Yuri", down) is None
+
+
+def test_shazam_is_asked_at_its_pace_and_left_alone_a_while_after_turning_us_away(monkeypatch):
+    class RateLimited(Exception):
+        pass
+
+    now = [1000.0]
+    waited = []
+    monkeypatch.setattr(shazam, "_last", [0.0])
+    monkeypatch.setattr(shazam, "_cool", [0.0, 0.0])
+
+    def sleep(seconds):
+        waited.append(round(seconds, 1))
+        now[0] += seconds
+
+    def ask(answer):
+        def run(clip):
+            if answer is None:
+                raise RateLimited("https://amp.shazam.com/... rate limited the request")
+            return answer
+
+        return run
+
+    clock = lambda: now[0]  # noqa: E731
+    assert shazam.paced(ask(FELICITA), "a", clock, sleep) == FELICITA
+    now[0] += 1.0
+    assert shazam.paced(ask(FELICITA), "b", clock, sleep) == FELICITA
+    assert waited == [0.0, shazam.SPACING - 1.0]  # the second waited for its turn
+    now[0] += 10
+    with pytest.raises(shazam.Busy) as refused:
+        shazam.paced(ask(None), "c", clock, sleep)
+    assert refused.value.until == pytest.approx(now[0] + shazam.COOL_DOWN)
+    with pytest.raises(shazam.Busy):  # nothing is sent while it cools down
+        shazam.paced(lambda clip: pytest.fail("asked"), "d", clock, sleep)
+    now[0] += shazam.COOL_DOWN + 1
+    with pytest.raises(shazam.Busy) as again:  # turned away again: twice as long
+        shazam.paced(ask(None), "e", clock, sleep)
+    assert again.value.until == pytest.approx(now[0] + 2 * shazam.COOL_DOWN)
+    now[0] += 2 * shazam.COOL_DOWN + 1
+    assert shazam.paced(ask(FELICITA), "f", clock, sleep) == FELICITA
+    assert shazam._cool[1] == 0.0  # it answered: the next cool-down starts short again

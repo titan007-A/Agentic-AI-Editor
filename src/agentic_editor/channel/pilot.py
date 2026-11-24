@@ -30,6 +30,7 @@ The scan (tick, every few minutes) only looks and queues; the work runs as queue
 
 import logging
 import threading
+import time as clock
 from collections import Counter
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -47,6 +48,7 @@ from agentic_editor import (
     fun,
     instagram,
     research,
+    shazam,
     slots,
 )
 from agentic_editor.analysis import separation
@@ -81,7 +83,10 @@ MOST_PER_DAY = 6
 MIN_FIT = 0.8  # the research's fit (relevance) a video needs to be picked
 BUFFER_DAYS = 2  # days of posts kept checked and edited ahead
 TRIES = 3  # videos checked for each one wanted
-MOST_PICKED = 20  # videos one research's picking checks, at most
+MOST_PICKED = 45  # videos one research's picking checks, at most
+SPARES = 2  # other copies of a song kept from one research, in case its best copy fails
+MOST_RESEARCHES = 3  # a day: another when today's picks are all checked and too few passed
+TOP_UP_AFTER = timedelta(hours=1)  # after the day's last research began
 PER_ARTIST = 2  # of one singer or band among them: the page mixes its artists
 GRACE = timedelta(hours=1)  # a post time missed by more is left (the next one comes)
 INSIGHTS_AFTER = (timedelta(hours=24), timedelta(hours=48))  # a post's numbers read then
@@ -95,6 +100,7 @@ WORK_AGING = timedelta(minutes=30)  # then it goes on anyway
 # A video's statuses: waiting to be checked, edited or posted; passed its first checks.
 WAITING = ("queued", "checking", "editing", "reviewing", "awaiting", "ready", "due", "posting")
 PASSED = ("editing", "reviewing", "awaiting", "ready", "due", "posting")
+PICKED = ("queued", "checking")  # picked, not checked yet
 HOLDS_SONG = (*WAITING, "look", "posted", "failed")  # its song is never found again
 PERMISSION = {10, 200}  # Graph API: the login lacks the permission
 BEFORE_EDIT = {"posted before", "original", "length", "download", "one song", "named", "vocals",
@@ -152,13 +158,16 @@ def title_of(item) -> str:
 # ---- what the account posted ---------------------------------------------------------
 
 
-def held_songs(db: Session, pilot: ChannelPilot, but: int | None = None) -> list[tuple[str, str]]:
+def held_songs(
+    db: Session, pilot: ChannelPilot, but: int | None = None, picked: bool = True
+) -> list[tuple[str, str]]:
     """The songs its videos hold: waiting, posted (in dry run only while it is still in dry
-    run), failed to post (it may have gone out) or left for a person."""
+    run), failed to post (it may have gone out) or left for a person. Without `picked`,
+    not those only picked to be checked: a video being checked isn't held up by another
+    copy of its song waiting its turn."""
+    holding = HOLDS_SONG if picked else tuple(s for s in HOLDS_SONG if s not in PICKED)
     rows = db.scalars(
-        select(ChannelPost).where(
-            ChannelPost.pilot_id == pilot.id, ChannelPost.status.in_(HOLDS_SONG)
-        )
+        select(ChannelPost).where(ChannelPost.pilot_id == pilot.id, ChannelPost.status.in_(holding))
     )
     pairs = []
     for post in rows:
@@ -170,10 +179,12 @@ def held_songs(db: Session, pilot: ChannelPilot, but: int | None = None) -> list
     return pairs
 
 
-def known(db: Session, pilot: ChannelPilot, but: int | None = None) -> research.Posted:
-    """Every song the account posted (its posts' captions) or has waiting."""
+def known(
+    db: Session, pilot: ChannelPilot, but: int | None = None, picked: bool = True
+) -> research.Posted:
+    """Every song the account posted (its posts' captions) or has waiting (see held_songs)."""
     captions = [h.get("caption", "") for h in pilot.history or []]
-    return research.Posted(held_songs(db, pilot, but), captions)
+    return research.Posted(held_songs(db, pilot, but, picked), captions)
 
 
 def reactions(entry: dict) -> int:
@@ -206,6 +217,7 @@ def context_for(db: Session, account_id: str | None) -> dict:
         "best": best_lines(pilot),
         "avoid": held_songs(db, pilot),
         "posted": [h.get("caption", "") for h in pilot.history or []],
+        "surprise": pilot.surprise,
     }
 
 
@@ -259,8 +271,27 @@ def wanted(db: Session, pilot: ChannelPilot) -> int:
     return pilot.posts_per_day * BUFFER_DAYS - have
 
 
-def research_due(pilot: ChannelPilot, now: datetime) -> bool:
-    return pilot.active and now.hour >= pilot.research_hour and pilot.research_on != now.date()
+def research_due(pilot: ChannelPilot, now: datetime, db: Session | None = None) -> bool:
+    """Whether a research should start: the day's first once its hour came; another
+    (MOST_RESEARCHES a day at most, TOP_UP_AFTER the last began) when everything the last
+    one gave was checked and too few passed to keep BUFFER_DAYS of posts waiting."""
+    if not pilot.active or now.hour < pilot.research_hour:
+        return False
+    if pilot.research_on != now.date():
+        return True
+    if db is None or pilot.researches_on >= MOST_RESEARCHES:
+        return False
+    last = db.get(Research, pilot.research_id) if pilot.research_id else None
+    if last is None or last.status not in ("done", "failed") or pilot.picked_id != last.id:
+        return False
+    if now - local(last.created_at) < TOP_UP_AFTER:
+        return False
+    waiting = db.scalar(
+        select(func.count())
+        .select_from(ChannelPost)
+        .where(ChannelPost.pilot_id == pilot.id, ChannelPost.status.in_(PICKED))
+    )
+    return not waiting and wanted(db, pilot) > 0
 
 
 def start_research(
@@ -270,6 +301,11 @@ def start_research(
     already (unless `fresh`), else a new one. The id of a new one (queued once the account
     is learned)."""
     today = now.date()
+    if pilot.research_on == today:
+        fresh = True  # another today: the morning one was had
+        pilot.researches_on = (pilot.researches_on or 0) + 1
+    else:
+        pilot.researches_on = 1
     pilot.research_on = today
     account = db.get(ResearchAccount, pilot.research_account_id or "")
     if account is None:
@@ -297,14 +333,21 @@ def start_research(
     db.flush()
     account.daily_on = today
     pilot.research_id = found.id
-    pilot.note = "today's research is starting"
+    pilot.note = (
+        "today's research is starting"
+        if pilot.researches_on <= 1
+        else f"too few passed: research {pilot.researches_on} of today is starting"
+    )
     return found.id
 
 
-def pick(db: Session, pilot: ChannelPilot, found: Research) -> int:
-    """Pick the research's best videos to check (status "queued"), best score first, at most
-    PER_ARTIST of one singer: those under MIN_FIT and songs posted or waiting are noted as
-    skipped. How many were picked."""
+def pick(
+    db: Session, pilot: ChannelPilot, found: Research, settings: Settings | None = None
+) -> int:
+    """Pick the research's best videos to check (status "queued"), the best fitting first
+    (then the best scored), at most PER_ARTIST singers' worth: those under MIN_FIT and songs
+    posted or waiting are noted as skipped. Another copy of a song picked here is kept as a
+    spare (SPARES at most), checked only if the better one fails. How many were picked."""
     pilot.picked_id = found.id
     want = wanted(db, pilot)
     if want <= 0:
@@ -312,10 +355,14 @@ def pick(db: Session, pilot: ChannelPilot, found: Research) -> int:
         return 0
     room = min(want * TRIES, MOST_PICKED)
     posted = known(db, pilot)
+    preset = preset_of(db, pilot, settings) if settings else None
+    shortest = preset.min_duration + checks.LEAD if preset else 0.0
+    batch = research.Posted([], [])  # the songs picked from this research
+    copies: Counter = Counter()
     codes = set(db.scalars(select(ChannelPost.code).where(ChannelPost.pilot_id == pilot.id)))
     picked = Counter()
     artists = Counter()
-    for item in sorted(found.items, key=lambda i: (-i.score, i.rank)):
+    for item in sorted(found.items, key=lambda i: (-(i.relevance or 0), -i.score, i.rank)):
         if item.code in codes:
             continue
         song = title_of(item)
@@ -332,18 +379,34 @@ def pick(db: Session, pilot: ChannelPilot, found: Research) -> int:
         elif posted.has(song, item.artist):
             row.status, row.reason = "skipped", f"“{song}” was posted or is waiting already"
             picked["posted before"] += 1
+        elif item.duration is not None and item.duration < shortest:
+            row.status = "skipped"
+            row.reason = f"{item.duration:.0f} s: too short for a reel (needs {shortest:.0f} s)"
+            picked["too short"] += 1
+        elif song and batch.has(song, item.artist):
+            key = research.title_key(song)
+            if copies[key] >= SPARES:
+                continue
+            copies[key] += 1
+            row.status, row.spare = "queued", True
+            row.reason = f"another copy of “{song}”: checked if the better one fails"
+            picked["spare"] += 1
         elif picked["picked"] >= room:
             continue  # not needed: never looked at
         elif (who := research.plain(item.artist)) and artists[who] >= PER_ARTIST:
             continue  # enough of this singer today; another day's research may bring it
         else:
             row.status = "queued"
-            posted.add(song, item.artist)
+            batch.add(song, item.artist)
             picked["picked"] += 1
             artists[research.plain(item.artist)] += 1
         db.add(row)
         codes.add(item.code)
-    left = ", ".join(f"{n} {why}" for why, n in picked.items() if why != "picked" and n)
+    left = ", ".join(
+        f"{n} {'spare copies' if why == 'spare' else why}"
+        for why, n in picked.items()
+        if why != "picked" and n
+    )
     pilot.note = f"picked {picked['picked']} of the {len(found.items)} videos found to check" + (
         f" ({left})" if left else ""
     )
@@ -437,11 +500,17 @@ def read_due(post: ChannelPost, now: datetime) -> bool:
     return False
 
 
-def tick(Session: sessionmaker, now: datetime | None = None, queue=None) -> list[str]:
+def tick(
+    Session: sessionmaker, now: datetime | None = None, queue=None, settings: Settings | None = None
+) -> list[str]:
     """Look at every channel autopilot (the server's scan): start a research when it's due,
     pick from a finished one, send ended edits to their checks, queue the work, post when
     a post time came and read posts' numbers. `now`: local time. What it did."""
     queue = queue or default_queue()
+    if settings is None:
+        from agentic_editor.settings import get_settings
+
+        settings = get_settings()
     now = now or datetime.now()
     if now.tzinfo is not None:
         now = now.astimezone().replace(tzinfo=None)
@@ -463,7 +532,7 @@ def tick(Session: sessionmaker, now: datetime | None = None, queue=None) -> list
             follow_edits(db, pilot)
             if (
                 pilot.active
-                and research_due(pilot, now)
+                and research_due(pilot, now, db)
                 and (research_id := start_research(db, pilot, now))
             ):
                 calls.append((queue.learn, pilot.id, research_id))
@@ -471,7 +540,7 @@ def tick(Session: sessionmaker, now: datetime | None = None, queue=None) -> list
             found = db.get(Research, pilot.research_id) if pilot.research_id else None
             if pilot.active and found is not None and pilot.picked_id != found.id:
                 if found.status == "done":
-                    picked = pick(db, pilot, found)
+                    picked = pick(db, pilot, found, settings)
                     did.append(f"picked {picked} for @{channel.username}")
                 elif found.status == "failed":
                     pilot.picked_id = found.id
@@ -526,7 +595,7 @@ def next_unit(db: Session, pilot_id: str) -> tuple[str, int] | None:
     queued = db.scalars(
         select(ChannelPost)
         .where(ChannelPost.pilot_id == pilot.id, ChannelPost.status == "queued")
-        .order_by(ChannelPost.id)
+        .order_by(ChannelPost.spare, ChannelPost.id)
     ).all()
     if not queued:
         return None
@@ -534,8 +603,12 @@ def next_unit(db: Session, pilot_id: str) -> tuple[str, int] | None:
         for post in queued:
             post.status, post.reason = "unused", "not needed: enough others passed"
         return None
-    post = queued[0]
-    post.status = "checking"
+    now = _utcnow()
+    ready = [p for p in queued if p.retry_at is None or p.retry_at <= now]
+    if not ready:
+        return None  # each waits for Shazam: the scan sends the work again later
+    post = ready[0]
+    post.status, post.retry_at = "checking", None
     return "check", post.id
 
 
@@ -623,7 +696,8 @@ def check_video(
         post = db.get(ChannelPost, post_id)
         pilot = db.get(ChannelPilot, post.pilot_id)
         preset = preset_of(db, pilot, settings)
-        posted = known(db, pilot, but=post.id)
+        posted = known(db, pilot, but=post.id, picked=False)
+        spare = post.spare
         url, song, artist, duration = post.url, post.song, post.artist, post.duration
         title = post.title.strip().split("\n", 1)[0]
     rows: list[checks.Check] = []
@@ -645,6 +719,8 @@ def check_video(
 
     if preset is None:
         return end("skipped", f"the preset {pilot.preset!r} isn't there")
+    if spare and song and posted.has(song, artist):
+        return end("unused", f"another copy of “{song}” passed its checks")
     try:
         if not passed(checks.not_posted(song, artist, posted, "the research")):
             return end("skipped", rows[-1].detail)
@@ -665,7 +741,14 @@ def check_video(
             return end("skipped", rows[-1].detail)
         work_dir = settings.cache_dir / file_hash(source.path)
         work_dir.mkdir(parents=True, exist_ok=True)
-        heard = checks.hear(source.path, work_dir, info.duration, ask, look)
+        try:
+            heard = checks.hear(source.path, work_dir, info.duration, ask, look)
+        except shazam.Busy as exc:  # it goes back in line, not out
+            wait = max(0.0, exc.until - clock.monotonic())
+            again = _utcnow() + timedelta(seconds=wait)
+            rows.append(checks.Check("one song", False, f"waiting: {exc}"))
+            return end("queued", f"Shazam asked to slow down: tried again after "
+                       f"{local(again):%H:%M}", retry_at=again, work_dir=str(work_dir))  # fmt: skip
         check, found = checks.one_song(heard)
         if not passed(check):
             return end("skipped", check.detail, work_dir=str(work_dir))
@@ -773,8 +856,8 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
         words = words_of(heard, edl)
         clip, rate = edl.clips[0], 16000
         # As the render chose it (render.compose.split_soundtrack).
-        quiet = split_render.voice_pauses(work_dir / "vocals.wav", clip.start, clip.end)
-        at = split_render.switch_time(edl.duration, preset.split, words, quiet)
+        pauses, breaths = split_render.quiet_spans(work_dir / "vocals.wav", clip.start, clip.end)
+        at = split_render.switch_time(edl.duration, preset.split, words, pauses, breaths)
         voice = ffmpeg.read_audio(work_dir / "vocals.wav", rate)
         voice = voice[int(clip.start * rate) : int(clip.end * rate)]
         found = [
@@ -784,10 +867,17 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
         rest = edl.duration - at - 0.2 - preset.audio.fade_out - 0.1
         part = checks.cut(path, at + 0.2, rest, scratch / "vocals-part.wav")
         first = checks.cut(path, 0.0, max(0.5, at - 0.05), scratch / "whole-part.wav")
-        heard = 22050
-        found.append(_attempt("leak", lambda: checks.leak(
-            ffmpeg.read_audio(part, heard), heard, ffmpeg.read_audio(first, heard)
-        )))  # fmt: skip
+
+        def leaked() -> checks.Check:
+            # The song's own instruments over the same stretch: the mix minus the vocals.
+            heard = 22050
+            a, b = int((clip.start + at + 0.2) * heard), int((clip.start + at + 0.2 + rest) * heard)
+            mix = ffmpeg.read_audio(work_dir / "audio.wav", heard)[a:b]
+            sung = ffmpeg.read_audio(work_dir / "vocals.wav", heard)[a:b]
+            n = min(len(mix), len(sung))
+            return checks.leak(ffmpeg.read_audio(part, heard), heard, mix[:n] - sung[:n])
+
+        found.append(_attempt("leak", leaked))
         second = checks.cut(path, at + 0.05, edl.duration - at - 0.05, scratch / "second.wav")
         found.append(_attempt("loudness", lambda: checks.loudness(path, first, second, preset)))
         return found

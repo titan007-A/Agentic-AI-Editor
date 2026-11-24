@@ -638,12 +638,13 @@ def split_soundtrack(
     """Where the vocals take over in a split preset's reel, and its soundtrack: the whole
     sound until then, the vocals after."""
     clip = edl.clips[0]
-    quiet = (
-        []
+    pauses, breaths = (
+        ([], [])
         if analysis.instrument_free or analysis.audio_source != "vocals"
-        else split.voice_pauses(analysis.audio_path, clip.start, clip.end)
+        else split.quiet_spans(analysis.audio_path, clip.start, clip.end)
     )
-    at = split.switch_time(edl.duration, preset.split, timeline_words(edl, analysis), quiet)
+    words = timeline_words(edl, analysis)
+    at = split.switch_time(edl.duration, preset.split, words, pauses, breaths)
     mix = analysis.mix_path or analysis.audio_path
     return at, split.soundtrack(edl, preset, mix, analysis.audio_path, at, work_dir)
 

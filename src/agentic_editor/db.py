@@ -722,6 +722,9 @@ class ChannelPilot(Base):
     preset: Mapped[str] = mapped_column(String(64), default="")
     # What its researches look for besides what the account's best posts show.
     focus: Mapped[str] = mapped_column(Text, default="")
+    # Its researches rate a recognisable but less obvious song over an artist's most famous
+    # hit (the owner's channel data: surprising picks did best).
+    surprise: Mapped[bool] = mapped_column(default=True)
     research_hour: Mapped[int] = mapped_column(default=7)  # local time
     posts_per_day: Mapped[int] = mapped_column(default=1)
     post_times: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["19:00"])  # "HH:MM"
@@ -733,6 +736,7 @@ class ChannelPilot(Base):
     paused_reason: Mapped[str] = mapped_column(Text, default="")
     note: Mapped[str] = mapped_column(Text, default="")  # what it did last
     research_on: Mapped[date | None]  # the day its last research started
+    researches_on: Mapped[int] = mapped_column(default=0)  # researches started that day
     research_id: Mapped[str | None] = mapped_column(String(12))  # that research
     picked_id: Mapped[str | None] = mapped_column(String(12))  # the research it picked from
     # The account's own posts as Instagram gave them when last read: id, caption, likes,
@@ -769,6 +773,10 @@ class ChannelPost(Base):
     relevance: Mapped[float | None]
     duration: Mapped[float | None]  # the source's seconds
     work_dir: Mapped[str] = mapped_column(Text, default="")  # its analysis cache folder
+    # Another copy of a song picked in the same batch: checked only if the better-scored
+    # copy fails its checks.
+    spare: Mapped[bool] = mapped_column(default=False)
+    retry_at: Mapped[datetime | None]  # UTC: not checked before then (Shazam asked to wait)
     # queued -> checking -> skipped, or editing -> reviewing -> look (needs a look), or
     # awaiting (a person approves) / ready -> due (its post time came) -> posting -> posted,
     # or failed; unused: picked but not needed, once enough others passed.

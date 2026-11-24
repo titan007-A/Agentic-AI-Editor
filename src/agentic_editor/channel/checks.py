@@ -23,8 +23,8 @@ After the edit, on the reel itself:
 - switch: the sound changes where the picture does, between two sung words: no word spans
   it and the voice is low there;
 - voice: the singer is heard in most of the vocals part;
-- leak: no instruments left in the vocals part: it falls silent between phrases and has
-  no bass, as clean vocals do and a band doesn't;
+- leak: no instruments left in the vocals part: its bass, against the song's own
+  instruments', puts them 28 dB or more under the voice;
 - loudness: the reel at the preset's loudness, both parts alike.
 """
 
@@ -73,21 +73,26 @@ BLACK = 0.3  # seconds of black a playing panel may show
 BLANK_SPREAD = 4  # a held picture this even (luma's standard deviation) is blank
 LABEL_DIFF = 40.0  # mean difference (of 255) of a label's pixels from how it is drawn
 SWITCH_AGREE = 0.25  # seconds between where the picture and the sound change, at most
-WORD_EDGE = 0.05  # seconds a word may overlap the change at its ends (timings are rough)
+WORD_EDGE = split_render.WORD_EDGE  # seconds a word may overlap the change at its ends
 VOICE_GAP = 12.0  # dB under its loudest the voice must be where the sound changes
 SILENT_THERE = split_render.SILENT  # and this far under, it is silent whatever the words say
 VOICE_AROUND = 0.06  # seconds either side of the change listened to
 VOICE_SHARE = 0.6  # of the vocals part the singer is heard in, at least
-# Instruments left in the vocals part keep playing where the singer stops and carry bass
-# the voice hasn't: the part must fall this far under its loudest between phrases (its
-# quietest tenth of 50 ms stretches against its loudest twentieth) and keep this little of
-# its energy under BASS Hz. On four real reels the vocals parts fell 44-57 dB with 0.00%
-# bass, their instruments parts 8-17 dB with 12-36%. (Separating the vocals part again
-# measures the model splitting the voice instead: that stem followed the voice exactly
-# and was silent wherever the singer was.)
-LEAK_FLOOR = 30.0
-LEAK_BASS = 0.005
+# Instruments left in the vocals part carry the band's bass, which a voice hasn't: the
+# vocals part's share of energy under BASS Hz against the song's own instruments' share
+# over the same stretch (the mix minus the vocals) says how far under the voice they leak.
+# On six real songs it read the song's own instruments mixed back in at -30, -25, -20 and
+# -15 dB within a dB (Chandelier's piano too, 17% bass), and the clean vocals parts -35 to
+# -54 dB. How far the vocals fall between phrases did not tell: reverb, backing vocals and
+# a singer who never stops kept clean parts of modern pop 10-27 dB, and the first live run
+# left 7 of 9 reels for a look over it. (A leak with no low end, hi-hats alone, isn't
+# measured: the 12-16 kHz air read the voice's own breath.)
+LEAK_DB = -28.0
 BASS = 120.0
+# A band with almost no bass of its own (a few strings, a piano's upper hand) gives too
+# little to compare: then the vocals part may have this little of its energy under BASS.
+LEAK_REF_LEAST = 0.02
+LEAK_BASS_ALONE = 0.0005
 LOUDNESS_OFF = 1.0  # LU the reel may be from the preset's loudness
 PEAK_OVER = 0.5  # dB its peak may be over the preset's
 PARTS_APART = 3.0  # LU the two parts may differ
@@ -256,13 +261,28 @@ def confidence(score: float, doubts: list[str], issues: list[str]) -> Check:
     return Check("confidence", ok, detail)
 
 
+# The caption feature's note that its length missed the preset's words ("71 words, not
+# 25-70"): a style target, not a doubt about what it says, within WORDS_SLACK of the range.
+WORD_COUNT = re.compile(r"^(\d+) words, not (\d+)-(\d+)$")
+WORDS_SLACK = 0.25
+
+
+def _length_only(note: str) -> bool:
+    if not (found := WORD_COUNT.match(note.strip())):
+        return False
+    count, least, most = (int(g) for g in found.groups())
+    return least * (1 - WORDS_SLACK) <= count <= most * (1 + WORDS_SLACK)
+
+
 def caption(text: str, status: str | None, notes: list[str]) -> Check:
     if status != "done" or not text.strip():
         why = "; ".join(notes) or status or "not written"
         return Check("caption", False, f"no caption: {why}")
-    if notes:
-        return Check("caption", False, "to check before posting: " + "; ".join(notes))
-    return Check("caption", True, f"written, {len(text.split())} words, checked by its sources")
+    doubts = [n for n in notes if not _length_only(n)]
+    if doubts:
+        return Check("caption", False, "to check before posting: " + "; ".join(doubts))
+    said = f"written, {len(text.split())} words, checked by its sources"
+    return Check("caption", True, said + ("" if not notes else f" ({'; '.join(notes)})"))
 
 
 def reel_length(duration: float, preset: Preset) -> Check:
@@ -458,13 +478,6 @@ def cut(path: Path, start: float, length: float, dest: Path) -> Path:
     return dest
 
 
-def floor(samples: np.ndarray, rate: int) -> float:
-    """How far a sound falls under its loudest at its quietest (dB): its quietest tenth of
-    50 ms stretches against its loudest twentieth."""
-    found = window_levels(samples, rate, 0.05)
-    return float(np.percentile(found, 95) - np.percentile(found, 10))
-
-
 def bass(samples: np.ndarray, rate: int) -> float:
     """The share of a sound's energy under BASS Hz."""
     power = np.abs(np.fft.rfft(samples.astype(np.float64))) ** 2
@@ -473,17 +486,21 @@ def bass(samples: np.ndarray, rate: int) -> float:
     return float(power[hz < BASS].sum() / total) if total else 0.0
 
 
-def leak(part: np.ndarray, rate: int, mix: np.ndarray | None = None) -> Check:
-    """Instruments left in the vocals part (`part`): it must fall LEAK_FLOOR dB between
-    phrases and have at most LEAK_BASS of its energy under BASS Hz. `mix`, the first part,
-    is measured too, for comparison."""
-    fell, low = floor(part, rate), bass(part, rate)
-    ok = fell >= LEAK_FLOOR and low <= LEAK_BASS
-    detail = (f"between phrases the vocals fall {fell:.0f} dB (needs {LEAK_FLOOR:.0f}); "
-              f"{low:.2%} of them under {BASS:.0f} Hz (needs {LEAK_BASS:.1%} at most)")  # fmt: skip
-    if mix is not None:
-        detail += f"; the instruments part: {floor(mix, rate):.0f} dB, {bass(mix, rate):.0%}"
-    return Check("leak", ok, detail)
+def leak(part: np.ndarray, rate: int, instruments: np.ndarray) -> Check:
+    """Instruments left in the vocals part (`part`): by its bass against the song's own
+    instruments' (`instruments`, the mix minus the vocals over the same stretch), they must
+    be LEAK_DB or further under the voice."""
+    low, ref = bass(part, rate), bass(instruments, rate)
+    if ref < LEAK_REF_LEAST:
+        said = (f"{low:.3%} of the vocals part under {BASS:.0f} Hz (needs "
+                f"{LEAK_BASS_ALONE:.2%} at most: the band has little bass, {ref:.1%})")  # fmt: skip
+        return Check("leak", low <= LEAK_BASS_ALONE, said)
+    under = 10 * np.log10(max(low, 1e-12) / ref)
+    ok = under <= LEAK_DB
+    detail = (f"instruments about {-under:.0f} dB under the voice by their bass ({low:.3%} of "
+              f"the vocals part under {BASS:.0f} Hz, the band's own {ref:.0%}); needs "
+              f"{-LEAK_DB:.0f} dB or more")  # fmt: skip
+    return Check("leak", bool(ok), detail)
 
 
 def loudness(path: Path, first: Path, second: Path, preset: Preset) -> Check:
