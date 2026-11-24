@@ -260,6 +260,7 @@ class MapModel(Writer):
         super().__init__(*replies)
         # where the second look says a thing comes from (else the card's own country)
         self.origins = {k.lower(): v for k, v in (origins or {}).items()}
+        self.home: dict[str, str] = {}  # each thing's card country, from the first look
         self.near = {n.lower() for n in near}  # passed the first look, not the second
         self.second: list[str] = []  # the second looks, as asked
         self.wrong = {w.lower() for w in wrong}
@@ -278,6 +279,7 @@ class MapModel(Writer):
             thing = re.search(r"Thing: (.+?)\.\n", text).group(1)
             kind = re.search(r"must be one of the (.+?)\.\n", text).group(1)
             self.judged.append(f"{country}: {thing}")
+            self.home[thing.lower()] = country
             bad = {thing.lower(), f"{country}: {thing}".lower()} & self.wrong
             allowed = sorted(mapwriter.allowed_for(kind) or {"other"})
             return {
@@ -287,8 +289,9 @@ class MapModel(Writer):
         if schema is mapwriter.KIND_SCHEMA:
             text = messages[-1]["content"]
             self.second.append(text)
-            thing = re.search(r"card: (.+?) \(", text).group(1)
-            home = re.search(r"On the (.+?) card", text).group(1)
+            thing = re.search(r"One card shows: (.+?) \(", text).group(1)
+            assert " card:" not in text  # the card's country isn't given away
+            home = self.home[thing.lower()]
             return {
                 "plain": thing, "answer": "no" if thing.lower() in self.near else "yes",
                 "origin": self.origins.get(thing.lower(), home),

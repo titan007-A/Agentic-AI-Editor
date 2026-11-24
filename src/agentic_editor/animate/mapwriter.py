@@ -978,7 +978,9 @@ def _kind_again(llm, idea, kind, country, thing, what) -> tuple[str, str, str]:
     with short_answers(llm, 80):
         reply = llm.chat_json(
             [{"role": "user", "content": (
-                f"A reel about {idea} must show only {kind}. On the {country} card: {thing} "
+                # The card's country isn't named: the model echoed it ("On the India card:
+                # compass" came back from India).
+                f"A reel about {idea} must show only {kind}. One card shows: {thing} "
                 f"({what}).\n"
                 f"plain: what {thing} is, in one or two plain words (like river, violin, "
                 "teapot).\n"
@@ -1237,10 +1239,10 @@ def refill(llm, idea, kind, country, have, avoid, need, allowed, checks, known=N
         log.warning("filling %s up failed: %s", country, exc)
         return []
     taken = [*have, *avoid]
-    fresh = [
-        i for i in _items(reply.get("items", []))
-        if not any(same_by_name(i.text, t.text) for t in taken)
-    ]  # fmt: skip
+    fresh: list[Item] = []
+    for i in _items(reply.get("items", [])):
+        if not any(same_by_name(i.text, t.text) for t in [*taken, *fresh]):
+            fresh.append(i)  # nothing the tour has, nor twice in this answer
     kept, _ = _sorted_out(llm, idea, kind, country, fresh, allowed, checks, known)
     return kept[:need]
 
