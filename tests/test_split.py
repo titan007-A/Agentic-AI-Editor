@@ -74,11 +74,47 @@ def test_the_sound_changes_in_the_singers_silence_before_a_gap_whisper_heard():
     assert split.switch_time(40.0, on, sung, quiet) == pytest.approx(15.1)
     # None near: the words' gap, as before.
     assert split.switch_time(40.0, on, sung, [(30, 31)]) == pytest.approx(12.75)
-    # A silence no word's timing spans before one inside a word.
+    # A silence counts whatever whisper's word timings say: the nearest.
     inside = [(13.8, 14.2), (15.5, 15.9)]
     assert split.switch_time(40.0, on, words((0, 14.6), (16.0, 40)), inside) == (
+        pytest.approx(14.0)
+    )
+    # A breath no word's timing spans before one inside a word, at a word's end in it.
+    assert split.switch_time(40.0, on, words((0, 14.6), (16.0, 40)), [], inside) == (
         pytest.approx(15.6)
     )
+    assert split.switch_time(40.0, on, words((0, 14.6), (14.6, 40)), [], [(14.56, 14.64)]) == (
+        pytest.approx(14.6)
+    )
+
+
+def test_with_no_silence_near_the_share_a_breath_near_it_then_one_further_away():
+    on = Split(enabled=True)  # 35% of 40 s: 14 s
+    held = words((0, 40))  # one long held note, as whisper hears it
+    # A breath within the snap before a silence far off: the share matters.
+    assert split.switch_time(40.0, on, [], [(21.0, 22.0)], [(15.0, 15.5)]) == pytest.approx(15.1)
+    # Nothing near: a silence anywhere from 20% to 60% of the reel, the nearest.
+    assert split.switch_time(40.0, on, [], [(21.0, 22.0), (30.0, 31.0)]) == pytest.approx(21.1)
+    # A breath further away when there is no silence at all.
+    assert split.switch_time(40.0, on, [], [], [(9.0, 9.4)]) == pytest.approx(9.3)
+    # Past 60% (or before 20%) doesn't count: the words', else the share as asked.
+    assert split.switch_time(40.0, on, held, [(30.0, 31.0)], [(2.0, 3.0)]) == pytest.approx(14.0)
+    # A silence reaching into the window counts from its edge inside it.
+    assert split.switch_time(40.0, on, [], [(22.0, 26.0)]) == pytest.approx(22.1)
+
+
+@needs_ffmpeg
+def test_the_singers_breaths_are_found_besides_their_silences(tmp_path):
+    voice = tmp_path / "vocals.wav"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=10",
+         "-af", "volume=enable='between(t,3,3.4)':volume=0.06,"
+         "volume=enable='between(t,6,6.5)':volume=0", str(voice)],
+        check=True,
+    )  # fmt: skip
+    pauses, breaths = split.quiet_spans(voice, 0.0, 10.0)
+    assert [round(a) for a, _ in pauses] == [6]  # the silence
+    assert [round(a) for a, _ in breaths] == [3, 6]  # 24 dB down: a breath, and the silence
 
 
 @needs_ffmpeg

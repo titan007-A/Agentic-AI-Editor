@@ -295,19 +295,22 @@ def test_the_singer_must_be_heard_in_most_of_the_vocals_part():
     assert not check.ok and "40%" in check.detail
 
 
-def test_instruments_left_in_the_vocals_part_keep_playing_between_phrases():
+def test_instruments_left_in_the_vocals_part_are_heard_by_their_bass():
     rate = 16000
-    clean = sung(rate, [True, True, False] * 8)  # the singer and silence between phrases
-    t = np.arange(len(clean)) / rate
-    band = 0.05 * np.sin(2 * np.pi * 70 * t) + 0.02 * np.sin(2 * np.pi * 900 * t)
-    check = checks.leak(clean, rate, mix=(clean + 6 * band).astype(np.float32))
-    assert check.ok, check.detail
-    assert "the instruments part" in check.detail
-    # A bass line under the voice: never silent between phrases, and low.
-    leaky = checks.leak((clean + band).astype(np.float32), rate)
-    assert not leaky.ok and "needs 30" in leaky.detail
-    # A voice that never stops isn't taken as clean.
-    assert not checks.leak(sung(rate, [True] * 24), rate).ok
+    voice = sung(rate, [True] * 24)  # a singer who never stops: no silence to go by
+    t = np.arange(len(voice)) / rate
+    band = (0.3 * np.sin(2 * np.pi * 70 * t) + 0.2 * np.sin(2 * np.pi * 900 * t)).astype(np.float32)
+    clean = checks.leak(voice, rate, band)
+    assert clean.ok, clean.detail
+    for under, leaks in ((20, True), (25, True), (35, False)):
+        gain = 10 ** (-under / 20) * np.sqrt(np.mean(voice**2) / np.mean(band**2))
+        check = checks.leak((voice + gain * band).astype(np.float32), rate, band)
+        assert check.ok is not leaks, (under, check.detail)
+        assert f"about {under} dB under the voice" in check.detail
+    # A band with almost no bass of its own: the vocals part's bass alone is judged.
+    thin = (0.2 * np.sin(2 * np.pi * 900 * t)).astype(np.float32)
+    assert checks.leak(voice, rate, thin).ok
+    assert "the band has little bass" in checks.leak(voice + band * 0.1, rate, thin).detail
 
 
 def split_reel(

@@ -74,6 +74,7 @@ function settingsOf(pilot: ChannelPilot | null, defaults: ChannelPilotSettings) 
     research_account_id: base.research_account_id,
     preset: base.preset,
     focus: base.focus,
+    surprise: base.surprise,
     research_hour: base.research_hour,
     posts_per_day: base.posts_per_day,
     post_times: base.post_times,
@@ -351,6 +352,19 @@ function PilotCard({
             onChange={(e) => set({ focus: e.target.value })}
           />
         </div>
+        <label className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm">
+          <span>
+            Prefer surprising picks
+            <span className="block text-xs text-muted-foreground">
+              A recognisable song people don&apos;t expect over an artist&apos;s most famous hit
+            </span>
+          </span>
+          <Switch
+            checked={form.surprise}
+            onCheckedChange={(v) => set({ surprise: Boolean(v) })}
+            aria-label="Prefer surprising picks"
+          />
+        </label>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div className="space-y-1">
             <Label htmlFor="pilot-hour">Research starts at</Label>

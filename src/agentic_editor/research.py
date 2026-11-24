@@ -296,6 +296,8 @@ class Context:
     best: list[str] = field(default_factory=list)
     avoid: list[tuple[str, str]] = field(default_factory=list)
     posted: list[str] = field(default_factory=list)
+    # The account wants surprising picks over each artist's most famous hits (SURPRISE).
+    surprise: bool = False
 
 
 @dataclass
@@ -873,6 +875,8 @@ def _taste(context: Context, rating: bool = False) -> str:
             + (":\n" if rating else " (so don't search for them):\n")
             + "\n".join(f"- {line}" for line in context.best)
         )
+    if context.surprise:
+        parts.append(SURPRISE_RATE if rating else SURPRISE_PLAN)
     if not rating and (named := Posted(context.avoid, context.posted).names(AVOID_LISTED)):
         parts.append(
             "Songs the account already posted or has waiting, never to be posted again: "
@@ -881,6 +885,22 @@ def _taste(context: Context, rating: bool = False) -> str:
     return "\n\n".join(parts)
 
 
+# For an account whose best posts were surprising picks (the owner's channel data): its
+# searches and ratings go past each artist's signature hit.
+SURPRISE_PLAN = (
+    "This account does best with SURPRISING picks: recognisable songs with a striking voice "
+    "that people don't expect, not each artist's single most famous, most-streamed hit (the "
+    "song everyone already knows them for). For each artist you search, name another of their "
+    "recognisable songs: an album track, a forgotten hit, a crossover, a famous live take or a "
+    "duet; at most a quarter of the searches may name an artist's signature hit. Spread the "
+    "searches over the 1960s to the 2010s, not mostly recent hits."
+)
+SURPRISE_RATE = (
+    "Rate surprise into the fit. An artist's single most famous, most-streamed hit (the song "
+    "everyone knows them for) or a hit of the last few years everyone has heard is at most 6. A "
+    "recognisable song with a striking voice that people don't expect (an album track, a "
+    "forgotten hit, a crossover, a famous live take) is 8-10. Use the whole scale."
+)
 AVOID_LISTED = 60  # songs posted before the planning model is told of, at most
 COMMON = {"band", "with", "from", "orchestra", "group", "music", "official"}
 NAMED_LINE = 80  # characters of a caption's first line that names a song, at most

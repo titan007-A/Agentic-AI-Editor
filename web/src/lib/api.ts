@@ -626,6 +626,8 @@ export type ChannelPilotSettings = {
   preset: string;
   /** What its researches look for besides what the page's best posts show. */
   focus: string;
+  /** Rate a recognisable but less obvious song over an artist's most famous hit. */
+  surprise: boolean;
   research_hour: number;
   posts_per_day: number;
   /** "HH:MM", local time on the server. */
