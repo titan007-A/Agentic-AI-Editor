@@ -396,3 +396,19 @@ def test_a_songs_caption_gets_the_pages_first_line_without_a_year_it_cant_find()
         "🎵 Self Control — Laura Branigan"
     )
     assert caption.first_line("{artist} ({year})", "X", "Y", None) == "Y"
+
+
+def test_a_caption_written_without_the_songs_own_article_is_posted():
+    from agentic_editor.channel import checks
+
+    note = (
+        "Wikipedia has no article on “I Heard It Through The Grapevine”: written from Amy "
+        "Winehouse, Amy Winehouse - I heard it through the grapevine lyrics and others. Check "
+        "it before posting."
+    )
+    text = "🎵 I Heard It Through The Grapevine — Amy Winehouse - 2006\n\nShe sang it live."
+    assert checks.caption(text, "done", [note]).ok
+    # Any other doubt about what it says still holds it, alone or with that note.
+    unsure = "not in its sources: 1962"
+    assert not checks.caption(text, "done", [note, unsure]).ok
+    assert not checks.caption(text, "failed", [note]).ok
