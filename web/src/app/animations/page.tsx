@@ -47,6 +47,11 @@ const STYLES = [
   ["stick", "Stick figure"],
   ["map", "World map (country by country)"],
 ] as const;
+const MAP_LOOKS = [
+  ["cards", "Picture cards"],
+  ["horror", "Gold horror"],
+  ["neon", "Neon food labels"],
+] as const;
 const LENGTHS = [
   ["auto", "Auto: AI decides"],
   ["short", "20-35 seconds"],
@@ -557,6 +562,28 @@ export default function AnimationsPage() {
                         </Button>
                       </div>
                     </div>
+                  </div>
+                )}
+                {current.plan?.style === "map" && (
+                  <div className="space-y-1">
+                    <Label>Map look</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {MAP_LOOKS.map(([look, label]) => (
+                        <Button
+                          key={look}
+                          size="sm"
+                          variant={(current.plan?.look ?? "cards") === look ? "default" : "outline"}
+                          disabled={busy || dirty || (current.plan?.look ?? "cards") === look}
+                          onClick={() => act(() => api.setAnimation(current.id, { look }))}
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Chosen by the topic: horror for haunted or scary ones, neon for food. A
+                      country&apos;s number badge (a ranking or a count) is in its scene below.
+                    </p>
                   </div>
                 )}
                 {current.plan && !["stick", "kinetic"].includes(current.plan.style) && (
