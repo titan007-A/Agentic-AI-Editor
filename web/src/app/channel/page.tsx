@@ -462,7 +462,7 @@ function Status({ pilot }: { pilot: ChannelPilot }) {
         </p>
       )}
       <p>
-        {pilot.posted_today} posted today
+        {pilot.posted_today} posted today{pilot.dry_run && " (dry run)"}
         {pilot.next_post && ` · next post ${pilot.next_post}`}
         {` · ${counts.ready ?? 0} ready · ${(counts.editing ?? 0) + (counts.reviewing ?? 0)} being edited`}
         {waiting > 0 && <span className="font-semibold"> · {waiting} waiting for you</span>}

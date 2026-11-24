@@ -384,6 +384,10 @@ def post_due(db: Session, pilot: ChannelPilot, now: datetime) -> ChannelPost | N
                 ChannelPost.pilot_id == pilot.id,
                 ChannelPost.status.in_(("due", "posting", "posted", "failed")),
                 ChannelPost.posted_at.is_not(None),
+                # The day dry run is switched off, its dry runs don't use up real posts.
+                ChannelPost.dry_run.is_(False) | (ChannelPost.status != "posted")
+                if not pilot.dry_run
+                else ChannelPost.id.is_not(None),
             )
         )
     ]

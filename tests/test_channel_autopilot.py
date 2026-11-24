@@ -713,6 +713,19 @@ def test_a_post_time_posts_nothing_beyond_the_days_limit_or_while_paused(env, tm
     assert not [c for c in queue.calls if c[0] == "post"]
 
 
+def test_dry_runs_dont_use_up_the_days_real_posts(env, tmp_path):
+    owner = page(env)
+    post_id, _ = ready_reel(env, tmp_path, owner, posts_per_day=1, post_times=["18:30"],
+                            dry_run=False)  # fmt: skip
+    with env.sessions() as db:
+        db.add(ChannelPost(pilot_id="p1", code="yt:dry", url="u", status="posted", dry_run=True,
+                           posted_at=datetime(2026, 11, 25, 9, 0)))  # fmt: skip
+        db.commit()
+    queue = Queue()
+    pilot.tick(env.sessions, datetime(2026, 11, 25, 18, 31), queue)
+    assert ("post", post_id) in queue.calls
+
+
 def due(env, post_id):
     with env.sessions() as db:
         row = db.get(ChannelPost, post_id)
