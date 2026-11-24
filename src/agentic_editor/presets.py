@@ -75,6 +75,14 @@ class OneLiner(Strict):
     # What it is written in: a name ("Spanish") or two letters ("es"); unset, the captions'
     # language when they are translated, else whatever the model writes.
     language: str | None = Field(default=None, max_length=40)
+    # Its box: across the frame with this many px left at each side, however long the words
+    # (a clips page's title card); unset, as wide as the words.
+    box_margin: int | None = Field(default=None, ge=0, le=500)
+    box_radius: int | None = Field(default=None, ge=0, le=300, description="px; unset, the room")
+    # px between the words and the box's top and bottom (and sides when it is as wide as the
+    # words); unset, about a third of the size.
+    box_pad: int | None = Field(default=None, ge=0, le=300)
+    line_spacing: float = Field(default=1.0, ge=0.6, le=3)
 
 
 class WordColor(Strict):

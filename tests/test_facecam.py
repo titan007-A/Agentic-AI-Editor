@@ -252,6 +252,34 @@ def test_the_kick_facecam_preset_loads_and_previews_clean():
     assert preset.one_liner.offset >= band[1]
 
 
+def test_the_kick_facecam_preset_is_laid_out_like_the_clips_page_reel():
+    """Where @kickclipsonly's reel (DgBUOQgxuBa, 1080x1920) puts each thing, measured from
+    its frames: camera 0-620, band 621-694, Kick's logo 56-308 x 595-676 rising into the
+    camera on a black backing, the channel's capitals 532-767 x 645-669, the white title
+    card 25-1055 from 695 over the game, the game down to 1892."""
+    from agentic_editor.presets import load_preset
+
+    settings = get_settings()
+    preset = load_preset(settings.presets_dir / "kick-facecam-9x16.yaml")
+    assert preset.facecam.rows(1920) == ((0, 621), (695, 1892))
+    jpeg, _ = preview.render_checked(preset, settings, "16:9")
+    image = np.asarray(Image.open(io.BytesIO(jpeg)).convert("RGB")).astype(int)
+    r, g, b = image[..., 0], image[..., 1], image[..., 2]
+    ys, xs = np.nonzero((g > 200) & (r < 120) & (b < 100))
+    assert abs(xs.min() - 56) <= 3 and abs(xs.max() - 308) <= 3
+    assert abs(ys.min() - 595) <= 3 and abs(ys.max() - 676) <= 3
+    assert image[588, 100].max() < 40  # the logo's backing, over the camera
+    channel = image[621:688, 400:1080].min(axis=2) > 200
+    ys, xs = np.nonzero(channel)
+    assert abs(xs.min() + 400 - 532) <= 4 and abs(ys.min() + 621 - 645) <= 3
+    assert 22 <= ys.max() - ys.min() + 1 <= 28  # capitals about 25 px tall, not a headline
+    card = image[:, :, :].min(axis=2) > 240
+    across = np.nonzero(card[800])[0]
+    assert abs(across.min() - 25) <= 3 and abs(across.max() - 1054) <= 3
+    down = np.nonzero(card[:, 540])[0]
+    assert abs(down[down > 690].min() - 695) <= 6
+
+
 @needs_ffmpeg
 def test_a_render_puts_the_camera_on_top_and_the_game_below(tmp_path):
     preset = facecam_preset()
@@ -269,6 +297,46 @@ def test_a_render_puts_the_camera_on_top_and_the_game_below(tmp_path):
     camera, game = image.getpixel((540, 380)), image.getpixel((540, 1300))
     assert camera[0] > 200 and camera[2] < 60  # the red camera fills the top panel
     assert game[2] > 200 and game[0] < 60  # the blue game the bottom one
+
+
+def test_a_banner_box_can_span_the_frame_whatever_the_words(tmp_path):
+    settings = get_settings()
+    font = text.font_file(settings.fonts_dir, "Montserrat-SemiBold")
+    across = text.BoxShape(margin=25, radius=35, pad=42)
+    spans = {}
+    for words in ("Short", "A much longer line of words here"):
+        for shape in (None, across):
+            dest = text.draw_banner(words, font, 60, "#000000", "#FFFFFF", (1080, 1920), 700,
+                                    tmp_path / "b.png", shape)  # fmt: skip
+            alpha = np.asarray(Image.open(dest))[..., 3]
+            rows = np.flatnonzero((alpha > 128).any(axis=1))
+            middle = (rows[0] + rows[-1]) // 2
+            columns = np.flatnonzero(alpha[middle] > 128)
+            spans[words, shape is None] = (columns[0], columns[-1], rows[0], rows[-1])
+            above, below = text.banner_extent(words, font, 60, "#FFFFFF", 1080, shape)
+            assert abs(700 + above - rows[0]) <= 2 and abs(700 + below - rows[-1]) <= 2
+    # Across the frame: the same box for few words and many; as wide as the words otherwise.
+    assert spans["Short", False][:2] == spans["A much longer line of words here", False][:2]
+    assert abs(spans["Short", False][0] - 25) <= 1 and abs(spans["Short", False][1] - 1054) <= 1
+    assert spans["Short", True][1] - spans["Short", True][0] < 400
+    # The room inside sets the box's height: 42 px over and under the ink.
+    hugging, wide = spans["Short", True], spans["Short", False]
+    assert abs((wide[3] - wide[2]) - (hugging[3] - hugging[2]) - 2 * (42 - 60 * text.BOX_PAD)) <= 2
+    # A line wraps where the box ends, not 80 px in from each side.
+    assert text.banner_room(1080, 70, across) == 1080 - 50 - 63
+    assert text.banner_room(1080, 70) == 920
+
+
+def test_a_fixed_banner_stays_close_under_the_preset_s_text():
+    from agentic_editor.render import compose
+
+    text_line = [(645.0, 670.0)]  # the channel line's ink, 23 px over the card
+    assert compose.banner_top("top", 693, 217, 1920, [], 10.0, text_line, fixed=True) == 693
+    # Not fixed, it keeps a banner's gap from other text, as before.
+    assert compose.banner_top("top", 693, 217, 1920, [], 10.0, text_line) != 693
+    # Fixed, it still never covers another's ink.
+    covering = compose.banner_top("top", 660, 217, 1920, [], 10.0, text_line, fixed=True)
+    assert covering + 217 <= 645 or covering >= 670
 
 
 def test_text_can_stand_at_the_left_or_the_right(tmp_path):
