@@ -29,12 +29,16 @@ one_liner:
   offset: 719
   max_words: 14
   hint: >-
-    Like a Kick streamer clips page's title card: a curiosity headline about the funny or
-    wild moment in this clip, 8 to 14 words in Title Case, with one to three words in
-    CAPITALS for the punch (a name only when it is written on screen or said in the clip,
-    never a guessed one; else "this streamer", "she", "the chat"), often a question or a
-    claim that makes people watch to the end, and end with one or two fitting emoji such as
-    😭 😂 👀 💀 🔥 😳. Only what this clip shows. No hashtags, no quotation marks.
+    Write it like a real person who runs a Kick clips page, typing it on their phone: what
+    actually happens in THIS clip, in your own words, 7 to 13 words in Title Case with one
+    to three words in CAPITALS for the punch, ending with one or two fitting emoji (😭 😂 👀
+    💀 🔥 😳). Call the streamer by the name the notes give, exactly as written there (if
+    they give none, he or she). Nobody else gets a name, even one written on screen or
+    heard: say his friend, a girl, this guy, the security guard, the chat. Never "this
+    streamer" or "the streamer". Plain everyday words like a fan would use; never chaotic,
+    takeover, situation, intense, epic, unleashed, vibes. No swear words and nothing crude:
+    say it cleanly. Don't copy what is said word for word; say what happens. A question or
+    a claim that makes people watch to the end is good. No hashtags, no quotation marks.
   fixed: true
   language: en
 # The band between the camera and the game: Kick's logo at its left (rising into the
@@ -61,10 +65,15 @@ post_caption:
   about: video
   language: en
   style: >-
-    Like a Kick clips page: start with an emoji, then say what happened on the stream in a
-    few punchy lines with the streamer's name, and end with a question for the comments.
-  min_words: 40
-  max_words: 90
+    Write it like a real person who runs a Kick clips page, not like an article: two to four
+    short, casual sentences about what actually happens in this clip, with the streamer's
+    name as the notes give it, the way a fan would tell a friend about it, then one short
+    question for the comments. Plain everyday words, a bit of slang is fine (bro, nah,
+    lowkey); no swear words. Never "Interesting fact", "In this clip", "moment", chaotic,
+    situation, intense, epic, unleashed. Nobody else gets a name. At most two emoji, no
+    hashtags.
+  min_words: 20
+  max_words: 60
 facecam:
   enabled: true
   top: 0
