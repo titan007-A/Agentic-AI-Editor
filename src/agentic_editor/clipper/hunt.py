@@ -5,8 +5,9 @@ followed streamers clipped while they are live (check_live), one stretch at a ti
 A hunt reads the chat across its stretch (every few seconds of a short one; a long one is
 sampled, then read again in full around its likely moments), the clips viewers made live,
 and the sound of the stream's lightest quality (all of a stretch up to an hour, else
-around the likely moments). Only the moments' clips are taken in full quality, so a
-six-hour stream costs minutes of video, not hours.
+around the likely moments). It finds more likely moments than it wants clips and makes
+only those whose opening grabs, each opening on its hook (hooks.py). Only the moments'
+clips are taken in full quality, so a six-hour stream costs minutes of video, not hours.
 """
 
 import json
@@ -25,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor import features
-from agentic_editor.clipper import kick, moments
+from agentic_editor.clipper import hooks, kick, moments
 from agentic_editor.db import Job, KickHunt, KickStreamer, User
 from agentic_editor.download import Source
 from agentic_editor.settings import Settings, get_settings
@@ -48,6 +49,7 @@ LIVE_FIRST = 600  # following a stream already under way starts this far back
 LIVE_LAST = 60  # what's left when a stream ends is clipped when at least this long
 BUSY = ("reading", "listening", "cutting")
 HLS_PROTOCOLS = "file,http,https,tcp,tls,crypto"
+PRE_ROLL = 5.0  # seconds read before a cut's start: decoding needs the key frame before it
 
 
 def clock(seconds: float) -> str:
@@ -112,6 +114,11 @@ def _set(Session: sessionmaker, hunt_id: str, **fields) -> None:
         db.commit()
 
 
+# Each likely moment's opening judged and only strong hooks made (clipper/hooks.py); off
+# only where no models run (tests).
+JUDGE_HOOKS = True
+
+
 def run(hunt_id: str, Session: sessionmaker, settings: Settings, client=None, queue=None) -> None:
     """The hunt's turn: its moments found, cut and queued as Jobs. Everything is inside
     the try: a hunt must never stay busy."""
@@ -124,7 +131,7 @@ def run(hunt_id: str, Session: sessionmaker, settings: Settings, client=None, qu
     own_client = client is None
     client = client or kick.Client()
     try:
-        made = _hunt(hunt_id, Session, settings, client)
+        made = _hunt(hunt_id, Session, settings, client, JUDGE_HOOKS)
         for job_id in made:
             queue(job_id)
     except Exception as exc:
@@ -136,7 +143,9 @@ def run(hunt_id: str, Session: sessionmaker, settings: Settings, client=None, qu
             client.close()
 
 
-def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> list[str]:
+def _hunt(
+    hunt_id: str, Session: sessionmaker, settings: Settings, client, judge_hooks: bool = True
+) -> list[str]:
     with Session() as db:
         hunt = db.get(KickHunt, hunt_id)
         hunt.status, hunt.message, hunt.error = "reading", "opening the stream's video", None
@@ -147,6 +156,7 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
             duration=0.0, live=hunt.live, source=hunt.source, uuid=hunt.uuid,
         )  # fmt: skip
         slug, channel_id, live, count = hunt.slug, hunt.channel_id, hunt.live, hunt.count
+        name = hunt.username or hunt.slug
         wanted = (hunt.start, hunt.end)
         avoid = clipped_before(db, hunt)
     if not stream.source:
@@ -194,13 +204,29 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
         log.warning("hunt %s: the stream's sound couldn't be read: %s", hunt_id, exc)
         loudness = None
     least = moments.STRONG if live else 0.0
-    found = moments.find(start, end, count, lines, read, loudness, clips, least=least, avoid=avoid)
+    # More likely moments than clips wanted: only those with a strong hook are made.
+    looked = hooks.wanted(count) if judge_hooks else count
+    found = moments.find(start, end, looked, lines, read, loudness, clips, least=least, avoid=avoid)
     if not found:
         _set(
             Session, hunt_id, status="done", moments=[],
             message=f"nothing stood out in {clock(start)}-{clock(end)}",
         )  # fmt: skip
         return []
+    judged = ""
+    if judge_hooks:
+        look = client.playlist(kick.best(variants, hooks.LOOK_HEIGHT))
+        found, judged = hooks.choose(
+            found, count, lambda a, b, dest: preview(look, a, b, dest), (start, end), lines,
+            (fan_name(name), plain_title(stream.title)), settings, told, avoid,
+        )  # fmt: skip
+        if not found:
+            _set(
+                Session, hunt_id, status="done", moments=[],
+                message=f"nothing crazy in {clock(start)}-{clock(end)}: no clips made "
+                f"({judged})",
+            )  # fmt: skip
+            return []
     _set(Session, hunt_id, status="cutting", message=f"cutting {len(found)} moments")
     full = client.playlist(kick.best(variants, FULL_QUALITY))
     made: list[str] = []
@@ -218,6 +244,8 @@ def _hunt(hunt_id: str, Session: sessionmaker, settings: Settings, client) -> li
     message = f"found {len(found)} moments; making {len(made)} clips"
     if len(made) < len(found):
         message += f" ({len(found) - len(made)} couldn't be cut)"
+    if judged:
+        message += f"; {judged}"
     _set(Session, hunt_id, status="done", moments=kept, message=message)
     return made
 
@@ -345,21 +373,59 @@ def listen(light: kick.Playlist, start: float, end: float, rate: int = 8000) -> 
     return 10 * np.log10(power + 1e-10)
 
 
-def cut(full: kick.Playlist, start: float, end: float, dest: Path) -> None:
+def cut(
+    full: kick.Playlist,
+    start: float,
+    end: float,
+    dest: Path,
+    flash: tuple[float, float] | None = None,
+) -> None:
     """`start`-`end` of the stream in full quality, encoded again so it begins and ends
-    on the second asked (a copy would begin at the key frame before)."""
-    pieces = full.between(start, end)
-    if not pieces:
+    on the second asked (a copy would begin at the key frame before). With `flash` (a
+    cold open), that stretch of the stream plays first, then the clip.
+
+    Each part is decoded from the start of its first piece and trimmed after decoding: a
+    seek in the stream's playlist was seen to land on the key frame after the time asked,
+    so a clip began up to two seconds late with nothing to show or hear before it."""
+    spans = [flash, (start, end)] if flash else [(start, end)]
+    found = [full.between(max(0.0, a - PRE_ROLL), b) for a, b in spans]
+    if not all(found):
         raise RuntimeError("the stream's video has nothing there")
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(".part.mp4")
     with tempfile.TemporaryDirectory() as folder:
-        playlist = _local_playlist(pieces, Path(folder))
+        inputs: list[str] = []
+        for n, pieces in enumerate(found):
+            sub = Path(folder) / str(n)
+            sub.mkdir()
+            playlist = _local_playlist(pieces, sub)
+            inputs += ["-protocol_whitelist", HLS_PROTOCOLS, "-i", str(playlist)]
+        at = [max(0.0, a - pieces[0].start) for (a, _), pieces in zip(spans, found, strict=True)]
+        if flash:
+            # The two parts (one quality of one stream) joined, picture and sound, with a
+            # whoosh over the cut back, as clip pages mark a cold open.
+            hooks.whoosh(Path(folder) / "whoosh.wav")
+            inputs += ["-i", str(Path(folder) / "whoosh.wav")]
+            delay = int(max(0.0, flash[1] - flash[0] - hooks.WHOOSH_BEFORE) * 1000)
+            parts = "".join(
+                f"[{n}:v:0]trim=start={at[n]:.3f}:duration={b - a:.3f},setpts=PTS-STARTPTS[v{n}];"
+                f"[{n}:a:0]atrim=start={at[n]:.3f}:duration={b - a:.3f},"
+                f"asetpts=PTS-STARTPTS[a{n}];"
+                for n, (a, b) in enumerate(spans)
+            )
+            maps = [
+                "-filter_complex",
+                parts + "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][joined];"
+                f"[2:a]adelay={delay}|{delay}[w];"
+                "[joined][w]amix=inputs=2:duration=first:normalize=0[a]",
+                "-map", "[v]", "-map", "[a]",
+            ]  # fmt: skip
+        else:
+            maps = ["-ss", f"{at[0]:.3f}", "-t", f"{end - start:.3f}",
+                    "-map", "0:v:0", "-map", "0:a:0?"]  # fmt: skip
         cmd = [
             get_settings().ffmpeg_bin, "-hide_banner", "-nostdin", "-v", "error", "-y",
-            "-protocol_whitelist", HLS_PROTOCOLS,
-            "-ss", f"{max(0.0, start - pieces[0].start):.3f}", "-i", str(playlist),
-            "-t", f"{end - start:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
+            *inputs, *maps,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(part),
         ]  # fmt: skip
@@ -370,16 +436,64 @@ def cut(full: kick.Playlist, start: float, end: float, dest: Path) -> None:
     part.replace(dest)
 
 
-def notes_for(moment: moments.Moment) -> str:
-    """What the title and text writers are told about the clip."""
-    parts = [
-        "A clip of a moment from a Kick live stream; it happens around "
-        f"{clock(moment.peak - moment.start)} into this video."
-    ]
+def preview(light: kick.Playlist, start: float, end: float, dest: Path) -> float:
+    """The pieces covering `start`-`end` copied as they are (a light quality, to be listened
+    to and looked at, see hooks.py); where in the stream the copy begins."""
+    pieces = light.between(start, end)
+    if not pieces:
+        raise RuntimeError("the stream's video has nothing there")
+    with tempfile.TemporaryDirectory() as folder:
+        playlist = _local_playlist(pieces, Path(folder))
+        cmd = [
+            get_settings().ffmpeg_bin, "-hide_banner", "-nostdin", "-v", "error", "-y",
+            "-protocol_whitelist", HLS_PROTOCOLS, "-i", str(playlist),
+            "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", str(dest),
+        ]  # fmt: skip
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
+    if result.returncode != 0 or not dest.is_file():
+        raise RuntimeError(f"couldn't fetch the stream there: {(result.stderr or '')[-300:]}")
+    return pieces[0].start
+
+
+# Streamers as their fans write them (owner: no "this streamer" or handle-like names);
+# others are worked out from the handle (fan_name).
+FAN_NAMES = {
+    "therealjuliannewman": "Julian Newman", "kaneljoseph": "Kanel", "sheismichaela": "Michaela",
+    "iamtiagz": "Tiagz", "jeanemarie": "Jeane Marie", "n3on": "N3on", "ddg": "DDG",
+    "sneako": "Sneako", "xqc": "xQc", "adinross": "Adin Ross", "kaicenat": "Kai Cenat",
+}  # fmt: skip
+HANDLE_BITS = re.compile(r"^(?:thereal|official|sheis|heis|iam|its)|official$", re.I)
+
+
+def fan_name(username: str) -> str:
+    """The streamer's name the way fans write it: "therealjuliannewman" is Julian Newman,
+    "iamsomeone_live" is Someone Live."""
+    plain = " ".join(username.split()).lstrip("@")
+    known = FAN_NAMES.get(re.sub(r"[\s_-]", "", plain).lower())
+    if known:
+        return known
+    stripped = HANDLE_BITS.sub("", plain) or plain
+    words = [w for w in re.split(r"[\s_.-]+", stripped) if w]
+    return " ".join(w if w[1:].lower() != w[1:] else w.capitalize() for w in words) or plain
+
+
+def notes_for(moment: moments.Moment, name: str = "") -> str:
+    """What the title and text writers are told about the clip: whose stream (the name fans
+    use), where it happens, what happens."""
+    flash = hooks.flash_of(moment)
+    at = moment.peak - moment.start + (flash[1] - flash[0] if flash else 0.0)
+    whose = (
+        f"A clip from {name}'s Kick stream; the streamer is {name}."
+        if name
+        else "A clip of a moment from a Kick live stream."
+    )
+    parts = [f"{whose} It happens around {clock(at)} into this video."]
     said = [w for w in moment.why if w.startswith('"')]
     if said:
         parts.append("The chat reacted with " + ", ".join(said) + ".")
-    return " ".join(parts)
+    if moment.hook:
+        parts.append(hooks.notes_line(moment.hook))
+    return " ".join(p for p in parts if p)
 
 
 def plain_title(title: str) -> str:
@@ -398,6 +512,8 @@ def about(name: str, stream_title: str, moment: moments.Moment) -> str:
     said = [w for w in moment.why if w.startswith('"')]
     if said:
         text += " The chat reacted with " + ", ".join(said) + "."
+    if (moment.hook or {}).get("what"):
+        text += f" What happens: {moment.hook['what'].rstrip('.')}."
     return text
 
 
@@ -510,6 +626,15 @@ def clip_preset(video: Path, chosen: str, irl: str, user, settings: Settings) ->
     return camera if game else whole
 
 
+def _kept_window(folder: Path) -> list | None:
+    """The stretch of stream a moment's kept video was cut from (see make_job); None when
+    it doesn't say (cut before it was noted: taken as it is)."""
+    try:
+        return json.loads((folder / "source.json").read_text(encoding="utf-8")).get("window")
+    except (OSError, ValueError):
+        return None
+
+
 def make_job(
     hunt_id: str,
     index: int,
@@ -529,8 +654,21 @@ def make_job(
     key = key_of(hunt_id, index)
     folder = settings.media_dir / "sources" / key
     dest = folder / "source.mp4"
+    flash = hooks.flash_of(moment)
+    window = [round(moment.start, 2), round(moment.end, 2), *(flash or ())]
+    kept = _kept_window(folder) if dest.is_file() else None
+    if kept is not None and kept != window:
+        dest.unlink()  # a hunt tried again chose another moment for this place
     if not dest.is_file():
-        cut(full, moment.start, moment.end, dest)
+        try:
+            cut(full, moment.start, moment.end, dest, flash)
+        except RuntimeError:
+            if not flash:
+                raise
+            log.info("hunt %s: moment %d cut without its cold open", hunt_id, index)
+            cut(full, moment.start, moment.end, dest)
+            moment.hook.pop("flash", None)
+            window = window[:2]
     link = (
         kick.MOMENT_LINK.format(slug=slug, uuid=uuid, seconds=int(moment.start))
         if uuid
@@ -539,14 +677,15 @@ def make_job(
     title = f"{name} · {stream_title[:60]} · {clock(moment.peak)}".strip()
     meta = {
         "path": str(dest), "title": title, "uploader": name, "url": link,
-        "description": about(name, stream_title, moment),
+        "description": about(fan_name(name), stream_title, moment), "window": window,
     }  # fmt: skip
     (folder / "source.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     if layout != "fixed":
         preset = clip_preset(dest, preset, irl, user, settings)
     with Session() as db:
         job = Job(
-            source=SOURCE + key, title=title, presets=[preset], notes=notes_for(moment),
+            source=SOURCE + key, title=title, presets=[preset],
+            notes=notes_for(moment, fan_name(name)),
             trim=False, owner_id=owner,
         )  # fmt: skip
         db.add(job)

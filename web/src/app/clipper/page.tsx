@@ -139,6 +139,17 @@ function MomentRow({ moment, index }: { moment: KickMoment; index: number }) {
           ))}
         </div>
       )}
+      {moment.hook?.what && (
+        <div className="space-y-0.5 text-xs" data-testid="moment-hook">
+          <p>{moment.hook.what}</p>
+          {moment.hook.crazy && <p className="font-semibold">Crazy: {moment.hook.crazy}</p>}
+          {moment.hook.said && (
+            <p className="text-muted-foreground">
+              {moment.hook.flash ? "Opens cold on" : "Opens on"} “{moment.hook.said}”
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         {busy && <Loader2 className="size-3.5 animate-spin" />}
         <span>{clipState(moment)}</span>

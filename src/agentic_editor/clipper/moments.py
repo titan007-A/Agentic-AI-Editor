@@ -6,10 +6,12 @@ a loud streamer isn't a moment; a jump is):
   chat reacts a few seconds after what it reacts to, so it is moved back by CHAT_LAG;
 - sound: loudness above the stream's usual (shouting, laughing, a blast in the game);
 - viewers' clips: a clip made live ends where it was made; the seconds before it count.
-A moment's clip is cut here, around it: the build-up, then the reaction, each end moved
-to the quietest second near it (a pause between sentences), 15-30 s long. The job only
-dresses it (its preset's text, captions, title): a planner choosing its own 15 s of a
-longer window was seen to miss the moment the chat reacted to.
+A moment's clip is placed here, around it: the build-up, then the reaction, each end moved
+to the quietest second near it (a pause between sentences), 15-30 s long. A hunt then
+places it again by its hook (hooks.py: it opens on what grabs, the moment still in it) and
+leaves out moments without one. The job only dresses it (its preset's text, captions,
+title): a planner choosing its own 15 s of a longer window was seen to miss the moment the
+chat reacted to.
 """
 
 import math
@@ -48,6 +50,8 @@ class Moment:
     score: float
     why: list[str] = field(default_factory=list)
     chat_at: float | None = None  # when the chat answered it most
+    # What its clip opens on and what happens, once its hook is judged (clipper/hooks.py).
+    hook: dict = field(default_factory=dict)
 
 
 def words_of(text: str) -> list[str]:
