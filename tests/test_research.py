@@ -223,7 +223,7 @@ def test_a_research_finds_rates_and_ranks_leaving_out_what_was_edited():
         about = {
             "ADAMS1": ("Bryan Adams - Summer of 69 live", 900),
             "SEEN01": ("Bryan Adams Heaven, Rock in Rio", 300),
-            "OTHER1": ("cat videos compilation", 90_000),
+            "OTHER1": ("funny cat videos", 90_000),
         }
         caption, likes = about[research.code_of(url)]
         return {"uploader": "x", "description": caption, "like_count": likes}
@@ -1417,6 +1417,63 @@ def test_instagram_few_keeps_youtube_s_order_and_instagram_s_room():
     kept = research.instagram_few(reels, 20)
     assert len(kept) == 20 and sum(r.on_instagram for r in kept) == 4  # 20% of 20
     assert [r.code for r in kept if r.youtube] == [f"yt:Y{i:010d}" for i in range(16)]
+
+
+def test_still_pictures_ai_and_lyric_edits_are_left_out_before_rating():
+    def short(title, caption=""):
+        return Reel("yt:S0000000001", "", "", title=title, caption=f"{title}\n{caption}")
+
+    about = "Quimbara\nProvided to YouTube by Universal Music Group\n\nQuimbara"
+    track = Reel("yt:Q0000000001", "", "", full=True, title="Quimbara", caption=about)
+    assert research.not_wanted(track, music=True) == research.STILL
+    assert research.not_wanted(short("Como la Flor / Selena AI Shorts"), False) == research.AI_MADE
+    assert research.not_wanted(short("Selena #ai #music"), True) == research.AI_MADE
+    # Someone asking for AI pictures gets them.
+    assert research.not_wanted(short("Selena AI Shorts"), False, wants_ai=True) == ""
+    for title in ("Como La Flor - Selena #lyrics", "Top 10 Italian Songs of the 80s",
+                  "best Italian Songs From 80s", "Ricchi E Poveri Keyboard Cover",
+                  "WHICH 1980 CONCERT WOULD YOU GO TO?"):  # fmt: skip
+        assert research.not_wanted(short(title), music=True) == research.NOT_PERFORMED, title
+    # A singer singing stays; a ranking is fine where it isn't music.
+    assert research.not_wanted(short("Ricchi E Poveri LIVE 1983 Sara perche ti amo"), True) == ""
+    assert research.not_wanted(short("Top 5 special forces of Latin America"), False) == ""
+    # Whole songs' titles are judged by NOT_A_SONG instead; an Instagram reel is never "still".
+    assert research.not_wanted(Reel("C0DE", "", "", caption="Provided to YouTube by X"), True) == ""
+
+
+def test_instagram_keeps_its_tenth_of_a_short_list_too():
+    def reels(youtube, instagram):
+        return [Reel(f"yt:Y{i:010d}", "", "") for i in range(youtube)] + [
+            Reel(f"IG{i}", "", "") for i in range(instagram)
+        ]
+
+    kept, dropped = research.instagram_share(reels(19, 3), 0.1)
+    assert sum(r.on_instagram for r in kept) == 2 and dropped == 1  # 2 of 21, not 3 of 22
+    kept, dropped = research.instagram_share(reels(27, 3), 0.1)
+    assert sum(r.on_instagram for r in kept) == 3 and dropped == 0
+    kept, dropped = research.instagram_share(reels(2, 2), 0.1)
+    assert sum(r.on_instagram for r in kept) == 1 and dropped == 1  # one may always stay
+    assert research.instagram_share(reels(0, 5), 1.0) == (reels(0, 5), 0)
+
+
+def test_a_typed_request_leaves_out_what_is_only_related():
+    class Halfway(Planner):
+        def chat_json(self, messages, schema, **kwargs):
+            reply = super().chat_json(messages, schema, **kwargs)
+            if "ratings" in schema["properties"]:
+                for rating in reply["ratings"]:
+                    rating["relevance"] = 5
+            return reply
+
+    def find(query, count):
+        return [hit("HALF01")]
+
+    def info(url):
+        return {"uploader": "x", "description": "Bryan Adams interview", "like_count": 900}
+
+    asked = research.run("Bryan Adams live", lambda: nullcontext(Halfway()), set(), set(),
+                         lambda *a: None, find, info, 0)  # fmt: skip
+    assert asked.reels == [] and asked.left_out["didn't fit"] == 1
 
 
 @pytest.mark.parametrize("music", [True, False])

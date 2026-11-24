@@ -168,6 +168,9 @@ RATE_BATCH = 10
 # Reels the model rates below this fit are left out, not shown at the bottom: a search
 # also finds what only shares a word with the request.
 MIN_FIT = 0.5
+# When the person typed what they want, "related" (5/10) isn't it: a ranking, a compilation
+# or a studio take when they asked for live performances.
+ASKED_FIT = 0.6
 MIN_QUERIES = 8  # fewer from the model, and it is asked once more
 MAX_QUESTIONS = 6  # asked before a research
 ANSWERED = "Their answers to the researcher's questions:"
@@ -523,6 +526,26 @@ def song_url(code: str) -> str:
 
 
 NOT_SONG = "not a song's video"
+# YouTube's own track of a song (a still picture with the sound, "Provided to YouTube by
+# <distributor>"): nothing to edit.
+ART_TRACK = re.compile(r"^\s*provided to youtube by\b", re.IGNORECASE | re.MULTILINE)
+STILL = "a still picture with the song"
+# Made with AI rather than filmed (a person asking for AI pictures says so: see not_wanted).
+MADE_WITH_AI = re.compile(
+    r"\bai[ -]?(?:shorts?|generated|made|art|video|cover|version|animation)\b|#ai\b|"
+    r"\b(?:made|created) (?:with|by|using) ai\b",
+    re.IGNORECASE,
+)
+ASKS_FOR_AI = re.compile(r"\b(?:ai|artificial intelligence)\b", re.IGNORECASE)
+AI_MADE = "made with AI"
+# In a music research, a Short or reel that isn't a singer singing: a lyric edit, a ranking
+# or quiz, a compilation, someone's cover, an altered copy.
+NOT_A_PERFORMANCE = re.compile(
+    r"\b(?:lyrics?|lyrical|karaoke|top \d+|compilation|playlist|medley|mashup|nightcore|"
+    r"slowed|sped up|8d|covers?|tribute|quiz|which .{1,40} would you|best .{1,30} songs)\b",
+    re.IGNORECASE,
+)
+NOT_PERFORMED = "not the singer performing"
 NOT_USABLE = "not a song video to edit"  # the model's word (see judge_songs)
 LIVE = ("is_live", "is_upcoming", "was_live", "post_live")  # streams, on or past
 OFF_CHANNEL = "not the artist's or a label's channel"
@@ -568,6 +591,41 @@ def not_a_song(link: str, title: str, duration: float | None, media_type=None, l
     if duration is not None and not MIN_SONG <= duration <= MAX_SONG:
         return NOT_SONG
     return NOT_SONG if NOT_A_SONG.search(title) else ""
+
+
+def not_wanted(reel: Reel, music: bool, wants_ai: bool = False) -> str:
+    """Why a looked-up reel is left out before the model rates it, "" when it may be
+    wanted: YouTube's still-picture track of a song (STILL), one made with AI unless the
+    person asked for AI (AI_MADE), and in a music research a Short or reel that isn't the
+    singer performing (a lyric edit, a ranking, a cover: NOT_PERFORMED). The model let
+    these through as fitting; their words say what they are."""
+    text = f"{reel.title}\n{reel.caption}"
+    if reel.youtube and (ART_TRACK.search(reel.caption) or ART_TRACK.search(reel.snippet)):
+        return STILL
+    if not wants_ai and MADE_WITH_AI.search(text):
+        return AI_MADE
+    if music and not reel.full and NOT_A_PERFORMANCE.search(text):
+        return NOT_PERFORMED
+    return ""
+
+
+def instagram_share(picked: list[Reel], share: float = 0.1) -> tuple[list[Reel], int]:
+    """`picked` with Instagram's reels at most `share` of the list as it ends up (at least
+    one may stay): with fewer found than asked, a fixed number of them would be more than
+    their share. The lowest-ranked go; how many did."""
+    if share >= 1:
+        return picked, 0
+    others = sum(not r.on_instagram for r in picked)
+    room = max(1, int(others * share / (1 - share) + 1e-9))
+    kept, given, dropped = [], 0, 0
+    for reel in picked:
+        if reel.on_instagram:
+            if given >= room:
+                dropped += 1
+                continue
+            given += 1
+        kept.append(reel)
+    return kept, dropped
 
 
 def _song(entry: dict, query: str, source: str = "", kind: str | None = None) -> Reel | None:
@@ -1604,6 +1662,11 @@ def run(
     reels = [r for r in reels if not r.long and not r.no_video and not r.unfit]
     left_out["low quality"] = sum(r.quality == "low" for r in reels)
     reels = [r for r in reels if r.quality != "low"]
+    wants_ai = bool(ASKS_FOR_AI.search(f"{description} {brief}"))
+    for r in reels:
+        r.unfit = not_wanted(r, bool(music) or many, wants_ai)
+    unfit.update(r.unfit for r in reels if r.unfit)
+    reels = [r for r in reels if not r.unfit]
     progress(f"rating {len(reels)} reels", 0.7)
     if reels:
         with planner() as llm:
@@ -1620,9 +1683,10 @@ def run(
     # then they all are, as half relevant, rather than nothing.
     rated = any(r.relevance is not None for r in reels)
     left_out["couldn't be rated"] = sum(r.relevance is None for r in reels) if rated else 0
+    least = ASKED_FIT if description.strip() else MIN_FIT
     fitting = [
         r for r in reels
-        if (r.relevance is None and not rated) or (r.relevance or 0) >= MIN_FIT
+        if (r.relevance is None and not rated) or (r.relevance or 0) >= least - 1e-9
     ]  # fmt: skip
     left_out["didn't fit"] = len(reels) - len(fitting) - left_out["couldn't be rated"]
     suggest(fitting, context)
@@ -1632,6 +1696,8 @@ def run(
     sourced = round(shown * SOURCE_SHARE) if context.sources else None
     picked, passed, cutoff = pick(rank(fitting), shown, asked=description, sourced=sourced,
                                   instagram=max(1, int(shown * INSTAGRAM_SHOWN)))  # fmt: skip
+    picked, over = instagram_share(picked, INSTAGRAM_SHOWN)
+    passed["Instagram's share"] = passed.get("Instagram's share", 0) + over
     left_out = {k: v for k, v in {**left_out, **passed}.items() if v}
     return Result(
         queries,
