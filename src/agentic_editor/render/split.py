@@ -1,17 +1,18 @@
 """Instruments against vocals (presets.Split): one stretch of a song in two panels, the
 first part heard whole in the top one, the rest as vocals only in the bottom one.
 
-Where the sound changes is worked out from the reel and the words alone (switch_time),
-so the picture, a soundtrack laid again later and the preview all change at the same
-moment. The picture is the reel's own, shown whole in the top panel's rows: the graph
-cuts those rows out twice, holds each copy's frame while the other plays, and lays both
-on the background (graph_parts). The labels are one frame-sized PNG drawn by Pillow
+Where the sound changes is worked out from the reel, the singer's silences and the words
+(switch_time, voice_pauses), once, so the picture and a soundtrack laid again later
+change at the same moment. The picture is the reel's own, shown whole in the top panel's
+rows: the graph cuts those rows out twice, holds each copy's frame while the other plays,
+and lays both on the background (graph_parts). The labels are one frame-sized PNG drawn by Pillow
 (labels_layer), pasted by the preview too.
 """
 
 import itertools
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from agentic_editor import ffmpeg
@@ -23,15 +24,63 @@ from agentic_editor.transcript import Word
 SNAP = 2.5  # seconds the change may move to land in a pause between sung words
 EDGE = 1.0  # seconds each part keeps at least
 SEAM = 0.04  # seconds each side fades over where the sound changes, so it doesn't click
+# The singer is silent where the isolated voice is this far under its loudest (the 95th
+# percentile of WINDOW-long stretches) for PAUSE seconds or more. Whisper's word timings
+# run each sung word up to the next, and a held note has no gap at all: on four real songs
+# the words' widest gap sat 0-13 dB under the voice's loudest, mid-note, while a true
+# silence 40-70 dB under was within the snap.
+SILENT = 25.0
+WINDOW = 0.02
+PAUSE = 0.12
+INSIDE = 0.1  # seconds the change keeps from a silence's edges
+STEADY = 0.3  # seconds of silence preferred over a shorter one nearer
 
 
-def switch_time(duration: float, split: Split, words: list[Word]) -> float:
+def voice_pauses(vocals: Path, start: float, end: float) -> list[tuple[float, float]]:
+    """Where the singer is silent in the stretch `start`-`end` of `vocals` (the isolated
+    voice), in seconds from `start`."""
+    rate = 16000
+    samples = ffmpeg.read_audio(vocals, rate)[int(start * rate) : int(end * rate)]
+    size = int(rate * WINDOW)
+    count = len(samples) // size
+    if count == 0:
+        return []
+    frames = samples[: count * size].reshape(count, size).astype(np.float64)
+    level = 20 * np.log10(np.maximum(np.sqrt(np.mean(np.square(frames), axis=1)), 1e-9))
+    quiet = level < np.percentile(level, 95) - SILENT
+    found, begun = [], None
+    for i, still in enumerate([*quiet, False]):
+        if still and begun is None:
+            begun = i
+        elif not still and begun is not None:
+            if (i - begun) * WINDOW >= PAUSE:
+                found.append((round(begun * WINDOW, 3), round(i * WINDOW, 3)))
+            begun = None
+    return found
+
+
+def switch_time(
+    duration: float, split: Split, words: list[Word], pauses: list[tuple[float, float]] = ()
+) -> float:
     """Seconds into the reel where the vocals take over: `split.switch` of the reel, moved
-    to the middle of the widest pause between words within SNAP seconds of it (the
-    nearest pause when two are as wide), or left where it is without one."""
+    into the nearest of the singer's silences (`pauses`, see voice_pauses) that reaches
+    within SNAP seconds of it, a little in from its edges (one no word's timing spans
+    first, then one of STEADY seconds or more); else to the middle of the widest gap
+    between words there (the nearest when two are as wide); else left where it is."""
     if duration <= 2 * EDGE:
         return duration / 2
     wanted = split.switch * duration
+    found: tuple[bool, bool, float, float] | None = None  # (in a word, short, distance, at)
+    for start, end in pauses:
+        inside = min(INSIDE, (end - start) / 2)
+        at = min(max(wanted, start + inside), end - inside)
+        if end <= start or abs(at - wanted) > SNAP:
+            continue
+        sung = any(w.start < at < w.end for w in words)  # by whisper's rough timings
+        key = (sung, end - start < STEADY, round(abs(at - wanted), 3), at)
+        found = min(found, key) if found else key
+    if found:
+        return min(max(found[3], EDGE), duration - EDGE)
     timed = sorted(words, key=lambda w: w.start)
     best: tuple[float, float, float] | None = None  # (-width, distance, middle)
     for before, after in itertools.pairwise(timed):

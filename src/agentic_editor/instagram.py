@@ -226,6 +226,40 @@ def get_recent_posts(channel: Channel, limit: int = 10) -> list[dict]:
     return data.get("data", [])
 
 
+MEDIA_FIELDS = "id,caption,like_count,comments_count,timestamp,permalink,media_product_type"
+# A reel's insights, as Graph API v22+ names them ("plays" became "views"). They need the
+# insights permission in the login's configuration; without it Meta answers (#10).
+INSIGHTS = ("views", "reach", "saved", "shares", "likes", "comments", "total_interactions")
+
+
+def get_media(channel: Channel, most: int = 1000) -> list[dict]:
+    """Every post of the account, newest first (up to `most`): id, caption, likes,
+    comments, time, link and kind."""
+    return _pages(f"{channel.id}/media", channel.access_token, fields=MEDIA_FIELDS, limit=50)[:most]
+
+
+def media_stats(channel: Channel, media_id: str) -> dict:
+    """One post's likes, comments, link and time."""
+    return _get(
+        media_id,
+        fields="like_count,comments_count,permalink,timestamp",
+        access_token=channel.access_token,
+    )
+
+
+def media_insights(channel: Channel, media_id: str, metrics=INSIGHTS) -> dict[str, int]:
+    """One post's insights by name, as far as Meta gives them."""
+    data = _get(f"{media_id}/insights", metric=",".join(metrics), access_token=channel.access_token)
+    found: dict[str, int] = {}
+    for item in data.get("data", []):
+        value = (item.get("total_value") or {}).get("value")
+        if value is None and item.get("values"):
+            value = item["values"][0].get("value")
+        if isinstance(value, int | float):
+            found[str(item.get("name"))] = int(value)
+    return found
+
+
 def get_comments(channel: Channel, post_id: str, limit: int = 50) -> list[Comment]:
     """A post's top-level comments, newest first, each with who replied to it."""
     data = _get(

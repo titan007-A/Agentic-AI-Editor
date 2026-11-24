@@ -35,7 +35,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agentic_editor import research
 from agentic_editor.clipper import hunt as kick_hunt
-from agentic_editor.db import Feed, FeedItem, Job, KickHunt, PileFolder
+from agentic_editor.db import (
+    ChannelPilot,
+    ChannelPost,
+    Feed,
+    FeedItem,
+    InstagramChannel,
+    Job,
+    KickHunt,
+    PileFolder,
+)
 from agentic_editor.download import signed_in
 
 log = logging.getLogger(__name__)
@@ -528,8 +537,9 @@ def _folder(db: Session, owner: str | None, preset: str, name: str, parent: int 
 def file_outputs(db: Session, job: Job, now: datetime | None = None) -> None:
     """Put a feed's finished videos in its folder on the piles, made the first time, inside
     each video's preset's folder, and in it the day's folder ("23-NOV": the owner sees each
-    day's videos apart) when the feed dates them (Feed.dated) or for a Kick clipper moment,
-    unless the folder's own name already says its day."""
+    day's videos apart) when the feed dates them (Feed.dated), for a Kick clipper moment or
+    a channel autopilot's reel ("@page autopilot"), unless the folder's own name already
+    says its day."""
     item = db.scalar(select(FeedItem).where(FeedItem.job_id == job.id))
     name = " ".join((item.feed.folder or "").split()) if item else ""
     owner = item.feed.owner_id if item else None
@@ -538,6 +548,12 @@ def file_outputs(db: Session, job: Job, now: datetime | None = None) -> None:
     hunt = db.get(KickHunt, hunt_id) if hunt_id and not name else None
     if hunt is not None:  # a Kick clipper moment: its hunt's folder
         name, owner, dated = kick_hunt.folder_name(hunt), hunt.owner_id, True
+    found = db.scalar(select(ChannelPost).where(ChannelPost.job_id == job.id)) if not name else None
+    pilot = db.get(ChannelPilot, found.pilot_id) if found else None
+    if pilot is not None:  # a channel autopilot's reel
+        channel = db.get(InstagramChannel, pilot.channel_id)
+        page = channel.username if channel else pilot.channel_id
+        name, owner, dated = f"@{page} autopilot", pilot.owner_id, True
     if not name:
         return
     day = day_tag(now) if dated and not DAY_NAMED.search(name) else None

@@ -18,10 +18,11 @@ from agentic_editor.db import User as Account
 # account's Instagram chat opens, one after another (the person sends each one).
 # animation_studio: the Animations tab, narrated animated reels written from one line
 # (animate/). kick_clipper: the Kick Clipper tab, 15-30 s clips cut from Kick streams'
-# moments, live ones too (clipper/).
+# moments, live ones too (clipper/). channel_autopilot: the Channel autopilot tab, an
+# Instagram page that finds, edits, checks and posts its own reels (channel/).
 FEATURES = (
     "trial_reel", "fun", "niche_finder", "trim_choice", "youtube_songs", "dm_queue",
-    "animation_studio", "kick_clipper",
+    "animation_studio", "kick_clipper", "channel_autopilot",
 )  # fmt: skip
 DEFAULT_USERS = ("siddhant",)
 # Features first tried by other accounts than DEFAULT_USERS.
@@ -35,6 +36,7 @@ DEFAULTS = {
     "dm_queue": ("siddhant-content",),
     "animation_studio": ("siddhant", "siddhant-content"),
     "kick_clipper": ("siddhant", "employee"),
+    "channel_autopilot": ("siddhant", "siddhant-content"),
 }
 
 
