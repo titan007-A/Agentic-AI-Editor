@@ -379,3 +379,12 @@ def test_an_opening_not_heard_again_on_its_own_is_left_out(tmp_path):
 
     assert hooks.heard_again([real, ghost], transcribe, tmp_path) == [real]
     assert len(heard) == 1
+
+
+def test_moments_are_written_down_a_few_at_a_time_each_a_short_gpu_turn(tmp_path):
+    looks = [a_look(peak=500.0 + 100 * n) for n in range(hooks.WRITTEN_AT_ONCE + 1)]
+    for look in looks:
+        look.audio = np.zeros(int((look.end - look.start) * hooks.RATE), dtype=np.float32)
+    calls = []
+    hooks.write_down(looks, lambda path: calls.append(path) or [], tmp_path)
+    assert len(calls) == 2

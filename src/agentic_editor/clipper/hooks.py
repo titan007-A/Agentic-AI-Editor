@@ -61,6 +61,7 @@ SEEN_NEAR = 2.5  # a frame this near an opening says what is on screen there
 RATE = 16000
 STEP = 0.25  # seconds per loudness value
 SILENCE = 1.5  # seconds between two moments' sound when written down in one go
+WRITTEN_AT_ONCE = 4  # moments written down in one go (about 3 minutes of sound)
 LINE_GAP = 0.45  # a pause this long starts a new line of what is said
 LINE_WORDS = 14
 CHAT_SHOWN = 18  # chat messages the model is shown
@@ -241,30 +242,32 @@ def gather(
 
 
 def write_down(looks: list[Look], transcribe: Callable[[Path], list[Word]], folder: Path):
-    """What is said around every moment, written down in one go (the model loads once): the
+    """What is said around every moment, written down a few moments at a time (each a turn
+    of its own at the GPU, so a person's job waits for one short turn at most): their
     stretches' sound one after another with SILENCE between, the words given back to each."""
-    gap = np.zeros(int(SILENCE * RATE), dtype=np.float32)
-    parts, places, at = [], [], 0.0
-    for look in looks:
-        audio = look.audio if look.audio is not None else np.zeros(0, dtype=np.float32)
-        places.append((at, at + audio.size / RATE))
-        parts += [audio, gap]
-        at += audio.size / RATE + SILENCE
-    joined = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
-    path = folder / "said.wav"
-    with wave.open(str(path), "wb") as out:
-        out.setnchannels(1)
-        out.setsampwidth(2)
-        out.setframerate(RATE)
-        out.writeframes((np.clip(joined, -1, 1) * 32767).astype("<i2").tobytes())
-    words = transcribe(path)
-    for look, (a, b) in zip(looks, places, strict=True):
-        look.words = [
-            Word(text=w.text, start=look.start + w.start - a, end=look.start + w.end - a,
-                 probability=w.probability)
-            for w in words if a <= (w.start + w.end) / 2 < b
-        ]  # fmt: skip
-        look.lines = lines_of(look.words)
+    for first in range(0, len(looks), WRITTEN_AT_ONCE):
+        group = looks[first : first + WRITTEN_AT_ONCE]
+        gap = np.zeros(int(SILENCE * RATE), dtype=np.float32)
+        parts, places, at = [], [], 0.0
+        for look in group:
+            audio = look.audio if look.audio is not None else np.zeros(0, dtype=np.float32)
+            places.append((at, at + audio.size / RATE))
+            parts += [audio, gap]
+            at += audio.size / RATE + SILENCE
+        path = folder / "said.wav"
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(RATE)
+            out.writeframes((np.clip(np.concatenate(parts), -1, 1) * 32767).astype("<i2").tobytes())
+        words = transcribe(path)
+        for look, (a, b) in zip(group, places, strict=True):
+            look.words = [
+                Word(text=w.text, start=look.start + w.start - a, end=look.start + w.end - a,
+                     probability=w.probability)
+                for w in words if a <= (w.start + w.end) / 2 < b
+            ]  # fmt: skip
+            look.lines = lines_of(look.words)
 
 
 class _Seen(BaseModel):
