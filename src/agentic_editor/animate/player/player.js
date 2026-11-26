@@ -36,6 +36,8 @@
     "Rubik-SemiBold",
     "PatrickHand-Regular",
     "Poppins-SemiBold",
+    "Poppins-Regular",
+    "Poppins-Bold",
   ];
 
   const THEMES = {
@@ -146,6 +148,26 @@
       quote: "Poppins-SemiBold",
       glow: true,
       map: true,
+      palette: "glow",
+    },
+    // Song story: a song's lyric line by line over painted moments of a story, in the dark
+    // with warm lamp light, as Indian lyric-story reels look (see "Song story" below).
+    song: {
+      bg: "#070b18",
+      text: "#FFFFFF",
+      muted: "rgba(255,255,255,0.86)",
+      accent: "#FFB23E",
+      accent2: "#FF5A4A",
+      accent3: "#6EC1FF",
+      card: "rgba(8,12,26,0.7)",
+      ink: "#070b18",
+      display: "Poppins-Bold",
+      body: "Poppins-Regular",
+      number: "Poppins-Bold",
+      caption: "Poppins-Regular",
+      quote: "Poppins-Regular",
+      glow: false,
+      song: true,
       palette: "glow",
     },
   };
@@ -304,6 +326,33 @@
         ctx.globalAlpha = 1;
         ctx.fillStyle = theme.bg;
         ctx.fillRect(0, 0, W, H);
+      };
+    }
+    if (theme.song) {
+      // The night the pictures sit in (and all there is where none was painted): deep blue,
+      // a few warm lights drifting out of focus.
+      const lights = Array.from({ length: 9 }, () => ({
+        x: r() * W, y: 380 + r() * 1180, rad: 60 + r() * 150, p: r() * 6.28,
+        warm: r() < 0.75, sp: 0.08 + r() * 0.12,
+      }));  // prettier-ignore
+      return (t) => {
+        ctx.globalAlpha = 1;
+        const g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, "#04060f");
+        g.addColorStop(0.45, "#0d1430");
+        g.addColorStop(1, "#04060f");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+        for (const l of lights) {
+          const x = l.x + Math.sin(t * l.sp + l.p) * 40;
+          const y = l.y + Math.cos(t * l.sp * 0.8 + l.p) * 30;
+          const c = l.warm ? "255,178,80" : "120,170,255";
+          const b = ctx.createRadialGradient(x, y, 0, x, y, l.rad);
+          b.addColorStop(0, `rgba(${c},${(0.16 + 0.05 * Math.sin(t * 1.3 + l.p)).toFixed(3)})`);
+          b.addColorStop(1, `rgba(${c},0)`);
+          ctx.fillStyle = b;
+          ctx.fillRect(x - l.rad, y - l.rad, l.rad * 2, l.rad * 2);
+        }
       };
     }
     if (theme.kinetic) {
@@ -2517,6 +2566,168 @@
   SCENES.country = (v, theme, root, scene, data) =>
     theme.map ? mapCountry(v, theme, root, scene, data) : SCENES.list(v, theme, root, scene);
 
+  // ---- Song story -----------------------------------------------------------------------
+  // Each lyric line's moment is a painted picture (people in it) the camera moves over while
+  // the line is sung; lines that go on with the same moment share the picture and the camera
+  // keeps moving across them (one shot). A new picture fades in over the last.
+
+  const XFADE = 0.35;
+  const SONG_COLORS = {
+    white: "#FFFFFF", amber: "#FFB23E", red: "#FF5A4A", blue: "#6EC1FF", pink: "#FF7EB6",
+    green: "#86E08A",
+  };  // prettier-ignore
+  const SONG_TEXT = { x: 84, y: 290, w: 900, h: 360, size: 50, key: 1.82 };
+
+  // The run of scenes showing the same picture as scene `i`: its first and last.
+  function shotOf(scenes, i) {
+    const same = (a, b) => (a.visual.image || a.visual.art) === (b.visual.image || b.visual.art);
+    let a = i;
+    let b = i;
+    while (a > 0 && same(scenes[a - 1], scenes[i])) a--;
+    while (b < scenes.length - 1 && same(scenes[b + 1], scenes[i])) b++;
+    return [a, b];
+  }
+
+  // Where the camera is over a picture, `p` (0-1) of the way through its shot.
+  function cameraAt(kind, p, punch) {
+    const e = ease.inOut(clamp(p));
+    let s = 1.08;
+    let x = 0;
+    let y = 0;
+    if (kind === "push_in") s = lerp(1.06, 1.2, e);
+    else if (kind === "pull_out") s = lerp(1.22, 1.06, e);
+    else if (kind === "pan_left") [s, x] = [1.16, lerp(46, -46, e)];
+    else if (kind === "pan_right") [s, x] = [1.16, lerp(-46, 46, e)];
+    else if (kind === "rise") [s, y] = [1.16, lerp(52, -52, e)];
+    else if (kind === "close_up") s = lerp(1.1, 1.18, e);
+    else s = 1.08 + 0.012 * Math.sin(p * Math.PI);
+    return { s: s * punch, x, y };
+  }
+
+  SCENES.moment = (v, theme, root, scene, data) => {
+    const scenes = data.scenes;
+    const i = scenes.indexOf(scene);
+    const [a, b] = shotOf(scenes, i);
+    const first = scenes[a];
+    const shotStart = first.start;
+    const shotEnd = scenes[b].end;
+    const box = place(el("div", "abs", root), 0, 0, W, H);
+    box.style.overflow = "hidden";
+    const base = building && building.options.imageBase;
+    let img = null;
+    if (v.image && base) {
+      img = place(el("img", "abs", box), 0, 0, W, H);
+      img.style.objectFit = "cover";
+      img.style.transformOrigin = "50% 55%";
+      img.alt = "";
+      building.pending.push(
+        new Promise((resolve) => {
+          img.onload = img.onerror = () => resolve();
+          img.src = base + v.image;
+        }).then(() => img.decode && img.decode().catch(() => undefined)),
+      );
+    }
+    return (t) => {
+      if (!img) return;
+      const p = (t - shotStart) / Math.max(0.5, shotEnd - shotStart);
+      // A line that hits hardest moves in suddenly when it starts, inside its shot.
+      const punch = v.camera === "close_up" ? lerp(1, 1.14, ease.out(prog(t, scene.start, 0.6))) : 1;
+      const c = cameraAt(first.visual.camera || "push_in", p, punch);
+      img.style.transform = `translate(${c.x.toFixed(1)}px, ${c.y.toFixed(1)}px) scale(${c.s.toFixed(4)})`;
+    };
+  };
+
+  // Over the pictures: dark at the top where the lyrics are, a vignette, dust drifting in
+  // the lamp light; and the fade to black at the very end, over everything.
+  function songOverlay(stage, seed, data) {
+    const shade = place(el("div", "abs", stage), 0, 0, W, H);
+    shade.style.background =
+      "linear-gradient(rgba(3,5,12,0.92) 0%, rgba(3,5,12,0.74) 17%, rgba(3,5,12,0.2) 33%, rgba(3,5,12,0) 42%, rgba(3,5,12,0) 72%, rgba(3,5,12,0.55) 88%, rgba(3,5,12,0.85) 100%)";
+    const vignette = place(el("div", "abs", stage), 0, 0, W, H);
+    vignette.style.background = "radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.5) 100%)";
+    const dust = el("canvas", "layer", stage);
+    dust.width = W;
+    dust.height = H;
+    const ctx = dust.getContext("2d");
+    const r = rng(seed ^ 0x5eed);
+    const motes = Array.from({ length: 34 }, () => ({
+      x: r() * W, y: 500 + r() * 1300, size: 1.5 + r() * 3.5, sp: 10 + r() * 26, drift: r() * 6.28,
+      a: 0.12 + r() * 0.28,
+    }));  // prettier-ignore
+    let fade = null;
+    return {
+      finish() {
+        fade = place(el("div", "abs", stage), 0, 0, W, H);
+        fade.style.background = "#000";
+      },
+      update(t) {
+        ctx.clearRect(0, 0, W, H);
+        for (const m of motes) {
+          const y = ((m.y - t * m.sp) % 1500 + 1500) % 1500 + 420;
+          const x = m.x + Math.sin(t * 0.6 + m.drift) * 18;
+          ctx.globalAlpha = m.a * (0.6 + 0.4 * Math.sin(t * 1.7 + m.drift));
+          ctx.fillStyle = "#ffe3b0";
+          ctx.beginPath();
+          ctx.arc(x, y, m.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        if (fade) fade.style.opacity = (ease.inOut(prog(t, data.duration - 0.9, 0.9)) * 1).toFixed(4);
+      },
+    };
+  }
+
+  // The lyric line at the top, as it is sung: each word comes in on its own time, the key
+  // words big and in colour, the small ones light; the whole line fades as the next begins.
+  function songSubtitles(theme, layer, captions) {
+    const chunks = captions.map((c) => {
+      const box = place(el("div", "abs fit", layer), SONG_TEXT.x, SONG_TEXT.y, SONG_TEXT.w, SONG_TEXT.h);
+      font(box, theme.body, SONG_TEXT.size, theme.muted);
+      box.style.display = "none";
+      box.style.lineHeight = "1.32";
+      box.style.textAlign = "left";
+      box.style.alignContent = "flex-start";
+      box.style.flexWrap = "wrap";
+      const line = el("div", "line", box);
+      const spans = c.words.map((w, k) => {
+        if (k) line.appendChild(document.createTextNode(" "));
+        const span = el("span", "word", line, w.text);
+        span.style.textShadow = "0 3px 16px rgba(0,0,0,0.8)";
+        span.style.verticalAlign = "baseline";
+        if (w.key) {
+          const color = SONG_COLORS[w.color] || SONG_COLORS.white;
+          span.style.fontFamily = `"${theme.display}", sans-serif`;
+          span.style.fontSize = SONG_TEXT.key + "em";
+          span.style.color = color;
+          span.style.textShadow = `0 0 26px ${color}55, 0 4px 18px rgba(0,0,0,0.75)`;
+        }
+        span.style.transformOrigin = "0% 80%";
+        return span;
+      });
+      box._fit = [SONG_TEXT.size, 30];
+      return { c, box, spans };
+    });
+    return {
+      chunks,
+      update(t) {
+        for (const ch of chunks) {
+          const on = t >= ch.c.start && t < ch.c.end;
+          ch.box.style.display = on ? "flex" : "none";
+          if (!on) continue;
+          const out = ease.inOut(prog(t, ch.c.end - 0.24, 0.24));
+          show(ch.box, 1 - out, `translateY(${(-10 * out).toFixed(1)}px)`);
+          ch.spans.forEach((span, k) => {
+            const w = ch.c.words[k];
+            const p = prog(t, w.start - 0.06, w.key ? 0.26 : 0.18);
+            const lift = (1 - ease.out(p)) * 16;
+            const grow = w.key ? lerp(0.82, 1, ease.back(p)) : 1;
+            show(span, ease.out(p), `translateY(${lift.toFixed(1)}px) scale(${grow.toFixed(4)})`);
+          });
+        }
+      },
+    };
+  }
+
   // ---- subtitles and header -----------------------------------------------------------
 
   function subtitles(theme, stage, captions, data) {
@@ -2524,6 +2735,7 @@
     // Bold kinetic text: the words are the picture already.
     if (theme.kinetic) return { chunks: [], update() {} };
     if (theme.map) return mapSubtitles(theme, layer, captions, data);
+    if (theme.song) return songSubtitles(theme, layer, captions);
     const chunks = captions.map((c) => {
       const box = place(el("div", "abs fit center", layer), (W - SUBS.w) / 2 - 20, SUBS.y, SUBS.w, SUBS.h);
       font(box, theme.caption, 78, theme.text);
@@ -2645,7 +2857,7 @@
   }
 
   function header(theme, stage, data) {
-    if (theme.kinetic || theme.map) return { fits: [], update() {} };
+    if (theme.kinetic || theme.map || theme.song) return { fits: [], update() {} };
     if (theme.stick) {
       // A big title on top for each part: the scene's own (who or where), else the reel's.
       const titles = new Map();
@@ -2709,7 +2921,7 @@
   // its loading is added to `pending`. None for styles drawn as themselves.
   function paintedLayer(scene, theme, root, base, pending) {
     const name = scene.visual && scene.visual.image;
-    if (!name || !base || theme.stick || theme.kinetic || theme.map) return null;
+    if (!name || !base || theme.stick || theme.kinetic || theme.map || theme.song) return null;
     const box = el("div", "abs", root);
     place(box, 0, 0, W, H);
     box.style.overflow = "hidden";
@@ -2786,8 +2998,10 @@
     building = null;
     // Every picture is in before a frame is drawn: the first frames of a render too.
     await Promise.all(pending);
+    const overlay = theme.song ? songOverlay(stage, seed, data) : null;
     const subs = subtitles(theme, stage, data.captions || [], data);
     const head = header(theme, stage, data);
+    if (overlay) overlay.finish();
     const guides = [
       [0, 0, W, SAFE.top],
       [0, H - SAFE.bottom, W, SAFE.bottom],
@@ -2806,7 +3020,7 @@
     });
     head.fits.forEach((node) => fit(node, node._fit[0], node._fit[1], "title"));
     scenes.forEach((s) => (s.root.style.display = "none"));
-    state = { data, theme, drawBg, scenes, subs, head, guides, t: 0 };
+    state = { data, theme, drawBg, scenes, subs, head, guides, overlay, t: 0 };
     await seek(0);
     return { duration: data.duration, problems: shrunk.slice() };
   }
@@ -2831,6 +3045,19 @@
         s.update(t);
         continue;
       }
+      if (state.theme.song) {
+        // One picture fades in over the last; the same picture going on is one shot.
+        const i = state.scenes.indexOf(s);
+        const before = i > 0 ? state.scenes[i - 1].scene.visual : null;
+        const continues = before && (before.image || before.art) === (s.scene.visual.image || s.scene.visual.art);
+        const songOn = t >= start - 0.001 && (s === last || t < end + XFADE);
+        s.root.style.display = songOn ? "block" : "none";
+        if (!songOn) continue;
+        const fadeIn = i === 0 || continues ? 1 : ease.inOut(prog(t, start, XFADE));
+        show(s.root, fadeIn, "none");
+        s.update(t);
+        continue;
+      }
       // The closing scene stays to the very end; the others hand over to the next.
       const stays = s === last;
       const on = t >= start - 0.001 && (stays || t < end + EXIT);
@@ -2850,6 +3077,7 @@
       }
       s.update(t);
     }
+    if (state.overlay) state.overlay.update(t);
     state.subs.update(t);
     state.head.update(t);
     if (waiting && waiting.length) {

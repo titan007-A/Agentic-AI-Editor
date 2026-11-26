@@ -75,6 +75,10 @@ class Timeline:
     duration: float
     captions: list[Caption] = field(default_factory=list)
     cues: list[Cue] = field(default_factory=list)
+    # A Song story plays the song itself instead of voice and music: its file, and where in
+    # it the reel's first frame is.
+    music: str = ""
+    music_from: float = 0.0
 
 
 def plain(text: str) -> str:
@@ -385,8 +389,44 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
     return timeline
 
 
+SWITCH = 0.15  # a Song story's picture changes this long before its line is sung
+
+
+def build_song(plan: Plan, music: str = "") -> Timeline:
+    """A Song story's timing, from its song alone: the part plays from its start; each
+    lyric line's moment lasts from just before it is sung until just before the next line
+    (the first from the first frame, the last to the end), and its caption shows from its
+    first word until the next line begins."""
+    song = plan.song
+    if song is None or not song.lines:
+        raise ValueError("a Song story needs its song's lines")
+    origin = song.start
+    length = round(song.end - song.start, 3)
+    lines = song.lines
+    times: list[SceneTime] = []
+    captions_: list[Caption] = []
+    for i, line in enumerate(lines):
+        words = [
+            Word(text=w.text, start=round(w.start - origin, 3), end=round(w.end - origin, 3))
+            for w in line.words
+        ]
+        sung = words[0].start if words else line.start - origin
+        nxt = lines[i + 1] if i + 1 < len(lines) else None
+        nxt_sung = (nxt.words[0].start if nxt.words else nxt.start) - origin if nxt else length
+        start = 0.0 if i == 0 else max(0.0, sung - SWITCH)
+        end = length if nxt is None else max(start + 0.2, nxt_sung - SWITCH)
+        last = words[-1].end if words else sung
+        times.append(SceneTime("moment", start, end, sung, last, words, []))
+        captions_.append(
+            Caption(max(0.0, sung - 0.12), length if nxt is None else nxt_sung - 0.06, words)
+        )
+    return Timeline(times, length, captions_, [], music, origin)
+
+
 def player_data(plan: Plan, timeline: Timeline) -> dict:
     """What player.js load() takes."""
+    if plan.style == "song" and plan.song is not None:
+        return song_player_data(plan, timeline)
     visuals = [s.visual.model_dump() for s in plan.scenes] + [{"kind": "cta", "text": plan.cta}]
     cast = [c.model_dump() for c in plan.cast]
     word = lambda w: {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}  # noqa: E731
@@ -421,4 +461,43 @@ def player_data(plan: Plan, timeline: Timeline) -> dict:
             }
             for c in timeline.captions
         ],
+    }
+
+
+def song_player_data(plan: Plan, timeline: Timeline) -> dict:
+    """A Song story's player data: no closing scene, and each caption's words with whether
+    they are drawn big and in which colour."""
+    lines = plan.song.lines if plan.song else []
+    word = lambda w: {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}  # noqa: E731
+    captions_ = []
+    for n, c in enumerate(timeline.captions):
+        marks = lines[n].words if n < len(lines) else []
+        shown = []
+        for k, w in enumerate(c.words):
+            mark = marks[k] if k < len(marks) else None
+            key = bool(mark and mark.key)
+            shown.append({**word(w), "key": key, "color": mark.color if key else ""})
+        captions_.append({"start": round(c.start, 3), "end": round(c.end, 3), "words": shown})
+    return {
+        "style": plan.style,
+        "look": plan.look,
+        "title": plan.title,
+        "duration": round(timeline.duration, 3),
+        "header": {"start": 9999},
+        "cast": [],
+        "scenes": [
+            {
+                "kind": s.kind,
+                "start": round(s.start, 3),
+                "end": round(s.end, 3),
+                "voiceStart": round(s.voice_start, 3),
+                "voiceEnd": round(s.voice_end, 3),
+                "beats": [],
+                "talkFrom": None,
+                "words": [word(w) for w in s.words],
+                "visual": scene.visual.model_dump(),
+            }
+            for s, scene in zip(timeline.scenes, plan.scenes, strict=False)
+        ],
+        "captions": captions_,
     }

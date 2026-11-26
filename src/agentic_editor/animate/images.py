@@ -47,6 +47,10 @@ LOOKS = {
     "light, highly detailed",
     "paper": "vintage editorial illustration, muted earthy colours, textured paper, finely "
     "detailed",
+    # A Song story's moment: the reference page's flat drawn look, people and all, at night.
+    "song": "flat 2D vector illustration, simple stylised characters with round heads and thick "
+    "dark outlines, muted colours, deep navy blue night, warm glowing lamp light and soft "
+    "shadows, cinematic storybook composition, the top quarter of the picture dark and plain",
     # A World map card: the thing alone on white, so it sits in the white card like a cut-out.
     "map": "one single subject centred and filling most of the frame, isolated on a plain pure "
     "white background, bright clean studio product photo, vivid natural colours, soft shadow",
