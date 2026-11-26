@@ -57,6 +57,9 @@ LOOKS = {
     # A gold horror card: the place itself, as a dark and eerie photograph.
     "map-horror": "a realistic photograph of the whole place, eerie and dark, dusk, fog, cold "
     "moonlight, moody desaturated colours, cinematic wide shot",
+    # A singer edit's scene: the warm, gritty poster look of the lyric edits it copies.
+    "singer": "cinematic moody digital painting, warm amber and burnt orange light against deep "
+    "brown shadows, glowing rim light, gritty textured poster, film grain, volumetric haze",
 }
 # Styles that are their own look: drawn, never painted.
 UNPAINTED = ("stick", "kinetic")

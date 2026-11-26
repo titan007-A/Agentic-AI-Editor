@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 KINDS = ("facts", "lesson", "story", "news")
-STYLES = ("glow", "paper", "story", "kinetic", "stick", "map", "song")
+STYLES = ("glow", "paper", "story", "kinetic", "stick", "map", "song", "singer")
 MOODS = ("mysterious", "uplifting", "emotional", "tense", "curious", "upbeat")
 LENGTHS = ("auto", "short", "medium", "long")
 # Narration words a reel of each length runs to (Kokoro speaks about 2.6 words a second).
@@ -24,7 +24,7 @@ WORDS = {"short": (50, 85), "medium": (90, 150), "long": (155, 230), "auto": (70
 MAP_WORDS = {"short": (55, 90), "medium": (90, 150), "long": (150, 230), "auto": (110, 175)}
 
 Kind = Literal["facts", "lesson", "story", "news"]
-Style = Literal["glow", "paper", "story", "kinetic", "stick", "map", "song"]
+Style = Literal["glow", "paper", "story", "kinetic", "stick", "map", "song", "singer"]
 Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious", "upbeat"]
 # A World map reel's look, as the reference page has them: white picture cards (most
 # topics), gold horror (haunted and scary topics: blood-red countries, photos in gold
@@ -33,7 +33,7 @@ LOOKS = ("cards", "horror", "neon")
 Look = Literal["cards", "horror", "neon"]
 VisualKind = Literal[
     "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots",
-    "scene", "country", "moment",
+    "scene", "country", "moment", "verse",
 ]  # fmt: skip
 # Character scenes (player.js character rig): where, who looks like what, what they do.
 SETTINGS = ("room", "street", "park", "office", "night", "school", "shop", "stage", "plain")
@@ -43,6 +43,8 @@ ACTIONS = (
 )  # fmt: skip
 FEELINGS = ("neutral", "happy", "sad", "angry", "surprised", "scared", "thinking")
 LOOKS = ("man", "woman", "boy", "girl", "old man", "old woman")
+# How a singer edit's line shows the singer (animate/singer.py, player/singer.js).
+SHOTS = ("hero", "close", "far", "print", "mirror", "echo", "silhouette", "words", "painted")
 MAX_ACTORS = 2
 MAX_CAST = 4
 # Too big to hold: a character with one of these in hand looks wrong.
@@ -190,6 +192,8 @@ class Visual(Loose):
     image: str = ""
     art_seed: int = 0
     camera: str = ""  # a moment's camera move (CAMERAS)
+    # A singer edit's line (kind "verse", animate/singer.py): how the singer is shown.
+    shot: str = ""
 
 
 class Scene(Loose):
@@ -262,6 +266,40 @@ class Song(Loose):
     # The story told over it (animate/songwriter.py): who is in it and what happens.
     people: list[Person] = Field(default_factory=list)
     story: str = ""
+class SungWord(Loose):
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+
+
+class SungLine(Loose):
+    """One sung line of a singer edit's hook: a scene, times from the hook's start."""
+
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    words: list[SungWord] = Field(default_factory=list)
+
+
+class SingerPhoto(Loose):
+    image: str = ""  # the photo as given (a picture in images.folder, named by its content)
+    cutout: str = ""  # the singer cut out of it, see-through around them; "" when none
+    face: list[float] = Field(default_factory=list)  # [x, y, w, h] in the cutout, 0..1
+    aspect: float = 0.0  # the cutout's width over its height
+
+
+class SingerEdit(Loose):
+    """What a singer edit is made from (animate/singer.py): the song's hook and the
+    singer's photos. Set by the studio, never by a writer or an edit by hand."""
+
+    query: str = ""  # the song as the owner named it
+    title: str = ""
+    artist: str = ""
+    audio: str = ""  # the hook's sound, a WAV named by its content (singer.songs_dir)
+    duration: float = 0.0
+    lines: list[SungLine] = Field(default_factory=list)  # one per scene, in order
+    photos: list[SingerPhoto] = Field(default_factory=list)
+    look: str = ""  # how the singer looks, for pictures that paint them
 
 
 class Plan(Loose):
@@ -278,6 +316,7 @@ class Plan(Loose):
     sources: list[Source] = Field(default_factory=list)
     look: Look = "cards"  # a World map reel's (LOOKS); the other styles ignore it
     song: Song | None = None  # a Song story reel's song, its part and lyric lines
+    singer: SingerEdit | None = None  # a singer edit's song and photos (style "singer")
 
 
 # ---- mending ---------------------------------------------------------------------------
@@ -385,7 +424,12 @@ def tidy(plan: Plan) -> Plan:
         text, leaked = no_leak(" ".join(v.text.split()))
         text = _one_line(text, 200 if v.kind == "quote" else 90)
         highlight = v.highlight.strip() or leaked.get("highlight", "")
-        if highlight and highlight.lower() not in text.lower():
+        if v.kind == "verse":  # a sung line's key words, one by one, wherever they are in it
+            words = text.lower().split()
+            stands = all(w in words for w in highlight.lower().split())
+        else:
+            stands = highlight.lower() in text.lower()
+        if not stands:
             highlight = ""
         visual = v.model_copy(
             update={
@@ -408,12 +452,13 @@ def tidy(plan: Plan) -> Plan:
                 "image": v.image if _PICTURE.fullmatch(v.image or "") else "",
                 "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
                 "camera": camera_of(v),
+                "shot": v.shot if v.kind == "verse" and v.shot in SHOTS else "",
             }
         )
         narration = " ".join(plain(scene.narration).split())
-        # A scene that only asks people to follow: the system's own ending does that. A
-        # Song story's narration is the lyric line, which may well say "follow me".
-        sung = plan.style == "song"
+        # A scene that only asks people to follow: the system's own ending does that. A sung
+        # line (a Song story's or a singer edit's) is the song's own, whatever it says.
+        sung = plan.style == "song" or v.kind == "verse"
         if not sung and _ASKS_TO_FOLLOW.search(narration) and len(narration.split()) <= 12:
             continue
         if narration:
