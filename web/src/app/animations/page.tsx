@@ -3,6 +3,7 @@
 import {
   Clapperboard,
   Film,
+  ImagePlus,
   Loader2,
   RefreshCw,
   Save,
@@ -10,6 +11,7 @@ import {
   Trash2,
   Undo2,
   Wand2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -54,9 +56,12 @@ const STYLES = [
   ["stick", "Stick figure"],
   ["map", "World map (country by country)"],
   ["song", "Song story (a song's hook)"],
+  ["singer", "Singer edit (a song + the singer's photos)"],
 ] as const;
-// The autopilot writes from topics; a Song story is made from a song someone names.
-const PILOT_STYLES = STYLES.filter(([s]) => s !== "song");
+// The autopilot writes from topics: a Song story is made from a song someone names, a
+// singer edit from a song and someone's photos.
+const PILOT_STYLES = STYLES.filter(([s]) => s !== "song" && s !== "singer");
+const MAX_PHOTOS = 6;
 const MAP_LOOKS = [
   ["cards", "Picture cards"],
   ["horror", "Gold horror"],
@@ -204,6 +209,8 @@ export default function AnimationsPage() {
   const [length, setLength] = useState("auto");
   const [pictures, setPictures] = useState(true);
   const [ideas, setIdeas] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [request, setRequest] = useState("");
   const [sending, setSending] = useState(false);
   const [shrunk, setShrunk] = useState<string[]>([]);
@@ -294,21 +301,41 @@ export default function AnimationsPage() {
     }
   }
 
+  const singerEdit = style === "singer";
+  // A Song story and a singer edit are made from a song: its name, not an idea.
+  const sung = style === "song" || singerEdit;
+
   async function create() {
     if (idea.trim().length < 3) {
-      toast.error(
-        style === "song" ? "Write the song's name first" : "Write the idea in a few words first",
-      );
+      toast.error(sung ? "Write the song's name first" : "Write the idea in a few words first");
+      return;
+    }
+    if (singerEdit && !photos.length) {
+      toast.error("Add at least one photo of the singer");
       return;
     }
     // A Song story: the song's name, then the words of the part wanted after a "|".
     const asked = style === "song" && part.trim() ? `${idea.trim()} | ${part.trim()}` : idea;
     await act(
-      () => api.createAnimation({ idea: asked, kind, style, voice, length, images: pictures }),
-      style === "song" ? "Finding the song" : "Writing the draft",
+      () =>
+        api.createAnimation({
+          idea: asked,
+          kind,
+          style,
+          voice,
+          length,
+          images: pictures,
+          ...(singerEdit ? { photos } : {}),
+        }),
+      singerEdit
+        ? "Finding the song and making the edit"
+        : sung
+          ? "Finding the song"
+          : "Writing the draft",
     );
     setIdea("");
     setPart("");
+    setPhotos([]);
   }
 
   async function playPart(choice: number) {
@@ -317,6 +344,23 @@ export default function AnimationsPage() {
       () => api.changeAnimation(current.id, { request: "", choice }),
       "Timing that part of the song",
     );
+  }
+
+  async function addPhotos(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files).slice(0, MAX_PHOTOS - photos.length)) {
+        try {
+          const { name } = await api.uploadAnimationPhoto(file);
+          setPhotos((had) => (had.includes(name) ? had : [...had, name].slice(0, MAX_PHOTOS)));
+        } catch (err) {
+          toast.error(`${file.name}: ${errorText(err)}`);
+        }
+      }
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function remove(id: string) {
@@ -396,12 +440,12 @@ export default function AnimationsPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-1">
-                <Label htmlFor="idea">{style === "song" ? "Song (name and singer)" : "Idea"}</Label>
+                <Label htmlFor="idea">{sung ? "Song (name and singer)" : "Idea"}</Label>
                 <Textarea
                   id="idea"
-                  rows={style === "song" ? 2 : 3}
+                  rows={sung ? 2 : 3}
                   placeholder={
-                    style === "song"
+                    sung
                       ? "e.g. Koi Apna Hoga Tony Kakkar"
                       : "e.g. The lost city of Ubar that vanished into the desert"
                   }
@@ -421,8 +465,63 @@ export default function AnimationsPage() {
                   />
                 </div>
               )}
-              <div className={cn("grid gap-3", style === "song" ? "grid-cols-1" : "grid-cols-2")}>
-                <div className={cn("space-y-1", style === "song" && "hidden")}>
+              {singerEdit && (
+                <div className="space-y-2 rounded-md border-[1.5px] border-dashed border-foreground/50 p-2">
+                  <p className="text-xs text-muted-foreground">
+                    Singer edit: the song is found and downloaded, its catchy part cut, and every
+                    sung word slapped on as a torn-paper sticker in time with the singing, over warm
+                    gritty scenes with the singer cut out of the photos standing in them.
+                  </p>
+                  <div className="flex flex-wrap gap-2" data-testid="singer-photos">
+                    {photos.map((name) => (
+                      <div key={name} className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/animation-images/${name}`}
+                          alt="Photo of the singer"
+                          className="h-24 w-[4.5rem] rounded border-[1.5px] border-foreground object-cover"
+                        />
+                        <button
+                          type="button"
+                          className="absolute -top-2 -right-2 flex size-7 items-center justify-center rounded-full border-[1.5px] border-foreground bg-background"
+                          onClick={() => setPhotos((had) => had.filter((n) => n !== name))}
+                          aria-label="Remove this photo"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    {photos.length < MAX_PHOTOS && (
+                      <label className="flex h-24 w-[4.5rem] cursor-pointer flex-col items-center justify-center gap-1 rounded border-[1.5px] border-dashed border-foreground text-center text-xs">
+                        {uploading ? (
+                          <Loader2 className="size-5 animate-spin" />
+                        ) : (
+                          <ImagePlus className="size-5" />
+                        )}
+                        {uploading ? "Sending" : "Add photos"}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          multiple
+                          className="sr-only"
+                          aria-label="Photos of the singer"
+                          disabled={uploading}
+                          onChange={(e) => {
+                            void addPhotos(e.target.files);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Up to {MAX_PHOTOS} photos of the singer (more photos, more variety). Clear
+                    photos of one person work best.
+                  </p>
+                </div>
+              )}
+              <div className={cn("grid gap-3", sung ? "grid-cols-1" : "grid-cols-2")}>
+                <div className={cn("space-y-1", sung && "hidden")}>
                   <Label htmlFor="kind">Content</Label>
                   <select
                     id="kind"
@@ -452,7 +551,7 @@ export default function AnimationsPage() {
                     ))}
                   </select>
                 </div>
-                <div className={cn("space-y-1", style === "song" && "hidden")}>
+                <div className={cn("space-y-1", sung && "hidden")}>
                   <Label htmlFor="length">Length</Label>
                   <select
                     id="length"
@@ -467,7 +566,7 @@ export default function AnimationsPage() {
                     ))}
                   </select>
                 </div>
-                <div className={cn("space-y-1", style === "song" && "hidden")}>
+                <div className={cn("space-y-1", sung && "hidden")}>
                   <Label htmlFor="voice">Voice</Label>
                   <VoiceSelect id="voice" value={voice} voices={voices} onChange={setVoice} />
                 </div>
@@ -480,7 +579,7 @@ export default function AnimationsPage() {
                   the song is the sound.
                 </p>
               )}
-              {style !== "song" && !["auto", "narrator", "calm", "energetic"].includes(voice) && (
+              {!sung && !["auto", "narrator", "calm", "energetic"].includes(voice) && (
                 <Button size="sm" variant="ghost" onClick={() => playSample(voice)}>
                   Hear this voice
                 </Button>
@@ -518,7 +617,9 @@ export default function AnimationsPage() {
                   <span className="block text-xs text-muted-foreground">
                     {style === "map"
                       ? "An AI paints each card's picture (a few minutes more); without it the cards show emoji."
-                      : "An AI paints each scene (a few minutes more). Not for Stick figure or Bold kinetic text."}
+                      : singerEdit
+                        ? "An AI paints each line's scene (on the Mac); without it the scenes are drawn from the photos."
+                        : "An AI paints each scene (a few minutes more). Not for Stick figure or Bold kinetic text."}
                   </span>
                 </span>
                 <Switch
@@ -527,8 +628,8 @@ export default function AnimationsPage() {
                   aria-label="Painted pictures"
                 />
               </label>
-              <Button className="w-full" onClick={create} disabled={sending}>
-                <Wand2 className="size-4" /> Write the draft
+              <Button className="w-full" onClick={create} disabled={sending || uploading}>
+                <Wand2 className="size-4" /> {singerEdit ? "Make the edit" : "Write the draft"}
               </Button>
             </CardContent>
           </Card>
@@ -643,22 +744,33 @@ export default function AnimationsPage() {
                     onChoose={(n) => void playPart(n)}
                   />
                 )}
-                {current.plan && current.plan.style !== "song" && (
+                {current.plan?.singer && (
+                  <p className="text-sm">
+                    {current.plan.singer.title}
+                    {current.plan.singer.artist ? ` · ${current.plan.singer.artist}` : ""}
+                    {current.plan.singer.duration
+                      ? ` · ${Math.round(current.plan.singer.duration)} s of the song`
+                      : ""}
+                  </p>
+                )}
+                {current.plan && !["song", "singer"].includes(current.plan.style) && (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
                       <Label>Style</Label>
                       <div className="flex flex-wrap gap-2">
-                        {STYLES.filter(([s]) => !["auto", "song"].includes(s)).map(([s, label]) => (
-                          <Button
-                            key={s}
-                            size="sm"
-                            variant={current.plan?.style === s ? "default" : "outline"}
-                            disabled={busy || dirty || current.plan?.style === s}
-                            onClick={() => act(() => api.setAnimation(current.id, { style: s }))}
-                          >
-                            {label}
-                          </Button>
-                        ))}
+                        {STYLES.filter(([s]) => !["auto", "song", "singer"].includes(s)).map(
+                          ([s, label]) => (
+                            <Button
+                              key={s}
+                              size="sm"
+                              variant={current.plan?.style === s ? "default" : "outline"}
+                              disabled={busy || dirty || current.plan?.style === s}
+                              onClick={() => act(() => api.setAnimation(current.id, { style: s }))}
+                            >
+                              {label}
+                            </Button>
+                          ),
+                        )}
                       </div>
                     </div>
                     <div className="space-y-1">
@@ -818,7 +930,11 @@ export default function AnimationsPage() {
                 <CardContent className="space-y-2">
                   <Textarea
                     rows={2}
-                    placeholder="e.g. make the ending more emotional; scene 3's number is wrong, it's 1992"
+                    placeholder={
+                      current.plan.style === "singer"
+                        ? "e.g. put line 3 in the mirror; more question marks; line 5 at sunset"
+                        : "e.g. make the ending more emotional; scene 3's number is wrong, it's 1992"
+                    }
                     value={request}
                     onChange={(e) => setRequest(e.target.value)}
                   />
@@ -852,7 +968,7 @@ export default function AnimationsPage() {
                         onClick={() =>
                           act(
                             () => api.editAnimation(current.id, draft),
-                            "Saved: recording the voice",
+                            draft.style === "singer" ? "Saved" : "Saved: recording the voice",
                           )
                         }
                       >
@@ -870,7 +986,7 @@ export default function AnimationsPage() {
                       </Button>
                     </div>
                   )}
-                  {current.player && (
+                  {current.player && draft.style !== "singer" && (
                     <AnimationTimeline
                       plan={draft}
                       saved={current.plan}

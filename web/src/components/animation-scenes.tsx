@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import type {
   AnimationActor,
   AnimationCastMember,
@@ -33,6 +34,7 @@ export const VISUALS: Record<AnimationVisualKind, string> = {
   scene: "Characters acting",
   country: "Country on the map",
   moment: "A painted moment (Song story)",
+  verse: "Sung line (singer edit)",
 };
 // How the camera moves over a Song story moment's picture (plan.py CAMERAS).
 const CAMERAS = [
@@ -43,6 +45,19 @@ const CAMERAS = [
   ["rise", "Rise up"],
   ["close_up", "Sudden close-up (the line that hits hardest)"],
   ["still", "Still"],
+] as const;
+
+/** How a singer edit's line shows the singer (animate/singer.py SHOTS). */
+export const SHOTS = [
+  ["hero", "Singer big, waist up"],
+  ["close", "Singer's face, close"],
+  ["far", "Singer small, far off"],
+  ["print", "Photo as a torn print"],
+  ["mirror", "Singer and their reflection"],
+  ["echo", "Three fading copies"],
+  ["silhouette", "Dark outline against the light"],
+  ["words", "Only the words, huge"],
+  ["painted", "Singer painted in (the Mac's image model)"],
 ] as const;
 
 const SETTINGS = ["room", "street", "park", "office", "night", "school", "shop", "stage", "plain"];
@@ -123,6 +138,10 @@ const FIELDS: Record<AnimationVisualKind, Field[]> = {
     { key: "emoji", label: "Big object beside them (one emoji, optional)" },
   ],
   moment: [],
+  verse: [
+    { key: "highlight", label: "Key words in red (words of the line)" },
+    { key: "emoji", label: "Red doodle: ❓ ⭐ ❤️ ➡️ ❌ 👑 ✨ (or empty)" },
+  ],
 };
 
 const ITEMS: Partial<Record<AnimationVisualKind, { keys: (keyof AnimationItem)[]; max: number }>> =
@@ -132,6 +151,7 @@ const ITEMS: Partial<Record<AnimationVisualKind, { keys: (keyof AnimationItem)[]
     list: { keys: ["emoji", "text"], max: 5 },
     timeline: { keys: ["year", "text"], max: 5 },
     country: { keys: ["text", "emoji", "art"], max: 5 },
+    verse: { keys: ["text"], max: 3 },
   };
 const ITEM_LABEL: Record<keyof AnimationItem, string> = {
   emoji: "Emoji",
@@ -201,8 +221,10 @@ export function AnimationScenes({
   onRedo: (index: number) => void;
   onPlayFrom: (seconds: number) => void;
 }) {
-  // A Song story has one scene per lyric line, timed to the song: none added, moved or removed.
-  const sung = plan.style === "song";
+  // A Song story and a singer edit have one scene a sung line, in the song's order and timed
+  // to it: none added, moved or removed, and what is sung stays.
+  const songStory = plan.style === "song";
+  const sung = songStory || plan.style === "singer";
   function setScene(i: number, scene: AnimationScene) {
     onChange({ ...plan, scenes: plan.scenes.map((s, j) => (j === i ? scene : s)) });
   }
@@ -244,12 +266,13 @@ export function AnimationScenes({
           />
         </div>
       </div>
-      {sung && plan.song ? (
+      {songStory && plan.song && (
         <PeopleEditor
           people={plan.song.people ?? []}
           onChange={(people) => onChange({ ...plan, song: { ...plan.song!, people } })}
         />
-      ) : (
+      )}
+      {!sung && (
         <CastEditor cast={plan.cast ?? []} onChange={(cast) => onChange({ ...plan, cast })} />
       )}
       {plan.scenes.map((scene, i) => {
@@ -273,7 +296,7 @@ export function AnimationScenes({
                   <Play className="size-3.5" /> {starts[i].toFixed(1)} s
                 </Button>
               )}
-              <div className={sung ? "hidden" : "ml-auto flex gap-1"}>
+              <div className={cn("ml-auto flex gap-1", sung && "hidden")}>
                 <Button
                   size="icon"
                   variant="ghost"
@@ -306,7 +329,9 @@ export function AnimationScenes({
             {sung ? (
               <div className="space-y-1">
                 <Label>Lyric line</Label>
-                <p className="text-base font-semibold">{scene.narration}</p>
+                <p className="text-base font-semibold" data-testid="sung-line">
+                  {scene.narration}
+                </p>
               </div>
             ) : (
               <div className="space-y-1">
@@ -338,8 +363,27 @@ export function AnimationScenes({
                 </select>
               </div>
             )}
-            <div className={sung ? "hidden" : "grid gap-3 sm:grid-cols-2"}>
-              <div className="space-y-1">
+            <div className={songStory ? "hidden" : "grid gap-3 sm:grid-cols-2"}>
+              {v.kind === "verse" && (
+                <div className="space-y-1">
+                  <Label htmlFor={`shot-${i}`}>How the singer is shown</Label>
+                  <select
+                    id={`shot-${i}`}
+                    className={SELECT}
+                    value={v.shot || "hero"}
+                    onChange={(e) =>
+                      setScene(i, { ...scene, visual: { ...v, shot: e.target.value } })
+                    }
+                  >
+                    {SHOTS.map(([k, label]) => (
+                      <option key={k} value={k}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className={cn("space-y-1", sung && "hidden")}>
                 <Label htmlFor={`kind-${i}`}>Shows</Label>
                 <select
                   id={`kind-${i}`}
@@ -353,7 +397,7 @@ export function AnimationScenes({
                   }
                 >
                   {Object.entries(VISUALS)
-                    .filter(([k]) => k !== "moment" || v.kind === "moment")
+                    .filter(([k]) => k === v.kind || (k !== "moment" && k !== "verse"))
                     .map(([k, label]) => (
                       <option key={k} value={k}>
                         {label}
@@ -399,7 +443,7 @@ export function AnimationScenes({
                         }
                       >
                         <Label htmlFor={`${key}-${i}-${k}`} className="text-xs">
-                          {ITEM_LABEL[key]} {k + 1}
+                          {v.kind === "verse" ? "Side note" : ITEM_LABEL[key]} {k + 1}
                         </Label>
                         {key === "motion" ? (
                           <select
@@ -464,7 +508,8 @@ export function AnimationScenes({
                       setScene(i, { ...scene, visual: { ...v, items: [...v.items, blankItem()] } })
                     }
                   >
-                    <Plus className="size-3.5" /> Add item
+                    <Plus className="size-3.5" />{" "}
+                    {v.kind === "verse" ? "Add a side note" : "Add item"}
                   </Button>
                 )}
               </div>
