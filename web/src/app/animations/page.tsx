@@ -26,7 +26,14 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/hooks/use-me";
-import { api, errorText, type Animation, type AnimationPlan, type AnimationVoice } from "@/lib/api";
+import {
+  api,
+  errorText,
+  type Animation,
+  type AnimationPlan,
+  type AnimationSong,
+  type AnimationVoice,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const SELECT =
@@ -46,7 +53,10 @@ const STYLES = [
   ["kinetic", "Bold kinetic text"],
   ["stick", "Stick figure"],
   ["map", "World map (country by country)"],
+  ["song", "Song story (a song's hook)"],
 ] as const;
+// The autopilot writes from topics; a Song story is made from a song someone names.
+const PILOT_STYLES = STYLES.filter(([s]) => s !== "song");
 const MAP_LOOKS = [
   ["cards", "Picture cards"],
   ["horror", "Gold horror"],
@@ -115,6 +125,69 @@ function VoiceSelect({
   );
 }
 
+function clock(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  return `${m}:${(seconds - m * 60).toFixed(1).padStart(4, "0")}`;
+}
+
+/** A Song story's song: what was found, the part playing, and the other parts to choose. */
+function SongPanel({
+  song,
+  disabled,
+  onChoose,
+}: {
+  song: AnimationSong;
+  disabled: boolean;
+  onChoose: (choice: number) => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-md border-[1.5px] border-foreground/40 p-3 text-sm">
+      <div>
+        <span className="font-semibold">{song.title}</span>
+        {song.artist ? ` · ${song.artist}` : ""} · playing {clock(song.start)}-{clock(song.end)}
+        {song.url && (
+          <>
+            {" · "}
+            <a className="underline" href={song.url} target="_blank" rel="noreferrer">
+              the song on YouTube
+            </a>
+          </>
+        )}
+      </div>
+      {song.lyrics === "heard" && (
+        <p className="text-xs text-muted-foreground">
+          No lyrics were found online: the words are as the AI heard them. Check them in the scenes.
+        </p>
+      )}
+      {song.choices.length > 1 && (
+        <div className="space-y-1">
+          <Label>Play another part of the song</Label>
+          <div className="flex flex-col gap-1.5">
+            {song.choices.map((c, n) => {
+              const playing = Math.abs(c.start - song.start) < 1.5;
+              return (
+                <Button
+                  key={c.start}
+                  size="sm"
+                  variant={playing ? "default" : "outline"}
+                  className="h-auto min-h-11 justify-start text-left text-xs whitespace-normal"
+                  disabled={disabled || playing}
+                  onClick={() => onChoose(n)}
+                >
+                  {clock(c.start)}-{clock(c.end)} · &ldquo;{c.first}&rdquo;
+                </Button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Another part is timed again and gets a new story.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AnimationsPage() {
   const me = useMe();
   const allowed = me?.features?.includes("animation_studio") ?? false;
@@ -124,6 +197,7 @@ export default function AnimationsPage() {
   const [dirty, setDirty] = useState(false);
   const [voices, setVoices] = useState<AnimationVoice[]>([]);
   const [idea, setIdea] = useState("");
+  const [part, setPart] = useState("");
   const [kind, setKind] = useState("auto");
   const [style, setStyle] = useState("auto");
   const [voice, setVoice] = useState("auto");
@@ -222,14 +296,27 @@ export default function AnimationsPage() {
 
   async function create() {
     if (idea.trim().length < 3) {
-      toast.error("Write the idea in a few words first");
+      toast.error(
+        style === "song" ? "Write the song's name first" : "Write the idea in a few words first",
+      );
       return;
     }
+    // A Song story: the song's name, then the words of the part wanted after a "|".
+    const asked = style === "song" && part.trim() ? `${idea.trim()} | ${part.trim()}` : idea;
     await act(
-      () => api.createAnimation({ idea, kind, style, voice, length, images: pictures }),
-      "Writing the draft",
+      () => api.createAnimation({ idea: asked, kind, style, voice, length, images: pictures }),
+      style === "song" ? "Finding the song" : "Writing the draft",
     );
     setIdea("");
+    setPart("");
+  }
+
+  async function playPart(choice: number) {
+    if (!current) return;
+    await act(
+      () => api.changeAnimation(current.id, { request: "", choice }),
+      "Timing that part of the song",
+    );
   }
 
   async function remove(id: string) {
@@ -309,17 +396,33 @@ export default function AnimationsPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-1">
-                <Label htmlFor="idea">Idea</Label>
+                <Label htmlFor="idea">{style === "song" ? "Song (name and singer)" : "Idea"}</Label>
                 <Textarea
                   id="idea"
-                  rows={3}
-                  placeholder="e.g. The lost city of Ubar that vanished into the desert"
+                  rows={style === "song" ? 2 : 3}
+                  placeholder={
+                    style === "song"
+                      ? "e.g. Koi Apna Hoga Tony Kakkar"
+                      : "e.g. The lost city of Ubar that vanished into the desert"
+                  }
                   value={idea}
                   onChange={(e) => setIdea(e.target.value)}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              {style === "song" && (
                 <div className="space-y-1">
+                  <Label htmlFor="part">Which part (optional)</Label>
+                  <Textarea
+                    id="part"
+                    rows={2}
+                    placeholder="A few words of its lyrics, e.g. ye chehre pe chehra. Empty: the part people replay most."
+                    value={part}
+                    onChange={(e) => setPart(e.target.value)}
+                  />
+                </div>
+              )}
+              <div className={cn("grid gap-3", style === "song" ? "grid-cols-1" : "grid-cols-2")}>
+                <div className={cn("space-y-1", style === "song" && "hidden")}>
                   <Label htmlFor="kind">Content</Label>
                   <select
                     id="kind"
@@ -349,7 +452,7 @@ export default function AnimationsPage() {
                     ))}
                   </select>
                 </div>
-                <div className="space-y-1">
+                <div className={cn("space-y-1", style === "song" && "hidden")}>
                   <Label htmlFor="length">Length</Label>
                   <select
                     id="length"
@@ -364,12 +467,20 @@ export default function AnimationsPage() {
                     ))}
                   </select>
                 </div>
-                <div className="space-y-1">
+                <div className={cn("space-y-1", style === "song" && "hidden")}>
                   <Label htmlFor="voice">Voice</Label>
                   <VoiceSelect id="voice" value={voice} voices={voices} onChange={setVoice} />
                 </div>
               </div>
-              {!["auto", "narrator", "calm", "energetic"].includes(voice) && (
+              {style === "song" && (
+                <p className="rounded-md border-[1.5px] border-dashed border-foreground/50 p-2 text-xs text-muted-foreground">
+                  Song story: the song is found on YouTube with its lyrics, the part people replay
+                  most is chosen (or the part you name), and the AI tells a story over it, one
+                  painted moment a lyric line, the words on screen as they are sung. No voice-over:
+                  the song is the sound.
+                </p>
+              )}
+              {style !== "song" && !["auto", "narrator", "calm", "energetic"].includes(voice) && (
                 <Button size="sm" variant="ghost" onClick={() => playSample(voice)}>
                   Hear this voice
                 </Button>
@@ -468,7 +579,7 @@ export default function AnimationsPage() {
 
           <AnimationAutopilotCard
             voices={voices}
-            styles={STYLES}
+            styles={PILOT_STYLES}
             kinds={KINDS}
             lengths={LENGTHS}
             onStarted={(a) => {
@@ -525,12 +636,19 @@ export default function AnimationsPage() {
                     ))}
                   </ul>
                 )}
-                {current.plan && (
+                {current.plan?.style === "song" && current.plan.song && (
+                  <SongPanel
+                    song={current.plan.song}
+                    disabled={busy || dirty || sending}
+                    onChoose={(n) => void playPart(n)}
+                  />
+                )}
+                {current.plan && current.plan.style !== "song" && (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
                       <Label>Style</Label>
                       <div className="flex flex-wrap gap-2">
-                        {STYLES.filter(([s]) => s !== "auto").map(([s, label]) => (
+                        {STYLES.filter(([s]) => !["auto", "song"].includes(s)).map(([s, label]) => (
                           <Button
                             key={s}
                             size="sm"

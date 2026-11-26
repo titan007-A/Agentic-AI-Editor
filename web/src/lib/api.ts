@@ -882,7 +882,8 @@ export type AnimationVisualKind =
   | "reveal"
   | "dots"
   | "scene"
-  | "country";
+  | "country"
+  | "moment";
 
 /** A character in a scene: who (from the cast), what they do and feel, what they hold, a line. */
 export type AnimationActor = {
@@ -920,6 +921,8 @@ export type AnimationVisual = {
   art_seed?: number;
   /** A country scene's country as the map knows it, when the narration says it otherwise. */
   country?: string;
+  /** A Song story moment's camera move over its picture. */
+  camera?: string;
 };
 
 export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
@@ -929,7 +932,7 @@ export type AnimationPlan = {
   v: number;
   title: string;
   kind: "facts" | "lesson" | "story" | "news";
-  style: "glow" | "paper" | "story" | "kinetic" | "stick" | "map";
+  style: "glow" | "paper" | "story" | "kinetic" | "stick" | "map" | "song";
   voice: string;
   mood: string;
   scenes: AnimationScene[];
@@ -939,9 +942,36 @@ export type AnimationPlan = {
   sources: { title: string; url: string }[];
   /** A World map reel's look: white picture cards, gold horror or neon food labels. */
   look?: MapLook;
+  /** A Song story's song: the part it plays and its lyric lines (animate/songhook.py). */
+  song?: AnimationSong | null;
 };
 
 export type MapLook = "cards" | "horror" | "neon";
+
+export type AnimationSongWord = {
+  text: string;
+  start: number;
+  end: number;
+  key: boolean;
+  color: string;
+};
+
+export type AnimationSong = {
+  query: string;
+  title: string;
+  artist: string;
+  video: string;
+  url: string;
+  duration: number;
+  start: number;
+  end: number;
+  language: string;
+  lyrics: string;
+  lines: { text: string; said: string; start: number; end: number; words: AnimationSongWord[] }[];
+  choices: { start: number; end: number; first: string; score: number }[];
+  people: { name: string; look: string }[];
+  story: string;
+};
 
 /** player.js load() data, scenes with their times (animate/timeline.py player_data). */
 export type AnimationPlayerData = {
@@ -1203,7 +1233,7 @@ export const api = {
     id: string,
     body: { style?: string; voice?: string; images?: boolean; look?: MapLook },
   ) => request<Animation>("PATCH", `/animations/${id}`, body),
-  changeAnimation: (id: string, body: { request: string; scene?: number }) =>
+  changeAnimation: (id: string, body: { request: string; scene?: number; choice?: number }) =>
     request<Animation>("POST", `/animations/${id}/change`, body),
   retryAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/retry`),
   undoAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/undo`),

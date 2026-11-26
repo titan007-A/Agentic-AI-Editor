@@ -32,7 +32,18 @@ export const VISUALS: Record<AnimationVisualKind, string> = {
   dots: "Glowing dots",
   scene: "Characters acting",
   country: "Country on the map",
+  moment: "A painted moment (Song story)",
 };
+// How the camera moves over a Song story moment's picture (plan.py CAMERAS).
+const CAMERAS = [
+  ["push_in", "Slowly closer"],
+  ["pull_out", "Slowly back"],
+  ["pan_left", "Pan left"],
+  ["pan_right", "Pan right"],
+  ["rise", "Rise up"],
+  ["close_up", "Sudden close-up (the line that hits hardest)"],
+  ["still", "Still"],
+] as const;
 
 const SETTINGS = ["room", "street", "park", "office", "night", "school", "shop", "stage", "plain"];
 const ACTIONS = [
@@ -111,6 +122,7 @@ const FIELDS: Record<AnimationVisualKind, Field[]> = {
     { key: "detail", label: "Red note with an arrow at the first person (optional)" },
     { key: "emoji", label: "Big object beside them (one emoji, optional)" },
   ],
+  moment: [],
 };
 
 const ITEMS: Partial<Record<AnimationVisualKind, { keys: (keyof AnimationItem)[]; max: number }>> =
@@ -189,6 +201,8 @@ export function AnimationScenes({
   onRedo: (index: number) => void;
   onPlayFrom: (seconds: number) => void;
 }) {
+  // A Song story has one scene per lyric line, timed to the song: none added, moved or removed.
+  const sung = plan.style === "song";
   function setScene(i: number, scene: AnimationScene) {
     onChange({ ...plan, scenes: plan.scenes.map((s, j) => (j === i ? scene : s)) });
   }
@@ -212,14 +226,16 @@ export function AnimationScenes({
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label htmlFor="anim-title">Title (small, at the top)</Label>
+          <Label htmlFor="anim-title">
+            {sung ? "Title (the reel's name)" : "Title (small, at the top)"}
+          </Label>
           <Input
             id="anim-title"
             value={plan.title}
             onChange={(e) => onChange({ ...plan, title: e.target.value })}
           />
         </div>
-        <div className="space-y-1">
+        <div className={sung ? "hidden" : "space-y-1"}>
           <Label htmlFor="anim-cta">Last line (said and shown with the Follow button)</Label>
           <Input
             id="anim-cta"
@@ -228,7 +244,14 @@ export function AnimationScenes({
           />
         </div>
       </div>
-      <CastEditor cast={plan.cast ?? []} onChange={(cast) => onChange({ ...plan, cast })} />
+      {sung && plan.song ? (
+        <PeopleEditor
+          people={plan.song.people ?? []}
+          onChange={(people) => onChange({ ...plan, song: { ...plan.song!, people } })}
+        />
+      ) : (
+        <CastEditor cast={plan.cast ?? []} onChange={(cast) => onChange({ ...plan, cast })} />
+      )}
       {plan.scenes.map((scene, i) => {
         const v = scene.visual;
         const items = ITEMS[v.kind];
@@ -250,7 +273,7 @@ export function AnimationScenes({
                   <Play className="size-3.5" /> {starts[i].toFixed(1)} s
                 </Button>
               )}
-              <div className="ml-auto flex gap-1">
+              <div className={sung ? "hidden" : "ml-auto flex gap-1"}>
                 <Button
                   size="icon"
                   variant="ghost"
@@ -280,16 +303,42 @@ export function AnimationScenes({
                 </Button>
               </div>
             </div>
-            <div className="space-y-1">
-              <Label htmlFor={`narration-${i}`}>Voice says</Label>
-              <Textarea
-                id={`narration-${i}`}
-                rows={2}
-                value={scene.narration}
-                onChange={(e) => setScene(i, { ...scene, narration: e.target.value })}
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            {sung ? (
+              <div className="space-y-1">
+                <Label>Lyric line</Label>
+                <p className="text-base font-semibold">{scene.narration}</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <Label htmlFor={`narration-${i}`}>Voice says</Label>
+                <Textarea
+                  id={`narration-${i}`}
+                  rows={2}
+                  value={scene.narration}
+                  onChange={(e) => setScene(i, { ...scene, narration: e.target.value })}
+                />
+              </div>
+            )}
+            {v.kind === "moment" && (
+              <div className="space-y-1">
+                <Label htmlFor={`camera-${i}`}>Camera</Label>
+                <select
+                  id={`camera-${i}`}
+                  className={SELECT}
+                  value={v.camera || "push_in"}
+                  onChange={(e) =>
+                    setScene(i, { ...scene, visual: { ...v, camera: e.target.value } })
+                  }
+                >
+                  {CAMERAS.map(([k, label]) => (
+                    <option key={k} value={k}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className={sung ? "hidden" : "grid gap-3 sm:grid-cols-2"}>
               <div className="space-y-1">
                 <Label htmlFor={`kind-${i}`}>Shows</Label>
                 <select
@@ -303,11 +352,13 @@ export function AnimationScenes({
                     })
                   }
                 >
-                  {Object.entries(VISUALS).map(([k, label]) => (
-                    <option key={k} value={k}>
-                      {label}
-                    </option>
-                  ))}
+                  {Object.entries(VISUALS)
+                    .filter(([k]) => k !== "moment" || v.kind === "moment")
+                    .map(([k, label]) => (
+                      <option key={k} value={k}>
+                        {label}
+                      </option>
+                    ))}
                 </select>
               </div>
               {FIELDS[v.kind].map((f) => (
@@ -429,7 +480,11 @@ export function AnimationScenes({
                   />
                 )}
                 <div className="min-w-0 flex-1 space-y-1">
-                  <Label htmlFor={`art-${i}`}>Painting behind it (what the AI paints)</Label>
+                  <Label htmlFor={`art-${i}`}>
+                    {sung
+                      ? "The picture (what the AI paints, people and all; a name from People is drawn as they look)"
+                      : "Painting behind it (what the AI paints)"}
+                  </Label>
                   <Textarea
                     id={`art-${i}`}
                     rows={2}
@@ -466,9 +521,11 @@ export function AnimationScenes({
           </div>
         );
       })}
-      <Button variant="outline" onClick={add} disabled={plan.scenes.length >= 24}>
-        <Plus className="size-4" /> Add a scene
-      </Button>
+      {!sung && (
+        <Button variant="outline" onClick={add} disabled={plan.scenes.length >= 24}>
+          <Plus className="size-4" /> Add a scene
+        </Button>
+      )}
       <div className="space-y-1">
         <Label htmlFor="anim-caption">Post caption</Label>
         <Textarea
@@ -478,6 +535,54 @@ export function AnimationScenes({
           onChange={(e) => onChange({ ...plan, caption: e.target.value })}
         />
       </div>
+    </div>
+  );
+}
+
+/** A Song story's people: a name the story uses and how they look in every picture. */
+function PeopleEditor({
+  people,
+  onChange,
+}: {
+  people: { name: string; look: string }[];
+  onChange: (people: { name: string; look: string }[]) => void;
+}) {
+  const set = (k: number, field: "name" | "look", value: string) =>
+    onChange(people.map((p, j) => (j === k ? { ...p, [field]: value } : p)));
+  return (
+    <div className="space-y-2 rounded-lg border-[1.5px] border-dashed border-foreground/50 p-3">
+      <Label>People in the story (painted the same way in every picture)</Label>
+      {people.map((p, k) => (
+        <div key={k} className="grid gap-2 sm:grid-cols-[minmax(0,140px)_minmax(0,1fr)_auto]">
+          <Input
+            aria-label={`Person ${k + 1}'s name`}
+            value={p.name}
+            onChange={(e) => set(k, "name", e.target.value)}
+          />
+          <Input
+            aria-label={`How ${p.name || `person ${k + 1}`} looks`}
+            value={p.look}
+            onChange={(e) => set(k, "look", e.target.value)}
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onChange(people.filter((_, j) => j !== k))}
+            aria-label={`Remove ${p.name || "person"}`}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      ))}
+      {people.length < 5 && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onChange([...people, { name: "", look: "" }])}
+        >
+          <Plus className="size-3.5" /> Add a person
+        </Button>
+      )}
     </div>
   );
 }
