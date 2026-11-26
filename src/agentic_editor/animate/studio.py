@@ -18,7 +18,16 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor.animate import images, maps, mapwriter, planner, songhook, songwriter, voice
+from agentic_editor.animate import (
+    images,
+    maps,
+    mapwriter,
+    planner,
+    singer,
+    songhook,
+    songwriter,
+    voice,
+)
 from agentic_editor.animate.plan import Plan, tidy
 from agentic_editor.animate.render import render
 from agentic_editor.animate.timeline import Spoken, Timeline, build, build_song, player_data
@@ -36,6 +45,7 @@ STYLE_NAMES = {
     "glow": "Neon Glow", "paper": "Clean Paper", "story": "Character story",
     "kinetic": "Bold kinetic text", "stick": "Stick figure", "map": "World map",
     "song": "Song story",
+    "singer": singer.NAME,
 }  # fmt: skip
 
 
@@ -77,6 +87,8 @@ def preview_sound(plan: Plan, player: dict, settings: Settings, speak=voice.spea
     reel and kept: the studio plays it the moment the reel is shown."""
     from agentic_editor.animate import render, sound
 
+    if plan.style == singer.STYLE:  # the song's own sound
+        return singer.preview_sound(plan, settings)
     song = [plan.song.video, plan.song.start] if plan.song is not None else []
     raw = json.dumps([player, plan.mood, plan.voice, 1, *song], sort_keys=True, default=str)
     key = hashlib.sha256(raw.encode()).hexdigest()[:24]
@@ -290,6 +302,8 @@ def known_country(settings: Settings) -> Countries | None:
 
 def player_of(plan: Plan, timeline: Timeline, settings: Settings) -> dict:
     """What the player draws: the timeline's data, with the map a World map reel needs."""
+    if plan.style == singer.STYLE:
+        return singer.player_of(plan, singer.timeline_of(plan))
     return maps.attach(player_data(plan, timeline), plan, settings.models_dir)
 
 
@@ -306,6 +320,12 @@ def run_task(
     from agentic_editor.backends import get_backends
     from agentic_editor.router import ModelRouter
 
+    with Session() as db:
+        a = db.get(Animation, animation_id)
+        made_as = a.style if a is not None else ""
+    if made_as == singer.STYLE:  # made from a song and photos, not written from a line
+        singer.run_task(animation_id, Session, settings, router=router, paint=paint)
+        return
     op = "draft"
     try:
         with Session() as db:
@@ -530,6 +550,8 @@ def _choose_topic(animation_id: str, Session: sessionmaker, llm) -> str:
 
 def edited(a: Animation, plan: Plan) -> Plan:
     """A Plan a person edited by hand, mended, keeping what only the studio sets."""
+    if a.style == singer.STYLE or plan.style == singer.STYLE:
+        return singer.edited(a.plan, plan)
     plan = tidy(plan)
     if not plan.scenes:
         raise ValueError("a reel needs at least one scene")
@@ -566,6 +588,8 @@ def render_job(
         if a is None or not a.plan:
             raise RuntimeError("the animation is gone or has no draft")
         plan = Plan.model_validate(a.plan)
+    if plan.style == singer.STYLE:
+        return singer.render_job(animation_id, plan, settings, progress, run_id)
     progress("title", plan.title or "Animation")
     progress("animate", "recording the voice-over")
     timeline, spoken = timeline_of(plan, settings, speak)

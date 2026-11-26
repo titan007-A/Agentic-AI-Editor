@@ -5,20 +5,30 @@ one (a draft, a change, the voice) is queued (jobs.animate); while it runs the a
 can't be changed again. Rendering makes an ordinary Job.
 """
 
+import asyncio
 import hashlib
 import re
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Literal
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentic_editor import features, instagram, jobs
-from agentic_editor.animate import images, maps, mapwriter, render, schedule, studio, voice
+from agentic_editor.animate import (
+    images,
+    maps,
+    mapwriter,
+    render,
+    schedule,
+    singer,
+    studio,
+    voice,
+)
 from agentic_editor.animate.plan import MAX_SCENES, Plan
 from agentic_editor.db import Animation, AnimationAutopilot, InstagramChannel, Job, Output
 from agentic_editor.render import fonts
@@ -28,12 +38,13 @@ PLAYER_FILES = {
     "player.html": "text/html",
     "player.js": "text/javascript",
     "player.css": "text/css",
+    "singer.js": "text/javascript",
 }
 FONT_NAMES = {
     "Montserrat-ExtraBold", "Montserrat-Bold", "Inter-SemiBold", "Inter-Bold", "Inter-Medium",
     "Anton-Regular", "SourceSerif4-Bold", "SourceSerif4-Semibold", "Rubik-ExtraBold",
     "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular", "Poppins-SemiBold", "Poppins-Regular",
-    "Poppins-Bold",
+    "Poppins-Bold", "AbrilFatface-Regular", "Kalam-Bold", "Martel-Heavy", "PermanentMarker-Regular",
 }  # fmt: skip
 # The player page only runs its own script and shows what it is sent as text.
 PLAYER_CSP = (
@@ -45,10 +56,15 @@ PLAYER_CSP = (
 class AnimationRequest(BaseModel):
     idea: str = Field(min_length=3, max_length=300)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map", "song"] = "auto"
+    style: Literal[
+        "auto", "glow", "paper", "story", "kinetic", "stick", "map", "song", "singer"
+    ] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
     images: bool = True  # painted pictures behind the scenes
+    # A singer edit's photos of the singer (names from POST /api/animation-photos); its
+    # idea is the song's name.
+    photos: list[str] = Field(default_factory=list, max_length=singer.MAX_PHOTOS)
 
 
 class PlanEdit(BaseModel):
@@ -87,6 +103,8 @@ class AutopilotSettings(BaseModel):
     images: bool = True
 
 
+MAX_PHOTO_BYTES = 25 * 1024 * 1024
+
 _versions: dict[str, tuple[float, int, str]] = {}
 
 
@@ -124,6 +142,7 @@ ROUTES = (
     ("POST", "/api/animations/{animation_id}/approve", "approve_animation"),
     ("POST", "/api/animations/{animation_id}/skip", "skip_animation"),
     ("GET", "/api/animation-images/{name}", "animation_image"),
+    ("POST", "/api/animation-photos", "upload_photo"),
     ("GET", "/api/animation-ideas", "animation_ideas"),
     ("GET", "/api/animation-map/v{version}/{level}/{name}", "map_tile"),
 )
@@ -218,10 +237,23 @@ def operations(
         studio_user(account, session)
         if body.voice not in ("auto", *voice.GROUPS, *voice.BY_ID):
             raise HTTPException(422, f"no voice {body.voice!r}")
+        idea = " ".join(body.idea.split())
         found = Animation(
-            owner_id=account.id, idea=" ".join(body.idea.split()), kind=body.kind,
+            owner_id=account.id, idea=idea, kind=body.kind,
             style=body.style, voice=body.voice, length=body.length, images=body.images,
         )  # fmt: skip
+        if body.style == singer.STYLE:
+            photos = list(dict.fromkeys(body.photos))
+            if not photos:
+                raise HTTPException(422, "a singer edit needs at least one photo of the singer")
+            folder = images.folder(settings)
+            if any(not re.fullmatch(r"[0-9a-f]{24}\.png", n) or not (folder / n).is_file()
+                   for n in photos):  # fmt: skip
+                raise HTTPException(422, "a photo is missing; send it again")
+            found.kind, found.voice, found.length = "story", "auto", "auto"
+            found.plan = singer.skeleton(idea, photos)
+        elif body.photos:
+            raise HTTPException(422, "photos are only for a singer edit")
         session.add(found)
         session.flush()
         queue(found, session, {"op": "draft"}, "waiting for a free slot")
@@ -250,8 +282,14 @@ def operations(
             raise HTTPException(409, "there is no draft yet")
         plan = Plan.model_validate(found.plan)
         update: dict = {}
-        if body.style and plan.style == "song" and body.style != "song":
+        # A Song story and a singer edit are made from a song: no other style can take
+        # their place, nor they another's.
+        if body.style and "song" in (body.style, plan.style) and body.style != plan.style:
             raise HTTPException(422, "a Song story is drawn to its song: it keeps its style")
+        if body.style and singer.STYLE in (body.style, found.style) and body.style != found.style:
+            raise HTTPException(
+                422, "a singer edit is made from a song and photos; it can't change style"
+            )
         if body.style:
             update["style"] = found.style = body.style
         if body.voice:
@@ -367,7 +405,7 @@ def operations(
         old player without the newer styles drew them all as Neon Glow."""
         if name == "player.html":
             html = (render.PLAYER / name).read_text(encoding="utf-8")
-            for asset in ("player.js", "player.css"):
+            for asset in ("player.js", "player.css", "singer.js"):
                 html = html.replace(f'"{asset}"', f'"{asset}?v={asset_version(asset)}"')
             headers = {"Cache-Control": "no-store", "Content-Security-Policy": PLAYER_CSP}
             return Response(html, media_type="text/html", headers=headers)
@@ -512,6 +550,18 @@ def operations(
             raise HTTPException(404, "no such tile")
         kept = {"Cache-Control": "private, max-age=31536000, immutable"}
         return FileResponse(path, media_type="image/jpeg", headers=kept)
+
+    async def upload_photo(file: UploadFile, account: User, session: DB) -> dict:
+        """A photo of the singer for a singer edit, kept with the pictures by its content."""
+        studio_user(account, session)
+        data = await file.read(MAX_PHOTO_BYTES + 1)
+        if len(data) > MAX_PHOTO_BYTES:
+            raise HTTPException(413, "that photo is too big; send one under 25 MB")
+        try:
+            name = await asyncio.to_thread(singer.save_photo, data, settings)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"name": name}
 
     def animation_image(name: str, account: User, session: DB) -> FileResponse:
         """A painted picture (images.name_of: named by what it shows, so kept for good)."""
