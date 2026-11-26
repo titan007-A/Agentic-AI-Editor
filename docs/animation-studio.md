@@ -328,6 +328,74 @@ words of the part wanted), and:
   picture; people can be edited; one scene a line (none added, moved or removed); its style
   stays. The autopilot doesn't make Song stories (they start from a song someone names).
 
+## Singer edit (owner's reference, 2026-11-26)
+
+The reference (KiD Boi's "Maa, I Tried", 12 s, 1080x1080 at 60 fps) is a song's hook made
+into a lyric edit around the singer: one picture a sung line (about 1.5 s each: eight lines),
+each a warm, gritty, cinematic scene (amber light, deep brown shadows, glowing rim light,
+film grain, torn-paper edges) with the singer in it, from behind, from the side, in a mirror,
+small in a crowd; every sung word slapped on as a torn-paper sticker the moment it is sung
+(bold serif on white paper, white on black paper, marker capitals), the line's key words in
+red handwriting with a pen underline, red stars and question marks, small side notes ("Kya
+achieve kiya?", "Future plan kya hai?") around the line; whip pans with motion blur, punch
+zooms, glitches and paper tears between lines; the song alone for sound.
+
+Ours (style `singer`, "Singer edit"; `animate/singer.py`, `player/singer.js`): the owner types
+the song's name and gives 1-6 photos of the singer.
+
+- The hook: `songhook` (written beside this, for Song story reels) finds the song, downloads
+  it, cuts its catchy part and times every sung word. `singer.find_hook` takes what it gives
+  however it is shaped (the hook alone or the whole song with the hook's place, times in the
+  song or the hook, words alone or inside lines) and keeps the hook's sound as a WAV. Lyrics
+  written in Latin letters for a song shown in another script (romanised Hindi) are used as
+  written, as the reference shows them.
+- Lines: the lyric's lines when they match the timed words, else the singer's breaths; a line
+  sung in under 0.75 s joins the next, one longer than 4.6 s is cut at its widest gap. Each is
+  one scene, from just before its first word to the next line.
+- Photos: uploaded through `POST /api/animation-photos` (kept with the painted pictures, by
+  content, at most 1600 px), then the singer cut out by ISNet (Apache-2.0, 176 MB, fetched the
+  first time into `models/segmentation`, run on the CPU, about 1.5 s a photo), stray blobs
+  dropped, cropped to them, their face found (MediaPipe), all kept once. A photo nobody stands
+  out in is shown whole, as a taped print.
+- The writer (the planner model, held to a schema) gives each line a shot, its key word or
+  two (a long line), 0-3 side notes in the song's own language and script, a doodle on a few
+  lines and the picture behind it, plus the title and the post's caption. What it gets wrong is
+  put right by rule: the reel opens on the singer, never the same shot twice running, words at
+  most twice, a whole line given back as "key words" picks the longest word that carries
+  something, never two doodles running. A writer that doesn't answer still gives an edit.
+- Shots (player/singer.js): `hero` (waist up, big), `close` (the face), `far` (small in a big
+  place; a full-length photo stands with a shadow and a pool of light), `print` (the photo as a
+  torn, taped print), `mirror` (the singer and their reflection in a gold frame), `echo` (three
+  copies, two fading), `silhouette` (a dark outline with a glowing rim against a sunset city),
+  `words` (no singer, the words huge), `painted` (the singer painted into the picture from
+  behind or the side: only where the image model is). A photo cut off at the waist always
+  stands on the frame's bottom edge, so its cut never shows.
+- Backdrops: the painted picture (Z-Image on the Mac, look "singer": warm amber, gritty poster,
+  film grain; nobody in it behind the photo; the singer described by the vision model for a
+  painted shot); without the model, drawn: the photo itself blurred and toned warm, an old
+  brick wall with paper scraps and a light beam, a sunset city, or rows of grey faceless people.
+- Words: a sticker each, landing on its sung time (a slam with a little overshoot, a shake of
+  the frame), set in rows as big as the shot's space allows, slightly turned and tucked; key
+  words red (Kalam Bold or Permanent Marker) with a pen underline drawn after they land. Side
+  notes go in the nearest room the words and the face leave free. Fonts (bundled): Abril
+  Fatface, Martel Heavy and Kalam Bold (OFL; Martel and Kalam write Devanagari too), Permanent
+  Marker (Apache-2.0).
+- Between lines: whip, punch, flash, paper tear or glitch, in turn; grain (12 a second), dust,
+  a drifting light leak and a vignette over everything; the last 0.3 s fade to black.
+- Sound: the hook's own, a 0.35 s fade at its end, at the presets' loudness (-14 LUFS, -1.5
+  dBTP). No voice, no generated music, no "Follow for more" ending: the reference has none and
+  it would cut the song.
+- Output: 1080x1920 (the reference is square; Reels are 9:16), 30 fps, CRF 21 (the grain
+  costs bits: 27 Mbit/s at 17, 8 at 21).
+- In the studio: the scene editor shows each sung line (fixed: one scene a line, in order),
+  its shot, key words, doodle, side notes and picture; change in words and "write this scene
+  again" work as for other styles; a singer edit keeps its style (a narrated reel can't become
+  one either); the timeline editor isn't shown (the song sets every length). Autopilots can't
+  make singer edits (they need photos).
+
+Measured on the PC (RTX 5050): writer (qwen3.5 9b) 22 s, the two cutouts 3 s, a 12 s edit
+renders in 40 s.
+
 ## Phase 3: autopilot
 
 - One autopilot per account (`animation_autopilots`): niche, topics (one per line, first
