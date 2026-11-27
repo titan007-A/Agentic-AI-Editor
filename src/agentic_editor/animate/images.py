@@ -110,6 +110,11 @@ def full_prompt(picture: Picture, style: str) -> str:
     return ", ".join(p for p in parts if p)
 
 
+def seed_of(text: str, again: int = 0) -> int:
+    """A picture's seed, from what it is painted for and the number asked to paint it again."""
+    return (int(hashlib.sha256(text.encode()).hexdigest()[:8], 16) + 7919 * again) % 2**31
+
+
 def name_of(prompt: str, seed: int, model: str, size: tuple[int, int] = SIZE) -> str:
     """The file a picture is kept in, by everything that makes it."""
     raw = json.dumps([model, STEPS, list(size), prompt, seed], ensure_ascii=False)
@@ -133,10 +138,13 @@ def paint_likeness(
     progress=None,
     run=subprocess.Popen,
     size: tuple[int, int] = LIKENESS_SIZE,
+    what: str = "pictures",
+    why: str = "paint the singer into the scenes",
 ) -> list[str]:
-    """`pictures` painted by the likeness model, each with the person in its `refs` painted
+    """`pictures` painted by the likeness model, each with the people in its `refs` painted
     in as themselves (none: the place alone); "" for one that couldn't be. The prompts are
-    used as given: the caller writes the look and what must never be in it."""
+    used as given: the caller writes the look and what must never be in it. `what` they
+    are called in the progress shown, `why` the GPU is taken."""
     progress = progress or (lambda *a: None)
     out = folder(settings)
     out.mkdir(parents=True, exist_ok=True)
@@ -154,8 +162,8 @@ def paint_likeness(
             "kind": "likeness", "model": model, "steps": LIKENESS_STEPS,
             "width": size[0], "height": size[1], "jobs": part,
         }  # fmt: skip
-        with slots.gpu.turn("paint the singer into the scenes", progress):
-            _run(request, len(part), settings, progress, run, (start, len(todo)))
+        with slots.gpu.turn(why, progress):
+            _run(request, len(part), settings, progress, run, (start, len(todo)), what)
     return [name if (out / name).exists() else "" for name in names]
 
 
@@ -288,8 +296,9 @@ def paint(
 
 
 def _run(
-    request: dict, count: int, settings: Settings, progress, run, of: tuple[int, int] = (0, 0)
-) -> None:
+    request: dict, count: int, settings: Settings, progress, run, of: tuple[int, int] = (0, 0),
+    what: str = "pictures",
+) -> None:  # fmt: skip
     # The model's own chatter (progress bars) goes to a file: a pipe nobody reads fills up
     # and stops it.
     log_file = folder(settings) / "paint.log"
@@ -298,13 +307,15 @@ def _run(
             [str(python_of(settings)), "-I", str(RUNNER)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=chatter, text=True,
         )  # fmt: skip
-        _follow(proc, request, count, progress, of)
+        _follow(proc, request, count, progress, of, what)
     if proc.returncode:
         tail = log_file.read_text(encoding="utf-8", errors="replace")[-500:]
         log.warning("painting failed (%s): %s", proc.returncode, tail)
 
 
-def _follow(proc, request: dict, count: int, progress, of: tuple[int, int] = (0, 0)) -> None:
+def _follow(
+    proc, request: dict, count: int, progress, of: tuple[int, int] = (0, 0), what: str = "pictures"
+) -> None:
     before, total = of[0], of[1] or count
     # A watchdog: reading the runner's lines blocks, so a stuck runner is killed on time.
     deadline = LOAD_SECONDS + SECONDS_EACH * count
@@ -321,8 +332,8 @@ def _follow(proc, request: dict, count: int, progress, of: tuple[int, int] = (0,
                 continue
             if "done" in said:
                 done = before + said["done"]
-                progress("paint", f"painted {done} of {total} pictures")
-                log.info("picture %s of %s in %s s", done, total, said.get("seconds"))
+                progress("paint", f"painted {done} of {total} {what}")
+                log.info("painted %s of %s %s, %s s", done, total, what, said.get("seconds"))
             elif "loaded" in said:
                 log.info("image model loaded in %s s", said["loaded"])
         proc.wait(timeout=deadline)

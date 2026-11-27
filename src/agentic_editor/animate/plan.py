@@ -257,10 +257,14 @@ class HookChoice(Loose):
 
 
 class Person(Loose):
-    """Someone in a Song story: a name the writer uses and how they look in every picture."""
+    """Someone in a Song story: a name the writer uses and how they look in every picture.
+    Where the likeness model is, they are painted once from their look as a portrait
+    (animate/songpaint.py) that every picture with them in it is painted from."""
 
     name: str = ""
     look: str = ""
+    image: str = ""  # the portrait's file once painted (images.folder)
+    art_seed: int = 0  # a number to paint the portrait again
 
 
 class Song(Loose):
@@ -547,7 +551,20 @@ def _song(song: Song) -> Song:
                 }
             )
         )
-    return song.model_copy(update={"lines": lines, "query": _one_line(song.query, 200)})
+    people = [
+        p.model_copy(
+            update={
+                "name": _one_line(p.name, 30),
+                "look": _one_line(p.look, 200),
+                "image": p.image if _PICTURE.fullmatch(p.image or "") else "",
+                "art_seed": max(0, min(10_000, int(p.art_seed or 0))),
+            }
+        )
+        for p in song.people
+    ]
+    return song.model_copy(
+        update={"lines": lines, "query": _one_line(song.query, 200), "people": people}
+    )
 
 
 # ---- a song's clock -----------------------------------------------------------------------

@@ -351,7 +351,7 @@ def story_of(plan: Plan) -> dict:
     return {
         "title": plan.title,
         "story": song.story,
-        "people": [p.model_dump() for p in song.people],
+        "people": [{"name": p.name, "look": p.look} for p in song.people],
         "moments": [
             {
                 "n": n,
@@ -521,18 +521,55 @@ def redo_moment(llm, plan: Plan, index: int, request: str = "") -> Plan:
     return tidy(plan.model_copy(update={"scenes": scenes}))
 
 
-def painted(plan: Plan, art: str) -> str:
+def painted(plan: Plan, art: str, marks: dict[str, str] | None = None) -> str:
     """What a moment's picture is painted from: its art with each person named in it
-    written out as they look, so a person looks the same in every picture."""
+    written out as they look, so a person looks the same in every picture. `marks`: words
+    put after a person's first mention, by name (which reference picture is theirs)."""
     song = plan.song
     if song is None:
         return art
     out = art
+    marks = {k.casefold(): v for k, v in (marks or {}).items()}
     for person in sorted(song.people, key=lambda p: -len(p.name)):
         if person.name and person.look:
-            pattern = re.compile(rf"\b{re.escape(person.name)}\b(?:'s)?", re.I)
-            out = pattern.sub(lambda m, p=person: _as_seen(p.look, m.group(0)), out)
+            mark = marks.get(person.name.casefold(), "")
+            first = [True]
+
+            def seen(m, p=person, mark=mark, first=first) -> str:
+                look = p.look
+                if mark and first[0]:
+                    first[0] = False
+                    look = f"{look} ({mark})"
+                return _as_seen(look, m.group(0))
+
+            out = _name_pattern(person.name).sub(seen, out)
     return out
+
+
+def _name_pattern(name: str) -> re.Pattern:
+    return re.compile(rf"\b{re.escape(name)}\b(?:'s)?", re.I)
+
+
+def people_in(plan: Plan, art: str) -> list[Person]:
+    """The people of the story named in a moment's art, in the order they first come."""
+    song = plan.song
+    if song is None:
+        return []
+    hits = [
+        (m.start(), m.end(), k)
+        for k, person in enumerate(song.people)
+        if person.name and person.look
+        for m in _name_pattern(person.name).finditer(art)
+    ]
+    # Longer names first: "Ana" inside "Ana Maria" is Ana Maria, not Ana.
+    taken: list[tuple[int, int]] = []
+    first: dict[int, int] = {}
+    for start, end, k in sorted(hits, key=lambda h: h[0] - h[1]):
+        if any(a <= start < b for a, b in taken):
+            continue
+        taken.append((start, end))
+        first[k] = min(first.get(k, start), start)
+    return [song.people[k] for k in sorted(first, key=first.get)]
 
 
 def _as_seen(look: str, said: str) -> str:

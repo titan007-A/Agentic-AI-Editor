@@ -26,6 +26,7 @@ from agentic_editor.animate import (
     planner,
     singer,
     songhook,
+    songpaint,
     songwriter,
     voice,
 )
@@ -133,8 +134,9 @@ def _set(Session: sessionmaker, animation_id: str, **values) -> Animation | None
 
 
 def paint_plan(
-    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint=None
-) -> tuple[Plan, list[str]]:
+    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint=None,
+    likeness=None,
+) -> tuple[Plan, list[str]]:  # fmt: skip
     """`plan` with each scene's picture painted (kept ones reused): the writer's `art`
     for it, nobody in it behind characters; a style drawn as itself gets none."""
     paint = paint or images.paint
@@ -143,7 +145,7 @@ def paint_plan(
     if plan.style == "map":
         return _paint_cards(plan, animation_id, Session, settings, paint)
     if plan.style == songwriter.STYLE:
-        return _paint_moments(plan, animation_id, Session, settings, paint)
+        return _paint_moments(plan, animation_id, Session, settings, paint, likeness)
     wanted = [(i, s) for i, s in enumerate(plan.scenes) if s.visual.art.strip()]
     if not wanted:
         return plan, []
@@ -151,7 +153,7 @@ def paint_plan(
         return plan, ["painted pictures need the image model (installed on the Mac)"]
     pictures = [
         images.Picture(
-            s.visual.art, _seed_of(s.visual.art, s.visual.art_seed), s.visual.kind == "scene"
+            s.visual.art, images.seed_of(s.visual.art, s.visual.art_seed), s.visual.kind == "scene"
         )
         for _, s in wanted
     ]
@@ -198,7 +200,7 @@ def _paint_cards(
         ]
         todo = []
     pictures = [
-        images.Picture(wanted[n][2].art, _seed_of(wanted[n][2].art, wanted[n][2].art_seed))
+        images.Picture(wanted[n][2].art, images.seed_of(wanted[n][2].art, wanted[n][2].art_seed))
         for n in todo
     ]
     progress = lambda stage, message: _set(Session, animation_id, message=message)  # noqa: E731
@@ -230,30 +232,15 @@ def _paint_cards(
 
 
 def _paint_moments(
-    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint
+    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint, likeness
 ) -> tuple[Plan, list[str]]:
-    """A Song story's pictures: each moment with its people in it, written out as they look
-    (songwriter.painted), all of one reel from one seed so they look alike; a moment that
-    goes on with the one before shares its picture, painted once."""
-    prompts = [songwriter.painted(plan, s.visual.art) for s in plan.scenes]
-    base = plan.song.video if plan.song is not None else plan.title
-    seeds = [_seed_of(base, s.visual.art_seed) for s in plan.scenes]
-    keys = list(zip(prompts, seeds, strict=True))
-    todo = list(dict.fromkeys(k for k in keys if k[0].strip()))
-    if not todo:
-        return plan, []
-    if paint is images.paint and not images.available(settings):
-        return plan, ["painted pictures need the image model (installed on the Mac)"]
+    """A Song story's pictures (songpaint): its people painted once as portraits and every
+    moment painted from theirs where the likeness model is, else each moment from words with
+    its people written out as they look; all of one reel from one seed."""
+    if likeness is None and paint is images.paint and images.identity_available(settings):
+        likeness = images.paint_likeness
     progress = lambda stage, message: _set(Session, animation_id, message=message)  # noqa: E731
-    names = paint([images.Picture(p, seed) for p, seed in todo], plan.style, settings, progress)
-    painted = dict(zip(todo, names, strict=True))
-    scenes = [
-        s.model_copy(update={"visual": s.visual.model_copy(update={"image": painted.get(k, "")})})
-        for s, k in zip(plan.scenes, keys, strict=True)
-    ]
-    missing = sum(1 for n in names if not n)
-    note = [f"{missing} of {len(names)} pictures couldn't be painted"] if missing else []
-    return plan.model_copy(update={"scenes": scenes}), note
+    return songpaint.paint(plan, settings, paint, likeness, progress)
 
 
 def without_pictures(plan: Plan) -> Plan:
@@ -310,13 +297,9 @@ def player_of(plan: Plan, timeline: Timeline, settings: Settings) -> dict:
     return maps.attach(player_data(plan, timeline), plan, settings.models_dir)
 
 
-def _seed_of(art: str, again: int) -> int:
-    return (int(hashlib.sha256(art.encode()).hexdigest()[:8], 16) + 7919 * again) % 2**31
-
-
 def run_task(
     animation_id: str, Session: sessionmaker, settings: Settings, router=None, speak=voice.speak,
-    paint=None,
+    paint=None, likeness=None,
 ) -> None:  # fmt: skip
     """The animation's queued operation (Animation.task). Like a job, it never stays
     busy: whatever happens is stored."""
@@ -438,7 +421,7 @@ def run_task(
             )  # fmt: skip
             with ThreadPoolExecutor(1, thread_name_prefix="voice") as voicing:
                 voiced = voicing.submit(timeline_of, plan, settings, speak)
-                plan, painted = paint_plan(plan, animation_id, Session, settings, paint)
+                plan, painted = paint_plan(plan, animation_id, Session, settings, paint, likeness)
                 _set(Session, animation_id, status="voicing", message="recording the voice-over")
                 timeline, _ = voiced.result()
             notes = [*notes, *painted]
