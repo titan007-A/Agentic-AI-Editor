@@ -109,6 +109,12 @@ def main() -> None:
         names.append(ready)
     photos, wiped = singer.photos_of(names, settings)
     print(f"photos ready in {time.time() - started:.1f} s ({wiped} marks painted out)")
+    from agentic_editor.backends import get_backends
+    from agentic_editor.router import ModelRouter
+
+    with ModelRouter(settings, get_backends(), lambda *a: None).vision() as llm:
+        look = singer.describe(llm, images.folder(settings) / photos[0].image)
+    print(f"the singer, as the vision model sees them: {look or '(nothing said)'}")
 
     words, at = [], 0.3
     for text, _, _ in LINES:
@@ -122,7 +128,9 @@ def main() -> None:
         {"line": i + 1, "shot": shot, "art": art, "highlight": "", "notes": [], "doodle": ""}
         for i, (_, shot, art) in enumerate(LINES)
     ]}  # fmt: skip
-    edit = SingerEdit(title="Test", artist="Singer", duration=hook.duration, photos=photos)
+    edit = SingerEdit(
+        title="Test", artist="Singer", duration=hook.duration, photos=photos, look=look
+    )
     plan = singer.plan_of(reply, hook, singer.sung_lines(hook), edit, paints=True)
 
     painting = time.time()

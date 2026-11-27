@@ -992,3 +992,18 @@ def test_with_no_face_the_crop_keeps_room_for_hair_and_shoulders():
     solid[300:600, 300:500] = True  # only the bright face of a dark cover
     left, top, right, bottom = singer.main_person(solid, [])
     assert left <= 240 and right >= 560 and top <= 225 and bottom >= 675
+
+
+def test_a_face_alone_is_painted_from_the_whole_photo_and_the_look_named(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    folder = images.folder(settings)
+    folder.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (200, 260), (200, 160, 140, 255)).save(folder / ("c" * 24 + ".png"))
+    head = SingerPhoto(
+        image="a" * 24 + ".png", cutout="c" * 24 + ".png", face=[0.1, 0.05, 0.8, 0.8]
+    )
+    assert singer.reference_of(head, settings) == folder / head.image
+    body = head.model_copy(update={"face": [0.3, 0.02, 0.4, 0.15]})
+    assert singer.reference_of(body, settings) != folder / head.image
+    prompt = singer.likeness_prompt("hero", "a rooftop at dusk", "a man with dark wavy hair")
+    assert "reference photo (a man with dark wavy hair)" in prompt

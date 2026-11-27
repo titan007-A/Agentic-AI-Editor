@@ -1413,10 +1413,13 @@ REFERENCE_SIDE = 1024
 REFERENCE_VERSION = 1
 
 
-def likeness_prompt(shot: str, art: str) -> str:
-    """What the likeness model paints for a scene with the singer in it."""
+def likeness_prompt(shot: str, art: str, look: str = "") -> str:
+    """What the likeness model paints for a scene with the singer in it; `look` (the
+    vision model's words for them) settles what a face alone leaves open, a man or a
+    woman, their age, their hair."""
+    who = f" ({look.strip().rstrip('.')})" if look.strip() else ""
     return (
-        f"The person from the reference photo, {POSES.get(shot, POSES['hero'])}. "
+        f"The person from the reference photo{who}, {POSES.get(shot, POSES['hero'])}. "
         f"{place_of(art)}. Keep their face, hairstyle, headwear, skin tone, build "
         f"and clothes exactly as in the photo. {images.LOOKS[STYLE]}. {images.NEVER}"
     )
@@ -1456,6 +1459,10 @@ def reference_of(photo: SingerPhoto, settings: Settings) -> Path:
     folder = images.folder(settings)
     if not photo.cutout or not (folder / photo.cutout).exists():
         return folder / photo.image
+    if len(photo.face) == 4 and photo.face[3] > 0.45:
+        # the cutout is a face alone (a close portrait, a cover): the photo says more of
+        # them (hair against the background, the neck and shoulders)
+        return folder / photo.image
     dest = folder / (_key(photo.cutout, "singer-reference", REFERENCE_VERSION) + ".png")
     if not dest.exists():
         cut = Image.open(folder / photo.cutout).convert("RGBA")
@@ -1491,7 +1498,7 @@ def paint_likenesses(plan: Plan, settings: Settings, likeness, progress) -> tupl
         if v.shot in POSES and photos:
             reference = reference_of(photos[turn % len(photos)], settings)
             turn += 1
-            prompt = likeness_prompt(v.shot, v.art)
+            prompt = likeness_prompt(v.shot, v.art, plan.singer.look if plan.singer else "")
             pictures.append(
                 images.Picture(prompt, _seed(prompt, v.art_seed), refs=(str(reference),))
             )
@@ -1691,7 +1698,7 @@ def run_task(
             if not any(p.cutout for p in photos):
                 notes.append("nobody stood out in the photos: they are shown whole, as prints")
             look = edit.look
-            if paints and not look and likeness is None:  # the likeness model sees the photo
+            if paints and not look:
                 say("looking at the singer")
                 with router.vision() as llm:
                     look = describe(llm, images.folder(settings) / photos[0].image)
