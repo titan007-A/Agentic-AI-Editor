@@ -585,3 +585,209 @@ def test_the_head_is_found_from_the_outline_and_a_wild_face_box_ignored(tmp_path
     jacket = lambda picture, settings: [40, 0, 220, 200]  # noqa: E731
     cut = singer.cut_out(name, settings, mask_of=mask, face_of=jacket)
     assert cut.face[2] < 0.5  # the face finder's jacket-wide box wasn't taken
+
+
+# ---- marks on the photos ---------------------------------------------------------------
+
+
+def textured(size=(400, 300)) -> Image.Image:
+    """A photo-like picture: smooth shading and fine grain, no flat colour."""
+    rng = np.random.default_rng(3)
+    yy, xx = np.mgrid[0 : size[1], 0 : size[0]]
+    base = np.stack([60 + xx * 0.3, 90 + yy * 0.25, 140 + (xx + yy) * 0.1], axis=2)
+    base = base + rng.normal(0, 4, base.shape)
+    return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
+
+
+def test_a_stamp_is_painted_out_of_the_photo_and_its_neighbours_with_it(tmp_path):
+    from PIL import ImageDraw, ImageFont
+
+    from agentic_editor.analysis.ocr import Line
+    from agentic_editor.settings import ROOT
+
+    settings, _ = studio_env(tmp_path)
+    clean = textured()
+    stamped = clean.copy()
+    draw = ImageDraw.Draw(stamped)
+    font = ImageFont.truetype(str(ROOT / "fonts" / "Montserrat-Bold.ttf"), 22)
+    draw.text((40, 120), "@pageofsongs", font=font, fill=(255, 255, 255))
+    draw.text((40, 95), "SONGS", font=font, fill=(255, 255, 255))
+    draw.text((250, 250), "Live", font=font, fill=(255, 255, 255))  # background, no stamp
+    out = io.BytesIO()
+    stamped.save(out, "PNG")
+    name = singer.save_photo(out.getvalue(), settings)
+    lines = [
+        Line(x0=40, y0=122, x1=200, y1=146, text="@pageofsongs", score=0.99),
+        Line(x0=40, y0=97, x1=120, y1=121, text="SONGS", score=0.99),
+        Line(x0=250, y0=252, x1=300, y1=276, text="Live", score=0.99),
+    ]
+    nobody = lambda picture, models: np.zeros((picture.height, picture.width), np.float32)  # noqa: E731
+    kept, marks = singer.clean_photo(name, settings, read=lambda pic: lines, mask_of=nobody)
+    assert marks == 2 and kept != name
+    after = np.asarray(Image.open(images.folder(settings) / kept).convert("RGB"), dtype=float)
+    before = np.asarray(stamped, dtype=float)
+    plain = np.asarray(clean, dtype=float)
+    box = (slice(95, 150), slice(40, 200))
+    assert np.abs(before[box] - plain[box]).mean() > 3 * np.abs(after[box] - plain[box]).mean()
+    corner = (slice(250, 280), slice(250, 300))
+    assert np.array_equal(after[corner], before[corner])  # background words stay
+    # kept: the second time nothing is read again
+    assert singer.clean_photo(name, settings, read=lambda pic: 1 / 0) == (kept, 2)
+
+
+def test_any_words_on_the_singer_go_and_a_clean_photo_stays_as_it_is(tmp_path):
+    from agentic_editor.analysis.ocr import Line
+
+    settings, _ = studio_env(tmp_path)
+    picture = textured()
+    out = io.BytesIO()
+    picture.save(out, "PNG")
+    name = singer.save_photo(out.getvalue(), settings)
+
+    def person(pic, models):
+        mask = np.zeros((pic.height, pic.width), np.float32)
+        mask[50:300, 100:250] = 1.0
+        return mask
+
+    on_shirt = [Line(x0=120, y0=150, x1=220, y1=170, text="BRAND", score=0.9)]
+    kept, marks = singer.clean_photo(name, settings, read=lambda p: on_shirt, mask_of=person)
+    assert marks == 1 and kept != name
+    other = singer.save_photo(photo_png(color=(10, 120, 200)), settings)
+    assert singer.clean_photo(other, settings, read=lambda p: []) == (other, 0)
+
+
+def test_photos_are_cleaned_before_the_singer_is_cut_out(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    names = [singer.save_photo(photo_png(color=(i * 40, 80, 60)), settings) for i in range(2)]
+    cut_from = []
+
+    def cleaner(name, settings):
+        return ("e" * 24 + ".png", 1) if name == names[0] else (name, 0)
+
+    def cutter(name, settings):
+        cut_from.append(name)
+        return fake_cut(name, settings)
+
+    (images.folder(settings) / ("e" * 24 + ".png")).write_bytes(photo_png())
+    photos, wiped = singer.photos_of(names, settings, cutter, cleaner)
+    assert wiped == 1 and cut_from == ["e" * 24 + ".png", names[1]]
+    assert photos[0].image == "e" * 24 + ".png" and photos[1].image == names[1]
+
+
+# ---- the singer painted in from their photos ------------------------------------------------
+
+
+def likeness_plan(tmp_path, settings) -> Plan:
+    h = hook(tmp_path)
+    photo_name = singer.save_photo(photo_png(size=(300, 600)), settings)
+    cut = Image.new("RGBA", (200, 500), (0, 0, 0, 0))
+    cut.paste(Image.new("RGBA", (120, 460), (200, 120, 90, 255)), (40, 20))
+    cut_name = "c" * 24 + ".png"
+    cut.save(images.folder(settings) / cut_name)
+    edit = edit_with_photos().model_copy(
+        update={
+            "photos": [
+                SingerPhoto(
+                    image=photo_name, cutout=cut_name, face=[0.3, 0.05, 0.4, 0.15], aspect=0.4
+                )
+            ]
+        }
+    )
+    reply = {"scenes": [
+        {"line": 1, "shot": "hero", "art": "a rain-soaked rooftop at night", "highlight": "",
+         "notes": [], "doodle": ""},
+        {"line": 2, "shot": "words", "art": "an old brick wall", "highlight": "", "notes": [],
+         "doodle": ""},
+        {"line": 3, "shot": "mirror", "art": "a dusty dressing room", "highlight": "",
+         "notes": [], "doodle": ""},
+        {"line": 4, "shot": "print", "art": "a pinboard", "highlight": "", "notes": [],
+         "doodle": ""}]}  # fmt: skip
+    return singer.plan_of(reply, h, singer.sung_lines(h), edit, paints=True)
+
+
+def test_with_the_likeness_model_the_singer_is_painted_into_their_scenes(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    plan = likeness_plan(tmp_path, settings)
+    asked = []
+
+    def likeness(pictures, settings, progress):
+        asked.extend(pictures)
+        return ["f" * 24 + ".png" if i != 2 else "" for i in range(len(pictures))]
+
+    painted, notes = singer.paint_plan(plan, settings, images.paint, None, likeness)
+    shots = [s.visual.shot for s in plan.scenes]
+    assert shots == ["hero", "words", "mirror", "print"]
+    assert asked[0].refs and not asked[1].refs and asked[2].refs and not asked[3].refs
+    assert "reference photo" in asked[0].prompt and "rooftop" in asked[0].prompt
+    assert "mirror" in asked[2].prompt and "no letters" in asked[2].prompt
+    assert "nobody in it" in asked[1].prompt and "reference" not in asked[1].prompt
+    reference = Image.open(asked[0].refs[0])
+    assert reference.mode == "RGB" and reference.getpixel((0, 0)) == (128, 128, 128)
+    v = [s.visual for s in painted.scenes]
+    assert v[0].with_singer and v[0].image == "f" * 24 + ".png"
+    assert not v[1].with_singer and v[1].image
+    # a picture that couldn't be painted: the singer cut out stands in, as without the model
+    assert not v[2].with_singer and v[2].image == "" and "photo cut out" in notes[0]
+    data = singer.player_of(painted, singer.timeline_of(painted))
+    assert data["scenes"][0]["visual"]["with_singer"] is True
+
+
+def test_the_likeness_painter_asks_the_runner_for_klein_with_the_photos(tmp_path):
+    from tests.test_animate import FakeProc
+
+    settings, _ = studio_env(tmp_path)
+    settings.identity_model = "mflux-community/flux2-klein-4b-mflux-q8"
+    ref = tmp_path / "ref.png"
+    Image.new("RGB", (64, 64), (128, 128, 128)).save(ref)
+    pics = [images.Picture("the person on a rooftop", 5, refs=(str(ref),)),
+            images.Picture("an empty rooftop", 6)]  # fmt: skip
+    names = images.paint_likeness(pics, settings, run=FakeProc)
+    asked = FakeProc.last
+    assert asked["kind"] == "likeness" and asked["model"] == settings.identity_model
+    assert asked["steps"] == 4 and (asked["width"], asked["height"]) == (720, 1280)
+    assert asked["jobs"][0]["refs"] == [str(ref)] and asked["jobs"][1]["refs"] == []
+    assert all(names) and names[0] != names[1]
+    assert images.likeness_name(pics[0], "m") != images.likeness_name(
+        images.Picture("the person on a rooftop", 5, refs=("/x/other.png",)), "m"
+    )
+    assert not images.identity_available(settings)  # not on this machine
+
+
+def test_without_the_likeness_model_today_s_cutouts_stay(tmp_path, monkeypatch):
+    settings, Session = studio_env(tmp_path)
+    made_singer(Session, settings)
+    h = hook(tmp_path)
+    monkeypatch.setattr(singer, "find_hook", lambda *a, **k: h)
+    monkeypatch.setattr(singer, "cut_out", fake_cut)
+    monkeypatch.setattr(singer, "clean_photo", lambda name, settings: (name, 0))
+    singer.run_task("s1", Session, settings, Router(Writer({})))
+    with Session() as db:
+        plan = Plan.model_validate(db.get(Animation, "s1").plan)
+    assert not any(s.visual.with_singer or s.visual.image for s in plan.scenes)
+
+
+def test_the_paint_runner_loads_klein_for_likenesses(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from agentic_editor.animate import paint_runner
+
+    made = {}
+
+    class Klein:
+        def __init__(self, model_config=None, model_path=None):
+            made["klein"] = (model_config, model_path)
+
+    config = types.SimpleNamespace(flux2_klein_4b=lambda: "klein-4b", z_image_turbo=lambda: "zit")
+    modules = {
+        "mflux": types.ModuleType("mflux"),
+        "mflux.models": types.ModuleType("mflux.models"),
+        "mflux.models.common": types.ModuleType("mflux.models.common"),
+        "mflux.models.common.config": types.SimpleNamespace(ModelConfig=config),
+        "mflux.models.flux2": types.ModuleType("mflux.models.flux2"),
+        "mflux.models.flux2.variants": types.SimpleNamespace(Flux2KleinEdit=Klein),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    paint_runner.load({"kind": "likeness", "model": "some/klein-q8"})
+    assert made["klein"] == ("klein-4b", "some/klein-q8")
