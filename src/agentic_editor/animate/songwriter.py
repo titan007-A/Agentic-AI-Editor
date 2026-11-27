@@ -318,7 +318,11 @@ def _moments_text(song: Song) -> str:
     return "\n".join(out)
 
 
-def story_prompt(song: Song, request: str = "", plan: Plan | None = None) -> list[dict]:
+def story_prompt(
+    song: Song, request: str = "", plan: Plan | None = None, cast: list[Person] | None = None
+) -> list[dict]:
+    """What the writer is asked for a story; `cast`: the people of the song's other reels,
+    kept so they look the same in every reel of it (their portraits are painted once)."""
     count = len(scene_lines(song))
     joined = ""
     if len(song.pieces) > 1:
@@ -336,6 +340,15 @@ def story_prompt(song: Song, request: str = "", plan: Plan | None = None) -> lis
     )
     if song.query and "\n" in song.query:
         ask += f"\nThe person asked for: {song.query}"
+    known = [p for p in cast or [] if p.name and p.look]
+    if known:
+        ask += (
+            "\n\nThe song's other reels have these people:\n"
+            + "\n".join(f"- {p.name}: {p.look}" for p in known)
+            + "\nTell this part's story with them: keep each one's name and look word for "
+            "word (the painter draws them from it), leave out anyone this part doesn't need, "
+            "and add someone new only if the story needs them."
+        )
     messages = [{"role": "system", "content": GUIDE}, {"role": "user", "content": ask}]
     if plan is not None:
         messages += [
@@ -365,10 +378,11 @@ def story_of(plan: Plan) -> dict:
     }
 
 
-def _plan_from(reply: dict, song: Song, title: str) -> Plan:
+def _plan_from(reply: dict, song: Song, title: str, cast: list[Person] | None = None) -> Plan:
     """The Plan from the writer's story: a scene for each moment. A moment goes on with
     the picture before only where the writer said so, at most one in KEEP_EVERY, never as a
-    line's second picture."""
+    line's second picture. Someone of `cast` (the song's other reels) keeps their look as it
+    was, word for word, whatever the writer wrote, so their portrait is the same one."""
     by_n = {int(m.get("n", 0)): m for m in reply.get("moments", []) if isinstance(m, dict)}
     scenes: list[Scene] = []
     art, seed = "", 0
@@ -396,6 +410,13 @@ def _plan_from(reply: dict, song: Song, title: str) -> Plan:
                look=" ".join(str(p.get("look", "")).split())[:200])
         for p in reply.get("people", []) if isinstance(p, dict) and p.get("name")
     ]  # fmt: skip
+    known = {p.name.casefold(): p for p in cast or [] if p.name and p.look}
+    people = [
+        known[p.name.casefold()].model_copy(update={"image": ""})
+        if p.name.casefold() in known
+        else p
+        for p in people
+    ]
     song = song.model_copy(
         update={"people": people[:5], "story": " ".join(str(reply.get("story", "")).split())}
     )
@@ -414,11 +435,13 @@ def _plan_from(reply: dict, song: Song, title: str) -> Plan:
     )
 
 
-def _ask(llm, messages: list[dict], song: Song, temperature: float) -> Plan:
+def _ask(
+    llm, messages: list[dict], song: Song, temperature: float, cast: list[Person] | None = None
+) -> Plan:
     from agentic_editor.animate.plan import song_problems
 
     reply = llm.chat_json(messages, STORY_SCHEMA, temperature=temperature)
-    plan = _plan_from(reply, song, song.title)
+    plan = _plan_from(reply, song, song.title, cast)
     wrong = _missing(reply, song) + song_problems(plan)
     if not wrong:
         return plan
@@ -431,7 +454,7 @@ def _ask(llm, messages: list[dict], song: Song, temperature: float) -> Plan:
         second = llm.chat_json(fix, STORY_SCHEMA, temperature=0.4)
     except LLMError:
         return plan
-    again = _plan_from(second, song, song.title)
+    again = _plan_from(second, song, song.title, cast)
     return again if len(_missing(second, song) + song_problems(again)) <= len(wrong) else plan
 
 
@@ -465,10 +488,12 @@ def pictured(song: Song) -> Song:
 
 def draft(llm, song: Song) -> tuple[Plan, list[str]]:
     """The reel for a found song: its lines as shown, how many pictures each gets, then its
-    story."""
+    story, with the people `song` already has (another part of a song a reel was made to)
+    kept as they look."""
+    cast = list(song.people)
     song, notes = shown(llm, song)
     song = pictured(song)
-    plan = _ask(llm, story_prompt(song), song, temperature=0.8)
+    plan = _ask(llm, story_prompt(song, cast=cast), song, temperature=0.8, cast=cast)
     if song.lyrics == "heard":
         notes.append("no lyrics were found online: the words are as heard, check them")
     return plan, notes
@@ -480,7 +505,15 @@ def change(llm, plan: Plan, request: str) -> tuple[Plan, list[str]]:
     if song is None:
         raise WriterError("this reel has no song")
     changed = _ask(llm, story_prompt(song, request, plan), song, temperature=0.5)
-    return changed.model_copy(update={"song": changed.song}), []
+    # Someone who looks as before keeps the portrait asked for again, if it was.
+    again = {(p.name.casefold(), p.look): p.art_seed for p in song.people}
+    people = [
+        p.model_copy(update={"art_seed": again.get((p.name.casefold(), p.look), 0)})
+        for p in changed.song.people
+    ]
+    return changed.model_copy(
+        update={"song": changed.song.model_copy(update={"people": people})}
+    ), []
 
 
 MOMENT_SCHEMA = STORY_SCHEMA["properties"]["moments"]["items"]

@@ -528,12 +528,14 @@ def _song_of(brief: planner.Brief, part: dict | None, settings: Settings, router
     if not part or not part.get("song"):
         return songhook.find(brief.idea, settings, router, say)
     choice = int(part.get("choice", 0))
+    kept = Song.model_validate(part["song"])
     say("timing its part of the song")
     try:
-        return songhook.rechoose(Song.model_validate(part["song"]), choice, settings, router)
+        return songhook.rechoose(kept, choice, settings, router)
     except songhook.SongError as exc:
         log.info("part %d of %r found again: %s", choice, brief.idea, exc)
-        return songhook.find(brief.idea, settings, router, say, choice=choice)
+        found = songhook.find(brief.idea, settings, router, say, choice=choice)
+        return found.model_copy(update={"people": kept.people})
 
 
 # ---- every part of a song ------------------------------------------------------------------
@@ -580,8 +582,10 @@ def new_parts(session, found: Animation) -> list[Animation]:
     todo = [n for n in range(len(song.choices)) if n not in taken]
     if not todo:
         raise ValueError("every part of the song has its reel already")
+    # The song's people go with it: each part's story is told with them, painted from the
+    # same portraits (songpaint).
     kept = song.model_copy(
-        update={"lines": [], "people": [], "story": "", "pieces": [], "playing": []}
+        update={"lines": [], "story": "", "pieces": [], "playing": []}
     ).model_dump(mode="json")
     brief = {
         "owner_id": found.owner_id, "idea": found.idea, "kind": found.kind,
