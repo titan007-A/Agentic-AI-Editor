@@ -266,6 +266,8 @@ class Song(Loose):
     # The story told over it (animate/songwriter.py): who is in it and what happens.
     people: list[Person] = Field(default_factory=list)
     story: str = ""
+
+
 class SungWord(Loose):
     text: str = ""
     start: float = 0.0

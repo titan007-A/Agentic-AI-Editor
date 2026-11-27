@@ -8,7 +8,7 @@ sung, the line's key words in red handwriting, small side notes and red doodles 
 Here the owner gives the song's name and the singer's photos:
 
 1. the hook: the song found, downloaded, its catchy part cut and every sung word timed
-   (songhook.find_hook, written beside this);
+   (animate/songhook.py, the Song story's song finder);
 2. the photos: each cut out (ISNet, see-through around the singer) and their face found;
 3. the writer gives every line a shot (how the singer is shown), its key words, side
    notes, a doodle and a picture, plus the post's caption;
@@ -41,6 +41,7 @@ from agentic_editor.animate.plan import (
     Scene,
     SingerEdit,
     SingerPhoto,
+    Song,
     SungLine,
     SungWord,
     Visual,
@@ -455,30 +456,23 @@ def _shift_line(line, by: float):
 
 
 def find_hook(query: str, settings: Settings, router=None, say=None, finder=None) -> Hook:
-    """The song named `query`, found and its hook cut by the song finder written beside
-    this (animate/songhook.py), whichever way it is called."""
+    """The song named `query` (a "|" and words of the part wanted may follow), found and
+    its hook chosen and timed by the song finder (animate/songhook.py), as a Hook; `finder`
+    stands in for it."""
+    from agentic_editor.animate import songhook
+
     say = say or (lambda message: None)
-    audio = None
-    if finder is None:
-        try:
-            from agentic_editor.animate import songhook
-        except ImportError as exc:
-            raise SingerError("finding a song's hook isn't installed on this machine") from exc
-        if hasattr(songhook, "find_hook"):
-            finder = songhook.find_hook
-        else:
-            finder = lambda q, settings: songhook.find(q, settings, router, say)  # noqa: E731
-        wrong = getattr(songhook, "SongError", SingerError)
-        try:
+    try:
+        if finder is not None:
             found = _call(finder, query, settings)
-        except wrong as exc:
-            raise SingerError(str(exc)) from exc
-        if found is not None and hasattr(songhook, "audio_path") and _get(found, "video"):
-            audio = songhook.audio_path(settings, found)
-    else:
-        found = _call(finder, query, settings)
+        else:
+            found = songhook.find(query, settings, router, say)
+    except songhook.SongError as exc:
+        raise SingerError(str(exc)) from exc
     if found is None:
         raise SingerError(f"no song found for {query!r}")
+    # A Song names its sound by the songs cache's own file name.
+    audio = songhook.audio_path(settings, found) if isinstance(found, Song) else None
     hook = hook_of(found, settings, audio)
     if len(hook.words) < 3:
         raise SingerError("the song's hook has no words to show (is it an instrumental part?)")

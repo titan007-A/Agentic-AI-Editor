@@ -5,8 +5,6 @@ the hook finder, the cutout and the writer are stand-ins."""
 import io
 import itertools
 import json
-import sys
-import types
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -15,13 +13,22 @@ import pytest
 from PIL import Image
 
 from agentic_editor import jobs
-from agentic_editor.animate import images, singer, studio
-from agentic_editor.animate.plan import Plan, SingerEdit, SingerPhoto, tidy
+from agentic_editor.animate import images, singer, songhook, studio
+from agentic_editor.animate.plan import (
+    Plan,
+    SingerEdit,
+    SingerPhoto,
+    Song,
+    SongLine,
+    SongWord,
+    tidy,
+)  # fmt: skip
 from agentic_editor.db import Animation
 from agentic_editor.transcript import Word
 from tests import test_api
 from tests.test_animate import needs_ffmpeg, studio_env, tone_wav
 from tests.test_animate_api import studio_on
+from tests.test_animate_song import song_finder_stand_ins
 
 env = test_api.env
 
@@ -285,48 +292,52 @@ def test_a_whole_song_with_its_hook_place_is_cut_and_its_times_moved(tmp_path):
 @needs_ffmpeg
 def test_a_songhook_song_gives_its_lines_words_in_the_lyrics_spelling(tmp_path, monkeypatch):
     settings, _ = studio_env(tmp_path)
-    song = tone_wav(tmp_path / "song.wav", 30.0)
-    song_obj = types.SimpleNamespace(
+    audio = tone_wav(tmp_path / "song.wav", 30.0)
+    found = Song(
         title="Maa, I Tried", artist="KiD Boi", video="abc", start=10.0, end=16.0, lines=[
-            {"text": "मेरे जैसा", "said": "Mere jaisa", "start": 10.2, "end": 11.5, "words": [
-                {"text": "मेरे", "start": 10.3, "end": 10.7},
-                {"text": "जैसा", "start": 10.8, "end": 11.4}]},
-            {"text": "नहीं है कोई", "said": "Nahi hai koi", "start": 11.6, "end": 13.0, "words": [
-                {"text": "नहीं", "start": 11.7, "end": 12.0},
-                {"text": "है", "start": 12.1, "end": 12.2},
-                {"text": "कोई", "start": 12.3, "end": 12.8}]},
+            SongLine(text="मेरे जैसा", said="Mere jaisa", start=10.2, end=11.5, words=[
+                SongWord(text="मेरे", start=10.3, end=10.7),
+                SongWord(text="जैसा", start=10.8, end=11.4)]),
+            SongLine(text="नहीं है कोई", said="Nahi hai koi", start=11.6, end=13.0, words=[
+                SongWord(text="नहीं", start=11.7, end=12.0),
+                SongWord(text="है", start=12.1, end=12.2),
+                SongWord(text="कोई", start=12.3, end=12.8)]),
         ],
     )  # fmt: skip
-    fake = types.ModuleType("agentic_editor.animate.songhook")
-
-    class SongError(RuntimeError):
-        pass
-
-    fake.SongError = SongError
-    fake.find = lambda idea, settings, router, say: song_obj
-    fake.audio_path = lambda settings, s: song
-    monkeypatch.setitem(sys.modules, "agentic_editor.animate.songhook", fake)
-    import agentic_editor.animate as package
-
-    monkeypatch.setattr(package, "songhook", fake, raising=False)
-    h = singer.find_hook("maa i tried", settings, router=object())
+    asked = []
+    monkeypatch.setattr(songhook, "find", lambda idea, *a, **k: asked.append(idea) or found)
+    monkeypatch.setattr(songhook, "audio_path", lambda settings, s: audio)
+    h = singer.find_hook("maa i tried | mere jaisa", settings, router=object())
+    assert asked == ["maa i tried | mere jaisa"]
     assert [w.text for w in h.words] == ["Mere", "jaisa", "Nahi", "hai", "koi"]
     assert h.words[0].start == pytest.approx(0.3) and h.duration == pytest.approx(6.0, abs=0.05)
     assert [x.text for x in singer.sung_lines(h)] == ["Mere jaisa", "Nahi hai koi"]
 
-    def nothing(idea, settings, router, say):
-        raise SongError("the song has no part of 12-32 s made of whole lines")
+    def nothing(*a, **k):
+        raise songhook.SongError("the song has no part of 15-32 s made of whole lines")
 
-    fake.find = nothing
-    with pytest.raises(singer.SingerError, match="12-32 s"):
+    monkeypatch.setattr(songhook, "find", nothing)
+    with pytest.raises(singer.SingerError, match="15-32 s"):
         singer.find_hook("maa i tried", settings, router=object())
 
 
-def test_without_a_song_finder_the_owner_is_told_so(tmp_path, monkeypatch):
+@needs_ffmpeg
+def test_the_song_finders_own_song_makes_the_hook(tmp_path):
+    """The Song story's finder, end to end on stand-ins, gives a singer edit its hook: the
+    chosen part's sound, its words timed from the part's start."""
     settings, _ = studio_env(tmp_path)
-    monkeypatch.setitem(sys.modules, "agentic_editor.animate.songhook", None)
-    with pytest.raises(singer.SingerError, match="isn't installed"):
-        singer.find_hook("anything", settings)
+    found, router = song_finder_stand_ins(tmp_path, settings)
+    song = songhook.find("Koi Apna Hoga Tony Kakkar", settings, router, **found)
+    h = singer.find_hook(
+        "Koi Apna Hoga Tony Kakkar", settings, router,
+        finder=lambda q, settings: songhook.find(q, settings, router, **found),
+    )  # fmt: skip
+    assert h.duration == pytest.approx(song.end - song.start, abs=0.05)
+    sung = [w for line in song.lines for w in line.words]
+    assert len(h.words) == len(sung) and h.words[0].start == pytest.approx(
+        sung[0].start - song.start, abs=0.01
+    )
+    assert len(singer.sung_lines(h)) >= len(song.lines) - 1
 
 
 # ---- the studio's work -------------------------------------------------------------------
