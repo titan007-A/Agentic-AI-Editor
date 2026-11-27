@@ -145,7 +145,7 @@ def main() -> None:
         "painter_peak_memory_gb": round(peak, 1), "notes": notes,
     }, indent=1))  # fmt: skip
     print(
-        f"(per picture and the load time: the 'picture N of M' and 'loaded' lines above; "
+        f"(per picture and the load time: the 'painted N of M pictures' and 'loaded' lines above; "
         f"the runner's own log is {images.folder(settings) / 'paint.log'})"
     )
 

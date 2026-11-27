@@ -12,6 +12,7 @@ import type {
   AnimationActor,
   AnimationCastMember,
   AnimationItem,
+  AnimationPerson,
   AnimationPlan,
   AnimationScene,
   AnimationVisual,
@@ -208,6 +209,7 @@ const blankItem = (): AnimationItem => ({
  */
 export function AnimationScenes({
   plan,
+  saved,
   starts,
   busy,
   onChange,
@@ -215,6 +217,8 @@ export function AnimationScenes({
   onPlayFrom,
 }: {
   plan: AnimationPlan;
+  /** The reel as last saved: what its portraits were painted from. */
+  saved?: AnimationPlan | null;
   /** When each scene starts in the preview (seconds). */
   starts: number[];
   busy: boolean;
@@ -272,6 +276,7 @@ export function AnimationScenes({
       {songStory && plan.song && (
         <PeopleEditor
           people={plan.song.people ?? []}
+          saved={saved?.song?.people ?? []}
           onChange={(people) => onChange({ ...plan, song: { ...plan.song!, people } })}
         />
       )}
@@ -589,41 +594,110 @@ export function AnimationScenes({
   );
 }
 
-/** A Song story's people: a name the story uses and how they look in every picture. */
+/**
+ * A Song story's people: a name the story uses and how they look in every picture. Where the
+ * likeness model is, each is painted once as a portrait and every picture with them is painted
+ * from it; a changed look (or "Paint the portrait again") paints a new one, and those pictures,
+ * when saved.
+ */
 function PeopleEditor({
   people,
+  saved,
   onChange,
 }: {
-  people: { name: string; look: string }[];
-  onChange: (people: { name: string; look: string }[]) => void;
+  people: AnimationPerson[];
+  saved: AnimationPerson[];
+  onChange: (people: AnimationPerson[]) => void;
 }) {
-  const set = (k: number, field: "name" | "look", value: string) =>
-    onChange(people.map((p, j) => (j === k ? { ...p, [field]: value } : p)));
+  const set = (k: number, update: Partial<AnimationPerson>) =>
+    onChange(people.map((p, j) => (j === k ? { ...p, ...update } : p)));
+  // A portrait is out of date once its look, or the number to paint it again, isn't the saved one.
+  const outdated = (p: AnimationPerson) => {
+    const was = saved.find((s) => s.image && s.image === p.image);
+    return !!was && (was.look !== p.look || (was.art_seed ?? 0) !== (p.art_seed ?? 0));
+  };
+  const portraits = people.some((p) => p.image);
   return (
-    <div className="space-y-2 rounded-lg border-[1.5px] border-dashed border-foreground/50 p-3">
-      <Label>People in the story (painted the same way in every picture)</Label>
-      {people.map((p, k) => (
-        <div key={k} className="grid gap-2 sm:grid-cols-[minmax(0,140px)_minmax(0,1fr)_auto]">
-          <Input
-            aria-label={`Person ${k + 1}'s name`}
-            value={p.name}
-            onChange={(e) => set(k, "name", e.target.value)}
-          />
-          <Input
-            aria-label={`How ${p.name || `person ${k + 1}`} looks`}
-            value={p.look}
-            onChange={(e) => set(k, "look", e.target.value)}
-          />
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => onChange(people.filter((_, j) => j !== k))}
-            aria-label={`Remove ${p.name || "person"}`}
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        </div>
-      ))}
+    <div
+      className="space-y-2 rounded-lg border-[1.5px] border-dashed border-foreground/50 p-3"
+      data-testid="people"
+    >
+      <Label>
+        {portraits
+          ? "People in the story (each painted once as a portrait; every picture with them is painted from it)"
+          : "People in the story (painted the same way in every picture)"}
+      </Label>
+      {people.map((p, k) => {
+        const old = outdated(p);
+        return (
+          <div key={k} className="flex items-start gap-2" data-testid="person">
+            {p.image && (
+              <a
+                href={`/api/animation-images/${p.image}`}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0"
+                aria-label={`Open ${p.name || "this person"}'s portrait`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/animation-images/${p.image}`}
+                  alt={`${p.name || "This person"}'s portrait`}
+                  className={cn(
+                    "h-24 w-[54px] rounded border-[1.5px] border-foreground object-cover",
+                    old && "opacity-40",
+                  )}
+                />
+              </a>
+            )}
+            {!p.image && portraits && (
+              // someone in no picture yet (or whose portrait couldn't be painted): room kept
+              <div
+                className="h-24 w-[54px] shrink-0 rounded border-[1.5px] border-dashed border-foreground/40"
+                aria-hidden
+              />
+            )}
+            <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,140px)_minmax(0,1fr)]">
+              <Input
+                aria-label={`Person ${k + 1}'s name`}
+                value={p.name}
+                onChange={(e) => set(k, { name: e.target.value })}
+              />
+              <Input
+                aria-label={`How ${p.name || `person ${k + 1}`} looks`}
+                value={p.look}
+                onChange={(e) => set(k, { look: e.target.value })}
+              />
+              {old ? (
+                <p className="text-xs text-muted-foreground sm:col-span-2" data-testid="repaint">
+                  A new portrait of {p.name || "them"}, and the pictures with them, are painted when
+                  you save.
+                </p>
+              ) : (
+                p.image && (
+                  <div className="sm:col-span-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => set(k, { art_seed: (p.art_seed ?? 0) + 1 })}
+                    >
+                      Paint the portrait again
+                    </Button>
+                  </div>
+                )
+              )}
+            </div>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => onChange(people.filter((_, j) => j !== k))}
+              aria-label={`Remove ${p.name || "person"}`}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        );
+      })}
       {people.length < 5 && (
         <Button
           size="sm"

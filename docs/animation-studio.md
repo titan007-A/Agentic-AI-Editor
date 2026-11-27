@@ -342,11 +342,49 @@ words of the part wanted), and:
   moment keeps the picture before only where the writer says so, at most one in five, never
   as a line's second picture. A 30 s reel comes to about 12-16 pictures (painting them on the
   Mac, Z-Image-Turbo at 20-27 s a picture: about 4-7 minutes, against 2-2.5 for the 5-6 of a
-  20 s reel before).
+  20 s reel before; with the likeness model, below, 2.5-5 minutes portraits and all).
 - Pictures: each moment painted with its people in it (the look `song`: flat 2D vector,
   thick outlines, muted colours, navy night, warm lamp light); a person's name in a picture is
   written out as they look; a moment that goes on with the last shares its picture; one seed a
   reel. Without the image model the moments are a dark night with warm lights.
+- The same faces in every picture (`animate/songpaint.py`): painted one by one from words, a
+  person changed from picture to picture (a live batch of 20 had a grandfather bearded in one
+  picture and clean-shaven in the next, and a close-up with no face). Where the likeness model
+  is (`IDENTITY_MODEL`, FLUX.2 [klein] 4B, below), each person named in the moments is painted
+  once as a portrait: full length, facing the viewer, alone on plain light grey, in the reel's
+  look without its night (576x1024, from their look and the reel's seed). Every moment is then
+  painted by the same model from the portraits of the people in it, in the order it names
+  them, each named by their picture ("an old man with a white beard... (the person in image
+  1)"), told that each looks exactly as in their picture, the same face, hair, skin tone,
+  build and clothes, nothing added (a beard and glasses named there were painted on people
+  who had none), every face drawn with eyes, brows, nose and mouth; the moments with nobody
+  in them by the same model from words, so the reel has one look. At most MOST_REFS (4)
+  portraits a picture: anyone else in it is painted from words. A picture the likeness model
+  couldn't paint, every picture when no portrait could be, and every picture while
+  `IDENTITY_MODEL` is unset, are painted by Z-Image from words as before (the same pictures as
+  before, kept ones reused).
+- Who is in a moment: the writer is told to name the people in every picture ("Dad lifts Mia
+  onto his shoulders", never "the father lifts the girl"); a story with someone unnamed in a
+  picture is sent back once. A person is also found by their role when their name is one (Dad
+  is the father, his dad) and by what their look says they are (the little boy, the old
+  woman), where no one else in the story is one; never "a boy" or "the other girl".
+- Portraits are kept by what makes them (the look, and the seed, which comes from the song),
+  so the song's other reels use them again: another part, two parts joined and every part are
+  written with the song's people (the writer keeps their names and looks word for word, leaves
+  out who the part doesn't need and adds someone only if the story does).
+- Measured on the M5 (2026-11-27, `scripts/mac_song_faces_test.py`, one English story of 17
+  moments and 2 people, one picture a GPU turn; then four made-up people at one table): a
+  portrait 5-8 s; a moment from one smaller portrait about 11 s, from two 13-17 s, three 21 s,
+  four 29 s, from words alone 9 s (from two whole portraits 30 s: why they are made smaller,
+  REF_SIZE 384x672, with no likeness lost in the test); four at a table came out with every
+  face whole and as their portraits; the model starts in 1-2 s a turn; the painter's peak
+  memory 7.5 GB. All 17 moments in 253 s, where Z-Image took 36-40 s a picture on the same
+  Mac that day (about 11 minutes for them; quiet, two more took 37 and 39 s).
+  A 30 s reel (12-16 moments, 2-5 portraits) paints in about 2.5-5 minutes; another part of
+  the same song skips the portraits. In the test sheet the father and the daughter keep their
+  faces, hair and clothes in every picture (before, his shirt, hair and build changed from
+  picture to picture and her dress and hair with them); signs can still come out with
+  made-up letters, and a picture now and then shows someone twice.
 - Timing (`timeline.build_song`): a scene a picture, from 0.15 s before its line is sung to
   0.15 s before the next; a line's second picture comes on the word nearest the middle of its
   time on screen (at least 1.2 s from either end); the caption from its first word until the
@@ -376,7 +414,10 @@ words of the part wanted), and:
 - Studio: the form takes the song's name and the part; a song reel shows the song, the part
   playing and the other parts to play (`POST /api/animations/{id}/change {"choice": n}`,
   op `hook`: timed again, a new story); its scenes show the lyric line (and which is a line's
-  second picture), the camera and the picture; people can be edited; one scene a picture
+  second picture), the camera and the picture; people can be edited, each with the portrait
+  their pictures are painted from (it opens full size): a changed look, or "Paint the portrait
+  again", dims it and says that saving paints a new portrait and the pictures with that person
+  (only those: the others are kept); one scene a picture
   (none added, moved or removed, so no timeline strip); its style stays. The autopilot
   doesn't make Song stories (they start from a song someone names).
 - Join two parts (`change {"join": [first, second]}`, op `hook`, undo goes back): a stretch
@@ -539,7 +580,10 @@ environment and the GPU slot, one model for the whole reel:
   the words go above it, else below it, never over it; the side notes keep off it too.
 - A picture that can't be painted (the model missing, a timeout) shows the singer cut out
   and stood in the scene, as without the model; so does every scene while `IDENTITY_MODEL` is
-  unset.
+  unset. mflux 0.24's edit model fails on a picture with no reference (it joins the
+  references' tokens to the picture's), and the runner then stopped, so every picture of a
+  batch after the first `words` or `print` came back unpainted; with no reference it now joins
+  an empty set and paints from words, and a picture that fails is skipped, the rest painted.
 
 Why this model: the owner pages earn money, so the licence must allow commercial use. FLUX.1
 Kontext [dev] and FLUX.2 [klein] 9B are non-commercial; InstantID, PuLID, IP-Adapter-FaceID

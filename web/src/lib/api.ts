@@ -1092,8 +1092,18 @@ export type AnimationSong = {
   playing?: number[];
   /** A joined reel's stretches of the song, one after the other (empty: start-end). */
   pieces?: { start: number; end: number }[];
-  people: { name: string; look: string }[];
+  people: AnimationPerson[];
   story: string;
+};
+
+/** Someone in a Song story: how they look in every picture, and their portrait once painted. */
+export type AnimationPerson = {
+  name: string;
+  look: string;
+  /** The portrait every picture with them is painted from (where the likeness model is). */
+  image?: string;
+  /** A number to paint the portrait again. */
+  art_seed?: number;
 };
 
 /** Another reel of a Song story's song, made for another of its parts. */
