@@ -1337,7 +1337,8 @@ export const api = {
   uploadAnimationPhoto: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return request<{ name: string }>("POST", "/animation-photos", form);
+    // The photo made ready (trimmed, text painted out, cropped to the singer) and what was done.
+    return request<{ name: string; notes?: string[] }>("POST", "/animation-photos", form);
   },
   editAnimation: (id: string, plan: AnimationPlan) =>
     request<Animation>("PUT", `/animations/${id}`, { plan }),

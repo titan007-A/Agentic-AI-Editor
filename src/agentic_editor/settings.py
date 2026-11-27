@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # mflux in its own environment (models/image-venv unless named here), on Apple Silicon.
     image_python: Path | None = None
     image_model: str = "filipstrand/Z-Image-Turbo-mflux-4bit"
+    # A singer edit's singer painted into its scenes from their photos (animate/images.py
+    # paint_likeness): FLUX.2 [klein] 4B (Apache-2.0) by mflux, in the same environment.
+    # Empty: off (the singer is cut out of the photos and stood in the scenes instead). Set
+    # it once scripts/mac_singer_identity_test.py has painted on this Mac, e.g.
+    # mflux-community/flux2-klein-4b-mflux-q8.
+    identity_model: str = ""
     # Model layers Ollama puts on the GPU (99: all). Unset, Ollama decides and on an 8 GB
     # card runs part of the 9b planner on the CPU at about two thirds the speed.
     llm_gpu_layers: int | None = Field(default=None, ge=0)

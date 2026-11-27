@@ -72,10 +72,23 @@ class Picture:
     prompt: str  # what the scene's picture shows (Visual.art)
     seed: int
     empty: bool = False  # characters stand in front of it: nobody painted in
+    # Photos of someone to paint into the picture as themselves (paint_likeness).
+    refs: tuple[str, ...] = ()
 
 
 def python_of(settings: Settings) -> Path:
     return settings.image_python or settings.models_dir / "image-venv" / "bin" / "python"
+
+
+# The likeness painter: FLUX.2 [klein] 4B, distilled to four steps.
+LIKENESS_STEPS = 4
+LIKENESS_SIZE = (720, 1280)
+
+
+def identity_available(settings: Settings) -> bool:
+    """Whether someone can be painted into pictures here from their photos: the image
+    model's environment, and a likeness model named for it (off until a Mac test passed)."""
+    return bool(settings.identity_model.strip()) and available(settings)
 
 
 def available(settings: Settings) -> bool:
@@ -101,6 +114,49 @@ def name_of(prompt: str, seed: int, model: str, size: tuple[int, int] = SIZE) ->
     """The file a picture is kept in, by everything that makes it."""
     raw = json.dumps([model, STEPS, list(size), prompt, seed], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()[:24] + ".png"
+
+
+def likeness_name(picture: Picture, model: str, size: tuple[int, int] = LIKENESS_SIZE) -> str:
+    """The file a picture painted with someone in it is kept in: by what it shows, who (the
+    photos, named by their content) and how."""
+    refs = [Path(r).name for r in picture.refs]
+    raw = json.dumps(
+        ["likeness", model, LIKENESS_STEPS, list(size), picture.prompt, picture.seed, refs],
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:24] + ".png"
+
+
+def paint_likeness(
+    pictures: list[Picture],
+    settings: Settings,
+    progress=None,
+    run=subprocess.Popen,
+    size: tuple[int, int] = LIKENESS_SIZE,
+) -> list[str]:
+    """`pictures` painted by the likeness model, each with the person in its `refs` painted
+    in as themselves (none: the place alone); "" for one that couldn't be. The prompts are
+    used as given: the caller writes the look and what must never be in it."""
+    progress = progress or (lambda *a: None)
+    out = folder(settings)
+    out.mkdir(parents=True, exist_ok=True)
+    model = settings.identity_model
+    names = [likeness_name(p, model, size) for p in pictures]
+    todo = [
+        {"prompt": p.prompt, "seed": p.seed, "dest": str(out / name), "refs": list(p.refs)}
+        for p, name in zip(pictures, names, strict=True)
+        if p.prompt.strip() and not (out / name).exists()
+    ]
+    todo = list({job["dest"]: job for job in todo}.values())
+    for start in range(0, len(todo), BATCH):
+        part = todo[start : start + BATCH]
+        request = {
+            "kind": "likeness", "model": model, "steps": LIKENESS_STEPS,
+            "width": size[0], "height": size[1], "jobs": part,
+        }  # fmt: skip
+        with slots.gpu.turn("paint the singer into the scenes", progress):
+            _run(request, len(part), settings, progress, run, (start, len(todo)))
+    return [name if (out / name).exists() else "" for name in names]
 
 
 def card_style(look: str) -> tuple[str, tuple[int, int]]:

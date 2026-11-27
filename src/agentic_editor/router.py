@@ -122,6 +122,9 @@ class ModelRouter:
 
         upscale.fetch_models(s.models_dir)
         maps.fetch(s.models_dir)  # the World map animations' Earth and countries
+        from agentic_editor.animate import singer
+
+        singer.cut_model(s.models_dir)  # singer edits: the singer cut out of their photos
 
     def planner(self) -> OllamaClient:
         """The planning model, holding the GPU while open."""

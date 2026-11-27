@@ -402,6 +402,112 @@ the song's name and gives 1-6 photos of the singer.
 Measured on the PC (RTX 5050): writer (qwen3.5 9b) 22 s, the two cutouts 3 s, a 12 s edit
 renders in 40 s.
 
+### Any photo, made ready by itself
+
+The first live uploads were refused: search-result thumbnails (a 197x197 WebP album cover, a
+295x180 stage photo) under the old 200 px minimum, with nothing in the log to say why. Now
+(`singer.take_photo`, `singer.prepare_photo`, on upload):
+
+- Any kind a phone or browser saves: JPEG, PNG, WebP, GIF and animated WebP (the first
+  frame), AVIF (Pillow), HEIC/HEIF from iPhones (pillow-heif: its code is BSD-3, its wheels
+  bundle libheif and libde265 under LGPL-3 and x265 under GPL-2, fine to run on our own
+  machines; pi-heif, the decode-only variant, is discontinued with a known decoder flaw),
+  CMYK, 16-bit (scaled, not clipped), see-through parts put on white, turned as the camera
+  held it. The picker offers every image (`image/*`, plus .heic/.heif/.avif).
+- Sizes: under 120 px on the short side is refused with the size in the message; under 400
+  px it is enlarged to 800 by Real-ESRGAN with GFPGAN on the faces (the upscale preset's
+  models, on the CPU: a thumbnail takes a few seconds and the GPU stays free), smoothly where
+  those models aren't, with a note that it may look soft; over 1600 px it is made smaller;
+  over 200 megapixels it is refused as a decompression bomb.
+- A refused upload is logged with the reason, the file's format, its size in bytes and
+  pixels and what the browser sent it as (never the picture), and the form shows the
+  server's reason next to the file's name.
+- Made ready: plain rows and columns at the edges trimmed (letterboxing, a phone
+  screenshot's status and navigation bars, a frame); every line OCR reads painted out, and
+  letters its detector sees but can't read (a cover's script title) where they aren't on the
+  person; cropped to the main person (the biggest face in a group, between the neighbours'
+  faces, with the whole head and room around the face; more room when no face is found);
+  smaller faces away from them left out of the cutout (a drummer behind the singer). A photo
+  of a face alone (a close portrait, a cover) is shown whole, as a print, not cut out to
+  float, and painted from whole. The form's thumbnail is this prepared photo, and the edit
+  uses exactly it; the notes ("a small photo (197x197): enlarged", "borders trimmed", "text
+  painted out", "cropped to the singer") show as a message.
+- The singer is described by the vision model from a photo of all of them where there is
+  one (it took the cover's made-up face for a woman's), and that description goes into the
+  likeness model's prompt.
+
+### Marks on the photos
+
+Photos people send carry stamps: an agency's watermark ("Bollywood Hungama" on the first
+test photo's jacket), a page's @handle, a web address. They would show in every scene, and
+a painting would copy them. Before anything else each photo is read by OCR (RapidOCR, the
+editor's own), and painted out (`singer.clean_photo`): any line that reads like a stamp
+(a web address, a handle, a copyright sign, a photo agency's name) wherever it is, any text
+mostly on the singer (lyric stickers go over the singer), and the lines beside those (the
+rest of a logo), each with a margin of half its height. Only the strokes are painted over
+(what stands out from the box's own smoothed look, cv2 inpainting), so a jacket under a
+watermark keeps its folds. Text in the background that doesn't read like a stamp stays; it
+goes with the background when the singer is cut out. The cleaned photo is used everywhere
+after: the cutout, the print, the likeness painter's reference. Without OCR (no ml extras),
+photos are used as sent.
+
+### The singer painted into the scenes (likeness)
+
+The reference paints the singer into each scene in new poses. Where the likeness model is
+(`IDENTITY_MODEL`, off until the Mac test below has passed), every line's picture is painted
+by FLUX.2 [klein] 4B (Black Forest Labs, Apache-2.0, distilled to 4 steps; text encoder
+Qwen3-4B, Apache-2.0) through mflux (0.24: `Flux2KleinEdit`), in the image model's own
+environment and the GPU slot, one model for the whole reel:
+
+- a scene with the singer (`hero`, `close`, `far`, `mirror`, `echo`, `silhouette`,
+  `painted`): the singer from their photo, as a reference image (the cleaned cutout on plain
+  grey, so nothing behind them is copied), posed as the shot says ("seen from the waist up",
+  "a close-up of their face", "small in the distance, seen from behind", "before a tall old
+  mirror", "in a crowd of grey faceless people", "a dark silhouette against a bright sunset"),
+  in the writer's place for the line, in the singer look, with "keep their face, hair, beard,
+  skin tone, build and clothes" and no text, letters, logo or watermark. Photos are used in
+  turn when there are several.
+- `words` and `print`: the place alone, nobody in it.
+- The player shows a painting with the singer in it at full size (their face stays sharp)
+  with nothing cut out in front. Its face is found in the painting (YuNet, the biggest face:
+  the singer stands nearest; MediaPipe's short-range finder missed most painted faces) and
+  the words go above it, else below it, never over it; the side notes keep off it too.
+- A picture that can't be painted (the model missing, a timeout) shows the singer cut out
+  and stood in the scene, as without the model; so does every scene while `IDENTITY_MODEL` is
+  unset.
+
+Why this model: the owner pages earn money, so the licence must allow commercial use. FLUX.1
+Kontext [dev] and FLUX.2 [klein] 9B are non-commercial; InstantID, PuLID, IP-Adapter-FaceID
+and PhotoMaker need InsightFace's antelopev2/buffalo face models, which are non-commercial;
+Z-Image-Edit isn't released (Z-Image-Turbo alone, text to image). The two candidates left are
+Qwen-Image-Edit-2511 (Apache-2.0, 20B: about 12 GB at 4 bits plus a 7B text encoder, many
+times slower) and FLUX.2 [klein] 4B (Apache-2.0, 4B, 4 steps; mflux's measure on an M4 Pro:
+27 s for a 1024x1024 picture in bf16 with the prompt encoding, 8.6 GB of weights at 8 bits,
+4.6 GB at 4). Measured on the M5 (the script below, 2026-11-27, `mflux-community/
+flux2-klein-4b-mflux-q8`, 8.0 GB download): a 720x1280 picture with one reference in 15-26 s
+(22-23 s on average, the first of a reel the quickest), about what Z-Image takes now; the
+painter's peak memory 4-4.5 GB. On the PC (RTX 5050, diffusers, 4-bit): 10-13 s a picture.
+
+Seen in the test paintings (two singers, three photos, six shots each): the face, turban or
+hair, beard or none, and the clothes carry over in the hero, echo, mirror reflection and
+close shots; far and silhouette shots are seen from behind as asked. Close-ups drift most
+from the real face. A back view now and then loses the headwear. Anything stuck to the
+singer in the cutout is painted as part of them (a logo behind one photo's turban came out
+as horns), so photos with a plain background work best. Signs in a street can come out with
+made-up letters despite "no text".
+
+Mac check before turning it on (nothing live is touched; the model, a newer mflux when the
+live one has no FLUX.2, the pictures and frames all go in a test folder):
+
+    .venv/bin/python run/polite.py scripts/mac_singer_identity_test.py \
+        --photos ~/Desktop/singer1.jpg --folder ~/aiedit-test/identity
+
+It prints the load time, the seconds of each picture and the painter's peak memory, and
+saves the photo next to three paintings (`out/sheet.jpg`) and three frames as the reel shows
+them. Then `IDENTITY_MODEL=mflux-community/flux2-klein-4b-mflux-q8` in `.env` and a restart.
+The live image environment needs mflux 0.24 (`models/image-venv/bin/pip install -U
+mflux==0.24.0`) for FLUX.2.
+
 ## Phase 3: autopilot
 
 - One autopilot per account (`animation_autopilots`): niche, topics (one per line, first
