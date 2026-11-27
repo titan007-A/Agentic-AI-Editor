@@ -647,39 +647,47 @@ def _cut(src: Path, start: float, end: float, dest: Path) -> Path:
 
 
 def separated(audio: Path, router) -> Path:
-    """The song's vocals alone (kept beside the song)."""
+    """The song's vocals alone (kept beside the song). Two reels of one song at once: the
+    second waits for the first one's vocals instead of separating them again."""
+    from agentic_editor import slots
+
     folder = audio.parent
     vocals = folder / "vocals.wav"
-    if not vocals.exists():
-        stems_dir = folder / "stems"
-        stems_dir.mkdir(exist_ok=True)
-        stems = router.separate_vocals(audio, stems_dir)
-        Path(stems.vocals).replace(vocals)
-        Path(stems.instrumental).unlink(missing_ok=True)
+    with slots.video(folder).turn("separate the song's vocals"):
+        if not vocals.exists():
+            stems_dir = folder / "stems"
+            stems_dir.mkdir(exist_ok=True)
+            stems = router.separate_vocals(audio, stems_dir)
+            Path(stems.vocals).replace(vocals)
+            Path(stems.instrumental).unlink(missing_ok=True)
     return vocals
 
 
 def hear(
     vocals: Path, start: float, end: float, router, language: str | None
 ) -> tuple[list[Word], str]:
-    """The words whisper hears in the vocals between start and end (song times), kept."""
-    key = f"heard-{start:.2f}-{end:.2f}-{language or 'auto'}.json"
-    kept = vocals.parent / key
-    if kept.exists():
-        data = json.loads(kept.read_text(encoding="utf-8"))
-        return [Word(**w) for w in data["words"]], data.get("language") or ""
-    clip = _cut(vocals, start, end, vocals.parent / "hook-vocals.wav")
-    heard = router.transcribe(clip, language)
-    words = [
-        Word(text=w.text, start=round(w.start + start, 3), end=round(w.end + start, 3))
-        for w in heard.words
-    ]
-    kept.write_text(
-        json.dumps({"language": heard.language, "words": [w.model_dump() for w in words]},
-                   ensure_ascii=False),
-        encoding="utf-8",
-    )  # fmt: skip
-    clip.unlink(missing_ok=True)
+    """The words whisper hears in the vocals between start and end (song times), kept. One
+    reel of the song hears at a time, each part from its own clip."""
+    from agentic_editor import slots
+
+    key = f"heard-{start:.2f}-{end:.2f}-{language or 'auto'}"
+    kept = vocals.parent / f"{key}.json"
+    with slots.video(vocals.parent).turn("hear the song's words"):
+        if kept.exists():
+            data = json.loads(kept.read_text(encoding="utf-8"))
+            return [Word(**w) for w in data["words"]], data.get("language") or ""
+        clip = _cut(vocals, start, end, vocals.parent / f"{key}.wav")
+        heard = router.transcribe(clip, language)
+        words = [
+            Word(text=w.text, start=round(w.start + start, 3), end=round(w.end + start, 3))
+            for w in heard.words
+        ]
+        kept.write_text(
+            json.dumps({"language": heard.language, "words": [w.model_dump() for w in words]},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )  # fmt: skip
+        clip.unlink(missing_ok=True)
     return words, heard.language or ""
 
 
