@@ -66,7 +66,7 @@ MIN_SIDE = 120  # a smaller photo has too little of the singer to show
 SMALL_SIDE = 400
 ENLARGE_SIDE = 800
 ENLARGE_WITH_MODELS = True  # tests turn the upscale models off
-PREPARE_VERSION = 3
+PREPARE_VERSION = 4
 HEAD_ONLY = 0.45  # a cutout whose face is more of its height than this is a face alone
 # Lines: a scene each. Words further apart than this start a new line when the hook
 # doesn't say where its lines are; so do long ones.
@@ -88,7 +88,7 @@ ROTATION = ("hero", "close", "far", "print", "silhouette", "mirror", "echo", "wo
 CUT_MODEL = "isnet-general-use.onnx"
 CUT_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
 CUT_SIZE = 1024
-CUT_VERSION = 3
+CUT_VERSION = 4
 _AUDIO = re.compile(r"[0-9a-f]{24}\.wav")
 _PICTURE = re.compile(r"[0-9a-f]{24}\.png")
 
@@ -399,17 +399,33 @@ def prepare_photo(
     picture = Image.open(out / name).convert("RGB")
     notes: list[str] = []
     changed = False
-    box = bars_of(picture)
-    if box != (0, 0, *picture.size):
-        picture = picture.crop(box)
-        notes.append("borders trimmed")
-        changed = True
     try:
         solid = keep_subject((mask_of or person_mask)(picture, settings.models_dir)) > 0.5
         faces = (faces_of or _faces_in)(picture, settings)
     except Exception:
         log.exception("couldn't find the singer in %s", name)
         solid, faces = None, []
+    person = None
+    if solid is not None and 0.02 < float(solid.mean()) < 0.97:
+        person = main_person(without_others(solid, faces), faces)
+    whole = (0, 0, picture.width, picture.height)
+    if person is None:
+        # nobody found: plain borders and screenshot bars trimmed. With someone found the
+        # crop to them does that, and never mistakes a dark backdrop (a cover's black, their
+        # hair against it) for a border.
+        box = bars_of(picture)
+        if box != whole:
+            notes.append("borders trimmed")
+    elif (person[2] - person[0]) * (person[3] - person[1]) < 0.85 * picture.width * picture.height:
+        box = person
+        notes.append("cropped to the singer")
+    else:
+        box = whole
+    if box != whole:
+        picture = picture.crop(box)
+        if solid is not None:
+            solid = solid[box[1] : box[3], box[0] : box[2]]
+        changed = True
     if read is None and detect is None:
         from agentic_editor.analysis import ocr
 
@@ -429,17 +445,6 @@ def prepare_photo(
     if boxes:
         picture = wipe(picture, boxes)
         notes.append(f"text painted out ({len(boxes)} places)")
-        changed = True
-    person = None
-    if solid is not None and 0.02 < float(solid.mean()) < 0.97:
-        person = main_person(without_others(solid, faces), faces)
-    if (
-        person
-        and (person[2] - person[0]) * (person[3] - person[1])
-        < 0.85 * picture.width * picture.height
-    ):
-        picture = picture.crop(person)
-        notes.append("cropped to the singer")
         changed = True
     if changed and min(picture.size) < SMALL_SIDE:
         picture = picture.resize(
@@ -567,6 +572,13 @@ def cut_out(
         sized = 0.5 * head[3] <= found[3] <= 1.6 * head[3] and found[2] <= 1.6 * head[2]
         if found[1] + found[3] / 2 < 0.45 and sized:
             face_box = found
+    if others and not face_of:
+        # YuNet's biggest face is trusted over both: it finds small and made-up faces the
+        # others miss (an album cover's face was taken for a tenth of its outline)
+        fx, fy, fw, fh = max(others, key=lambda f: f[2] * f[3])
+        grow = 0.15  # its box is the face; the head around it
+        face_box = [(fx - fw * grow - left) / w, (fy - fh * grow * 1.6 - top) / h,
+                    fw * (1 + 2 * grow) / w, fh * (1 + 2.6 * grow) / h]  # fmt: skip
     face_box = [round(min(1.0, max(0.0, v)), 4) for v in face_box]
     part = out / (dest_name + ".part.png")
     cut.save(part)

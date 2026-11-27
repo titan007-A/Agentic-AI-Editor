@@ -402,6 +402,40 @@ the song's name and gives 1-6 photos of the singer.
 Measured on the PC (RTX 5050): writer (qwen3.5 9b) 22 s, the two cutouts 3 s, a 12 s edit
 renders in 40 s.
 
+### Any photo, made ready by itself
+
+The first live uploads were refused: search-result thumbnails (a 197x197 WebP album cover, a
+295x180 stage photo) under the old 200 px minimum, with nothing in the log to say why. Now
+(`singer.take_photo`, `singer.prepare_photo`, on upload):
+
+- Any kind a phone or browser saves: JPEG, PNG, WebP, GIF and animated WebP (the first
+  frame), AVIF (Pillow), HEIC/HEIF from iPhones (pillow-heif: its code is BSD-3, its wheels
+  bundle libheif and libde265 under LGPL-3 and x265 under GPL-2, fine to run on our own
+  machines; pi-heif, the decode-only variant, is discontinued with a known decoder flaw),
+  CMYK, 16-bit (scaled, not clipped), see-through parts put on white, turned as the camera
+  held it. The picker offers every image (`image/*`, plus .heic/.heif/.avif).
+- Sizes: under 120 px on the short side is refused with the size in the message; under 400
+  px it is enlarged to 800 by Real-ESRGAN with GFPGAN on the faces (the upscale preset's
+  models, on the CPU: a thumbnail takes a few seconds and the GPU stays free), smoothly where
+  those models aren't, with a note that it may look soft; over 1600 px it is made smaller;
+  over 200 megapixels it is refused as a decompression bomb.
+- A refused upload is logged with the reason, the file's format, its size in bytes and
+  pixels and what the browser sent it as (never the picture), and the form shows the
+  server's reason next to the file's name.
+- Made ready: plain rows and columns at the edges trimmed (letterboxing, a phone
+  screenshot's status and navigation bars, a frame); every line OCR reads painted out, and
+  letters its detector sees but can't read (a cover's script title) where they aren't on the
+  person; cropped to the main person (the biggest face in a group, between the neighbours'
+  faces, with the whole head and room around the face; more room when no face is found);
+  smaller faces away from them left out of the cutout (a drummer behind the singer). A photo
+  of a face alone (a close portrait, a cover) is shown whole, as a print, not cut out to
+  float, and painted from whole. The form's thumbnail is this prepared photo, and the edit
+  uses exactly it; the notes ("a small photo (197x197): enlarged", "borders trimmed", "text
+  painted out", "cropped to the singer") show as a message.
+- The singer is described by the vision model from a photo of all of them where there is
+  one (it took the cover's made-up face for a woman's), and that description goes into the
+  likeness model's prompt.
+
 ### Marks on the photos
 
 Photos people send carry stamps: an agency's watermark ("Bollywood Hungama" on the first
