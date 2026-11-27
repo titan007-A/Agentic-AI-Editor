@@ -773,6 +773,66 @@ def test_a_reel_that_passes_every_check_waits_for_approval_then_its_post_time(
 
 
 @needs_ffmpeg
+def test_a_reel_of_a_song_on_the_strike_list_waits_for_a_person(env, short_vs, tmp_path):
+    owner = short_vs
+    reel = split_reel(tmp_path, vs_preset(min_duration=5, max_duration=15), 3.5, 10.0)
+    router = fake_router(env)
+    work_dir = env.settings.cache_dir / ("d" * 20)
+    analysed(env, work_dir, router)
+    luna = {"song": "LUNA", "artist": "Feid", "year": "2023", "year_from": "MusicBrainz",
+            "label": "Universal Music Latin Entertainment", "group": "UMG",
+            "label_from": "MusicBrainz"}  # fmt: skip
+    with env.sessions() as db:
+        post_id = queued_post(db, owner, song="LUNA", artist="Feid")
+        row = db.get(ChannelPost, post_id)
+        row.heard_song, row.heard_artist, row.work_dir = "LUNA", "Feid", str(work_dir)
+        job = edited(db, post_id, reel)
+        job.song_facts = luna
+        row.status, row.output_id = "reviewing", job.outputs[0].id
+        db.commit()
+        output_id = job.outputs[0].id
+    assert pilot.review(post_id, env.sessions, env.settings, router) == "look"
+    with env.sessions() as db:
+        row = db.get(ChannelPost, post_id)
+        assert {c["name"] for c in row.checks if not c["ok"]} == {"strike list"}
+        assert row.reason.startswith("strike list: “Luna” by Feid & ATL Jacob was blocked")
+        output = db.get(Output, output_id)
+        assert output.pile == "look"
+        assert any(d.startswith("Autopilot strike list:") for d in output.doubts)
+    shown = env.client.get("/api/channel-autopilot/ig1/posts?show=queue").json()
+    notice = next(p for p in shown if p["id"] == post_id)["notice"]
+    assert notice["blocked"]["song"] == "Luna" and notice["group"] == "UMG"
+
+
+@needs_ffmpeg
+def test_a_majors_song_is_said_on_the_reel_but_still_posts(env, short_vs, tmp_path):
+    owner = short_vs
+    reel = split_reel(tmp_path, vs_preset(min_duration=5, max_duration=15), 3.5, 10.0)
+    router = fake_router(env)
+    work_dir = env.settings.cache_dir / ("c" * 20)
+    analysed(env, work_dir, router)
+    with env.sessions() as db:
+        post_id = queued_post(db, owner)
+        row = db.get(ChannelPost, post_id)
+        row.heard_song, row.heard_artist, row.work_dir = (
+            "Wuthering Heights",
+            "Kate Bush",
+            str(work_dir),
+        )
+        job = edited(db, post_id, reel)
+        job.song_facts = {"song": "Wuthering Heights", "artist": "Kate Bush", "year": "1978",
+                          "year_from": "MusicBrainz", "label": "EMI", "group": "UMG",
+                          "label_from": "MusicBrainz"}  # fmt: skip
+        row.status, row.output_id = "reviewing", job.outputs[0].id
+        db.commit()
+    assert pilot.review(post_id, env.sessions, env.settings, router) == "awaiting"
+    with env.sessions() as db:
+        rights = next(c for c in db.get(ChannelPost, post_id).checks if c["name"] == "song rights")
+        assert rights == {"name": "song rights", "ok": True,
+                          "detail": "Universal Music's song (EMI); 1978"}  # fmt: skip
+
+
+@needs_ffmpeg
 def test_any_doubt_about_the_reel_leaves_it_for_a_person_and_on_the_piles(env, short_vs, tmp_path):
     owner = short_vs
     preset = vs_preset(min_duration=5, max_duration=15)

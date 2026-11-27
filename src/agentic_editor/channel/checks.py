@@ -298,6 +298,26 @@ def caption(text: str, status: str | None, notes: list[str]) -> Check:
     return Check("caption", True, said + ("" if not notes else f" ({'; '.join(notes)})"))
 
 
+def song_rights(notice, known: bool) -> Check | None:
+    """The reel's song against the strike list (strikes.notice): on it, the reel waits for
+    a person like any other doubt. Its label and year, when the edit `known` them, are said
+    in a check that passes: a major's song or a new one is posted, but the page shows it."""
+    if notice is None:
+        return None
+    if blocked := notice.blocked:
+        why = ", ".join(x for x in (blocked.label_group, blocked.note) if x and x != "other")
+        return Check("strike list", False, f"“{blocked.song}” by {blocked.artist or '?'} was "
+                     f"{blocked.what_label} before{f' ({why})' if why else ''}: pick another "
+                     "song")  # fmt: skip
+    if not known:
+        return None
+    label = notice.label or "label not found"
+    if notice.notified:
+        label = f"{notice.group_name}'s song ({notice.label})"
+    year = f"{notice.year}, a new song" if notice.new else notice.year or "year unknown"
+    return Check("song rights", True, f"{label}; {year}")
+
+
 def reel_length(duration: float, preset: Preset) -> Check:
     ok = preset.min_duration - 0.5 <= duration <= preset.max_duration + 0.5
     return Check("reel length", ok, f"{duration:.1f} s (preset {preset.min_duration:g}-"

@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from agentic_editor import download, jobs, pipeline, research, songfacts, strikes
-from agentic_editor.db import Event, Job
+from agentic_editor.channel import checks
+from agentic_editor.db import Event, Job, Strike
 from agentic_editor.edl import EDL, Clip
 from tests import test_api
 from tests.test_api import employee, start
@@ -283,3 +284,24 @@ def test_a_researchs_reels_show_their_songs_year_label_and_strikes(env):
     assert [(i["new"], i["label_group"]) for i in items] == [(True, "Sony"), (
         datetime.now(UTC).year - 2023 <= 3, "UMG"), (False, "")]  # fmt: skip
     assert [bool(i["blocked"]) for i in items] == [False, True, False]
+
+
+def notice_of(facts: dict, *listed: tuple[str, str]):
+    rows = [Strike(id=n, song=s, artist=a, label_group="UMG", what="blocked", note="")
+            for n, (s, a) in enumerate(listed)]  # fmt: skip
+    return strikes.notice(facts, rows, this_year=2026)
+
+
+def test_the_channel_autopilot_holds_a_reel_of_a_strike_list_song():
+    held = checks.song_rights(notice_of({"song": "Luna", "artist": "Feid"},
+                                        ("Luna", "Feid & ATL Jacob")), known=False)  # fmt: skip
+    assert held.name == "strike list" and not held.ok
+    assert held.detail == "“Luna” by Feid & ATL Jacob was blocked worldwide before (UMG): pick " \
+        "another song"  # fmt: skip
+    said = checks.song_rights(notice_of(FLOWERS), known=True)
+    assert said.ok and said.name == "song rights"
+    assert said.detail == "Sony Music's song (Columbia); 2023, a new song"
+    assert checks.song_rights(notice_of(OLD), known=True).detail == "T‐Series; 2013"
+    # Shazam's name alone (no edit facts): only the strike list is checked.
+    assert checks.song_rights(notice_of({"song": "Flowers", "artist": "x"}), known=False) is None
+    assert checks.song_rights(None, known=True) is None

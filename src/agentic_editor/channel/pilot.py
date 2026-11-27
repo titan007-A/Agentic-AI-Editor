@@ -50,6 +50,7 @@ from agentic_editor import (
     research,
     shazam,
     slots,
+    strikes,
 )
 from agentic_editor.analysis import separation
 from agentic_editor.analyze import file_hash, isolate_vocals, transcript_file
@@ -830,10 +831,15 @@ def review(post_id: int, Session: sessionmaker, settings: Settings, router) -> s
         doubts = [d for d in doubts if not d.startswith(OWN_DOUBT)]
         text, status, notes = output.caption, output.caption_status, list(output.caption_notes)
         work_dir = Path(post.work_dir)
+        # The song as its edit knew it (year, label), else as Shazam heard it.
+        facts = output.job.song_facts if output.job else None
+        heard = {"song": post.heard_song or post.song, "artist": post.heard_artist or post.artist}
+        rights = checks.song_rights(strikes.notice(facts or heard, strikes.listed(db)), bool(facts))
     rows = [
         checks.confidence(score, doubts, issues),
         checks.caption(text, status, notes),
         checks.reel_length(edl.duration, preset),
+        *([rights] if rights else []),
     ]
     scratch = work_dir / "channel-review" / str(post_id)
     scratch.mkdir(parents=True, exist_ok=True)
