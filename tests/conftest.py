@@ -27,6 +27,17 @@ def shazam_hears_nothing(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def musicbrainz_knows_nothing(request, monkeypatch):
+    """MusicBrainz is a third party's server: in a test a song's label and year come only
+    from what the video says, unless the test fakes MusicBrainz's answers itself."""
+    from agentic_editor import songfacts
+
+    if request.module.__name__.endswith("test_songfacts"):
+        return
+    monkeypatch.setattr(songfacts, "musicbrainz", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
 def no_map_download(monkeypatch):
     """The world map is 33 MB from other people's servers: never fetched by a test (one
     that wants it gives its own `download`)."""
