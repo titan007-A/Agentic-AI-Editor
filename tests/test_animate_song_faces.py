@@ -97,6 +97,9 @@ def test_people_are_painted_once_as_portraits_and_each_moment_from_theirs(tmp_pa
     assert not any(word in songpaint.KEEP for word in ("beard", "glasses", "shaven"))
     assert alone.refs == (by_name["Sam"],) and "his car" in alone.prompt
     assert empty.refs == () and "reference" not in empty.prompt
+    # Nobody in it: told so, never asked for faces (they came out on the lamps).
+    assert images.EMPTY in empty.prompt and "every face" not in empty.prompt
+    assert all("every face" in m.prompt for m in (first, alone, crowd, running))
     assert "flat 2D vector" in empty.prompt and "no text" in empty.prompt
     # Five in one picture: painted from the first four portraits, the fifth from words.
     assert crowd.refs == (by_name["Nana"], by_name["Leo"], by_name["Sam"], by_name["Ana"])
@@ -499,3 +502,18 @@ def test_one_picture_that_fails_never_takes_the_rest_with_it(tmp_path, monkeypat
                                                                      "done"]  # fmt: skip
     assert (tmp_path / "0.png").exists() and (tmp_path / "2.png").exists()
     assert not (tmp_path / "1.png").exists()
+
+
+def test_a_moment_with_people_nobody_named_still_asks_for_their_faces():
+    plan = faces_plan(
+        arts=[
+            "two girls dance under the street lights",
+            "Leo alone at the bus stop",
+            "the wet street at dawn, puddles and one lamp",
+        ],
+        people=(LEO,),
+    )
+    crowd, leo, street = (songpaint.moment_prompt(plan, s.visual.art, []) for s in plan.scenes)
+    assert "every face" in crowd and images.EMPTY not in crowd
+    assert "every face" in leo  # named, painted from words (no portrait)
+    assert images.EMPTY in street and "every face" not in street

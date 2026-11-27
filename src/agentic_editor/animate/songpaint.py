@@ -65,7 +65,11 @@ def moment_prompt(plan: Plan, art: str, refs: list[Person]) -> str:
     marks = {p.name: f"the person in image {k}" for k, p in enumerate(refs, 1)}
     scene = songwriter.painted(plan, art, marks).strip().rstrip(".")
     keep = f"{KEEP}. " if refs else ""
-    return f"{scene}. {keep}{images.LOOKS[songwriter.STYLE]}, every face {FEATURES}, {images.NEVER}"
+    # A moment with nobody in it is told so: asked for faces, the model put them on whatever
+    # was there (lamps in an empty garden came out as rows of round faces).
+    someone = refs or songwriter.people_in(plan, art) or songwriter.SOMEONE.search(art)
+    faces = f"every face {FEATURES}" if someone else images.EMPTY
+    return f"{scene}. {keep}{images.LOOKS[songwriter.STYLE]}, {faces}, {images.NEVER}"
 
 
 def paint(plan: Plan, settings: Settings, paint, likeness, progress) -> tuple[Plan, list[str]]:
