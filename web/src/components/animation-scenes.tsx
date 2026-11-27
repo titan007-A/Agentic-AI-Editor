@@ -650,6 +650,13 @@ function PeopleEditor({
                 />
               </a>
             )}
+            {!p.image && portraits && (
+              // someone in no picture yet (or whose portrait couldn't be painted): room kept
+              <div
+                className="h-24 w-[54px] shrink-0 rounded border-[1.5px] border-dashed border-foreground/40"
+                aria-hidden
+              />
+            )}
             <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,140px)_minmax(0,1fr)]">
               <Input
                 aria-label={`Person ${k + 1}'s name`}
