@@ -27,6 +27,7 @@ from agentic_editor import (
     research,
     shazam,
     slots,
+    songfacts,
     style,
 )
 from agentic_editor.animate import schedule, studio
@@ -103,6 +104,14 @@ class Tracker:
         if stage == "title":  # the source's own title, known once it is downloaded
             with self.Session() as db:
                 db.get(Job, self.job_id).title = message
+                db.commit()
+            return
+        if stage == "song":  # its song, year and label (pipeline.song_known): not a stage
+            facts = json.loads(message)
+            with self.Session() as db:
+                db.get(Job, self.job_id).song_facts = facts
+                line = f"song: {songfacts.Facts(**facts).line()}"
+                db.add(Event(job_id=self.job_id, stage="song", message=line, progress=self.value))
                 db.commit()
             return
         # A job that got the GPU or encoder it waited for is back at the stage it was at.
@@ -583,6 +592,43 @@ def caption_about_song(
     return done
 
 
+def song_from_caption(
+    job_id: str,
+    song: str,
+    artist: str,
+    output_path: Path,
+    Session: sessionmaker,
+    settings: Settings,
+) -> None:
+    """A post caption found the reel's song: the job learns it, with its year and label,
+    when its edit didn't know it (a preset that doesn't show the song) or knew another (a
+    person named the right one). Never fails the caption."""
+    with Session() as db:
+        job = db.get(Job, job_id)
+        facts = job.song_facts if job else None
+    if job is None or not song.strip():
+        return
+    if facts and research.Posted([(facts["song"], facts.get("artist", ""))], []).has(song, artist):
+        return
+    try:
+        _, description = source_text(output_path, settings.media_dir)
+        meta = output_path.parent / "source.json"
+        uploader = json.loads(meta.read_text()).get("uploader", "") if meta.exists() else ""
+        found = songfacts.look_up(
+            song, artist, description=description, uploader=uploader or "",
+            cache_dir=settings.cache_dir,
+        )  # fmt: skip
+    except Exception:
+        log.exception("job %s: couldn't look up %s - %s's label and year", job_id, song, artist)
+        return
+    with Session() as db:
+        if job := db.get(Job, job_id):
+            job.song_facts = found.as_dict()
+            db.add(Event(job_id=job_id, stage="song", message=f"song: {found.line()}",
+                         progress=job.progress))  # fmt: skip
+            db.commit()
+
+
 def run_caption(output_id: int, Session: sessionmaker, settings: Settings, router=None) -> None:
     """Write an output's post caption (see caption.py). Like a job, it never stays
     "writing": whatever happens is stored. Videos go first: a job waiting for the GPU
@@ -618,7 +664,9 @@ def _write_caption(output_id: int, Session: sessionmaker, settings: Settings, ro
             with Session() as db:
                 if output := db.get(Output, output_id):
                     output.caption_song, output.caption_artist = song, artist
+                    job_id = output.job_id
                     db.commit()
+            song_from_caption(job_id, song, artist, path, Session, settings)
 
         if source_ref.startswith(studio.SOURCE):  # an animation's caption is its Plan's
             written = studio.caption_of(source_ref.removeprefix(studio.SOURCE), Session)

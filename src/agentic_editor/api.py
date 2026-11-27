@@ -47,6 +47,7 @@ from agentic_editor import (
     niche,
     research,
     songlist,
+    strikes,
 )
 from agentic_editor.animate import mcp_tools, studio
 from agentic_editor.animate import routes as animate_routes
@@ -692,6 +693,8 @@ class JobView(BaseModel):
     # Roughly how long a queued or running job still has, in seconds (eta.py); None when
     # it can't be told or the job is over.
     eta_seconds: int | None = None
+    # Its song, once known, and what to know before posting it (strikes.notice).
+    song: strikes.Notice | None = None
 
 
 def job_view(
@@ -701,6 +704,7 @@ def job_view(
     labels: dict[str, str] | None = None,
     eta_seconds: int | None = None,
     posts: dict[int, list[dict]] | None = None,
+    listed: list | None = None,
 ) -> JobView:
     outputs = [
         OutputView(
@@ -749,6 +753,7 @@ def job_view(
         owner=owner,
         unnamed=UNNAMED.findall(job.error or ""),
         eta_seconds=eta_seconds,
+        song=strikes.notice(job.song_facts, listed or []),
     )
 
 
@@ -790,6 +795,8 @@ def create_app(
     settings: Settings, session_factory: sessionmaker | None = None, start_worker: bool = True
 ) -> FastAPI:
     make_session = session_factory or jobs.sessions()
+    with make_session() as session:
+        strikes.seed(session)
 
     async def scan_feeds() -> None:
         while True:
@@ -950,10 +957,11 @@ def create_app(
         labels: dict | None = None,
         etas: dict[str, int] | None = None,
         posts: dict[int, list[dict]] | None = None,
+        listed: list | None = None,
     ) -> JobView:
         """The job as its viewer sees it: the primary account with who started it. A list passes
-        `names`, `labels` (a cache), `etas` and its outputs' Buffer `posts` worked out once,
-        so a long one doesn't look each owner up again."""
+        `names`, `labels` (a cache), `etas`, its outputs' Buffer `posts` and the strike list
+        (`listed`) worked out once, so a long one doesn't look each owner up again."""
         shown = preset_labels(job.owner_id, session, labels)
         left = None
         if job.status in ("queued", "running"):
@@ -964,7 +972,9 @@ def create_app(
             posts = buffer_posts.for_outputs(session, [o.id for o in job.outputs])
         if names is None:
             names = render_names(account, session)
-        return job_view(job, only, names.get(job.owner_id), shown, left, posts)
+        if listed is None:
+            listed = strikes.listed(session) if job.song_facts else []
+        return job_view(job, only, names.get(job.owner_id), shown, left, posts, listed)
 
     def find_job(job_id: str, session: Session, account: Account) -> Job:
         job = session.get(Job, job_id)
@@ -2123,10 +2133,12 @@ def create_app(
         labels: dict = {}
         etas = eta.estimates(session, settings.max_concurrent_jobs)
         posts = buffer_posts.for_outputs(session, [o.id for j in rows for o in j.outputs])
+        listed = strikes.listed(session)
         return [
-            view(j, account, session, names=names, labels=labels, etas=etas, posts=posts)
+            view(j, account, session, names=names, labels=labels, etas=etas, posts=posts,
+                 listed=listed)
             for j in rows
-        ]
+        ]  # fmt: skip
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, account: User, session: DB) -> JobView:
@@ -3619,6 +3631,7 @@ def create_app(
     channel_routes.install(
         app, User=User, DB=DB, presets_of=presets, public_base=public_base, settings=settings
     )
+    strikes.install(app, User=User, DB=DB, find_job=find_job)
 
     if settings.web_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")

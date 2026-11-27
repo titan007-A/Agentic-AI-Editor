@@ -75,6 +75,9 @@ class Job(Base):
     started_at: Mapped[datetime | None]
     # Who started it; None for jobs from before accounts, which are the admin's.
     owner_id: Mapped[str | None] = mapped_column(String(12), index=True)
+    # The song, once the edit or its caption knew it, with its year and label
+    # (songfacts.Facts); None until then. Its warnings are worked out when shown (strikes.py).
+    song_facts: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
@@ -969,6 +972,24 @@ class ReelLog(Base):
     made_at: Mapped[datetime] = mapped_column(default=_now, index=True)
     captioned: Mapped[bool] = mapped_column(default=False)
     posted: Mapped[int] = mapped_column(default=0)
+
+
+class Strike(Base):
+    """A song a label blocked or took down on one of the pages: the strike list, one for
+    every account (strikes.py). Russia-only mutes and blocks never go on it."""
+
+    __tablename__ = "strikes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    song: Mapped[str] = mapped_column(Text)
+    artist: Mapped[str] = mapped_column(Text, default="")
+    label_group: Mapped[str] = mapped_column(String(8), default="other")  # songfacts.GROUPS
+    what: Mapped[str] = mapped_column(String(16), default="blocked")  # strikes.WHATS
+    note: Mapped[str] = mapped_column(Text, default="")  # "228 countries"
+    # Who put it there (they and an admin may take it off); None: the list's first entry.
+    added_by: Mapped[str | None] = mapped_column(String(12), index=True)
+    job_id: Mapped[str | None] = mapped_column(String(12))  # the reel it happened to
+    created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
 class Setting(Base):

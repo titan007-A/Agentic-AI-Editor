@@ -30,6 +30,7 @@ from agentic_editor import (
     shazam,
     silence,
     slots,
+    songfacts,
     subtitles,
     trim,
 )
@@ -1210,9 +1211,10 @@ def edit_presets(
     # Text that moves with the picture, where the preset moves it (framing.text_follows_video).
     face = compose.text_face(settings, None)
     presets = [compose.moved_layout(p, face) for p in presets]
-    # "song:" and "artist:" lines are always taken, so the instruction reader never sees
-    # them; a preset that doesn't name the song still gets them for its reel's song.
-    wanted = set().union({"song", "artist", "channel"}, *(names.wanted(p) for p in presets))
+    # "song:", "artist:" and "year:" lines are always taken, so the instruction reader never
+    # sees them; a preset that doesn't name the song still gets them for its reel's song.
+    always = {"song", "artist", "channel", "year"}
+    wanted = set().union(always, *(names.wanted(p) for p in presets))
     given, notes = names.from_notes(notes, wanted)
     # {channel}: a "channel:" line in the notes wins over the video's own.
     given.setdefault("channel", names.channel_of(source.url, source.uploader))
@@ -1266,6 +1268,11 @@ def edit_presets(
         except (names.UnnamedSong, names.MissingField) as exc:
             failed(preset.name, exc)
     presets = named
+    known = next(iter(songs.values()), None)
+    if known is None and given.get("song") and given.get("artist"):
+        known = given["song"], given["artist"]
+    if known:
+        song_known(*known, source, work_dir, given.get("year"), settings, progress)
     if any(headline.wanted(p) for p in presets):
         presets = headlined(router, source, presets, given_headline, instructed, failed,
                             settings, progress)  # fmt: skip
@@ -1442,6 +1449,40 @@ def edit_presets(
             "uploader": source.uploader, "description": source.description}  # fmt: skip
     (out_dir / "source.json").write_text(json.dumps(meta))
     return Result(source.title, outputs, failures)
+
+
+def song_known(
+    song: str,
+    artist: str,
+    source: download.Source,
+    work_dir: Path,
+    given_year: str | None,
+    settings: Settings,
+    progress: Progress,
+) -> None:
+    """Tells the job its song, with its year and label (songfacts), as progress "song" (the
+    facts as JSON): the job page warns from them. The edit never waits on a lookup that
+    fails; it goes on without them."""
+    year, year_from = None, ""
+    if given_year and names.ANY_YEAR.fullmatch(given_year.strip()):
+        year, year_from = given_year.strip(), "notes"
+    elif found := names.year_in(f"{source.title}\n{source.description}", song):
+        year, year_from = found, "the post"
+    try:
+        facts = songfacts.look_up(
+            song,
+            artist,
+            description=source.description,
+            uploader=source.uploader,
+            heard=shazam.details(work_dir),
+            year=year,
+            year_from=year_from,
+            cache_dir=settings.cache_dir,
+        )
+    except Exception as exc:
+        log.warning("couldn't look up %s - %s's label and year: %s", song, artist, exc)
+        return
+    progress("song", json.dumps(facts.as_dict()))
 
 
 def understand(
