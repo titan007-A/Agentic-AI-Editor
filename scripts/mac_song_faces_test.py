@@ -169,7 +169,9 @@ def main() -> None:
 
 
 def probe(plan, after, settings, out: Path, measured: dict, times: Times) -> None:
-    """The moment with the most people in it, painted from 1, 2, 3... of their portraits."""
+    """The moment with the most people in it, painted from words, then from 1, 2, 3... of
+    their portraits (as moments are, made smaller), and from all of them whole: what each
+    costs and keeps."""
     from PIL import Image
 
     from agentic_editor.animate import images, songpaint, songwriter
@@ -187,16 +189,23 @@ def probe(plan, after, settings, out: Path, measured: dict, times: Times) -> Non
         print("no moment has two people with portraits: no probe")
         return
     seed = images.seed_of(plan.song.video, best.visual.art_seed)
-    pictures = []
+    pictures = [images.Picture(songpaint.moment_prompt(plan, best.visual.art, []), seed + 1)]
+    asked = ["words"]
     for n in range(1, min(4, len(who)) + 1):
         refs = who[:n]
-        pictures.append(images.Picture(
-            songpaint.moment_prompt(plan, best.visual.art, refs), seed + 1,
-            refs=tuple(str(folder / portraits[p.name]) for p in refs)))  # fmt: skip
+        small = tuple(songpaint.reference_of(folder, portraits[p.name]) for p in refs)
+        prompt = songpaint.moment_prompt(plan, best.visual.art, refs)
+        pictures.append(images.Picture(prompt, seed + 1, refs=small))
+        asked.append(f"{n} small")
+    pictures.append(images.Picture(
+        songpaint.moment_prompt(plan, best.visual.art, who[:4]), seed + 1,
+        refs=tuple(str(folder / portraits[p.name]) for p in who[:4])))  # fmt: skip
+    asked.append(f"{min(4, len(who))} whole")
     times.pictures.clear()
     names = images.paint_likeness(pictures, settings, lambda *a: None)
     measured["probe"] = {
         "who": [p.name for p in who],
+        "asked": asked,
         "seconds": [s for _, s in times.pictures],
         "pictures": names,
     }
