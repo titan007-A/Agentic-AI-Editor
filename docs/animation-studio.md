@@ -305,34 +305,76 @@ words of the part wanted), and:
   YouTube search for the song's own upload (never a slowed, lo-fi, cover or live take; the
   length the lyrics' recording has), its sound downloaded once into `cache/songs/<video>`,
   the vocals separated with the editor's own model, and the line times moved onto the upload
-  (where singing starts after a pause). The part: runs of whole lines 15-32 s long scored by
+  (where singing starts after a pause). The part: runs of whole lines 24-40 s long scored by
   YouTube's "most replayed" graph (how high over the song and over the 30 s around it, and at
-  the part's opening), whole sections, no line twice, near 20 s, the first time a part comes,
-  and above all the words typed. Four parts that don't overlap are offered. Whisper hears the
-  part's vocals and the lyric words are laid over the heard words by syllables. A song LRCLIB
-  doesn't know is heard whole and what whisper heard is its lyrics (a note says so).
+  the part's opening), whole sections, no line twice, near 30 s (the owner asked for reels of
+  about 30 s instead of 20), the first time a part comes, and above all the words typed; a
+  part with music between its lines (a lyric held over a solo) counts less, one with more
+  than 6 s of it between two lines is offered only when the song has nothing else (a live
+  "Fix You" reel came out 76 s long with four lines over its instrumental builds), and a
+  last line counts only as long as its words can take to sing. Four parts that don't
+  overlap are offered. Whisper hears the part's vocals and the lyric words are laid over the heard words
+  by syllables: only the run of heard words from near the line's start, until a pause over
+  1.3 s or longer than its words can take (0.6 s a syllable and 1 s more), since whisper
+  "hears" words in an instrumental too (a live "Piano Man" reel had its last line's three
+  words stretched over a 12 s harmonica solo, and the reel ran on over it). The part ends
+  1.2 s after its last sung word, and never runs past the longest a part may be (timed
+  longer than its lines' times said, it ends a line or more sooner); a first line written
+  well before it is sung (the vocals quiet a while: music before it) starts where the
+  singing does. The song's title and singer are shown clean: LRCLIB's "Artist - Title" (or
+  both fields the whole name) becomes the title and singer, from the upload's own title and
+  channel when LRCLIB's look wrong. A song LRCLIB doesn't know
+  is heard whole and what whisper heard is its lyrics (a note says so). The Singer edit, which
+  uses the same finder, keeps its shorter hook (15-32 s, near 20 s).
 - `animate/songwriter.py` (the planning model): first the lines as shown (Devanagari for
   Hindi and Urdu, one word for one so every word keeps its time; a line that doesn't come back
   one for one stays as written), their key words and colours (never a small word), and where a
-  long line breaks into two; then the story: 2-5 people with a fixed look, one moment a line
-  (what its picture shows, a camera move, whether it goes on with the last picture), a title
-  and a caption in the page's way (Hinglish lines, "Sound on", song credit, hashtags).
+  long line breaks into two; then the story: 2-5 people with a fixed look, a moment for each
+  picture (what it shows, a camera move): one a line, two for a line on screen longer than
+  3 s (two camera beats over it, the second a new picture), a title and a caption in the
+  page's way ("Sound on", song credit, hashtags). A new picture far more often than not: a
+  moment keeps the picture before only where the writer says so, at most one in five, never
+  as a line's second picture. A 30 s reel comes to about 12-16 pictures (painting them on the
+  Mac, Z-Image-Turbo at 20-27 s a picture: about 4-7 minutes, against 2-2.5 for the 5-6 of a
+  20 s reel before).
 - Pictures: each moment painted with its people in it (the look `song`: flat 2D vector,
   thick outlines, muted colours, navy night, warm lamp light); a person's name in a picture is
   written out as they look; a moment that goes on with the last shares its picture; one seed a
   reel. Without the image model the moments are a dark night with warm lights.
-- Timing (`timeline.build_song`): a scene a line, from 0.15 s before it is sung to 0.15 s
-  before the next; the caption from its first word until the next line. The sound is the
-  song's part, faded in and out, at -14 LUFS. No closing "Follow" scene.
+- Timing (`timeline.build_song`): a scene a picture, from 0.15 s before its line is sung to
+  0.15 s before the next; a line's second picture comes on the word nearest the middle of its
+  time on screen (at least 1.2 s from either end); the caption from its first word until the
+  next line. The sound is the song's part, faded in and out, at -14 LUFS. No closing
+  "Follow" scene.
 - Player (theme `song`): the picture covers the frame with the camera move over its shot, a
   new picture fading in over the last; dark at the top for the lyrics, a vignette, dust in the
   light, a fade to black at the end; the line at the top left in Poppins (Devanagari), each
   word rising in on its time, key words 1.8x in Poppins Bold and their colour.
 - Studio: the form takes the song's name and the part; a song reel shows the song, the part
   playing and the other parts to play (`POST /api/animations/{id}/change {"choice": n}`,
-  op `hook`: timed again, a new story); its scenes show the lyric line, the camera and the
-  picture; people can be edited; one scene a line (none added, moved or removed); its style
-  stays. The autopilot doesn't make Song stories (they start from a song someone names).
+  op `hook`: timed again, a new story); its scenes show the lyric line (and which is a line's
+  second picture), the camera and the picture; people can be edited; one scene a picture
+  (none added, moved or removed, so no timeline strip); its style stays. The autopilot
+  doesn't make Song stories (they start from a song someone names).
+- Join two parts (`change {"join": [first, second]}`, op `hook`, undo goes back): a stretch
+  of whole lines from each part picked (scored as a part is, about 15 s each, about 30 s in
+  all, no line in both), every word timed, one story across both (the writer is told which
+  lines are which part). The first part is cut in the quiet of the vocals after its last line
+  (before the next line), the second in the quiet before its first, each on the strongest
+  beat or onset of the music there (spectral flux of the song itself). The plan keeps the two
+  stretches (`Song.pieces`, each line's `piece`), and the reel's clock runs through one then
+  the other; `sound.joined` reads both, brings each to their average loudness (BS.1770 LUFS,
+  at most 6 dB) and crossfades them over 0.25 s, equal power (cos/sin) centred on the cut, so
+  the joint has no dip and no click; preview and render both mix through it. Choosing one
+  part again leaves the join.
+- Make every part (`POST /api/animations/{id}/parts`): a new reel for each part of the song
+  that no reel of it plays yet, pointing at the first reel (`Animation.made_from`, its part
+  in `Animation.part`): timed from the song already found (found again, that part, if its
+  files are gone), drafted one after another (one sent to the queue at a time; the next takes
+  its turn when the one before is ready or failed, after a restart too), each rendered by
+  itself once drafted, as the Render button does (later changes are rendered by hand). The
+  song panel lists the song's reels with how far along each is, a link to open it and its
+  video in Jobs.
 
 ## Singer edit (owner's reference, 2026-11-26)
 
