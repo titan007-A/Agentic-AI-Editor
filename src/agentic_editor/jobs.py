@@ -109,7 +109,11 @@ class Tracker:
                 db.commit()
             return
         if stage == "song":  # its song, year and label (pipeline.song_known): not a stage
-            facts = json.loads(message)
+            try:
+                facts = songfacts.Facts(**json.loads(message)).as_dict()
+            except (ValueError, TypeError) as exc:  # a notice, never the job's end
+                log.warning("job %s: a song message that can't be read: %s", self.job_id, exc)
+                return
             with self.Session() as db:
                 db.get(Job, self.job_id).song_facts = facts
                 line = f"song: {songfacts.Facts(**facts).line()}"

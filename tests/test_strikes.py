@@ -149,6 +149,11 @@ def test_the_tracker_keeps_the_song_without_changing_the_stage(env):
         assert job.song_facts == FLOWERS and job.stage == "plan"
     track("render", "rendering")
     assert track.stage == "render"
+    # A message it can't read is passed over: the job goes on.
+    track("song", "not json")
+    track("song", json.dumps({"title": "Flowers"}))
+    with env.sessions() as db:
+        assert db.get(Job, "j1").song_facts == FLOWERS
 
 
 def source(tmp_path, description="", title="Video by someone"):
