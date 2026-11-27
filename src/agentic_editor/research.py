@@ -298,6 +298,8 @@ class Context:
     posted: list[str] = field(default_factory=list)
     # The account wants surprising picks over each artist's most famous hits (SURPRISE).
     surprise: bool = False
+    # The strike list's songs, (song, artist): a label blocked them, so none is given.
+    strikes: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -1824,6 +1826,11 @@ def run(
         again = {id(r) for r in reels if posted.has(song_title(r), r.artist)}
         left_out["posted before"] = len(again)
         reels = [r for r in reels if id(r) not in again]
+    if context.strikes:
+        listed = Posted(context.strikes, [])
+        blocked = {id(r) for r in reels if listed.has(song_title(r), r.artist)}
+        left_out["on the strike list"] = len(blocked)
+        reels = [r for r in reels if id(r) not in blocked]
     # A reel the model couldn't rate isn't shown (the owner: no junk), unless it rated none:
     # then they all are, as half relevant, rather than nothing.
     rated = any(r.relevance is not None for r in reels)

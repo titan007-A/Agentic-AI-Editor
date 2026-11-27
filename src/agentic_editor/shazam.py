@@ -77,10 +77,33 @@ def song(video: Path, work_dir: Path, ask=None, look=None) -> tuple[str, str] | 
         if heard := named(track):
             found = names_only(*heard, look or titles)
             log.info("Shazam heard %s - %s at %.0f s: %s - %s", *heard, start, *found)
-            cache.write_text(json.dumps({"song": found[0], "artist": found[1], "heard": heard}))
+            kept = {"song": found[0], "artist": found[1], "heard": heard, **about(track)}
+            cache.write_text(json.dumps(kept))
             return found
     log.info("Shazam didn't recognise %s", video.name)
     return None
+
+
+def about(track: dict | None) -> dict:
+    """The label and release year Shazam's match names ({"label": "Columbia", "released":
+    "2023"}), from its song section's metadata; only those it gives."""
+    found = {}
+    for section in (track or {}).get("sections") or []:
+        for item in (section or {}).get("metadata") or []:
+            title, text = str(item.get("title") or "").casefold(), str(item.get("text") or "")
+            if title in ("label", "released") and text.strip():
+                found.setdefault(title, text.strip())
+    return found
+
+
+def details(work_dir: Path) -> dict:
+    """What the video's kept Shazam match says of its label and year (see about), {} when
+    Shazam wasn't asked or matched before it kept them."""
+    try:
+        kept = json.loads((work_dir / "shazam-v2.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: kept[k] for k in ("label", "released") if kept.get(k)}
 
 
 def starts(duration: float) -> list[float]:

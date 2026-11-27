@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { SongBadges } from "@/components/song-notice";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -651,6 +652,15 @@ function VideoCard({ post, onChange }: { post: ChannelPost; onChange: (p: Channe
               <Link href={`/job/?id=${post.job_id}`} className="underline">
                 the edit
               </Link>
+            )}
+            {post.notice && (
+              <SongBadges
+                year={post.notice.year}
+                new={post.notice.new}
+                group={post.notice.group}
+                label={post.notice.label}
+                blocked={post.notice.blocked}
+              />
             )}
             {post.relevance !== null && <span>fit {Math.round(post.relevance * 10)}/10</span>}
             {post.duration !== null && <span>{Math.round(post.duration)} s</span>}

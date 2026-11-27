@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -156,8 +157,10 @@ class Offline:
 
 
 def edit_offline(
-    monkeypatch, tmp_path, make_analysis, presets, broken=(), calls=None, notes=None, description=""
-):
+    monkeypatch, tmp_path, make_analysis, presets, broken=(), calls=None, notes=None,
+    description="",
+    progress=None,
+):  # fmt: skip
     """pipeline.edit with analysis, planning and rendering faked; rendering `broken`
     versions raises. `calls` collects (what, whether the vision model was open)."""
     calls = [] if calls is None else calls
@@ -186,10 +189,13 @@ def edit_offline(
     monkeypatch.setattr(pipeline, "produce", produce)
     monkeypatch.setattr(pipeline.faces, "detect", detect)
     monkeypatch.setattr(pipeline.compose, "picture_area", lambda *args: (0, 0, 1920, 1080))
-    settings = type("S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path})
+    settings = type(
+        "S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path, "cache_dir": tmp_path}
+    )
     source = download.Source(path=tmp_path / "source.mp4", title="Talk", description=description)
     work = tmp_path / "cache" / "abc"
-    return pipeline.edit(source, work, presets, settings, None, notes, lambda *args: None, "run1")
+    progress = progress or (lambda *args: None)
+    return pipeline.edit(source, work, presets, settings, None, notes, progress, "run1")
 
 
 def test_a_link_s_song_and_artist_come_from_the_notes(make_analysis, monkeypatch, tmp_path):
@@ -208,6 +214,27 @@ def test_a_link_s_song_and_artist_come_from_the_notes(make_analysis, monkeypatch
     (output,) = result.outputs
     assert output.song == ("Felicità", "Al Bano & Romina Power")
     assert output.edl.title == "Felicità - Al Bano & Romina Power"
+
+
+def test_the_job_is_told_the_song_its_label_and_year(make_analysis, monkeypatch, tmp_path):
+    shows = [{"text": "{song}", "size": 40, "anchor": "top", "offset": 100}]
+    named = Preset(name="a", label="a", min_duration=4, max_duration=8, captions={"enabled": False},
+                   text_blocks=shows)  # fmt: skip
+    told = []
+    notes = "song: Kesariya" + chr(10) + "artist: Arijit Singh" + chr(10) + "year: 2022"
+    said = "℗ 2022 Sony Music Entertainment India Pvt. Ltd."
+    edit_offline(monkeypatch, tmp_path, make_analysis, [named], notes=notes, description=said,
+                 progress=lambda *args: told.append(args))  # fmt: skip
+    (facts,) = [json.loads(m) for stage, m in told if stage == "song"]
+    assert facts == {"song": "Kesariya", "artist": "Arijit Singh", "year": "2022",
+                     "year_from": "notes", "label": "Sony Music Entertainment India Pvt. Ltd.",
+                     "group": "Sony", "label_from": "YouTube"}  # fmt: skip
+    # A preset that doesn't show the song, with nothing naming it: no song, no lookup.
+    plain = Preset(name="b", label="b", min_duration=4, max_duration=8, captions={"enabled": False})
+    told.clear()
+    edit_offline(monkeypatch, tmp_path, make_analysis, [plain],
+                 progress=lambda *args: told.append(args))  # fmt: skip
+    assert [m for stage, m in told if stage == "song"] == []
 
 
 def test_one_failed_version_keeps_the_others(make_analysis, monkeypatch, tmp_path):
@@ -324,7 +351,9 @@ def test_a_video_that_cant_be_analysed_fails_with_the_reason(make_analysis, monk
     presets = [Preset(name="a", label="a", min_duration=4, max_duration=8)]
     monkeypatch.setattr(pipeline, "ModelRouter", lambda *args: Offline())
     monkeypatch.setattr(pipeline, "analyze", no_audio)
-    settings = type("S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path})
+    settings = type(
+        "S", (), {"media_dir": tmp_path / "media", "models_dir": tmp_path, "cache_dir": tmp_path}
+    )
     source = download.Source(path=tmp_path / "clip.mp4", title="Clip")
     with pytest.raises(ValueError, match="has no audio track"):
         pipeline.edit(

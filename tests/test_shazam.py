@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -195,3 +196,24 @@ def test_shazam_is_asked_at_its_pace_and_left_alone_a_while_after_turning_us_awa
     now[0] += 2 * shazam.COOL_DOWN + 1
     assert shazam.paced(ask(FELICITA), "f", clock, sleep) == FELICITA
     assert shazam._cool[1] == 0.0  # it answered: the next cool-down starts short again
+
+
+def test_shazam_keeps_the_label_and_year_its_match_names(monkeypatch, tmp_path):
+    faked(monkeypatch)
+    track = {
+        "title": "Flowers",
+        "subtitle": "Miley Cyrus",
+        "sections": [
+            {"type": "SONG", "metadata": [{"title": "Album", "text": "Endless Summer Vacation"},
+                                          {"title": "Label", "text": "Columbia"},
+                                          {"title": "Released", "text": "2023"}]},
+            {"type": "LYRICS"},
+        ],
+    }  # fmt: skip
+    work = tmp_path / "work"
+    shazam.song(tmp_path / "v.mp4", work, lambda clip: track, look=lambda s, a: None)
+    assert shazam.details(work) == {"label": "Columbia", "released": "2023"}
+    # A match kept before the label was: nothing more to say.
+    (work / "shazam-v2.json").write_text(json.dumps({"song": "x", "artist": "y"}))
+    assert shazam.details(work) == {}
+    assert shazam.details(tmp_path / "never") == {}

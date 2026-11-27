@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ReelFeedback } from "@/components/reel-feedback";
+import { SongBadges } from "@/components/song-notice";
 import { type Preset, type Research, type ResearchItem } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -234,6 +235,13 @@ export function ReelCard({
           </p>
         </div>
         <div className="flex flex-wrap gap-1">
+          <SongBadges
+            year={item.year}
+            new={item.new}
+            group={item.label_group}
+            label={item.label}
+            blocked={item.blocked}
+          />
           <Badge variant={(item.relevance ?? 0.5) >= 0.6 ? "default" : "outline"}>
             Fit {item.relevance === null ? "?" : percent(item.relevance)}
           </Badge>

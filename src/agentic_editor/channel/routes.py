@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from agentic_editor import features, jobs
+from agentic_editor import features, jobs, strikes
 from agentic_editor.channel import pilot as autopilot
 from agentic_editor.db import (
     ChannelPilot,
@@ -166,9 +166,12 @@ def install(app, *, User, DB, presets_of, public_base, settings) -> None:
         at = later[0] if later else times[0]
         return f"{'today' if later else 'tomorrow'} {at:%H:%M}"
 
-    def post_view(row: ChannelPost, session: Session) -> dict:
+    def post_view(row: ChannelPost, session: Session, listed: list | None = None) -> dict:
         output = session.get(Output, row.output_id) if row.output_id else None
         job = session.get(Job, row.job_id) if row.job_id else None
+        if listed is None:
+            listed = strikes.listed(session) if job and job.song_facts else []
+        song = strikes.notice(job.song_facts, listed) if job else None
         return {
             "id": row.id, "status": row.status, "reason": row.reason, "code": row.code,
             "url": row.url, "title": row.title[:300], "song": row.song, "artist": row.artist,
@@ -184,6 +187,7 @@ def install(app, *, User, DB, presets_of, public_base, settings) -> None:
             "insights": row.insights, "insights_at":
                 row.insights_at.isoformat() if row.insights_at else None,
             "created_at": row.created_at.isoformat(),
+            "notice": song.model_dump() if song else None,
         }  # fmt: skip
 
     def research_account(
@@ -319,7 +323,8 @@ def install(app, *, User, DB, presets_of, public_base, settings) -> None:
             .order_by(order)
             .limit(SHOWN)
         )
-        return [post_view(r, session) for r in rows]
+        listed = strikes.listed(session)
+        return [post_view(r, session, listed) for r in rows]
 
     @app.post("/api/channel-posts/{post_id}/approve")
     def approve_post(post_id: int, account: User, session: DB) -> dict:

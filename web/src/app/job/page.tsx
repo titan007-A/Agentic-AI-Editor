@@ -10,6 +10,7 @@ import { JobStatus, jobLabel, needsName } from "@/components/job-status";
 import { NameSongForm } from "@/components/name-song-form";
 import { OutputCard } from "@/components/output-card";
 import { RetryButton } from "@/components/retry-button";
+import { BlockButton, SongNoticeCard } from "@/components/song-notice";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -28,6 +29,7 @@ import { api, ApiError, errorText, type Job } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
 import { cheer } from "@/lib/fun-events";
 import { timeLeft } from "@/lib/eta";
+import { toastKey, toastText } from "@/lib/song-notice.mjs";
 import { sounds } from "@/lib/sounds";
 
 function JobDetail() {
@@ -83,6 +85,23 @@ function JobDetail() {
     was.current = status;
   }, [job?.status, fun]);
   const events = useJobEvents(id, active, follow);
+  // The edit found the song: its notice comes with the job, asked for again now.
+  const songEvents = events.filter((e) => e.stage === "song").length;
+  useEffect(() => {
+    if (songEvents > 0) void load(true);
+  }, [songEvents, load]);
+  // A notice that turns up while the page is open is said once more, as a toast.
+  const toasted = useRef<{ id: string; key: string | null } | null>(null);
+  useEffect(() => {
+    if (!job) return;
+    const key = toastKey(job.id, job.song);
+    const before = toasted.current;
+    toasted.current = { id: job.id, key };
+    if (before?.id !== job.id || !key || key === before.key) return;
+    const text = toastText(job.song);
+    if (job.song?.blocked) toast.error(text);
+    else toast.warning(text);
+  }, [job]);
   // The time left is worked out on the server: asked again now and then while it runs.
   useEffect(() => {
     if (!active) return;
@@ -90,7 +109,8 @@ function JobDetail() {
     return () => window.clearInterval(every);
   }, [active, load]);
   const left = active ? timeLeft(job?.eta_seconds, job?.status === "queued") : null;
-  const latest = events.at(-1);
+  // Where the job is: its song's word isn't a stage.
+  const latest = events.filter((e) => e.stage !== "song").at(-1);
   const progress = latest?.progress ?? job?.progress ?? 0;
 
   async function remove() {
@@ -109,6 +129,7 @@ function JobDetail() {
   if (!job) return <p className="text-sm text-muted-foreground">Loading...</p>;
   // The job is fetched once; while it runs, the latest event says where it is now.
   const now = active && latest ? { ...job, status: "running" as const, stage: latest.stage } : job;
+  const named = captionSong(job);
 
   return (
     <div className="space-y-6">
@@ -178,6 +199,17 @@ function JobDetail() {
         </Card>
       )}
 
+      {job.song ? (
+        <SongNoticeCard notice={job.song} jobId={job.id} onAdded={() => void load(true)} />
+      ) : (
+        named && (
+          <Card className="flex-row flex-wrap items-center justify-between gap-2 p-3">
+            <p className="text-sm">Did a label block or take down this reel?</p>
+            <BlockButton {...named} jobId={job.id} />
+          </Card>
+        )
+      )}
+
       {needsName(job) ? (
         <NameSongForm job={job} />
       ) : (
@@ -212,6 +244,13 @@ function JobDetail() {
       </Dialog>
     </div>
   );
+}
+
+/** The song a finished job's post caption named, when its edit didn't know it. */
+function captionSong(job: Job): { song: string; artist: string } | null {
+  if (job.status !== "done") return null;
+  const named = job.outputs.find((o) => o.caption_song);
+  return named ? { song: named.caption_song, artist: named.caption_artist } : null;
 }
 
 export default function JobPage() {

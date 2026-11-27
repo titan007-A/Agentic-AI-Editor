@@ -5,6 +5,7 @@ import Link from "next/link";
 import { JobStatus, jobLabel } from "@/components/job-status";
 import { RetryButton } from "@/components/retry-button";
 import { Snowman } from "@/components/snowman";
+import { SongBadges } from "@/components/song-notice";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useFun } from "@/hooks/use-fun";
@@ -34,6 +35,21 @@ export function JobList({ jobs, onChange }: { jobs: Job[]; onChange: () => void 
                 {job.trim === false && <span>whole video</span>}
                 <span>{new Date(job.created_at + "Z").toLocaleString()}</span>
               </div>
+              {job.song && (
+                <div className="flex flex-wrap items-center gap-1 text-xs">
+                  <span className="truncate text-muted-foreground">
+                    {job.song.song}
+                    {job.song.artist && ` · ${job.song.artist}`}
+                  </span>
+                  <SongBadges
+                    year={job.song.year}
+                    new={job.song.new}
+                    group={job.song.group}
+                    label={job.song.label}
+                    blocked={job.song.blocked}
+                  />
+                </div>
+              )}
               {(job.status === "running" || job.status === "queued") && (
                 <div className="flex items-center gap-2">
                   {fun && <Snowman value={job.progress} size={30} falling={false} />}
