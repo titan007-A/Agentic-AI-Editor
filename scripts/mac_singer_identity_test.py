@@ -109,10 +109,10 @@ def main() -> None:
         names.append(ready)
     photos, wiped = singer.photos_of(names, settings)
     print(f"photos ready in {time.time() - started:.1f} s ({wiped} marks painted out)")
-    from agentic_editor.backends import get_backends
     from agentic_editor.router import ModelRouter
 
-    with ModelRouter(settings, get_backends(), lambda *a: None).vision() as llm:
+    # the vision model alone: no transcriber or encoder is checked for it
+    with ModelRouter(settings, None, lambda *a: None).vision() as llm:
         look = singer.describe(llm, images.folder(settings) / photos[0].image)
     print(f"the singer, as the vision model sees them: {look or '(nothing said)'}")
 
