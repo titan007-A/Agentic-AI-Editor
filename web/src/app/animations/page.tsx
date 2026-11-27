@@ -352,7 +352,8 @@ export default function AnimationsPage() {
     try {
       for (const file of Array.from(files).slice(0, MAX_PHOTOS - photos.length)) {
         try {
-          const { name } = await api.uploadAnimationPhoto(file);
+          const { name, notes } = await api.uploadAnimationPhoto(file);
+          if (notes?.length) toast.info(`${file.name}: ${notes.join("; ")}`);
           setPhotos((had) => (had.includes(name) ? had : [...had, name].slice(0, MAX_PHOTOS)));
         } catch (err) {
           toast.error(`${file.name}: ${errorText(err)}`);
@@ -501,7 +502,7 @@ export default function AnimationsPage() {
                         {uploading ? "Sending" : "Add photos"}
                         <input
                           type="file"
-                          accept="image/jpeg,image/png,image/webp"
+                          accept="image/*,.heic,.heif,.avif"
                           multiple
                           className="sr-only"
                           aria-label="Photos of the singer"
@@ -515,8 +516,9 @@ export default function AnimationsPage() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Up to {MAX_PHOTOS} photos of the singer (more photos, more variety). Clear
-                    photos of one person work best.
+                    Up to {MAX_PHOTOS} photos of the singer, any kind (more photos, more variety).
+                    Each is made ready by itself: borders and text taken off, cropped to the singer.
+                    What you see here is what will be used.
                   </p>
                 </div>
               )}
