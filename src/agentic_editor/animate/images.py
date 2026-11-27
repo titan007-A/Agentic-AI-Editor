@@ -333,7 +333,13 @@ def _follow(
             if "done" in said:
                 done = before + said["done"]
                 progress("paint", f"painted {done} of {total} {what}")
-                log.info("painted %s of %s %s, %s s", done, total, what, said.get("seconds"))
+                memory = (
+                    f", {said['memory_gb']} GB (most {said['peak_gb']} GB)"
+                    if "memory_gb" in said
+                    else ""
+                )
+                log.info("painted %s of %s %s, %s s%s", done, total, what, said.get("seconds"),
+                         memory)  # fmt: skip
             elif "failed" in said:
                 log.warning("%s %s of %s couldn't be painted (paint.log says why)", what,
                             before + said["failed"], total)  # fmt: skip
