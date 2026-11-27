@@ -32,7 +32,9 @@ PORTRAIT_SIZE = (576, 1024)
 # clothes at this size.
 REF_SIZE = (384, 672)
 # The most portraits one picture is painted from; anyone else in it is painted from words.
-MOST_REFS = 3
+# Four at a table came out with every face whole and as their portraits on the M5 (21 s from
+# three, 29 s from four, 11 s from one); a fifth was never tried.
+MOST_REFS = 4
 # The reel's look without its night and its dark top: a portrait's colours stay true.
 PORTRAIT_LOOK = (
     "flat 2D vector illustration, simple stylised character with thick dark outlines, muted "

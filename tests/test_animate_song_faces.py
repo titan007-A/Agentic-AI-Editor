@@ -17,18 +17,19 @@ LEO = Person(name="Leo", look="a boy of nine with curly red hair in a yellow rai
 NANA = Person(name="Nana", look="an old woman with a grey bun and round glasses, green shawl")
 SAM = Person(name="Sam", look="a tall man with a black beard in a grey hoodie")
 ANA = Person(name="Ana", look="a girl with two black braids in a blue dress")
+BEA = Person(name="Bea", look="a woman with short purple hair in a denim jacket")
 ARTS = [
     "Leo and Nana fold paper boats at the kitchen table, warm lamp light",
     "Sam waits alone in his car at night, a cold phone glow on his face",
     "an empty street after the rain under one street light",
-    "Nana, Leo, Sam and Ana at the window watching the storm, close-up",
+    "Nana, Leo, Sam, Ana and Bea at the window watching the storm, close-up",
     "Leo runs down the wet street with Nana's umbrella, Nana calling after him",
 ]
 
 TWO_PARTS = [HookChoice(start=9.7, end=18.0), HookChoice(start=40.0, end=60.0)]
 
 
-def faces_plan(arts=ARTS, people=(LEO, NANA, SAM, ANA), video="made") -> Plan:
+def faces_plan(arts=ARTS, people=(LEO, NANA, SAM, ANA, BEA), video="made") -> Plan:
     song = song_of([3.0] * len(arts)).model_copy(update={"people": list(people), "video": video})
     scenes = [
         Scene(narration=line.text, visual=Visual(kind="moment", art=art, camera="push_in"))
@@ -75,7 +76,7 @@ def test_people_are_painted_once_as_portraits_and_each_moment_from_theirs(tmp_pa
     assert how == {"size": songpaint.PORTRAIT_SIZE, "what": "portraits",
                    "why": "paint the story's people"}  # fmt: skip
     assert [p.prompt.split(" of ", 1)[1].split(", standing")[0] for p in portraits] == [
-        LEO.look, NANA.look, SAM.look, ANA.look
+        LEO.look, NANA.look, SAM.look, ANA.look, BEA.look
     ]  # fmt: skip
     assert all("full-length" in p.prompt and "plain flat light grey" in p.prompt
                and "no text" in p.prompt and not p.refs for p in portraits)  # fmt: skip
@@ -97,10 +98,10 @@ def test_people_are_painted_once_as_portraits_and_each_moment_from_theirs(tmp_pa
     assert alone.refs == (by_name["Sam"],) and "his car" in alone.prompt
     assert empty.refs == () and "reference" not in empty.prompt
     assert "flat 2D vector" in empty.prompt and "no text" in empty.prompt
-    # Four in one picture: painted from the first three portraits, the fourth from words.
-    assert crowd.refs == (by_name["Nana"], by_name["Leo"], by_name["Sam"])
+    # Five in one picture: painted from the first four portraits, the fifth from words.
+    assert crowd.refs == (by_name["Nana"], by_name["Leo"], by_name["Sam"], by_name["Ana"])
     assert len(crowd.refs) == songpaint.MOST_REFS
-    assert ANA.look in crowd.prompt and "image 4" not in crowd.prompt
+    assert BEA.look in crowd.prompt and "image 5" not in crowd.prompt
     # Named twice (and with a possessive): marked once, written out each time.
     assert running.prompt.count(NANA.look) == 2 and running.prompt.count("image 2") == 1
     assert f"{NANA.look} (the person in image 2)'s umbrella" in running.prompt
@@ -138,8 +139,8 @@ def test_a_person_in_no_moment_gets_no_portrait(tmp_path):
     plan = faces_plan(arts=ARTS[:3])
     painters = Painters()
     painted, _ = songpaint.paint(plan, settings, painters.paint, painters.likeness, None)
-    assert len(painters.likeness_calls[0][0]) == 3  # Leo, Nana, Sam; Ana is in none
-    assert [bool(p.image) for p in painted.song.people] == [True, True, True, False]
+    assert len(painters.likeness_calls[0][0]) == 3  # Leo, Nana, Sam; Ana and Bea in none
+    assert [bool(p.image) for p in painted.song.people] == [True, True, True, False, False]
 
 
 def test_without_the_likeness_model_each_moment_is_painted_from_words_as_before(tmp_path):
@@ -216,7 +217,7 @@ def test_editing_a_look_repaints_its_portrait_and_only_the_moments_with_that_per
     shown = []
     plan = faces_plan()
     painted, _ = songpaint.paint(plan, settings, None, likeness, lambda s, m: shown.append(m))
-    assert "painted 4 of 4 portraits" in shown and shown[-1] == "painted 5 of 5 pictures"
+    assert "painted 5 of 5 portraits" in shown and shown[-1] == "painted 5 of 5 pictures"
     asked = FakeProc.last
     assert (asked["width"], asked["height"], asked["kind"]) == (720, 1280, "likeness")
     # Sam's look changed: his portrait and the two moments he is in, nothing else.
@@ -270,7 +271,7 @@ def test_portraits_are_used_again_by_the_songs_other_reels(tmp_path):
     # Another song (another seed): painted anew.
     calls.clear()
     songpaint.paint(faces_plan(video="another"), settings, None, counting, None)
-    assert len(calls[0][1]["jobs"]) == 4
+    assert len(calls[0][1]["jobs"]) == 5
     # A portrait asked for again: a new one.
     calls.clear()
     asked_again = other.model_copy(update={"song": other.song.model_copy(update={
