@@ -189,6 +189,16 @@ def sweep(Session: sessionmaker, settings: Settings, now: datetime | None = None
                 freed += _remove(folder)
                 count += 1
     gone["caches"] = count
+
+    # TikTok videos' pictures kept for the Researcher's cards (tiktok.keep_picture).
+    count = 0
+    thumbs = settings.cache_dir / "thumbs"
+    if thumbs.is_dir():
+        for picture in thumbs.iterdir():
+            if picture.is_file() and _older(picture, stamp):
+                freed += _remove(picture)
+                count += 1
+    gone["pictures"] = count
     gone["bytes"] = freed
     if any(v for k, v in gone.items() if k != "bytes"):
         log.info("kept %d days: deleted %s, %.1f MB freed", days, gone, freed / 1e6)

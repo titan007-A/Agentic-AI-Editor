@@ -112,6 +112,27 @@ def _backends(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tiktok_gateway(args: argparse.Namespace) -> int:
+    """The TikTok gateway as the System page shows it; 0 when TikTok answers through it."""
+    from agentic_editor import tiktok
+
+    settings = get_settings()
+    if args.proxy is not None:
+        settings = settings.model_copy(update={"tiktok_proxy": args.proxy.strip()})
+    found = tiktok.status(settings)
+    if not found["set"]:
+        print("TikTok gateway: not set (TIKTOK_PROXY is empty in .env)")
+        return 1
+    print(f"TikTok gateway: {found['proxy']}")
+    if found["tunnel"] is not None:
+        print("Tunnel: up" if found["tunnel"] else f"Tunnel: DOWN ({found['tunnel_said']})")
+    if found["tiktok"]:
+        print(f"TikTok through it: answers ({found['seconds']} s)")
+    else:
+        print(f"TikTok through it: NO ANSWER ({found['tiktok_said']})")
+    return 0 if found["tiktok"] else 1
+
+
 def _presets(args: argparse.Namespace) -> int:
     for name, preset in load_presets(get_settings().presets_dir).items():
         print(
@@ -319,6 +340,11 @@ def main(argv: list[str] | None = None) -> int:
         "fetch-models", help="download the transcription, separation and face models"
     ).set_defaults(handler=_fetch_models)
     commands.add_parser("presets", help="list presets").set_defaults(handler=_presets)
+    gateway = commands.add_parser(
+        "tiktok-gateway", help="check the TikTok gateway: its tunnel, and TikTok through it"
+    )
+    gateway.add_argument("--proxy", help="check this proxy instead of TIKTOK_PROXY")
+    gateway.set_defaults(handler=_tiktok_gateway)
     commands.add_parser("serve", help="run the web app and job worker").set_defaults(handler=_serve)
     mcp = commands.add_parser(
         "mcp", help="the Animations tab's tools for Claude over stdio (the server does the work)"
