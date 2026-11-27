@@ -1163,6 +1163,7 @@ export default function AnimationsPage() {
                   )}
                   <AnimationScenes
                     plan={draft}
+                    saved={current.plan}
                     starts={starts}
                     busy={busy || dirty || sending}
                     onChange={(p) => {
