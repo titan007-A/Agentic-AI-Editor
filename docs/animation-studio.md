@@ -289,8 +289,14 @@ each lyric line sits at the top in Devanagari while it is sung, word by word, th
 light and the key words big and in colour (red for enemies and pain, amber for love and faces,
 blue for phones and loneliness); a line fades as the next begins, the picture moves on with it,
 the camera pushes in or pans, and the reel fades to black. Its picture tells what each line
-means through one visual idea (relatives holding smiling masks over dark faces for "chehre pe
-chehra"), with the same people from line to line.
+means through one visual idea (relatives holding smiling masks over dark faces for a line about
+false faces), with the same people from line to line.
+
+The owner's pages post English and Spanish songs, so the story is set in the song's own world
+(US/UK everyday life for an English song, Latin America or Spain for a Spanish one) and the
+caption is written in its language. Whisper is told the lyrics' language (their letters, or the
+everyday words that fill them): left to guess, mlx-whisper on the Mac took a sung Hindi part
+for English and heard one word. Tests and prompt examples use made-up lyrics only.
 
 Ours (style `song`, "Song story"): the owner types the song's name (and, after a `|`, a few
 words of the part wanted), and:

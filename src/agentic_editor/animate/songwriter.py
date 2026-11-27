@@ -2,9 +2,10 @@
 
 The reference page tells a story to a song's best-known part: each lyric line on screen
 as it is sung, a few words big and in colour, over a painted moment of a story that shows
-what the line means (masks on relatives' faces for "chehre pe chehra", a family lit by
-their phones for "duniya phone mein tanha"). Here the planning model does two things with
-the part animate/songhook.py found:
+what the line means (masks on relatives' faces for a line about false faces, a family lit by
+their phones for a line about a lonely world). The owner's pages post English and Spanish
+songs: the story is set in the song's own world and the caption written in its language.
+Here the planning model does two things with the part animate/songhook.py found:
 
 1. The lines in the script the reel shows them in (Devanagari for Hindi and Urdu, however
    the lyrics were written), word for word so every word keeps its time, and the words
@@ -77,19 +78,22 @@ SCRIPT_SCHEMA = {
     "required": ["lines"],
 }
 
-KEY_GUIDE = """Key words are drawn big and in colour, as Indian lyric reels do: in each line pick
-the 1-3 words that carry its meaning and feeling (nouns, strong verbs or adjectives: never small
-words like ye, ke, ka, hai, pe, to, the, a, I, you). Most lines have two: the first white, the
-next in colour. Colours by meaning:
+KEY_GUIDE = """Key words are drawn big and in colour, as lyric reels do: in each line pick the 1-3
+words that carry its meaning and feeling (nouns, strong verbs or adjectives: never small words
+like the, a, I, you, my, el, la, que, mi, tu, ye, ke, hai). Most lines have two: the first
+white, the next in colour. Colours by meaning:
 - red: enemies, pain, betrayal, anger, poison, blood, death, worse
 - amber: love, family, faces, warmth, loyalty, the line's main thing
 - blue: loneliness, cold, phones, screens, night, tears, distance
 - pink: romance, longing, a beloved
 - green: hope, life, growing, nature
 - white: other strong words
-Example (Hindi): "ये चेहरे पे चेहरा लगा लेते हैं" -> चेहरे white, चेहरा amber;
-"ये दुश्मन को तेरे वफ़ा देते हैं" -> दुश्मन red, वफ़ा amber;
-"ये दुनिया है फ़ोन में तन्हा हो गई" -> दुनिया white, फ़ोन blue, तन्हा amber."""
+Example (English): "I keep your letters in a drawer" -> letters white, drawer amber;
+"The city lights are cold tonight" -> lights white, cold blue.
+Example (Spanish): "Tu voz se quedó en mi ventana" -> voz pink, ventana amber;
+"La noche me encuentra sola" -> noche blue, sola blue.
+Example (Hindi): "ये रातें अब ख़ाली लगती हैं" -> रातें white, ख़ाली blue;
+"तेरी यादों का मेला लगा है" -> यादों amber, मेला white."""
 
 
 def script_prompt(song: Song) -> list[dict]:
@@ -119,8 +123,8 @@ def script_prompt(song: Song) -> list[dict]:
                 f"each word numbered from 0:\n{numbered}\n\nFor every line (n as given):\n"
                 f"- {how}\n- key: its key words by number, each with a colour.\n"
                 f"- split: for a line of more than {SPLIT_OVER} words, the number of the word "
-                'its second half starts with, where the meaning breaks ("Log jo apno pe jaan '
-                'dete thay woh naslein puraani fanah ho gayi" -> 7, at "woh"); 0 otherwise.'
+                'its second half starts with, where the meaning breaks ("I walked the empty roads '
+                'all night and still I could not find you" -> 7, at "and"); 0 otherwise.'
                 f"\n\n{KEY_GUIDE}"
             ),
         }
@@ -242,25 +246,30 @@ GUIDE = """You direct short animated Instagram reels set to a song. The reel pla
 song; each lyric line is on screen while it is sung, over one painted moment of a story. The story
 shows what the lines MEAN as a scene from everyday life that makes people feel it (family, friends,
 love, betrayal, loneliness, growing old...), not the words drawn literally. A visual idea that
-carries a line works best: relatives holding smiling masks over dark faces for "they put a face on
+carries a line works best: friends holding smiling masks over dark faces for "they put a face on
 their face"; a family on the sofa each lit blue by a phone while the grandfather sits alone for
-"the world became lonely in its phones"; a garlanded photo of the grandfather with a diya under it
-for "that old generation is gone".
+"the world became lonely in its phones"; an empty chair at a set table under a lamp for "you are
+gone"; a girl at a rainy bus stop watching the bus pull away for "you left me waiting".
 
 How to write it:
 - people: 2-5 people who come back from moment to moment, each with a fixed look a painter can
   draw the same way every time: age, build, clothes and their colours, hair (e.g. "an old
-  grandfather with a white beard, white kurta and white cap"; "a young man in a blue kurta").
-  Fit them to the song's language and world: for a Hindi song an Indian family or friends in
-  everyday Indian clothes (kurtas, sarees, salwar), homes with chai, a diya, a sofa, a photo on
-  the wall. No alcohol, no smoking, nothing gory.
+  grandfather with a white beard, grey cardigan and glasses"; "a young woman with long dark
+  hair in a red jacket"). Fit them to the song's language and world:
+  - an English song: everyday life as in the US or the UK (a family home, a kitchen, a diner, a
+    car at night, a city street, a school corridor), people in jeans, hoodies, jackets, dresses;
+  - a Spanish song: everyday life in Latin America or Spain (a family home with a patio, a
+    plaza, a market, a beach town, a barrio street at night), people dressed as people there are;
+  - a Hindi song: an Indian family or friends in everyday Indian clothes (kurtas, sarees,
+    salwar), homes with chai, a diya, a sofa, a photo on the wall.
+  No alcohol, no smoking, nothing gory.
 - moments: exactly one for each line, in order, n as the line's number. The moments follow one
   story with a beginning, a turn and an ending that lands on the last line, mostly in one or two
   places (one house, one street) so it feels like one film.
 - art: what the picture shows, in plain English for an image painter: who is in it (by name from
   people), what they are doing, where, how close we are (wide, medium, close-up), and the light
-  (a warm lamp or diya, a cold phone glow, moonlight). One clear action. Never any writing, signs,
-  or words in the picture.
+  (a warm lamp, a candle, a cold phone glow, moonlight, a street light). One clear action.
+  Never any writing, signs, or words in the picture.
 - new_picture: false when the line goes on with the same moment as the line before (the same
   picture stays, the camera keeps moving); the first moment is always true, and most are true.
 - camera: push_in (slowly closer), pull_out (slowly back), pan_left, pan_right, rise (slowly
@@ -268,10 +277,11 @@ How to write it:
 - title: a short title for the reel (3-6 words).
 - story: the story in 2-3 sentences.
 - caption: the post's caption, as such pages write it: 2-4 short lines telling the feeling of the
-  story in the song's own language written in Latin letters (Hinglish for a Hindi song), one or
-  two emoji; then a line like "Sound on 🎧 | Tag someone who..." ; then "(Song credit: <song>,
-  <singer>)"; then 10-15 hashtags (the song, the singer, the story's theme, #animation
-  #animatedreel #storytelling #reels). Never claim the reel was made by the singer."""
+  story in the song's own language (English for an English song, Spanish for a Spanish song,
+  Hinglish in Latin letters for a Hindi song), one or two emoji; then a line like "Sound on 🎧 |
+  Tag someone who..." in that language; then "(Song credit: <song>, <singer>)"; then 10-15
+  hashtags (the song, the singer, the story's theme, #animation #animatedreel #storytelling
+  #reels). Never claim the reel was made by the singer."""
 
 
 def _lines_text(song: Song) -> str:

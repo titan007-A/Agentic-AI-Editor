@@ -35,33 +35,33 @@ from tests.test_animate_api import studio_on
 env = test_api.env  # the editor with a signed-in admin (a fixture)
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
 
-LINE_ONE = "Yeh chehre pe chehra laga lete hain"
-LAST_SHOWN = "लोग जो अपनों पे जाँ देते थे वो नस्लें पुरानी फ़ना हो गईं"
+LINE_ONE = "Yeh sapne pe sapna saja lete hain"
+LAST_SHOWN = "लोग जो अपनों पे जाँ देते थे वो राहें सुहानी हवा हो गईं"
 LRC = """[ar: Tony Kakkar]
-[00:00.15] Tere girne ke peechay koi tera apna hoga
-[00:05.23] Ye jaan kar bhi rishta tujh ko rakhna hoga
-[00:10.18] Tere girne ke peechay koi tere apna hoga
-[00:15.04] Yeh jaan kar bhi rishta tujh ko rakhna hoga
-[00:20.20] Yeh chehre pe chehra laga lete hain
-[00:22.52] Yeh dushman ko tere wafa dete hain
-[00:24.94] Yeh tere hain apne parayon se bad-tar
-[00:27.58] Yeh tere ghamon ka maza lete hain
-[00:29.95] Zamane mein mushkil wafa ho gayi
-[00:32.53] Yeh dunya hai phone mein tanha ho gayi
-[00:34.93] Log jo apno pe jaan dete thay woh naslein puraani fanah ho gayi
-[00:39.79][00:49.66] Tere girne ke peechay koi tera apna hoga
-[00:44.55] Yeh jaan kar bhi rishta tujh ko rakhna hoga
-[00:54.38] Yeh jaan kar bhi rishta tujh ko rakhna hoga
-[00:59.62] Koi shakhs dikhta meherbaan hai
-[01:02.02] Mai puchhna chahta hoon kya kaam hai
-[01:04.52] Nahi koi matlab ki baatein karu mai
-[01:07.15] Toh kehte hain nikamma nakaam hai
-[01:09.77] Pathhar ke logon mein dil khojta hoon mai
-[01:12.32] Acha rahu mai yeh kyu sochta hoon
+[00:00.15] Tere chalne ke baahar koi tera apna hoga
+[00:05.23] Ye jaan kar bhi vaada tujh ko sehna hoga
+[00:10.18] Tere chalne ke baahar koi tere apna hoga
+[00:15.04] Yeh jaan kar bhi vaada tujh ko sehna hoga
+[00:20.20] Yeh sapne pe sapna saja lete hain
+[00:22.52] Yeh baadal ko tere sada dete hain
+[00:24.94] Yeh tere hain apne doston se kam-tar
+[00:27.58] Yeh tere yaadon ka mela lete hain
+[00:29.95] Kinare mein mehngi sada ho gayi
+[00:32.53] Yeh basti hai khidki mein khaali ho gayi
+[00:34.93] Log jo apno pe jaan dete thay woh raahein suhaani hawa ho gayi
+[00:39.79][00:49.66] Tere chalne ke baahar koi tera apna hoga
+[00:44.55] Yeh jaan kar bhi vaada tujh ko sehna hoga
+[00:54.38] Yeh jaan kar bhi vaada tujh ko sehna hoga
+[00:59.62] Koi shaam rukta anjaana hai
+[01:02.02] Mai kehna sunta hoon kya kaam hai
+[01:04.52] Nahi koi mausam ki raatein karu mai
+[01:07.15] Toh kehte hain deewana naraz hai
+[01:09.77] Saagar ke shehron mein dil maangta hoon mai
+[01:12.32] Acha rahu mai yeh kyu dekhta hoon
 [01:14.62] Woh jaana hee jaate hai, jaa kar rahein ge
-[01:17.03] Mai jaane se unko kyu hee rokta hu
-[01:19.62] Tere girne ke peechay koi tera apna hoga
-[01:24.08] Yeh jaan kar bhi rishta tujh ko rakna hoga
+[01:17.03] Mai jaane se unko kyu hee tokta hu
+[01:19.62] Tere chalne ke baahar koi tera apna hoga
+[01:24.08] Yeh jaan kar bhi vaada tujh ko sehna hoga
 [02:09.25]
 """
 
@@ -73,8 +73,8 @@ def test_the_song_name_and_the_part_wanted_are_told_apart():
     assert songhook.asked("Koi Apna Hoga Tony Kakkar") == songhook.Asked(
         "Koi Apna Hoga Tony Kakkar", ""
     )
-    assert songhook.asked("Koi Apna Hoga | ye chehre pe  chehra") == songhook.Asked(
-        "Koi Apna Hoga", "ye chehre pe chehra"
+    assert songhook.asked("Koi Apna Hoga | ye sapne pe  sapna") == songhook.Asked(
+        "Koi Apna Hoga", "ye sapne pe sapna"
     )
     assert songhook.asked("Kesariya\nkesariya tera ishq hai piya").part == (
         "kesariya tera ishq hai piya"
@@ -83,10 +83,10 @@ def test_the_song_name_and_the_part_wanted_are_told_apart():
 
 def test_synced_lyrics_come_in_time_order_and_a_line_sung_twice_comes_twice():
     lines = songhook.parse_lrc(LRC)
-    assert lines[0] == (0.15, "Tere girne ke peechay koi tera apna hoga")
+    assert lines[0] == (0.15, "Tere chalne ke baahar koi tera apna hoga")
     assert [t for t, _ in lines] == sorted(t for t, _ in lines)
-    assert sum(1 for t, text in lines if text.startswith("Tere girne ke peechay koi tera")) == 4
-    assert (49.66, "Tere girne ke peechay koi tera apna hoga") in lines
+    assert sum(1 for t, text in lines if text.startswith("Tere chalne ke baahar koi tera")) == 4
+    assert (49.66, "Tere chalne ke baahar koi tera apna hoga") in lines
     assert all(text for _, text in lines)  # the closing empty line and the tag are left out
 
 
@@ -120,10 +120,10 @@ def test_the_songs_own_upload_is_chosen_never_a_slowed_or_lofi_take():
 
 
 def test_syllables_are_counted_in_latin_and_devanagari():
-    assert songhook.syllables("chehra") == 2
-    assert songhook.syllables("dushman") == 2
-    assert songhook.syllables("चेहरा") == 3  # च ह र: one each
-    assert songhook.syllables("नस्लें") == 2  # स् joins ल
+    assert songhook.syllables("sapna") == 2
+    assert songhook.syllables("baadal") == 2
+    assert songhook.syllables("सपना") == 3  # च ह र: one each
+    assert songhook.syllables("राहें") == 2  # स् joins ल
     assert songhook.syllables("a") == 1
 
 
@@ -163,9 +163,9 @@ def test_the_part_people_replay_is_the_hook_and_whole_sections_are_kept():
     heat = songhook.heat_curve(_heat(duration, (20.0, 30.0)), duration)
     best = songhook.distinct(songhook.windows(lines, duration, heat, None, "", "Koi Apna Hoga"))
     first = best[0]
-    assert lines[first.first][1] == "Yeh chehre pe chehra laga lete hain"
+    assert lines[first.first][1] == "Yeh sapne pe sapna saja lete hain"
     assert songhook.SHORTEST <= first.end - first.start <= songhook.LONGEST
-    assert lines[first.last + 1][1].startswith("Tere girne")  # ends where the chorus begins
+    assert lines[first.last + 1][1].startswith("Tere chalne")  # ends where the chorus begins
     # No two of the parts offered mostly overlap.
     for a in best:
         for b in best:
@@ -177,8 +177,8 @@ def test_the_part_people_replay_is_the_hook_and_whole_sections_are_kept():
 def test_words_typed_from_a_part_choose_it():
     lines = songhook.parse_lrc(LRC)
     heat = songhook.heat_curve(_heat(134.0, (20.0, 30.0)), 134.0)
-    best = songhook.windows(lines, 134.0, heat, None, "koi shaks dikhta meherban", "")
-    assert lines[best[0].first][1] == "Koi shakhs dikhta meherbaan hai"
+    best = songhook.windows(lines, 134.0, heat, None, "koi shaks rukta meherban", "")
+    assert lines[best[0].first][1] == "Koi shaam rukta anjaana hai"
 
 
 def test_without_a_graph_the_louder_part_counts():
@@ -195,20 +195,20 @@ def test_without_a_graph_the_louder_part_counts():
 def test_lyric_words_are_laid_over_the_heard_words_by_how_long_they_take():
     heard = [
         Word(text="ये", start=20.4, end=20.6),
-        Word(text="चेहरे", start=20.6, end=21.0),
+        Word(text="सपने", start=20.6, end=21.0),
         Word(text="पे", start=21.0, end=21.2),
-        Word(text="चेहरा", start=21.2, end=21.7),
-        Word(text="लगा", start=21.7, end=22.0),
+        Word(text="सपना", start=21.2, end=21.7),
+        Word(text="सजा", start=21.7, end=22.0),
         Word(text="लेते", start=22.0, end=22.2),
         Word(text="हैं", start=22.2, end=22.5),
     ]
     laid = songhook.lay_words(
-        ["Yeh", "chehre", "pe", "chehra", "laga", "lete", "hain"], 20.2, 22.52, heard
+        ["Yeh", "sapne", "pe", "sapna", "saja", "lete", "hain"], 20.2, 22.52, heard
     )
-    assert [w for w, _, _ in laid] == ["Yeh", "chehre", "pe", "chehra", "laga", "lete", "hain"]
+    assert [w for w, _, _ in laid] == ["Yeh", "sapne", "pe", "sapna", "saja", "lete", "hain"]
     starts = [a for _, a, _ in laid]
     assert starts == sorted(starts) and 20.2 <= starts[0] <= 20.5 and starts[-1] < 22.5
-    assert abs(starts[3] - 21.2) < 0.3  # "chehra" where it was heard
+    assert abs(starts[3] - 21.2) < 0.3  # "sapna" where it was heard
     # Nothing heard: spread over the line from its start.
     spread = songhook.lay_words(["one", "two", "three"], 5.0, 9.0, [])
     assert spread[0][1] == 5.0 and spread[-1][2] <= 9.0
@@ -223,16 +223,16 @@ def _line(text: str, start: float, step: float = 0.35, said: str = "") -> SongLi
 
 
 def test_a_long_line_is_shown_as_two_where_its_meaning_breaks():
-    line = _line("Log jo apno pe jaan dete thay woh naslein puraani fanah ho gayi", 34.9)
+    line = _line("Log jo apno pe jaan dete thay woh raahein suhaani hawa ho gayi", 34.9)
     first, second = songhook.split_long(line, 7)
     assert first.text == "Log jo apno pe jaan dete thay"
-    assert second.text == "woh naslein puraani fanah ho gayi"
+    assert second.text == "woh raahein suhaani hawa ho gayi"
     assert first.end == second.start and second.end == line.end
     assert first.said == first.text and second.said == second.text
     # Without being told where: still two, split near the middle.
     a, b = songhook.split_long(line)
     assert 4 <= len(a.words) <= 9 and len(a.words) + len(b.words) == 13
-    short = _line("Yeh chehre pe chehra laga lete hain", 20.2)
+    short = _line("Yeh sapne pe sapna saja lete hain", 20.2)
     assert songhook.split_long(short, 3) == [short]
 
 
@@ -247,6 +247,7 @@ class SongRouter:
         self.heard = heard
         self.separated = 0
         self.fetched: list[str] = []
+        self.languages: list[str | None] = []
 
     def separate_vocals(self, audio, out_dir):
         self.separated += 1
@@ -257,6 +258,7 @@ class SongRouter:
         return type("Stems", (), {"vocals": vocals, "instrumental": other})()
 
     def transcribe(self, audio, language=None):
+        self.languages.append(language)
         return Transcript(language="hi", words=self.heard)
 
     def planner(self):
@@ -285,7 +287,7 @@ def song_finder_stand_ins(tmp_path: Path, settings) -> tuple[dict, "SongRouter"]
     duration = 134.0
     source = _song_wav(tmp_path / "source.wav", duration, [(t, t + 2.0) for t, _ in lines])
     heard = [Word(text=w, start=20.2 + 0.3 * k, end=20.5 + 0.3 * k) for k, w in
-             enumerate(["ये", "चेहरे", "पे", "चेहरा", "लगा", "लेते", "हैं"])]  # fmt: skip
+             enumerate(["ये", "सपने", "पे", "सपना", "सजा", "लेते", "हैं"])]  # fmt: skip
     router = SongRouter(heard)
 
     def fetch(candidate, settings_):
@@ -311,10 +313,12 @@ def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
     said: list[str] = []
     song = songhook.find("Koi Apna Hoga Tony Kakkar", settings, router, said.append, **stand_ins)
     assert router.fetched == ["own"] and router.separated == 1
+    # The lyrics are Hindi in Latin letters: whisper is told so, not left to guess.
+    assert router.languages == ["hi"]
     assert (song.title, song.artist, song.video, song.lyrics) == (
         "Koi Apna Hoga", "Tony Kakkar", "own", "lrclib",
     )  # fmt: skip
-    assert song.lines[0].said == "Yeh chehre pe chehra laga lete hain"
+    assert song.lines[0].said == "Yeh sapne pe sapna saja lete hain"
     assert song.start == pytest.approx(19.9, abs=0.2) and 12 <= song.end - song.start <= 32
     assert song.language == "hi" and len(song.choices) >= 2
     assert all(w.start < w.end for line in song.lines for w in line.words)
@@ -365,6 +369,23 @@ def test_two_reels_of_one_song_at_once_share_its_vocals_and_hear_their_own_part(
     assert not list(folder.glob("*.wav.part*")) and len(list(folder.glob("heard-*.json"))) == 2
 
 
+def test_lyrics_tell_whisper_their_language():
+    english = [
+        "I keep your letters in a drawer",
+        "The city lights are cold tonight",
+        "You said that you would wait for me",
+        "But I don't know where you are",
+    ]
+    spanish = ["Tu voz se quedó en mi ventana", "La noche me encuentra sola",
+               "Y no sé por qué te fuiste", "Pero mi corazón te espera"]  # fmt: skip
+    assert songhook.lyrics_language([text for _, text in songhook.parse_lrc(LRC)]) == "hi"
+    assert songhook.lyrics_language(english) == "en"
+    assert songhook.lyrics_language(spanish) == "es"
+    assert songhook.lyrics_language(["ये रातें अब ख़ाली लगती हैं"]) == "hi"
+    assert songhook.lyrics_language(["یہ راتیں اب خالی ہیں"]) == "ur"
+    assert songhook.lyrics_language(["la la la", "na na"]) is None
+
+
 def test_a_song_nobody_can_find_says_so():
     with pytest.raises(songhook.SongError, match="song's name"):
         songhook.find("  ", None, None)
@@ -385,9 +406,9 @@ class Writer:
 
 def sample_song() -> Song:
     lines = [
-        _line("Yeh chehre pe chehra laga lete hain", 20.2),
-        _line("Yeh dushman ko tere wafa dete hain", 22.6),
-        _line("Log jo apno pe jaan dete thay woh naslein puraani fanah ho gayi", 25.0, 0.3),
+        _line("Yeh sapne pe sapna saja lete hain", 20.2),
+        _line("Yeh baadal ko tere sada dete hain", 22.6),
+        _line("Log jo apno pe jaan dete thay woh raahein suhaani hawa ho gayi", 25.0, 0.3),
     ]
     return Song(query="Koi Apna Hoga Tony Kakkar", title="Koi Apna Hoga", artist="Tony Kakkar",
                 video="own", start=19.9, end=30.0, language="hi", lyrics="lrclib",
@@ -396,10 +417,10 @@ def sample_song() -> Song:
 
 SCRIPT_REPLY = {
     "lines": [
-        {"n": 1, "words": ["ये", "चेहरे", "पे", "चेहरा", "लगा", "लेते", "हैं"],
+        {"n": 1, "words": ["ये", "सपने", "पे", "सपना", "सजा", "लेते", "हैं"],
          "key": [{"word": 1, "color": "white"}, {"word": 3, "color": "amber"},
                  {"word": 6, "color": "red"}], "split": 0},
-        {"n": 2, "words": ["ये", "दुश्मन", "को", "तेरे"],  # a word short: kept as written
+        {"n": 2, "words": ["ये", "बादल", "को", "तेरे"],  # a word short: kept as written
          "key": [{"word": 1, "color": "red"}], "split": 0},
         {"n": 3, "words": LAST_SHOWN.split(),
          "key": [{"word": 2, "color": "amber"}, {"word": 4, "color": "red"}], "split": 7},
@@ -410,18 +431,18 @@ SCRIPT_REPLY = {
 def test_lines_are_shown_in_devanagari_word_for_word_with_their_key_words():
     shown, notes = songwriter.shown(Writer(SCRIPT_REPLY), sample_song())
     first = shown.lines[0]
-    assert first.text == "ये चेहरे पे चेहरा लगा लेते हैं"
-    assert [(w.text, w.color) for w in first.words if w.key] == [("चेहरे", "white"),
-                                                                 ("चेहरा", "amber")]  # fmt: skip
+    assert first.text == "ये सपने पे सपना सजा लेते हैं"
+    assert [(w.text, w.color) for w in first.words if w.key] == [("सपने", "white"),
+                                                                 ("सपना", "amber")]  # fmt: skip
     assert first.words[0].start == 20.2  # the times stay the lyric words'
     # A line that didn't come back one for one stays as written, its key word kept.
-    assert shown.lines[1].text == "Yeh dushman ko tere wafa dete hain"
-    assert [w.text for w in shown.lines[1].words if w.key] == ["dushman"]
+    assert shown.lines[1].text == "Yeh baadal ko tere sada dete hain"
+    assert [w.text for w in shown.lines[1].words if w.key] == ["baadal"]
     assert notes == ["1 lyric lines are shown as the lyrics wrote them"]
     # The long line is two, where the writer said its meaning breaks.
     assert [line.text for line in shown.lines[2:]] == [
         "लोग जो अपनों पे जाँ देते थे",
-        "वो नस्लें पुरानी फ़ना हो गईं",
+        "वो राहें सुहानी हवा हो गईं",
     ]
     assert shown.lines[2].said == "Log jo apno pe jaan dete thay"
 
@@ -437,7 +458,7 @@ def story_reply(n: int) -> dict:
              "art": f"Moment {k + 1}: Dadaji and Ravi at the door at night, warm diya light"}
             for k in range(n)
         ],
-        "caption": "Har chehra apna nahi hota.\n(Song credit: Koi Apna Hoga, Tony Kakkar)",
+        "caption": "Har sapna apna nahi hota.\n(Song credit: Koi Apna Hoga, Tony Kakkar)",
     }  # fmt: skip
 
 
@@ -454,7 +475,7 @@ def test_a_found_song_becomes_a_story_with_a_moment_for_every_line():
     assert [p.name for p in plan.song.people] == ["Dadaji", "Ravi"]
     assert "Song credit" in plan.caption and plan.cta == ""
     asked = writer.asked[1][1]["content"]
-    assert "ये चेहरे पे चेहरा लगा लेते हैं" in asked and "4 moments" in asked
+    assert "ये सपने पे सपना सजा लेते हैं" in asked and "4 moments" in asked
     # A person named in a picture is painted as they look.
     painted = songwriter.painted(plan, plan.scenes[0].visual.art)
     assert "an old grandfather in a white kurta and cap" in painted and "Dadaji" not in painted
@@ -524,7 +545,7 @@ def test_each_line_is_a_scene_from_just_before_it_is_sung_and_the_song_plays_thr
     data = player_data(plan, tl)
     assert data["style"] == "song" and len(data["scenes"]) == 4  # no closing scene
     keys = [(w["text"], w["color"]) for w in data["captions"][0]["words"] if w["key"]]
-    assert keys == [("चेहरे", "white"), ("चेहरा", "amber")]
+    assert keys == [("सपने", "white"), ("सपना", "amber")]
 
 
 @needs_ffmpeg
@@ -594,7 +615,7 @@ def test_a_song_story_is_drafted_painted_and_ready_to_play(tmp_path, monkeypatch
 
     monkeypatch.setattr(studio, "preview_sound", lambda *a, **k: None)
     with Session() as db:
-        db.add(Animation(id="s1", owner_id="u1", idea="Koi Apna Hoga | ye chehre pe chehra",
+        db.add(Animation(id="s1", owner_id="u1", idea="Koi Apna Hoga | ye sapne pe sapna",
                          style="song", task={"op": "draft"}))  # fmt: skip
         db.commit()
     writer = Writer(SCRIPT_REPLY, story_reply(4))
@@ -603,7 +624,7 @@ def test_a_song_story_is_drafted_painted_and_ready_to_play(tmp_path, monkeypatch
         a = db.get(Animation, "s1")
         assert a.status == "ready" and a.error is None, a.error
         plan = Plan.model_validate(a.plan)
-        assert asked == ["Koi Apna Hoga | ye chehre pe chehra"]
+        assert asked == ["Koi Apna Hoga | ye sapne pe sapna"]
         assert a.player["style"] == "song" and len(a.player["scenes"]) == 4
         assert a.notes[-1].startswith("10 s, Koi Apna Hoga by Tony Kakkar, 0:19.9-0:30.0")
     # One picture for the moment that goes on with the one before; people written out.
@@ -671,8 +692,8 @@ def song_studio(env, monkeypatch):
         return song.model_copy(update={"start": song.choices[index].start - 0.3})
 
     choices = [
-        HookChoice(start=20.2, end=30.0, first="Yeh chehre"),
-        HookChoice(start=59.6, end=79.6, first="Koi shakhs"),
+        HookChoice(start=20.2, end=30.0, first="Yeh sapne"),
+        HookChoice(start=59.6, end=79.6, first="Koi shaam"),
     ]
     found = sample_song().model_copy(update={"choices": choices})
     monkeypatch.setattr(songhook, "find", lambda *a, **k: found)
@@ -692,12 +713,12 @@ def song_studio(env, monkeypatch):
 
 def test_a_song_story_is_made_from_a_songs_name_and_plays_another_part_when_asked(env, song_studio):
     made = env.client.post(
-        "/api/animations", json={"idea": "Koi Apna Hoga Tony Kakkar | ye chehre", "style": "song"}
+        "/api/animations", json={"idea": "Koi Apna Hoga Tony Kakkar | ye sapne", "style": "song"}
     )
     assert made.status_code == 200, made.text
     a = made.json()
     assert a["status"] == "ready" and a["plan"]["style"] == "song", a["error"]
-    assert a["idea"] == "Koi Apna Hoga Tony Kakkar | ye chehre"
+    assert a["idea"] == "Koi Apna Hoga Tony Kakkar | ye sapne"
     assert a["plan"]["song"]["title"] == "Koi Apna Hoga" and a["scenes"] == 4
     # Its style stays: a Song story is drawn to its song.
     switched = env.client.patch(f"/api/animations/{a['id']}", json={"style": "glow"})
