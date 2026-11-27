@@ -506,7 +506,7 @@ def windows(
 
 
 def _match(wanted: list[str], line: str) -> float:
-    """How much of the words typed are in a line (0-1), loosely: "chehra" finds "chehre"."""
+    """How much of the words typed are in a line (0-1), loosely: "sapna" finds "sapne"."""
     have = [h for h in line.split() if len(h) > 2]
     wanted = [w for w in wanted if len(w) > 2] or wanted
     if not wanted or not have:
@@ -693,6 +693,44 @@ def hear(
 
 # Whisper writes Hindi sung in a film song as Urdu often enough: the reels show Devanagari.
 SCRIPT_OF = {"ur": "hi"}
+# Words a language's lyrics are full of and the others' hardly ever use. Whisper left to
+# guess may take a sung part for another language and hear next to nothing (mlx-whisper on
+# the Mac took Koi Apna Hoga for English and heard one word): the lyrics tell it instead.
+_WORDS = {
+    "en": """
+the and you your i'm i you're don't can't it's that what this with for all but just know
+love baby never will when like got gonna wanna feel heart tonight there they how she he
+""",
+    "es": """
+que el la los las y en mi tu te me es por con una un se para como más pero yo amor corazón
+quiero eres estoy cuando sin todo nada siempre vida quién porque ya si cómo noche contigo
+""",
+    "hi": """
+hai hain mein mujhe tujhe mera meri mere tera teri tere apna apni apne yeh woh kya kyun nahi
+nahin kabhi koi dil pyaar pyar ishq jaan zindagi yaar sanam hoga hogi gaya gayi gaye raha
+rahi rahe karo karna lete dete hum tum aap bhi toh tha thi thay kaise jaise saath dard wafa
+""",
+}
+LANGUAGE_WORDS = {code: frozenset(words.split()) for code, words in _WORDS.items()}
+
+
+def lyrics_language(texts: list[str]) -> str | None:
+    """The language lyrics are in: by their letters (Devanagari: Hindi; Arabic script: Urdu),
+    else by the everyday words of English, Spanish or Hindi in Latin letters that fill them;
+    None when they don't tell (whisper guesses)."""
+    joined = " ".join(texts)
+    if re.search(r"[\u0900-\u097f]", joined):
+        return "hi"
+    if re.search(r"[\u0600-\u06ff]", joined):
+        return "ur"
+    words = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)?", joined.lower())
+    if len(words) < 6:
+        return None
+    share = {
+        code: sum(w in known for w in words) / len(words) for code, known in LANGUAGE_WORDS.items()
+    }
+    best = max(share, key=share.get)
+    return best if share[best] >= 0.15 else None
 
 
 def find(idea: str, settings: Settings, router, say=lambda message: None, choice: int | None = None,
@@ -773,7 +811,9 @@ def timed(
     its end a little after its last word (before the next line)."""
     start = max(0.0, chosen.start - LEAD_IN)
     after = lines[chosen.last + 1][0] if chosen.last + 1 < len(lines) else duration
-    heard, language = hear(vocals, start, min(duration, after + 0.3), router, None)
+    hint = lyrics_language([text for _, text in lines])
+    heard, language = hear(vocals, start, min(duration, after + 0.3), router, hint)
+    language = hint or language
     language = SCRIPT_OF.get(language, language)
     part = timed_lines(lines, chosen.first, chosen.last, after, heard)
     last_word = max((w.end for line in part for w in line.words), default=chosen.end)
