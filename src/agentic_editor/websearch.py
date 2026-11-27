@@ -6,6 +6,8 @@
   Startpage refused. Both layouts are read here, and a search asks as many Yahoo pages as
   it takes to give the results asked for (Yahoo shows about 7 a page).
 - When Yahoo fails, ddgs's engines; SEARXNG_URL, when set, is asked before both.
+- A search for TikTok's pages goes to Yahoo and ddgs through the TikTok gateway (see
+  _via), as the engines leave TikTok out of what they answer India.
 - A "site:" search answered with pages from other sites is a failure, not an answer: Yahoo,
   after many searches from one address, sends unrelated pages (a WhatsApp login, office
   furniture) and ignores "site:". Such an answer is neither used nor kept, and the next
@@ -206,7 +208,20 @@ def _client(fresh: bool = False):
     return client
 
 
-def _yahoo_page(query: str, first: int) -> list[dict]:
+def _gateway_client(via: str, fresh: bool = False):
+    """Like _client, for searches asked through the proxy `via` (see search)."""
+    import primp
+
+    clients = _yahoo_clients.__dict__.setdefault("via", {})
+    if fresh or via not in clients:
+        clients[via] = primp.Client(
+            impersonate="random", impersonate_os="random", timeout=TIMEOUT,
+            follow_redirects=True, proxy=via,
+        )  # fmt: skip
+    return clients[via]
+
+
+def _yahoo_page(query: str, first: int, via: str = "") -> list[dict]:
     params = {"p": query}
     if first > 1:
         params["b"] = str(first)
@@ -214,7 +229,8 @@ def _yahoo_page(query: str, first: int) -> list[dict]:
     url = f"{YAHOO};_ylt={token_urlsafe(18)};_ylu={token_urlsafe(35)}"
     for attempt in range(2):
         try:
-            response = _client(fresh=attempt > 0).get(url, params=params)
+            client = _gateway_client(via, attempt > 0) if via else _client(fresh=attempt > 0)
+            response = client.get(url, params=params)
         except Exception as exc:
             if attempt:
                 raise SearchError(f"yahoo: {type(exc).__name__}: {exc}") from exc
@@ -233,16 +249,16 @@ def _yahoo_page(query: str, first: int) -> list[dict]:
     return []
 
 
-def yahoo(query: str, count: int, page: int = 1) -> list[dict]:
+def yahoo(query: str, count: int, page: int = 1, via: str = "") -> list[dict]:
     """Up to `count` results: those from `(page - 1) * count + 1` on, from as many Yahoo
-    pages as that takes."""
+    pages as that takes; through the proxy `via` when given."""
     first = (page - 1) * count + 1
     hits: list[dict] = []
     seen: set[str] = set()
     for n in range(YAHOO_PAGES):
         if n:
             time.sleep(YAHOO_PAUSE)
-        got = _yahoo_page(query, first)
+        got = _yahoo_page(query, first, via)
         mine = answers(query, got)
         if mine is None:  # Yahoo turned to unrelated pages: what came before them stands
             if hits:
@@ -291,13 +307,13 @@ def searxng(query: str, count: int, page: int = 1) -> list[dict]:
     return hits[:count]
 
 
-def ddgs(query: str, count: int, page: int = 1) -> list[dict]:
+def ddgs(query: str, count: int, page: int = 1, via: str = "") -> list[dict]:
     from ddgs import DDGS
     from ddgs.exceptions import DDGSException
 
     try:
         # Not Yahoo again (asked first), nor the encyclopedias ddgs puts first otherwise.
-        return DDGS(timeout=10).text(
+        return DDGS(timeout=10, proxy=via or None).text(
             query, max_results=count, page=page,
             backend="duckduckgo,brave,mojeek,startpage",
         )  # fmt: skip
@@ -316,6 +332,31 @@ def _engines() -> list[tuple[str, Engine]]:
         order.append(("searxng", searxng))
     order += [("yahoo", yahoo), ("ddgs", ddgs)]
     return order
+
+
+# Searches for TikTok's pages are asked from the TikTok gateway's address (tiktok.py): from
+# India the engines leave tiktok.com out ("site:tiktok.com" found nothing on Yahoo, with or
+# without asking for another country's results). Nothing else goes through it.
+TIKTOK_SITE = re.compile(r"(?:^|\s)site:(?:[\w-]+\.)*tiktok\.com\b", re.I)
+
+
+def _via(query: str) -> str:
+    """The proxy a search is asked through: the TikTok gateway's for TikTok's pages."""
+    if not TIKTOK_SITE.search(query):
+        return ""
+    from agentic_editor import tiktok
+
+    through = tiktok.proxy()
+    return "" if through == tiktok.DIRECT else through
+
+
+def _gateway_engines(via: str) -> list[tuple[str, Engine]]:
+    """The engines asked through `via` (SearXNG, here, would search from here), each under
+    its own name: a gateway that is down mustn't rest the engines every other search uses."""
+    return [
+        ("yahoo through the TikTok gateway", lambda q, n, p: yahoo(q, n, p, via)),
+        ("ddgs through the TikTok gateway", lambda q, n, p: ddgs(q, n, p, via)),
+    ]
 
 
 # --- state: failures and the cache ---------------------------------------------------
@@ -396,7 +437,8 @@ def search(query: str, count: int = 30, page: int = 1) -> list[dict]:
     if hit is not None and (hit := answers(query, hit)) is not None:
         return hit  # an answer kept before these checks may be all unrelated: asked again
     problems = []
-    for name, engine in _engines():
+    via = _via(query)
+    for name, engine in _gateway_engines(via) if via else _engines():
         if _resting(name):
             problems.append(f"{name} failed just now")
             continue

@@ -43,10 +43,11 @@ from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
-from agentic_editor import songlist
+from agentic_editor import songlist, tiktok
 from agentic_editor.download import signed_in
 from agentic_editor.llm import LLMError, parse
 from agentic_editor.presets import Preset
+from agentic_editor.settings import get_settings
 
 log = logging.getLogger(__name__)
 
@@ -63,15 +64,26 @@ POST = re.compile(
     r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/(?:\w{1,15}|i(?:/web)?)/status/(\d{5,25})"
 )
 X = "x:"
+# A TikTok video: its link (the account's name may be left out, "@/video/<id>"; m.tiktok.com
+# and the app's tiktokv.com share links name only the video), and its code ("tt:" and id).
+TIKTOK_VIDEO = re.compile(
+    r"https?://(?:[\w-]+\.)*tiktok\.com/@([\w.-]*)/video/(\d{5,25})"
+    r"|https?://(?:m\.|www\.)?tiktok\.com/v/(\d{5,25})"
+    r"|https?://(?:www\.)?tiktokv\.com/share/video/(\d{5,25})"
+)
+TIKTOK = "tt:"
 # Where a research searches, as the engines are asked. On X only posts with a video are
-# kept (see look_up): "video" in the search brings more of them.
+# kept (see look_up): "video" in the search brings more of them. TikTok only with the
+# TikTok gateway (tiktok.py), which its searches go through too (see websearch).
 SITES = {
     "instagram": "site:instagram.com/reel",
     "shorts": "site:youtube.com/shorts",
     "x": "site:x.com video",
+    "tiktok": "site:tiktok.com video",
     "songs": "ytsearch",  # YouTube's own search, not the engines (see _youtube_songs)
 }
 SONGS = "songs"
+TIKTOK_SITE = "tiktok"
 SITE = SITES["instagram"]
 # What a daily research searches: X only when the person asks for it; whole songs only
 # when what it finds is music (see Planned.music).
@@ -238,13 +250,19 @@ class Reel:
         return self.code.startswith(X)
 
     @property
+    def on_tiktok(self) -> bool:
+        return self.code.startswith(TIKTOK)
+
+    @property
     def on_instagram(self) -> bool:
-        return not self.youtube and not self.on_x
+        return not self.youtube and not self.on_x and not self.on_tiktok
 
     @property
     def kind(self) -> str:
         if self.full:
             return "YouTube song (whole video)"
+        if self.on_tiktok:
+            return "TikTok video"
         return "YouTube Short" if self.short else "X post" if self.on_x else "Instagram reel"
 
     @property
@@ -514,14 +532,22 @@ LEARN = (
 
 
 def code_of(link: str) -> str | None:
-    """An Instagram reel's code, "yt:" and a YouTube video's id, or "x:" and an X post's."""
+    """An Instagram reel's code, "yt:" and a YouTube video's id, "x:" and an X post's, or
+    "tt:" and a TikTok video's."""
     if match := REEL.match(link.strip()):
         return match.group(1)
     if match := VIDEO.match(link.strip()):
         return YOUTUBE + match.group(1)
     if match := POST.match(link.strip()):
         return X + match.group(1)
+    if match := TIKTOK_VIDEO.match(link.strip()):
+        return TIKTOK + next(g for g in match.groups()[1:] if g)
     return None
+
+
+def tiktok_url(code: str, handle: str = "") -> str:
+    """A TikTok video's page; "_" stands for an account not known, as TikTok takes it."""
+    return f"https://www.tiktok.com/@{handle or '_'}/video/{code.removeprefix(TIKTOK)}"
 
 
 def kind_of(code: str, url: str = "") -> str:
@@ -726,6 +752,8 @@ def reel_url(code: str) -> str:
         return f"https://www.youtube.com/shorts/{code.removeprefix(YOUTUBE)}"
     if code.startswith(X):
         return f"https://x.com/i/status/{code.removeprefix(X)}"
+    if code.startswith(TIKTOK):
+        return tiktok_url(code)
     return f"https://www.instagram.com/reel/{code}/"
 
 
@@ -1193,7 +1221,8 @@ def search(
     lists: list[list[Reel]] = []  # each search's reels, in its order
     for n, ((query, site), hits) in enumerate(answers):
         if progress:
-            where = {"shorts": " (YouTube Shorts)", "x": " (X)", SONGS: " (YouTube songs)"}
+            where = {"shorts": " (YouTube Shorts)", "x": " (X)", TIKTOK_SITE: " (TikTok)",
+                     SONGS: " (YouTube songs)"}  # fmt: skip
             progress(f"searching: {query}{where.get(site, '')}", 0.05 + 0.35 * (n + 1) / len(asked))
         if isinstance(hits, Exception):  # the engines are third parties: one failing is one less
             log.warning("search %r on %s failed: %s", query, site, hits)
@@ -1213,10 +1242,13 @@ def search(
             if code and code.startswith(YOUTUBE) and "/shorts/" not in link:
                 continue  # a video, not a Short
             if code:
+                url = reel_url(code)
+                if code.startswith(TIKTOK) and (named := TIKTOK_VIDEO.match(link)):
+                    url = tiktok_url(code, named.group(1) or "")
                 reels.append(
                     Reel(
                         code=code,
-                        url=reel_url(code),
+                        url=url,
                         query=query,
                         title=hit.get("title", "")[:200],
                         snippet=hit.get("body", "")[:500],
@@ -1240,6 +1272,8 @@ class _Quiet:
 
 
 def _info(url: str) -> dict:
+    """yt-dlp's info for a reel's link. A TikTok video's goes through the TikTok gateway,
+    and its picture is kept here (see tiktok.keep_picture)."""
     from yt_dlp import YoutubeDL
 
     options = {
@@ -1249,18 +1283,29 @@ def _info(url: str) -> dict:
         "socket_timeout": 15,
         "logger": _Quiet(),
     }
+    if tiktok.is_link(url):
+        with tiktok.explained(url), YoutubeDL(tiktok.routed(url, options)) as ydl:
+            meta = ydl.extract_info(tiktok.link(url), download=False)
+            folder = get_settings().cache_dir / "thumbs"
+            return {**meta, "thumbnail": tiktok.keep_picture(ydl, meta, folder)}
     with signed_in(options) as options, YoutubeDL(options) as ydl:
         return ydl.extract_info(url, download=False)
 
 
 def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
     """Fill in each reel's account, caption, likes, comments and date. One Instagram won't
-    show without signing in keeps what the search engine said about it."""
+    show without signing in keeps what the search engine said about it. Once the TikTok
+    gateway fails, the TikTok videos left aren't asked (each would wait out its timeout)."""
+    gateway_down: list[str] = []
 
     def one(reel: Reel) -> None:
+        if reel.on_tiktok and gateway_down:
+            return
         try:
             meta = info(reel.url)
         except Exception as exc:
+            if isinstance(exc, tiktok.GatewayError):
+                gateway_down.append(str(exc))
             log.info("couldn't look up %s: %s", reel.url, str(exc)[:200])
             # An X post yt-dlp can't read has no video to edit ("No video could be found").
             reel.no_video = reel.on_x
@@ -1298,6 +1343,17 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
             reel.handle = (meta.get("uploader_id") or "").removeprefix("@").lower()
             reel.caption = (meta.get("description") or meta.get("title") or "")[:1000]
             reel.views = _count(meta.get("view_count"))
+        elif reel.on_tiktok:
+            # TikTok's "uploader" is the account's @name, its "channel" the name it shows.
+            reel.account = meta.get("channel") or meta.get("uploader") or ""
+            reel.handle = (meta.get("uploader") or "").removeprefix("@").lower()
+            if reel.handle:
+                reel.url = tiktok_url(reel.code, reel.handle)
+            artists = ", ".join(a for a in meta.get("artists") or [meta.get("artist")] if a)
+            sound = " - ".join(t for t in (meta.get("track"), artists) if t)
+            said = meta.get("description") or meta.get("title") or ""
+            reel.caption = "\n".join(t for t in (said, sound and f"Sound: {sound}") if t)[:1000]
+            reel.views = _count(meta.get("view_count"))
         else:
             reel.account = meta.get("uploader") or meta.get("channel") or ""
             reel.handle = (meta.get("channel") or "").lower()
@@ -1320,6 +1376,17 @@ def look_up(reels: list[Reel], info=_info, workers: int = LOOKUPS) -> None:
 
     with ThreadPoolExecutor(workers) as pool:
         list(pool.map(one, reels))
+
+
+def _unread(reel: Reel) -> bool:
+    """A Short or TikTok video the lookup didn't read: left out (see run)."""
+    return (reel.short or reel.on_tiktok) and not reel.looked_up
+
+
+def reachable(sites: tuple[str, ...]) -> tuple[str, ...]:
+    """`sites` without TikTok while no TikTok gateway is set (it may have gone since the
+    research was asked for): its videos couldn't be looked up or downloaded."""
+    return sites if tiktok.available() else tuple(s for s in sites if s != TIKTOK_SITE)
 
 
 def source_of(text: str) -> str | None:
@@ -1751,6 +1818,7 @@ def run(
     brings new ones. With whole songs more are looked up and given (SONGS_REELS,
     SONGS_SHOWN), and only those the model says are a song's own video to edit."""
     context = context or Context()
+    sites = reachable(sites)
     progress("planning the searches", 0.02)
     with planner() as llm:
         brief, queries, music = plan(llm, description, context)
@@ -1789,10 +1857,11 @@ def run(
     progress(f"looking up {len(reels)} reels", 0.45)
     look_up(reels, info)
     reels = [r for r in reels if not r.page or r.handle == r.page]  # another's, found by name
-    # A Short YouTube wouldn't show (gone, private, age-locked) has nothing but what the
-    # search engine said: no channel, no caption to judge, nothing to download.
-    left_out["couldn't be looked up"] = sum(r.short and not r.looked_up for r in reels)
-    reels = [r for r in reels if not (r.short and not r.looked_up)]
+    # A Short YouTube wouldn't show (gone, private, age-locked), or a TikTok video, has
+    # nothing but what the search engine said: no channel, no caption to judge, nothing to
+    # download.
+    left_out["couldn't be looked up"] = sum(_unread(r) for r in reels)
+    reels = [r for r in reels if not _unread(r)]
     if context.handle:
         left_out["the account's own"] += sum(r.handle == context.handle for r in reels)
         reels = [r for r in reels if r.handle != context.handle]
@@ -1888,6 +1957,7 @@ def run_pdf(
     engines give a different few each time."""
     of_songs = is_songs(kind)
     context = context or Context()
+    sites = reachable(sites)
     given: list[tuple[int, Reel]] = []
     taken = used | seen | context.own
     answered = False
@@ -1916,6 +1986,7 @@ def run_pdf(
                 for r in reels
                 if not r.long
                 and not r.no_video
+                and not (r.on_tiktok and not r.looked_up)
                 and not r.unfit
                 and r.quality != "low"
                 and r.handle not in context.hidden
