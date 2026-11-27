@@ -124,6 +124,9 @@ CATALOGUE: dict[str, tuple[str, str]] = {
 CAMERAS = ("push_in", "pull_out", "pan_left", "pan_right", "rise", "close_up", "still")
 # The colours a Song story's key words are drawn in (player.js SONG_COLORS), by what they mean.
 WORD_COLORS = ("white", "amber", "red", "blue", "pink", "green")
+# What a Song story key word meaning a movement may do with its letters while it is sung
+# (player.js songEffect): tumble down out of the line, float up, tremble, fly apart, turn.
+WORD_EFFECTS = ("fall", "rise", "shake", "scatter", "spin")
 
 MOTIONS = ("pop", "float", "walk_left", "walk_right", "shake", "spin", "grow", "fall", "pulse")
 DEFAULT_EMOJI = {
@@ -213,14 +216,16 @@ class Source(Loose):
 
 
 class SongWord(Loose):
-    """A sung word, its times in the song (seconds), and whether it is drawn big and in
-    which colour (WORD_COLORS)."""
+    """A sung word, its times in the song (seconds), whether it is drawn big and in which
+    colour (WORD_COLORS), and what its letters do while it is sung (WORD_EFFECTS, a key
+    word meaning a movement now and then; mostly none)."""
 
     text: str
     start: float
     end: float
     key: bool = False
     color: str = ""
+    effect: str = ""
 
 
 class SongLine(Loose):
@@ -237,6 +242,9 @@ class SongLine(Loose):
     pictures: int = 1
     # Which of the song's pieces it is sung in (Song.pieces: a reel joined from two parts).
     piece: int = 0
+    # The word its second row starts with on screen, where the writer said its phrase
+    # breaks; 0: set by width (timeline.second_row).
+    row: int = 0
 
 
 class SongPiece(Loose):
@@ -522,7 +530,8 @@ def camera_of(v: Visual) -> str:
 
 def _song(song: Song) -> Song:
     """A song's lines with their words in order inside the part played, colours only from
-    WORD_COLORS and only on key words."""
+    WORD_COLORS and only on key words, a letter effect only from WORD_EFFECTS, on a key
+    word, one a line at most."""
     lines = []
     for line in song.lines:
         words = [
@@ -531,11 +540,15 @@ def _song(song: Song) -> Song:
                     "text": " ".join(w.text.split()),
                     "end": max(w.end, w.start),
                     "color": (w.color if w.color in WORD_COLORS else "white") if w.key else "",
+                    "effect": w.effect if w.key and w.effect in WORD_EFFECTS else "",
                 }
             )
             for w in sorted(line.words, key=lambda w: w.start)
             if w.text.strip()
         ]
+        moving = [k for k, w in enumerate(words) if w.effect]
+        for k in moving[1:]:
+            words[k] = words[k].model_copy(update={"effect": ""})
         text = " ".join(w.text for w in words) or " ".join(line.text.split())
         lines.append(
             line.model_copy(
@@ -544,6 +557,7 @@ def _song(song: Song) -> Song:
                     "text": text,
                     "pictures": 2 if line.pictures >= 2 else 1,
                     "piece": min(max(0, line.piece), max(0, len(song.pieces) - 1)),
+                    "row": line.row if 0 < line.row < len(words) else 0,
                 }
             )
         )
