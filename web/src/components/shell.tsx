@@ -37,6 +37,7 @@ const LINKS = [
   { href: "/presets/", label: "Presets" },
   { href: "/buffer/", label: "Buffer" },
   { href: "/instagram/", label: "Instagram" },
+  { href: "/strikes/", label: "Strike list" },
 ];
 // Only admins run the Mac's side of things.
 const ADMIN_LINKS = [

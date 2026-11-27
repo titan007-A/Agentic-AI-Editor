@@ -100,6 +100,65 @@ export type Feed = FeedFields & {
   recent: FeedItem[];
 };
 
+/** A label group (see songfacts.GROUPS on the server). */
+export type LabelGroup = "UMG" | "Sony" | "Warner" | "other";
+
+/** The strike list's entry a song is on. */
+export type Blocked = {
+  id: number;
+  song: string;
+  artist: string;
+  label_group: LabelGroup;
+  what: "blocked" | "removed" | "strike";
+  what_label: string;
+  note: string;
+};
+
+/** A job's song, once known, and what to know before posting it (strikes.notice). */
+export type SongNotice = {
+  song: string;
+  artist: string;
+  year: string | null;
+  year_from: string;
+  label: string;
+  /** "" when no label was found. */
+  group: LabelGroup | "";
+  /** "Sony Music"; "" for any other label. */
+  group_name: string;
+  label_from: string;
+  /** On the strike list: a label blocked it before. */
+  blocked: Blocked | null;
+  /** A label group the app warns about. */
+  notified: boolean;
+  /** Out in the last few years: labels block new songs more often. */
+  new: boolean;
+};
+
+/** One song on the strike list. */
+export type Strike = Blocked & {
+  /** Who put it there; null for the list's first entry. */
+  added_by: string | null;
+  job_id: string | null;
+  created_at: string;
+  /** An admin, or whoever added it. */
+  can_remove: boolean;
+};
+
+export type StrikeList = {
+  entries: Strike[];
+  groups: LabelGroup[];
+  whats: Record<Blocked["what"], string>;
+};
+
+export type NewStrike = {
+  song: string;
+  artist: string;
+  label_group: LabelGroup;
+  what: Blocked["what"];
+  note: string;
+  job_id?: string | null;
+};
+
 export type Job = {
   id: string;
   source: string;
@@ -121,6 +180,8 @@ export type Job = {
   eta_seconds?: number | null;
   /** False when the person chose to keep the whole video, not cut to the preset's length. */
   trim?: boolean;
+  /** Its song, once known, with its label and year; absent from older servers. */
+  song?: SongNotice | null;
 };
 
 export type ResearchItem = {
@@ -172,6 +233,14 @@ export type ResearchItem = {
   verdict_reason: string;
   /** Its account is one the person hid. */
   hidden: boolean;
+  /** Its song's year and label, "" when not known (older servers: absent). */
+  year?: string;
+  label?: string;
+  label_group?: LabelGroup | "";
+  /** Its year is a new song's. */
+  new?: boolean;
+  /** Its song is on the strike list (a PDF's songs may be). */
+  blocked?: Blocked | null;
 };
 
 /** Feedback on a reel; null takes it back. */
@@ -717,6 +786,8 @@ export type ChannelPost = {
   insights: Record<string, number>;
   insights_at: string | null;
   created_at: string;
+  /** Its edit's song with its label and year, once known. */
+  notice?: SongNotice | null;
 };
 
 export type IgComment = {
@@ -1435,6 +1506,9 @@ export const api = {
   renamePresets: (labels: Record<string, string>) =>
     request<PresetName[]>("PUT", "/presets/names", { labels }),
   deleteJob: (id: string) => request("DELETE", `/jobs/${id}`),
+  strikes: () => request<StrikeList>("GET", "/strikes"),
+  addStrike: (entry: NewStrike) => request<Strike>("POST", "/strikes", entry),
+  removeStrike: (id: number) => request<{ ok: boolean }>("DELETE", `/strikes/${id}`),
   clearJobs: () => request<{ deleted: number; freed_mb: number }>("POST", "/jobs/clear"),
   storage: () => request<{ keep_days: number }>("GET", "/system/storage"),
   setStorage: (keepDays: number) =>

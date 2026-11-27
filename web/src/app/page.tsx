@@ -1,11 +1,13 @@
 "use client";
 
 import { Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { BadgeStrip } from "@/components/badge-strip";
 import { JobList } from "@/components/job-list";
+import { jobLabel } from "@/components/job-status";
 import { NewJobForm } from "@/components/new-job-form";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +24,7 @@ import { api, errorText, type Job } from "@/lib/api";
 import { confetti } from "@/lib/confetti";
 import { cheer } from "@/lib/fun-events";
 import { keepIfSame } from "@/lib/poller.mjs";
+import { toastKey, toastText } from "@/lib/song-notice.mjs";
 import { sounds } from "@/lib/sounds";
 
 // Quick while something is being edited; slower otherwise, so jobs the autopilot or
@@ -31,11 +34,13 @@ const IDLE_MS = 15000;
 
 export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [busyClearing, setBusyClearing] = useState(false);
   const busy = jobs.some((j) => j.status === "queued" || j.status === "running");
   const finished = jobs.filter((j) => j.status === "done" || j.status === "failed").length;
   const me = useMe();
+  const router = useRouter();
   const fun = me?.features?.includes("fun") ?? false;
   // A job seen running that is now done: snowfall and a bell (once, however many).
   const seenRunning = useRef<Set<string>>(new Set());
@@ -56,11 +61,36 @@ export default function Dashboard() {
     } else if (fun && failedNow) cheer("failed");
   }, [jobs, fun]);
 
+  // A song notice that turns up on a job after the page opened (the edit found its song,
+  // or the song went on the strike list) is said once, as a toast.
+  const toasted = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const keys = jobs
+      .map((job) => [job, toastKey(job.id, job.song)] as const)
+      .filter((pair): pair is readonly [Job, string] => pair[1] !== null);
+    if (!loaded) return;
+    if (toasted.current === null) {
+      toasted.current = new Set(keys.map(([, key]) => key));
+      return;
+    }
+    for (const [job, key] of keys) {
+      if (toasted.current.has(key)) continue;
+      toasted.current.add(key);
+      const text = `${toastText(job.song)} (${jobLabel(job)})`;
+      const open = { label: "Open", onClick: () => router.push(`/job/?id=${job.id}`) };
+      if (job.song?.blocked) toast.error(text, { action: open });
+      else toast.warning(text, { action: open });
+    }
+  }, [jobs, loaded, router]);
+
   const refresh = usePolling(
     () =>
       api
         .jobs()
-        .then((next) => setJobs((current) => keepIfSame(current, next)))
+        .then((next) => {
+          setJobs((current) => keepIfSame(current, next));
+          setLoaded(true);
+        })
         .catch(() => {}),
     busy ? BUSY_MS : IDLE_MS,
   );

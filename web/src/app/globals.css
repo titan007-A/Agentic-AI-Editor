@@ -373,6 +373,23 @@ body::before {
   color: #6b3410;
 }
 
+/* A song its label may block: a major's, or a new one (the job's song notice). */
+[data-slot="badge"][data-tone="warn"] {
+  background: #f6e2a6;
+  border-color: var(--mustard);
+  color: #5a4210;
+}
+
+[data-slot="card"][data-tone="warn"] {
+  border-color: var(--mustard);
+  background: color-mix(in oklab, var(--mustard) 16%, var(--card));
+}
+
+[data-slot="card"][data-tone="blocked"] {
+  border-color: var(--destructive);
+  background: color-mix(in oklab, var(--destructive) 10%, var(--card));
+}
+
 [data-slot="progress"] {
   height: 12px;
   background: var(--paper-light);
@@ -752,6 +769,19 @@ body::before {
 .dark [data-slot="badge"][data-tone="ask"] {
   background: var(--badge-3);
   color: var(--badge-3-ink);
+}
+
+.dark [data-slot="badge"][data-tone="warn"] {
+  background: var(--badge-1);
+  color: var(--badge-1-ink);
+}
+
+.dark [data-slot="card"][data-tone="warn"] {
+  border-color: var(--mustard);
+}
+
+.dark [data-slot="card"][data-tone="blocked"] {
+  border-color: var(--destructive);
 }
 
 .dark [data-slot="checkbox"][data-state="checked"] {
