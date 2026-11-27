@@ -196,6 +196,9 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
   const row = useRef<HTMLElement>(null);
   const ruler = useRef<HTMLDivElement>(null);
   const [shown, setShown] = useState(links.length);
+  // "More" says the page you are on when it is in there: room is kept for that name.
+  const here = links.find((link) => isActive(link.href, pathname))?.label ?? "";
+  const moreLabel = here.length > "More".length ? here : "More";
 
   useEffect(() => {
     const room = row.current;
@@ -205,15 +208,17 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
     const fit = () => {
       const widths = Array.from(sizes.children, (el) => (el as HTMLElement).offsetWidth);
       const more = widths.pop() ?? 0;
-      const all = widths.reduce((sum, w) => sum + w, 0);
+      // The row's gap between links takes room too.
+      const gap = parseFloat(getComputedStyle(sizes).columnGap) || 0;
+      const all = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
       if (all <= room.clientWidth) {
         setShown(widths.length);
         return;
       }
       let used = more;
       let count = 0;
-      while (count < widths.length && used + widths[count] <= room.clientWidth) {
-        used += widths[count];
+      while (count < widths.length && used + gap + widths[count] <= room.clientWidth) {
+        used += gap + widths[count];
         count += 1;
       }
       setShown(count);
@@ -245,7 +250,7 @@ function NavLinks({ links, pathname }: { links: NavLink[]; pathname: string }) {
           </span>
         ))}
         <span className={LINK_CLASS}>
-          <span className="py-1">More</span>
+          <span className="py-1">{moreLabel}</span>
           <ChevronDown className="ml-0.5 size-4" />
         </span>
       </div>
