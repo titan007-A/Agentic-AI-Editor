@@ -4,7 +4,9 @@ shown and its story written (songwriter), and the reel timed, heard and drawn.""
 import json
 import shutil
 import subprocess
+import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -328,6 +330,39 @@ def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
     assert again.video == "own" and router.fetched == ["own"] and router.separated == 1
     with pytest.raises(songhook.SongError):
         songhook.rechoose(song, 9, settings, router)
+
+
+@needs_ffmpeg
+def test_two_reels_of_one_song_at_once_share_its_vocals_and_hear_their_own_part(tmp_path):
+    folder = tmp_path / "songs" / "own"
+    folder.mkdir(parents=True)
+    audio = _song_wav(folder / "song.wav", 60.0, [(10.0, 50.0)])
+
+    class Slow(SongRouter):
+        def __init__(self):
+            super().__init__([])
+            self.clips: list[float] = []
+
+        def separate_vocals(self, audio, out_dir):
+            time.sleep(0.3)  # long enough for the other reel to ask meanwhile
+            return super().separate_vocals(audio, out_dir)
+
+        def transcribe(self, audio, language=None):
+            with wave.open(str(audio)) as w:
+                self.clips.append(round(w.getnframes() / w.getframerate(), 1))
+            time.sleep(0.2)
+            return Transcript(language="hi", words=[Word(text="x", start=0.1, end=0.4)])
+
+    router = Slow()
+    with ThreadPoolExecutor(2) as pool:
+        vocals = list(pool.map(lambda _: songhook.separated(audio, router), range(2)))
+    assert router.separated == 1 and vocals[0] == vocals[1] == folder / "vocals.wav"
+    parts = [(10.0, 30.0), (30.0, 42.0)]
+    with ThreadPoolExecutor(2) as pool:
+        heard = list(pool.map(lambda p: songhook.hear(vocals[0], *p, router, "hi"), parts))
+    assert sorted(router.clips) == [12.0, 20.0]
+    assert [h[0][0].start for h in heard] == [10.1, 30.1]
+    assert not list(folder.glob("*.wav.part*")) and len(list(folder.glob("heard-*.json"))) == 2
 
 
 def test_a_song_nobody_can_find_says_so():
