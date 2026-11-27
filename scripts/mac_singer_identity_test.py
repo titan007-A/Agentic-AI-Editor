@@ -100,7 +100,13 @@ def main() -> None:
         sys.exit("the likeness painter isn't available here (Apple Silicon and IMAGE_PYTHON)")
 
     started = time.time()
-    names = [singer.save_photo(p.expanduser().read_bytes(), settings) for p in args.photos]
+    # as the upload does: taken in (any kind, a small one enlarged), then made ready
+    names = []
+    for path in args.photos:
+        taken = singer.take_photo(path.expanduser().read_bytes(), settings)
+        ready, done = singer.prepare_photo(taken.name, settings)
+        print(f"{path.name}: {'; '.join(taken.notes + done) or 'used as sent'}")
+        names.append(ready)
     photos, wiped = singer.photos_of(names, settings)
     print(f"photos ready in {time.time() - started:.1f} s ({wiped} marks painted out)")
 
