@@ -602,6 +602,7 @@ def textured(size=(400, 300)) -> Image.Image:
 
 
 def test_a_stamp_is_painted_out_of_the_photo_and_its_neighbours_with_it(tmp_path, monkeypatch):
+    pytest.importorskip("cv2")  # painting marks out needs OpenCV (the ml extra)
     monkeypatch.setattr(singer, "SMALL_SIDE", 100)  # kept at its own size: boxes line up
     from PIL import ImageDraw, ImageFont
 
@@ -639,6 +640,7 @@ def test_a_stamp_is_painted_out_of_the_photo_and_its_neighbours_with_it(tmp_path
 
 
 def test_any_words_on_the_singer_go_and_a_clean_photo_stays_as_it_is(tmp_path):
+    pytest.importorskip("cv2")  # painting marks out needs OpenCV (the ml extra)
     from agentic_editor.analysis.ocr import Line
 
     settings, _ = studio_env(tmp_path)
@@ -923,6 +925,7 @@ def test_a_group_photo_is_cropped_to_its_main_person_with_their_face():
 
 
 def test_a_photo_is_made_ready_once_and_says_what_was_done(tmp_path):
+    pytest.importorskip("cv2")  # painting marks out needs OpenCV (the ml extra)
     from agentic_editor.analysis.ocr import Line
 
     settings, _ = studio_env(tmp_path)

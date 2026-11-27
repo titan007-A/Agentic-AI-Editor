@@ -761,8 +761,13 @@ def stamps(lines, solid) -> list[tuple[int, int, int, int]]:
 def wipe(picture, boxes):
     """`picture` with the letters inside `boxes` painted over from around them: only the
     strokes (what stands out from the box's own smoothed look), so a jacket under a
-    watermark keeps its folds."""
-    import cv2
+    watermark keeps its folds. Without OpenCV (an install without the ml extra) the photo
+    stays as it is."""
+    try:
+        import cv2
+    except ImportError:
+        log.warning("OpenCV isn't installed: marks on a singer photo stay")
+        return picture
     import numpy as np
     from PIL import Image
 
