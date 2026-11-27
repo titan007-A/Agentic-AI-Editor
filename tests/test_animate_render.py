@@ -225,7 +225,7 @@ def test_a_world_map_reel_flies_lights_the_country_and_pins_its_cards(tmp_path, 
     plan = map_plan()
     data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, models)
     assert data["map"]["tiles"] and data["map"]["levels"] == 1
-    usa = data["scenes"][1]
+    usa = data["scenes"][0]  # the tour starts on its first country
     card_at = usa["beats"][1] + 0.22  # the first card has popped, the camera is on it
     data["duration"] = round(card_at + 0.5, 2)
     opts = render.options(ROOT / "fonts", models)
@@ -296,11 +296,11 @@ def test_each_map_look_is_drawn_and_the_video_is_its_preview(tmp_path, monkeypat
     (models / "fonts").mkdir()
     plan = map_plan()
     if look == "badge":  # a ranking: the United States third
-        plan.scenes[1].visual.value, plan.scenes[1].visual.emoji = "#3", "🏆"
+        plan.scenes[0].visual.value, plan.scenes[0].visual.emoji = "#3", "🏆"
     else:
         plan = plan.model_copy(update={"look": look})
     data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, models)
-    usa = data["scenes"][1]
+    usa = data["scenes"][0]
     card_at = round(usa["beats"][1] + 0.3, 1)  # the first card is up; on a frame of the video
     data["duration"] = round(card_at + 0.5, 2)
     opts = render.options(ROOT / "fonts", models)
