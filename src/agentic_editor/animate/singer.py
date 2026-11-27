@@ -1075,8 +1075,8 @@ def likeness_prompt(shot: str, art: str) -> str:
     """What the likeness model paints for a scene with the singer in it."""
     return (
         f"The person from the reference photo, {POSES.get(shot, POSES['hero'])}. "
-        f"{art.strip().rstrip('.')}. Keep their face, hair, beard, skin tone, build and "
-        f"clothes exactly as in the photo. {images.LOOKS[STYLE]}. {images.NEVER}"
+        f"{art.strip().rstrip('.')}. Keep their face, hairstyle, headwear, skin tone, build "
+        f"and clothes exactly as in the photo. {images.LOOKS[STYLE]}. {images.NEVER}"
     )
 
 
@@ -1155,12 +1155,14 @@ def paint_likenesses(plan: Plan, settings: Settings, likeness, progress) -> tupl
 
 def painted_face(path: Path, settings: Settings, face_of=None) -> list[float]:
     """Where the singer's face is in a picture painted with them, [x, y, w, h], 0..1; []
-    when none is seen (from behind, far off): the words then take the shot's usual place."""
+    when none is seen (from behind, far off): the words then take the shot's usual place.
+    The biggest face YuNet finds (the singer stands nearest; others in a crowd are small):
+    MediaPipe's short-range finder misses a face a tenth of the picture wide."""
     from PIL import Image
 
     try:
         picture = Image.open(path).convert("RGB")
-        found = (face_of or _face)(picture, settings)
+        found = (face_of or _yunet_face)(picture, settings)
     except Exception:
         log.info("no face looked for in %s", path, exc_info=True)
         return []
@@ -1169,6 +1171,16 @@ def painted_face(path: Path, settings: Settings, face_of=None) -> list[float]:
     x, y, w, h = found
     box = [x / picture.width, y / picture.height, w / picture.width, h / picture.height]
     return [round(min(1.0, max(0.0, v)), 4) for v in box]
+
+
+def _yunet_face(picture, settings: Settings) -> list[float] | None:
+    import numpy as np
+
+    from agentic_editor.analysis import facecam
+
+    pixels = np.asarray(picture)[None]
+    found = facecam.faces(pixels, facecam.model(settings.models_dir))[0]
+    return list(max(found, key=lambda b: b[2] * b[3])) if found else None
 
 
 def paint_plan(
