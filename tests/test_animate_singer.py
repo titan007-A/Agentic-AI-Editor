@@ -41,6 +41,7 @@ def no_model_download(monkeypatch):
         raise AssertionError("a test asked for the cutout model")
 
     monkeypatch.setattr(singer, "cut_model", refuse)
+    monkeypatch.setattr(singer, "ENLARGE_WITH_MODELS", False)  # no Real-ESRGAN in a test
 
 
 LYRIC = [
@@ -235,7 +236,7 @@ def test_photos_are_kept_by_their_content_and_bad_files_refused(tmp_path):
     assert (images.folder(settings) / name).exists() and name.endswith(".png")
     with pytest.raises(ValueError, match="isn't a photo"):
         singer.save_photo(b"not a picture", settings)
-    with pytest.raises(ValueError, match="too small"):
+    with pytest.raises(ValueError, match="only 50x50 pixels"):
         singer.save_photo(photo_png(size=(50, 50)), settings)
 
 
@@ -570,7 +571,8 @@ def test_the_player_page_brings_the_singer_style_along(singer_env):
     assert font.status_code == 200
 
 
-def test_the_head_is_found_from_the_outline_and_a_wild_face_box_ignored(tmp_path):
+def test_the_head_is_found_from_the_outline_and_a_wild_face_box_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(singer, "SMALL_SIDE", 100)  # kept at its own size: the mask lines up
     solid = np.zeros((800, 300), dtype=bool)
     yy, xx = np.mgrid[0:800, 0:300]
     solid |= (xx - 150) ** 2 + (yy - 60) ** 2 < 45**2  # the head
@@ -599,7 +601,8 @@ def textured(size=(400, 300)) -> Image.Image:
     return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
 
 
-def test_a_stamp_is_painted_out_of_the_photo_and_its_neighbours_with_it(tmp_path):
+def test_a_stamp_is_painted_out_of_the_photo_and_its_neighbours_with_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(singer, "SMALL_SIDE", 100)  # kept at its own size: boxes line up
     from PIL import ImageDraw, ImageFont
 
     from agentic_editor.analysis.ocr import Line
@@ -820,3 +823,172 @@ def test_a_picture_is_never_asked_for_writing_or_a_photo():
     )
     assert singer.place_of("Torn photo taped to a wall") == singer.FALLBACK_ART
     assert "typography" not in singer.likeness_prompt("hero", "a rooftop at dusk, bold typography")
+
+
+# ---- any photo taken in and made ready ----------------------------------------------------
+
+
+def encoded(picture: Image.Image, kind: str, **options) -> bytes:
+    out = io.BytesIO()
+    picture.save(out, kind, **options)
+    return out.getvalue()
+
+
+def test_any_photo_a_phone_or_a_browser_saves_is_taken(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    face = textured((900, 700))
+    sent = {
+        "jpeg-cmyk": encoded(face.convert("CMYK"), "JPEG"),
+        "webp": encoded(face, "WEBP"),
+        "png-alpha": encoded(Image.new("RGBA", (700, 700), (0, 0, 0, 0)), "PNG"),
+        "png-16bit": encoded(
+            Image.fromarray((np.arange(700 * 700).reshape(700, 700) % 60000).astype(np.uint16)),
+            "PNG",
+        ),
+        "gif": encoded(
+            face.convert("P"), "GIF", save_all=True, append_images=[Image.new("P", face.size, 3)]
+        ),
+    }
+    from PIL import features
+
+    if features.check("avif"):
+        sent["avif"] = encoded(face, "AVIF")
+    try:
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+        sent["heic"] = encoded(face, "HEIF")
+    except (ImportError, KeyError, OSError):
+        pass
+    for kind, data in sent.items():
+        name = singer.save_photo(data, settings)
+        kept = Image.open(images.folder(settings) / name)
+        assert kept.mode == "RGB" and min(kept.size) >= singer.SMALL_SIDE, kind
+        if kind == "png-alpha":
+            assert kept.getpixel((10, 10)) == (255, 255, 255)  # see-through on white
+        if kind == "gif":
+            assert np.asarray(kept).std() > 5  # the first frame, not the plain second one
+    assert {"webp", "png-16bit"} <= set(sent)
+
+
+def test_a_small_photo_is_enlarged_and_a_tiny_one_refused_saying_why(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    taken = singer.take_photo(encoded(textured((197, 197)), "WEBP"), settings)
+    kept = Image.open(images.folder(settings) / taken.name)
+    assert min(kept.size) == singer.ENLARGE_SIDE and "197x197" in taken.notes[0]
+    with pytest.raises(singer.PhotoRefused, match="only 100x80 pixels") as refused:
+        singer.take_photo(encoded(textured((100, 80)), "PNG"), settings)
+    assert refused.value.details["format"] == "PNG" and refused.value.details["pixels"] == "100x80"
+    assert refused.value.details["bytes"] > 0
+    with pytest.raises(singer.PhotoRefused, match="isn't a photo") as refused:
+        singer.take_photo(b"%PDF-1.4 not a picture", settings)
+    assert refused.value.details["format"] == "unknown"
+
+
+def test_a_huge_photo_is_made_smaller_and_a_bomb_refused(tmp_path, monkeypatch):
+    settings, _ = studio_env(tmp_path)
+    name = singer.save_photo(
+        encoded(Image.new("RGB", (4000, 3000), (90, 30, 30)), "JPEG"), settings
+    )
+    assert Image.open(images.folder(settings) / name).size == (1600, 1200)
+    monkeypatch.setattr(singer, "MAX_PIXELS", 1_000_000)
+    with pytest.raises(singer.PhotoRefused, match="far too big"):
+        singer.take_photo(encoded(Image.new("RGB", (1200, 1000)), "PNG"), settings)
+
+
+def test_borders_and_screenshot_bars_are_trimmed():
+    from PIL import ImageDraw
+
+    shot = Image.new("RGB", (600, 1300), (250, 250, 250))
+    draw = ImageDraw.Draw(shot)
+    draw.text((20, 10), "9:41", fill=(0, 0, 0))  # a status bar with a little writing
+    draw.rectangle((540, 12, 580, 22), fill=(0, 0, 0))
+    shot.paste(textured((600, 700)), (0, 250))
+    draw.rectangle((0, 1240, 600, 1300), fill=(20, 20, 20))  # the navigation bar
+    left, top, right, bottom = singer.bars_of(shot)
+    assert (left, right) == (0, 600) and 240 <= top <= 251 and 949 <= bottom <= 951
+    assert singer.bars_of(Image.new("RGB", (300, 300), (0, 0, 0))) == (0, 0, 300, 300)
+
+
+def test_a_group_photo_is_cropped_to_its_main_person_with_their_face():
+    solid = np.zeros((600, 900), dtype=bool)
+    solid[200:600, 100:320] = True  # someone on the left
+    solid[120:600, 300:620] = True  # the singer, nearest the camera, touching them
+    solid[220:600, 600:820] = True  # someone on the right
+    faces = [(170, 210, 60, 70), (420, 130, 110, 130), (680, 230, 60, 70)]
+    left, top, right, bottom = singer.main_person(solid, faces)
+    assert 230 < left < 330 and 600 < right < 720  # between the neighbours' faces
+    assert top < 130 and bottom == 600
+    assert singer.main_person(np.zeros((10, 10), bool), []) is None
+
+
+def test_a_photo_is_made_ready_once_and_says_what_was_done(tmp_path):
+    from agentic_editor.analysis.ocr import Line
+
+    settings, _ = studio_env(tmp_path)
+    cover = Image.new("RGB", (800, 800), (5, 5, 5))
+    cover.paste(textured((300, 450)), (250, 300))
+    name = singer.save_photo(encoded(cover, "PNG"), settings)
+    title = [Line(x0=200, y0=60, x1=600, y1=110, text="Billy Joel / Piano Man", score=0.9)]
+
+    def person(pic, models):
+        mask = np.zeros((pic.height, pic.width), np.float32)
+        mask[300:750, 250:550] = 1.0
+        return mask
+
+    made, notes = singer.prepare_photo(
+        name, settings, read=lambda pic: title, mask_of=person,
+        faces_of=lambda pic, s: [(350, 330, 100, 120)],
+    )  # fmt: skip
+    assert (
+        made != name and "text painted out (1 places)" in notes and "cropped to the singer" in notes
+    )
+    ready = Image.open(images.folder(settings) / made)
+    assert ready.width < ready.height and min(ready.size) >= singer.SMALL_SIDE
+    again = singer.prepare_photo(name, settings, read=lambda pic: 1 / 0)
+    assert again == (made, notes)
+    plain = singer.save_photo(photo_png(color=(40, 40, 40)), settings)
+    nobody = lambda pic, models: np.zeros((pic.height, pic.width), np.float32)  # noqa: E731
+    same = singer.prepare_photo(plain, settings, read=lambda pic: [], mask_of=nobody,
+                                faces_of=lambda pic, s: [])  # fmt: skip
+    assert same == (plain, [])
+
+
+def test_a_refused_upload_is_logged_with_why_and_the_reason_sent_back(singer_env, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    tiny = encoded(textured((90, 90)), "WEBP")
+    sent = singer_env.client.post(
+        "/api/animation-photos", files={"file": ("OIP.webp", tiny, "image/webp")}
+    )
+    assert sent.status_code == 422 and "only 90x90 pixels" in sent.json()["detail"]
+    logged = [r.getMessage() for r in caplog.records if "singer photo refused" in r.getMessage()]
+    assert (
+        logged
+        and "WEBP" in logged[0]
+        and f"{len(tiny)} bytes" in logged[0]
+        and "90x90" in logged[0]
+    )
+    small = encoded(textured((197, 197)), "WEBP")
+    taken = singer_env.client.post(
+        "/api/animation-photos", files={"file": ("OIP.webp", small, "image/webp")}
+    )
+    assert taken.status_code == 200 and "197x197" in taken.json()["notes"][0]
+
+
+def test_a_small_face_away_from_the_singer_leaves_the_outline():
+    solid = np.zeros((600, 900), dtype=bool)
+    solid[100:600, 300:700] = True  # the singer
+    solid[250:600, 60:300] = True  # a drummer behind, touching them
+    faces = [(450, 120, 120, 140), (120, 270, 60, 70)]
+    kept = singer.without_others(solid, faces)
+    assert not kept[290, 140] and kept[300, 500]  # the drummer's head gone, the singer kept
+    assert singer.without_others(solid, faces[:1]) is solid
+
+
+def test_with_no_face_the_crop_keeps_room_for_hair_and_shoulders():
+    solid = np.zeros((800, 800), dtype=bool)
+    solid[300:600, 300:500] = True  # only the bright face of a dark cover
+    left, top, right, bottom = singer.main_person(solid, [])
+    assert left <= 240 and right >= 560 and top <= 225 and bottom >= 675
