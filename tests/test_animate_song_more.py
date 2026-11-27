@@ -1,6 +1,6 @@
 """Song story reels made longer and fuller: parts about 30 s, a second picture over a long
-line, words that never stretch over the music after a line, and two parts of a song joined
-into one reel. Every lyric here is made up."""
+line, words that never stretch over the music after a line, two parts of a song joined into
+one reel, and a reel made for each other part of a song. Every lyric here is made up."""
 
 import itertools
 import shutil
@@ -23,7 +23,7 @@ from agentic_editor.animate.plan import (
     tidy,
 )
 from agentic_editor.animate.timeline import SWITCH, build_song, player_data
-from agentic_editor.db import Animation
+from agentic_editor.db import Animation, Job
 from agentic_editor.transcript import Transcript, Word
 from tests import test_api
 from tests.test_animate import studio_env
@@ -461,6 +461,106 @@ def test_two_parts_of_a_song_are_joined_into_the_reel_and_undo_goes_back(env, pa
     # Playing one part again after a join is one part.
     one = env.client.post(f"/api/animations/{a['id']}/change", json={"choice": 1}).json()
     assert one["plan"]["song"]["pieces"] == [] and one["plan"]["song"]["playing"] == [1]
+
+
+def test_make_every_part_makes_a_reel_for_each_other_part_one_after_another(
+    env, parts_studio, monkeypatch
+):
+    a = env.client.post("/api/animations", json={"idea": "Paper Boats", "style": "song"}).json()
+    sent = []
+    monkeypatch.setattr(jobs, "animate", sent.append)  # the queue, not run yet
+    made = env.client.post(f"/api/animations/{a['id']}/parts")
+    assert made.status_code == 200, made.text
+    parts = made.json()["parts"]
+    assert len(parts) == 2 and [p["spans"][0][0] for p in parts] == [59.6, 0.2]
+    assert len(sent) == 1 and sent[0] == parts[0]["id"]  # one at a time
+    assert [p["status"] for p in parts] == ["queued", "queued"]
+    # The one sent is the queue's; the one waiting for its turn can still be deleted.
+    assert env.client.delete(f"/api/animations/{parts[0]['id']}").status_code == 409
+    # The first is drafted: rendered by itself, and the second takes its turn.
+    parts_studio["run"](sent[0])
+    with env.sessions() as db:
+        first = db.get(Animation, sent[0])
+        assert first.status == "ready" and first.job_id and first.made_from == a["id"]
+        assert Plan.model_validate(first.plan).song.playing == [1]
+        assert db.get(Job, first.job_id).source == studio.SOURCE + first.id
+    assert parts_studio["rendered"] == [first.job_id]
+    assert len(sent) == 2 and sent[1] == parts[1]["id"]
+    parts_studio["run"](sent[1])
+    assert len(sent) == 2 and len(parts_studio["rendered"]) == 2
+    view = env.client.get(f"/api/animations/{a['id']}").json()
+    assert [p["status"] for p in view["parts"]] == ["ready", "ready"]
+    assert all(p["render"]["job_id"] for p in view["parts"])
+    # Every part has its reel now; a part lists the first reel and the other part.
+    assert env.client.post(f"/api/animations/{a['id']}/parts").status_code == 409
+    assert env.client.post(f"/api/animations/{sent[1]}/parts").status_code == 409
+    other = env.client.get(f"/api/animations/{sent[1]}").json()
+    assert {p["id"] for p in other["parts"]} == {a["id"], sent[0]}
+    assert other["made_from"] == a["id"]
+    # A later change to a part is rendered by hand, not by itself.
+    env.client.post(f"/api/animations/{sent[0]}/change", json={"request": "make it rain"})
+    parts_studio["run"](sent[0])
+    assert len(parts_studio["rendered"]) == 2
+
+
+def test_a_part_waiting_for_its_turn_can_be_deleted(env, parts_studio, monkeypatch):
+    a = env.client.post("/api/animations", json={"idea": "Paper Boats", "style": "song"}).json()
+    sent = []
+    monkeypatch.setattr(jobs, "animate", sent.append)
+    parts = env.client.post(f"/api/animations/{a['id']}/parts").json()["parts"]
+    assert env.client.delete(f"/api/animations/{parts[1]['id']}").status_code == 200
+    parts_studio["run"](sent[0])
+    assert sent == [parts[0]["id"]]  # nothing left to take its turn
+    assert len(env.client.get(f"/api/animations/{a['id']}").json()["parts"]) == 1
+
+
+def test_a_part_that_failed_is_made_again_as_that_part(env, parts_studio, monkeypatch):
+    a = env.client.post("/api/animations", json={"idea": "Paper Boats", "style": "song"}).json()
+    real = parts_studio["run"]
+    sent = []
+    monkeypatch.setattr(jobs, "animate", sent.append)
+    monkeypatch.setattr(songhook, "rechoose", lambda *a, **k: (_ for _ in ()).throw(
+        songhook.SongError("the song's files are gone: make the reel again")))  # fmt: skip
+    found_again = []
+
+    def find(idea, settings, router, say=None, choice=None, **kwargs):
+        found_again.append(choice)
+        raise songhook.SongError("YouTube found nothing")
+
+    monkeypatch.setattr(songhook, "find", find)
+    env.client.post(f"/api/animations/{a['id']}/parts")
+    real(sent[0])
+    with env.sessions() as db:
+        assert db.get(Animation, sent[0]).status == "failed"
+    assert found_again == [1] and len(sent) == 2  # its own part looked for; the next goes on
+    retried = env.client.post(f"/api/animations/{sent[0]}/retry")
+    assert retried.status_code == 200 and sent[-1] == sent[0]
+    with env.sessions() as db:
+        assert db.get(Animation, sent[0]).part["choice"] == 1
+
+
+def test_a_restart_sends_only_the_part_whose_turn_it_was(env, monkeypatch):
+    with env.sessions() as db:
+        db.add_all([
+            Animation(id="root1", idea="x", style="song", status="ready"),
+            Animation(id="part1", idea="x", style="song", status="drafting", made_from="root1",
+                      part={"choice": 1}, task={"op": "draft", "turn": "sent"}),
+            Animation(id="part2", idea="x", style="song", status="queued", made_from="root1",
+                      part={"choice": 2}, task={"op": "draft", "turn": "waiting"}),
+            Animation(id="part3", idea="x", style="song", status="queued", made_from="root1",
+                      part={"choice": 3}, task={"op": "draft", "turn": "waiting"}),
+        ])  # fmt: skip
+        db.commit()
+    queued = []
+    monkeypatch.setattr(jobs, "animate", queued.append)
+    jobs.recover(env.sessions)
+    with env.sessions() as db:
+        assert db.get(Animation, "part1").status == "failed"
+        assert db.get(Animation, "part2").task["turn"] == "sent"
+    assert queued == ["part2"]  # the one stopped failed; the next took its turn, not both
+
+
+# ---- drawn ----------------------------------------------------------------------------------
 
 
 def _browser() -> bool:

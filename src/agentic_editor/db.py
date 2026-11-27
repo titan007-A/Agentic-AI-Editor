@@ -310,6 +310,11 @@ class Animation(Base):
     post_id: Mapped[str | None] = mapped_column(String(64))
     # Claims the fact check found no source for; any of them keeps it from posting by itself.
     doubts: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # A Song story made for another part of a song another reel found ("Make every part"):
+    # that reel's id, and the part ({"choice": n, "song": the song found, without its lines,
+    # "render": rendered by itself once drafted}).
+    made_from: Mapped[str | None] = mapped_column(String(12))
+    part: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 

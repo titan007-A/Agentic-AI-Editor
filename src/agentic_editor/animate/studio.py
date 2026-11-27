@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import sessionmaker
 
 from agentic_editor.animate import (
@@ -28,7 +29,7 @@ from agentic_editor.animate import (
     songwriter,
     voice,
 )
-from agentic_editor.animate.plan import Plan, scene_lines, song_spans, tidy
+from agentic_editor.animate.plan import Plan, Song, scene_lines, song_spans, tidy
 from agentic_editor.animate.render import render
 from agentic_editor.animate.timeline import Spoken, Timeline, build, build_song, player_data
 from agentic_editor.db import Animation
@@ -329,6 +330,7 @@ def run_task(
         singer.run_task(animation_id, Session, settings, router=router, paint=paint)
         return
     op = "draft"
+    part, made_from = None, None
     try:
         with Session() as db:
             a = db.get(Animation, animation_id)
@@ -338,6 +340,7 @@ def run_task(
             brief = brief_of(a)
             wants_pictures = bool(a.images)
             current = Plan.model_validate(a.plan) if a.plan else None
+            part, made_from = (dict(a.part) if a.part else None), a.made_from
         op = task.get("op", "draft")
         notes: list[str] = []
         doubts: list[str] = []
@@ -354,7 +357,7 @@ def run_task(
         if sung and op in ("draft", "change", "scene", "hook"):
             router = router or ModelRouter(settings, get_backends(), lambda *args: None)
             plan, wrote = _song_task(
-                op, task, brief, current, animation_id, Session, settings, router
+                op, task, brief, current, animation_id, Session, settings, router, part
             )
             notes = [*notes, *wrote]
         elif op in ("draft", "auto", "change", "scene"):
@@ -469,6 +472,8 @@ def run_task(
             from agentic_editor.animate import schedule
 
             schedule.render(animation_id, Session)
+        elif op == "draft" and part and part.get("render"):  # one of "Make every part"
+            render_part(animation_id, Session)
     except Exception as exc:
         log.exception("animation %s failed", animation_id)
         if op == "auto":  # an autopilot's reel that never got made
@@ -483,6 +488,8 @@ def run_task(
             Session, animation_id, status="failed", task=None, message="failed",
             error=str(exc) if isinstance(exc, plain) else f"{type(exc).__name__}: {exc}",
         )  # fmt: skip
+    if made_from and part is not None and op == "draft":  # the next part's turn
+        next_part(made_from, Session)
 
 
 def _length_note(plan: Plan, length: str) -> str:
@@ -499,7 +506,7 @@ def _clock(seconds: float) -> str:
 
 def _song_task(
     op: str, task: dict, brief: planner.Brief, current: Plan | None, animation_id: str,
-    Session: sessionmaker, settings: Settings, router,
+    Session: sessionmaker, settings: Settings, router, part: dict | None = None,
 ) -> tuple[Plan, list[str]]:  # fmt: skip
     """A Song story's writing: find the song and write it (draft), time another part of it,
     or two parts joined, and write that (hook), or change its story in words or one
@@ -508,7 +515,7 @@ def _song_task(
     song = None
     if op == "draft":
         _set(Session, animation_id, status="drafting", message="finding the song", error=None)
-        song = songhook.find(brief.idea, settings, router, say)
+        song = _song_of(brief, part, settings, router, say)
     elif current is None or current.song is None:
         raise planner.PlannerError("there is no draft to change yet")
     elif op == "hook" and task.get("join"):
@@ -529,6 +536,135 @@ def _song_task(
             return songwriter.change(llm, current, task.get("request", ""))
         index = int(task.get("scene", 0))
         return songwriter.redo_moment(llm, current, index, task.get("request", "")), []
+
+
+def _song_of(brief: planner.Brief, part: dict | None, settings: Settings, router, say) -> Song:
+    """The song a Song story is drafted to: found from its name; for a reel made for another
+    part of a song found already, that part timed from what was kept (found again, that
+    part, if the song's files are gone)."""
+    if not part or not part.get("song"):
+        return songhook.find(brief.idea, settings, router, say)
+    choice = int(part.get("choice", 0))
+    say("timing its part of the song")
+    try:
+        return songhook.rechoose(Song.model_validate(part["song"]), choice, settings, router)
+    except songhook.SongError as exc:
+        log.info("part %d of %r found again: %s", choice, brief.idea, exc)
+        return songhook.find(brief.idea, settings, router, say, choice=choice)
+
+
+# ---- every part of a song ------------------------------------------------------------------
+# "Make every part": a Song story's other parts each become a reel of their own, made one
+# after another through the queue (never all at once) and each rendered once drafted. The
+# reels of one song point at the first one (Animation.made_from).
+
+_turns = threading.Lock()
+WAITING = "waiting"  # a part's task while it waits for its turn (task["turn"])
+
+
+def plays(song: Song) -> list[int]:
+    """The parts (song.choices) a Song story plays: as it says, or for one made before it
+    said, the part that starts where it does."""
+    if song.playing:
+        return list(song.playing)
+    return [n for n, c in enumerate(song.choices) if abs(c.start - song.start) < 1.5][:1]
+
+
+def family(session, root: str) -> list[Animation]:
+    """The reels of one song: the first and those made for its other parts, oldest first."""
+    found = session.scalars(
+        select(Animation).where(or_(Animation.id == root, Animation.made_from == root))
+    ).all()
+    return sorted(found, key=lambda a: (a.made_from is not None, a.created_at,
+                                        (a.part or {}).get("choice", 0)))  # fmt: skip
+
+
+def new_parts(session, found: Animation) -> list[Animation]:
+    """A reel for each part `found`'s song offers that no reel of the song plays yet, each
+    waiting for its turn (next_part) and rendered once drafted."""
+    plan = Plan.model_validate(found.plan) if found.plan else None
+    song = plan.song if plan is not None and plan.style == songwriter.STYLE else None
+    if song is None or not song.choices:
+        raise ValueError("only a Song story has other parts of its song to make")
+    root = found.made_from or found.id
+    taken: set[int] = set()
+    for a in family(session, root):
+        made = (a.plan or {}).get("song")
+        if made:
+            taken |= set(plays(Song.model_validate(made)))
+        elif a.part:
+            taken.add(int(a.part.get("choice", -1)))
+    todo = [n for n in range(len(song.choices)) if n not in taken]
+    if not todo:
+        raise ValueError("every part of the song has its reel already")
+    kept = song.model_copy(
+        update={"lines": [], "people": [], "story": "", "pieces": [], "playing": []}
+    ).model_dump(mode="json")
+    brief = {
+        "owner_id": found.owner_id, "idea": found.idea, "kind": found.kind,
+        "style": songwriter.STYLE, "voice": found.voice, "length": found.length,
+        "images": found.images, "made_from": root, "status": "queued",
+        "message": "waiting for the part before it",
+    }  # fmt: skip
+    made = [
+        Animation(**brief, part={"choice": n, "song": kept, "render": True},
+                  task={"op": "draft", "turn": WAITING})
+        for n in todo
+    ]  # fmt: skip
+    session.add_all(made)
+    session.flush()
+    return made
+
+
+def next_part(root: str, Session: sessionmaker, send=None) -> str | None:
+    """The next of a song's reels waiting for its turn, sent to the queue when none of
+    them is queued or being made; its id, or None."""
+    from agentic_editor import jobs
+
+    send = send or jobs.animate
+    with _turns, Session() as db:
+        reels = [a for a in family(db, root) if a.made_from == root]
+        busy = any(
+            a.status in BUSY or (a.status == "queued" and (a.task or {}).get("turn") != WAITING)
+            for a in reels
+        )
+        waiting = next(
+            (a for a in reels if a.status == "queued" and (a.task or {}).get("turn") == WAITING),
+            None,
+        )
+        if busy or waiting is None:
+            return None
+        waiting.task = {**(waiting.task or {}), "turn": "sent"}
+        waiting.message = "waiting for a free slot"
+        db.commit()
+        chosen = waiting.id
+    send(chosen)
+    return chosen
+
+
+def render_part(animation_id: str, Session: sessionmaker, process=None) -> str | None:
+    """A reel made for another part of a song, rendered as soon as it is drafted (as the
+    Render button does); the render's job id."""
+    from agentic_editor import jobs
+    from agentic_editor.db import Job
+
+    process = process or jobs.process
+    with Session() as db:
+        a = db.get(Animation, animation_id)
+        if a is None or not a.plan:
+            return None
+        job = Job(
+            source=SOURCE + a.id, title=(a.plan or {}).get("title", ""), presets=[],
+            notes=None, trim=False, owner_id=a.owner_id,
+        )  # fmt: skip
+        db.add(job)
+        db.flush()
+        a.job_id = job.id
+        a.part = {**(a.part or {}), "render": False}  # once: later changes are rendered by hand
+        db.commit()
+        job_id = job.id
+    process(job_id)
+    return job_id
 
 
 def _choose_topic(animation_id: str, Session: sessionmaker, llm) -> str:

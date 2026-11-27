@@ -17,7 +17,7 @@ from fastapi import HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from agentic_editor import features, instagram, jobs
 from agentic_editor.animate import (
@@ -30,7 +30,7 @@ from agentic_editor.animate import (
     studio,
     voice,
 )
-from agentic_editor.animate.plan import MAX_SCENES, Plan
+from agentic_editor.animate.plan import MAX_SCENES, Plan, Song, song_spans
 from agentic_editor.db import Animation, AnimationAutopilot, InstagramChannel, Job, Output
 from agentic_editor.render import fonts
 
@@ -136,6 +136,7 @@ ROUTES = (
     ("POST", "/api/animations/{animation_id}/retry", "retry_animation"),
     ("POST", "/api/animations/{animation_id}/undo", "undo_animation"),
     ("POST", "/api/animations/{animation_id}/render", "render_animation"),
+    ("POST", "/api/animations/{animation_id}/parts", "make_parts"),
     ("DELETE", "/api/animations/{animation_id}", "delete_animation"),
     ("GET", "/api/animations/{animation_id}/sound", "animation_sound"),
     ("GET", "/api/animation-voices", "animation_voices"),
@@ -219,10 +220,35 @@ def operations(
             "render": render_of(found, session),
             "autopilot_id": found.autopilot_id, "post_status": found.post_status,
             "post_error": found.post_error, "post_id": found.post_id, "doubts": found.doubts or [],
+            "made_from": found.made_from,
         }  # fmt: skip
         if full:
             out["plan"] = found.plan
             out["player"] = found.player
+            out["parts"] = parts_of(found, session) if found.style == "song" else []
+        return out
+
+    def parts_of(found: Animation, session: Session) -> list[dict]:
+        """The other reels of a Song story's song (made for its other parts): what each
+        plays, how far along it is and its render."""
+        reels = studio.family(session, found.made_from or found.id)
+        out = []
+        for a in reels:
+            if a.id == found.id:  # the reels of a song are all its owner's
+                continue
+            song = (a.plan or {}).get("song")
+            if song:
+                spans = song_spans(Song.model_validate(song))
+            else:
+                choices = ((a.part or {}).get("song") or {}).get("choices") or []
+                n = int((a.part or {}).get("choice", -1))
+                spans = [(choices[n]["start"], choices[n]["end"])] if 0 <= n < len(choices) else []
+            out.append({
+                "id": a.id, "title": (a.plan or {}).get("title") or "", "status": a.status,
+                "message": a.message, "error": a.error, "first": a.made_from is None,
+                "spans": [[round(x, 2), round(y, 2)] for x, y in spans],
+                "render": render_of(a, session),
+            })  # fmt: skip
         return out
 
     def queue(found: Animation, session: Session, task: dict, message: str) -> None:
@@ -381,9 +407,27 @@ def operations(
         session.expire_all()  # the job as it is now (the queue may have taken it up already)
         return view(found, session, full=True)
 
-    def delete_animation(animation_id: str, account: User, session: DB) -> dict:
+    def make_parts(animation_id: str, account: User, session: DB) -> dict:
+        """Make every part: a reel for each part of the song this Song story offers that no
+        reel of its song plays yet, drafted one after another through the queue and each
+        rendered once drafted."""
         found = find(animation_id, session, account)
         idle(found)
+        try:
+            made = studio.new_parts(session, found)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        session.commit()
+        turns = sessionmaker(session.get_bind(), expire_on_commit=False)
+        studio.next_part(made[0].made_from, turns)
+        session.expire_all()  # as they are now (the queue may have taken the first already)
+        return view(found, session, full=True)
+
+    def delete_animation(animation_id: str, account: User, session: DB) -> dict:
+        found = find(animation_id, session, account)
+        # A part still waiting for its turn isn't in the queue yet: it can go.
+        if (found.task or {}).get("turn") != studio.WAITING or found.status != "queued":
+            idle(found)
         session.delete(found)
         session.commit()
         return {"ok": True}
