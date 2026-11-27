@@ -257,11 +257,13 @@ def names(title: str, artist: str, upload: str = "", channel: str = "") -> tuple
     ("Artist - Title (Official Video)") and channel ("Artist - Topic", "ArtistVEVO")."""
     title, artist = " ".join((title or "").split()), " ".join((artist or "").split())
     if title and artist:
+        # "Adele - Someone Like You" by Adele, or the singer twice over ("X - X - Title")
         parts = _DASH.split(title)
-        if len(parts) == 2 and plain(parts[0]) == plain(artist):
-            title = parts[1]  # "Adele - Someone Like You" by Adele
-        elif len(parts) == 2 and plain(parts[1]) == plain(artist):
-            title = parts[0]
+        while len(parts) > 1 and plain(parts[0]) == plain(artist):
+            parts = parts[1:]
+        while len(parts) > 1 and plain(parts[-1]) == plain(artist):
+            parts = parts[:-1]
+        title = " - ".join(parts)
     if title and artist and plain(title) != plain(artist):
         return _tidy_name(title), _tidy_name(artist)
     # LRCLIB's names look wrong (none, or the title and singer both the whole name): the
