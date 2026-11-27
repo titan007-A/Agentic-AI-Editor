@@ -48,6 +48,7 @@ FONT_NAMES = {
     "Anton-Regular", "SourceSerif4-Bold", "SourceSerif4-Semibold", "Rubik-ExtraBold",
     "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular", "Poppins-SemiBold", "Poppins-Regular",
     "Poppins-Bold", "AbrilFatface-Regular", "Kalam-Bold", "Martel-Heavy", "PermanentMarker-Regular",
+    "PlayfairDisplay-BoldItalic", "Inter-Light",
 }  # fmt: skip
 # The player page only runs its own script and shows what it is sent as text.
 PLAYER_CSP = (

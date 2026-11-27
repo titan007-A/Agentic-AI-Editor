@@ -499,20 +499,110 @@ def player_data(plan: Plan, timeline: Timeline) -> dict:
     }
 
 
+# How a Song story's lyric line is set (player.js songSubtitles): a line of TWO_ROWS words or
+# more in two rows, the key words bigger (KEY_SIZE, a coloured one ACCENT_SIZE, times the
+# small words'), each word coming in from a soft blur over WORD_IN from WORD_LEAD before it
+# is sung, the whole line blurring away over the last LINE_OUT before the next.
+TWO_ROWS = 3
+KEY_SIZE = 1.68
+ACCENT_SIZE = 1.95
+WORD_IN = 0.4
+WORD_LEAD = 0.08
+LINE_OUT = 0.34
+# A word whose letters act out its movement does it once it has come in (EFFECT_AFTER
+# after it is sung) over its sung time, at least EFFECT_SHORTEST and at most
+# EFFECT_LONGEST; one that ends back in place (EFFECT_SETTLES) finishes before its line
+# blurs away, the others may run into it. Too little time left for that: the word only
+# comes in.
+EFFECT_AFTER = 0.3
+EFFECT_SHORTEST = 0.9
+EFFECT_LONGEST = 1.8
+EFFECT_LEAST = 0.6
+EFFECT_SETTLES = ("rise", "shake", "spin")
+
+
+def _width(text: str, key: bool, color: str) -> float:
+    """About how wide a lyric word is drawn, in the small words' size (Inter Light letters
+    are about 0.53 of it, Playfair Display Bold Italic's 0.5 of theirs)."""
+    if not key:
+        return 0.53 * len(text)
+    return 0.5 * len(text) * (KEY_SIZE if color in ("", "white") else ACCENT_SIZE)
+
+
+def second_row(words: list[dict], told: int = 0) -> int:
+    """The word a lyric line's second row starts with (0: one row): where the writer said
+    its phrase breaks, else where the two rows come out nearest the same width (the first
+    the wider on a tie)."""
+    n = len(words)
+    if n < TWO_ROWS:
+        return 0
+    if 0 < told < n:
+        return told
+    widths = [_width(w["text"], w.get("key", False), w.get("color", "")) for w in words]
+    space = 0.44  # a space and the player's word spacing
+
+    def row(a: int, b: int) -> float:
+        return sum(widths[a:b]) + space * (b - a - 1)
+
+    return min(range(1, n), key=lambda k: (abs(row(0, k) - row(k, n)), -k))
+
+
+def line_out(start: float, end: float, words: list[Word]) -> float:
+    """When a lyric line starts blurring away: LINE_OUT before it goes, less when its last
+    word comes late (never under 0.12 s, never before it has come)."""
+    last = words[-1].start if words else start
+    out = min(LINE_OUT, max(0.12, end - (last + 0.2)))
+    return round(max(start, end - out), 3)
+
+
+def effect_time(effect: str, w: Word, out: float, end: float) -> tuple[float, float] | None:
+    """When a word's letters act out its movement (reel seconds), or None when its line
+    leaves too little time for it."""
+    if not effect:
+        return None
+    start = w.start + EFFECT_AFTER
+    finish = start + min(EFFECT_LONGEST, max(EFFECT_SHORTEST, w.end - w.start))
+    finish = min(finish, out if effect in EFFECT_SETTLES else end)
+    if finish - start < EFFECT_LEAST:
+        return None
+    return round(start, 3), round(finish, 3)
+
+
 def song_player_data(plan: Plan, timeline: Timeline) -> dict:
     """A Song story's player data: no closing scene, and each caption's words with whether
-    they are drawn big and in which colour."""
+    they are drawn big, in which colour and what their letters do and when; where its
+    second row starts and when it blurs away."""
     lines = plan.song.lines if plan.song else []
     word = lambda w: {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}  # noqa: E731
     captions_ = []
     for n, c in enumerate(timeline.captions):
-        marks = lines[n].words if n < len(lines) else []
+        line = lines[n] if n < len(lines) else None
+        marks = line.words if line else []
+        out = line_out(c.start, c.end, c.words)
         shown = []
         for k, w in enumerate(c.words):
             mark = marks[k] if k < len(marks) else None
             key = bool(mark and mark.key)
-            shown.append({**word(w), "key": key, "color": mark.color if key else ""})
-        captions_.append({"start": round(c.start, 3), "end": round(c.end, 3), "words": shown})
+            moves = effect_time(mark.effect if key else "", w, out, c.end)
+            shown.append(
+                {
+                    **word(w),
+                    "key": key,
+                    "color": mark.color if key else "",
+                    "effect": mark.effect if moves else "",
+                    "effectFrom": moves[0] if moves else None,
+                    "effectTo": moves[1] if moves else None,
+                }
+            )
+        captions_.append(
+            {
+                "start": round(c.start, 3),
+                "end": round(c.end, 3),
+                "out": out,
+                "row": second_row(shown, line.row if line else 0),
+                "words": shown,
+            }
+        )
     return {
         "style": plan.style,
         "look": plan.look,

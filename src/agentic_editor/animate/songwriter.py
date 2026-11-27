@@ -8,8 +8,9 @@ songs: the story is set in the song's own world and the caption written in its l
 Here the planning model does two things with the part animate/songhook.py found:
 
 1. The lines in the script the reel shows them in (Devanagari for Hindi and Urdu, however
-   the lyrics were written), word for word so every word keeps its time, and the words
-   drawn big with their colours.
+   the lyrics were written), word for word so every word keeps its time, the words drawn
+   big with their colours, where each line breaks into its two rows on screen, and now and
+   then a word meaning a movement whose letters act it out (fall, rise, shake...).
 2. The story: a few people who come back from line to line, a moment for each picture (a
    picture to paint and how the camera moves over it: one a line, two for a line on screen
    longer than LONG_PICTURE), a title and the post's caption. A reel joined from two parts
@@ -19,16 +20,19 @@ Here the planning model does two things with the part animate/songhook.py found:
 import json
 import logging
 import re
+import unicodedata
 
 from agentic_editor.animate import songhook
 from agentic_editor.animate.plan import (
     CAMERAS,
     MAX_SCENES,
     WORD_COLORS,
+    WORD_EFFECTS,
     Person,
     Plan,
     Scene,
     Song,
+    SongLine,
     Visual,
     scene_lines,
     sung_spans,
@@ -44,6 +48,11 @@ MOOD = "emotional"
 SCRIPTS = {"hi": "Devanagari", "ur": "Devanagari"}
 MOST_KEYS = 3
 SPLIT_OVER = 7  # words: a longer line may be shown as two
+# A word's letters act out its movement in at most one line in this many, never in two lines
+# running, and only in a word of this many letters or more (the reference does it twice in
+# a 29 s reel).
+EFFECT_EVERY = 4
+EFFECT_LETTERS = 3
 # A line on screen longer than this (s) gets a second picture partway (a scene each).
 LONG_PICTURE = 3.0
 # At most one moment in this many goes on with the picture before (the owner wants a new
@@ -74,6 +83,7 @@ SCRIPT_SCHEMA = {
                             "properties": {
                                 "word": {"type": "integer"},
                                 "color": {"type": "string", "enum": list(WORD_COLORS)},
+                                "effect": {"type": "string", "enum": ["none", *WORD_EFFECTS]},
                             },
                             "required": ["word", "color"],
                         },
@@ -91,7 +101,8 @@ SCRIPT_SCHEMA = {
 KEY_GUIDE = """Key words are drawn big and in colour, as lyric reels do: in each line pick the 1-3
 words that carry its meaning and feeling (nouns, strong verbs or adjectives: never small words
 like the, a, I, you, my, el, la, que, mi, tu, ye, ke, hai). Most lines have two: the first
-white, the next in colour. Colours by meaning:
+white, the next in colour. White and amber are the reel's main pair: the coloured word is
+amber unless its meaning is plainly one of the others. Colours by meaning:
 - red: enemies, pain, betrayal, anger, poison, blood, death, worse
 - amber: love, family, faces, warmth, loyalty, the line's main thing
 - blue: loneliness, cold, phones, screens, night, tears, distance
@@ -104,6 +115,16 @@ Example (Spanish): "Tu voz se quedó en mi ventana" -> voz pink, ventana amber;
 "La noche me encuentra sola" -> noche blue, sola blue.
 Example (Hindi): "ये रातें अब ख़ाली लगती हैं" -> रातें white, ख़ाली blue;
 "तेरी यादों का मेला लगा है" -> यादों amber, मेला white."""
+
+EFFECT_GUIDE = """Now and then a key word means a movement, and its letters act it out on screen
+while it is sung: effect fall (falling, dropping, sinking, crashing down: the letters tumble
+down out of the line), rise (rising, flying, floating, lifting up: they float up), shake
+(shaking, trembling, shivering: they tremble), scatter (breaking, shattering, falling apart,
+scattering: they fly apart), spin (turning, spinning, whirling: they turn). Give a key word an
+effect only when the word itself means that movement, at most one word in a line, in a few
+lines of the part at most, never two lines running; every other key word has effect none.
+Example: "We fall like rain on a paper town" -> fall white with effect fall, town amber;
+"Mis manos tiemblan cuando llamas" -> manos amber, tiemblan white with effect shake."""
 
 
 def script_prompt(song: Song) -> list[dict]:
@@ -131,11 +152,14 @@ def script_prompt(song: Song) -> list[dict]:
                 f'Song: "{song.title}" by {song.artist or "unknown"} (language: '
                 f"{song.language or 'unknown'}). These are the lines of the part a reel plays, "
                 f"each word numbered from 0:\n{numbered}\n\nFor every line (n as given):\n"
-                f"- {how}\n- key: its key words by number, each with a colour.\n"
-                f"- split: for a line of more than {SPLIT_OVER} words, the number of the word "
-                'its second half starts with, where the meaning breaks ("I walked the empty roads '
-                'all night and still I could not find you" -> 7, at "and"); 0 otherwise.'
-                f"\n\n{KEY_GUIDE}"
+                f"- {how}\n- key: its key words by number, each with a colour (and an "
+                "effect, mostly none).\n"
+                "- split: each line is set on screen as two rows: the number of the word its "
+                'second row starts with, where its phrase breaks ("Hold the light for me" -> 3, '
+                'at "for"; "I walked the empty roads all night and still I could not find you" '
+                f'-> 7, at "and": a line of more than {SPLIT_OVER} words is shown as two lines '
+                "there); 0 for a line of one or two words."
+                f"\n\n{KEY_GUIDE}\n\n{EFFECT_GUIDE}"
             ),
         }
     ]
@@ -158,11 +182,9 @@ def shown(llm, song: Song) -> tuple[Song, list[str]]:
         got = by_n.get(n) or {}
         words = [" ".join(str(w).split()) for w in got.get("words", [])]
         same_count = len(words) == len(line.words) and all(words)
-        keys = {
-            int(k.get("word", -1)): k.get("color", "white")
-            for k in got.get("key", [])[:MOST_KEYS]
-            if isinstance(k, dict)
-        }
+        given = [k for k in got.get("key", [])[:MOST_KEYS] if isinstance(k, dict)]
+        keys = {int(k.get("word", -1)): k.get("color", "white") for k in given}
+        effects = {int(k.get("word", -1)): str(k.get("effect") or "") for k in given}
         shown_words = words if same_count else [w.text for w in line.words]
         said_words = line.said.split() or [w.text for w in line.words]
         keys = {
@@ -174,7 +196,11 @@ def shown(llm, song: Song) -> tuple[Song, list[str]]:
         }
         new_words = []
         for k, w in enumerate(line.words):
-            update = {"key": k in keys, "color": keys.get(k, "") if k in keys else ""}
+            update = {
+                "key": k in keys,
+                "color": keys.get(k, "") if k in keys else "",
+                "effect": effects.get(k, "") if k in keys else "",
+            }
             if same_count:
                 update["text"] = words[k]
             new_words.append(w.model_copy(update=update))
@@ -185,10 +211,81 @@ def shown(llm, song: Song) -> tuple[Song, list[str]]:
             changed = _guess_keys(line.model_copy(update={"words": new_words}))
             new_words = changed.words
         whole = line.model_copy(update={"words": new_words, "text": text})
-        at = int(got.get("split") or 0)
-        lines += songhook.split_long(whole, at if at > 0 else None)
+        at = _number(got.get("split"))
+        parts = songhook.split_long(whole, at if at > 0 else None)
+        if len(parts) == 1 and 0 < at < len(new_words):
+            # Short enough to stay one line: the writer's break is where its rows break.
+            parts = [whole.model_copy(update={"row": at})]
+        lines += parts
     notes = [f"{kept} lyric lines are shown as the lyrics wrote them"] if kept else []
-    return song.model_copy(update={"lines": lines}), notes
+    return song.model_copy(update={"lines": moving(lines)}), notes
+
+
+def _number(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+# The words (English and Spanish) that mean each movement: a word the writer marks keeps
+# its effect only when it is one of them (the writer gave "hurts" a tremble and, two
+# lines on, a scatter), under the effect it means if the writer named another.
+MOVES = {
+    "fall": r"fall(s|ing|en)?|fell|drop(s|ped|ping)?|sink(s|ing)?|sank|sunk|crash(es|ed|ing)?"
+    r"|tumbl\w*|collaps\w*|plung\w*|descend\w*|ca(er|igo|es|e|emos|en|i|yo|yeron|yendo|ida"
+    r"|ido|ia|ias)|hund\w*|derrumb\w*|desplom\w*",
+    "rise": r"ris(e|es|ing|en)|rose|fl(y|ies|ew|ying|own)|float\w*|lift\w*|soar\w*|climb\w*"
+    r"|ascend\w*|rais(e|es|ed|ing)|sub(e|o|es|en|ir|imos|iendo|io)|vol(ar|ando|amos)"
+    r"|vuel(o|a|as|an)|elev\w*|flot\w*|alz\w*|levant\w*|ascien\w*|despeg\w*",
+    "shake": r"shak(e|es|ing|en)|shook|trembl\w*|shiver\w*|quak\w*|quiver\w*|shudder\w*"
+    r"|tiembl\w*|tembl\w*|estremec\w*|sacud\w*|vibr\w*",
+    "scatter": r"scatter\w*|shatter\w*|break(s|ing)?|broke|broken|burst\w*|explod\w*"
+    r"|crumbl\w*|splinter\w*|romp\w*|rot[oa]s?|quiebr\w*|quebr\w*|estall\w*|destroz\w*"
+    r"|deshac\w*|pedazos?|anicos",
+    "spin": r"spin(s|ning)?|spun|turn(s|ed|ing)?|twirl\w*|whirl\w*|rotat\w*|revolv\w*"
+    r"|danc\w*|gir(a|as|an|o|ar|ando|amos|aba)|vuelta|bail(a|as|an|o|ar|ando|amos|emos)",
+}
+_MOVES = {effect: re.compile(rf"^({words})$") for effect, words in MOVES.items()}
+
+
+def moves(word: str, effect: str) -> str:
+    """The effect `word` acts out: `effect` when the word means that movement, else the
+    movement it does mean, else none."""
+    if effect not in WORD_EFFECTS:
+        return ""
+    bare = unicodedata.normalize("NFKD", word.lower())
+    bare = re.sub(r"[^a-z]", "", "".join(c for c in bare if not unicodedata.combining(c)))
+    if _MOVES[effect].match(bare):
+        return effect
+    return next((other for other, said in _MOVES.items() if said.match(bare)), "")
+
+
+def moving(lines: list[SongLine]) -> list[SongLine]:
+    """The lines with the letter effects the writer gave kept only as the reference uses
+    them: on a key word of EFFECT_LETTERS letters or more that means a movement (MOVES),
+    one word a line, never in two lines running, in one line of EFFECT_EVERY at most (the
+    first ones given)."""
+    most = max(1, len(lines) // EFFECT_EVERY)
+    out, used, last = [], 0, -2
+    for n, line in enumerate(lines):
+        mover = next(
+            (k for k, w in enumerate(line.words)
+             if w.key and moves(w.text, w.effect)
+             and len(re.findall(r"\w", w.text)) >= EFFECT_LETTERS),
+            None,
+        )  # fmt: skip
+        if mover is not None and (used >= most or n - last < 2):
+            mover = None
+        if mover is not None:
+            used, last = used + 1, n
+        if mover is None and not any(w.effect for w in line.words):
+            out.append(line)
+            continue
+        words = [w.model_copy(update={"effect": moves(w.text, w.effect) if k == mover else ""})
+                 for k, w in enumerate(line.words)]  # fmt: skip
+        out.append(line.model_copy(update={"words": words}))
+    return out
 
 
 SMALL = re.compile(

@@ -38,6 +38,8 @@
     "Poppins-SemiBold",
     "Poppins-Regular",
     "Poppins-Bold",
+    "PlayfairDisplay-BoldItalic",
+    "Inter-Light",
   ];
 
   const THEMES = {
@@ -151,21 +153,22 @@
       palette: "glow",
     },
     // Song story: a song's lyric line by line over painted moments of a story, in the dark
-    // with warm lamp light, as Indian lyric-story reels look (see "Song story" below).
+    // with warm lamp light, as lyric-story reels look (see "Song story" below): key words in
+    // a bold italic serif, the rest in a light sans (Poppins draws what they can't, Devanagari).
     song: {
       bg: "#070b18",
-      text: "#FFFFFF",
-      muted: "rgba(255,255,255,0.86)",
-      accent: "#FFB23E",
-      accent2: "#FF5A4A",
-      accent3: "#6EC1FF",
+      text: "#F4F3EF",
+      muted: "rgba(222,224,234,0.8)",
+      accent: "#EDB860",
+      accent2: "#E25A48",
+      accent3: "#7CB8F2",
       card: "rgba(8,12,26,0.7)",
       ink: "#070b18",
-      display: "Poppins-Bold",
-      body: "Poppins-Regular",
-      number: "Poppins-Bold",
-      caption: "Poppins-Regular",
-      quote: "Poppins-Regular",
+      display: "PlayfairDisplay-BoldItalic",
+      body: "Inter-Light",
+      number: "PlayfairDisplay-BoldItalic",
+      caption: "Inter-Light",
+      quote: "Inter-Light",
       glow: false,
       song: true,
       palette: "glow",
@@ -2572,11 +2575,19 @@
   // keeps moving across them (one shot). A new picture fades in over the last.
 
   const XFADE = 0.35;
+  // The reference's warm white and amber first; the others by what a word means.
   const SONG_COLORS = {
-    white: "#FFFFFF", amber: "#FFB23E", red: "#FF5A4A", blue: "#6EC1FF", pink: "#FF7EB6",
-    green: "#86E08A",
+    white: "#F4F3EF", amber: "#EDB860", red: "#E25A48", blue: "#7CB8F2", pink: "#F08AB8",
+    green: "#8FD694",
   };  // prettier-ignore
-  const SONG_TEXT = { x: 84, y: 290, w: 900, h: 360, size: 50, key: 1.82 };
+  // The lyric block at the top: its rows centred on `axis` (the middle of the safe width, as
+  // the reference's lean left of the frame's), the second `indent` to the right; key words
+  // KEY_SIZE times the small words, a coloured one ACCENT_SIZE (timeline.py, which also says
+  // where the rows break and when words come and the line goes).
+  const SONG_TEXT = {
+    left: 64, right: W - SAFE.right, axis: 497, top: 292, h: 440, size: 56, min: 30,
+    key: 1.68, accent: 1.95, indent: 54, lead: 0.08, wordIn: 0.4, blur: 14, outBlur: 12,
+  };  // prettier-ignore
 
   // The run of scenes showing the same picture as scene `i`: its first and last.
   function shotOf(scenes, i) {
@@ -2677,55 +2688,228 @@
     };
   }
 
-  // The lyric line at the top, as it is sung: each word comes in on its own time, the key
-  // words big and in colour, the small ones light; the whole line fades as the next begins.
-  function songSubtitles(theme, layer, captions) {
-    const chunks = captions.map((c) => {
-      const box = place(el("div", "abs fit", layer), SONG_TEXT.x, SONG_TEXT.y, SONG_TEXT.w, SONG_TEXT.h);
-      font(box, theme.body, SONG_TEXT.size, theme.muted);
-      box.style.display = "none";
-      box.style.lineHeight = "1.32";
-      box.style.textAlign = "left";
-      box.style.alignContent = "flex-start";
-      box.style.flexWrap = "wrap";
-      const line = el("div", "line", box);
-      const spans = c.words.map((w, k) => {
-        if (k) line.appendChild(document.createTextNode(" "));
-        const span = el("span", "word", line, w.text);
-        span.style.textShadow = "0 3px 16px rgba(0,0,0,0.8)";
-        span.style.verticalAlign = "baseline";
-        if (w.key) {
-          const color = SONG_COLORS[w.color] || SONG_COLORS.white;
-          span.style.fontFamily = `"${theme.display}", sans-serif`;
-          span.style.fontSize = SONG_TEXT.key + "em";
-          span.style.color = color;
-          span.style.textShadow = `0 0 26px ${color}55, 0 4px 18px rgba(0,0,0,0.75)`;
-        }
-        span.style.transformOrigin = "0% 80%";
-        return span;
-      });
-      box._fit = [SONG_TEXT.size, 30];
-      return { c, box, spans };
+  const smooth = (a, b, v) => {
+    const p = clamp((v - a) / (b - a));
+    return p * p * (3 - 2 * p);
+  };
+
+  // A word's letters, each its own piece to move (one piece for a script whose letters
+  // join, as Devanagari's do: split, they would lose their shapes).
+  function letterPieces(text) {
+    if (!/^[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{M}\p{N}\p{P}\p{S}]+$/u.test(text)) return [text];
+    if (typeof Intl !== "undefined" && Intl.Segmenter) {
+      return Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text), (s) => s.segment);
+    }
+    return Array.from(text);
+  }
+
+  // What a word meaning a movement does with its letters while it is sung (plan.py
+  // WORD_EFFECTS): `p` 0-1 through its time (timeline.py effect_time). Falling and flying
+  // apart leave the line; rising, trembling and turning end back in place. Every letter's
+  // way is drawn from the word's own seed, so each frame is the same however it is reached.
+  function songEffect(fx, t) {
+    const p = (t - fx.from) / Math.max(0.05, fx.to - fx.from);
+    const spread = 0.4;
+    fx.letters.forEach((letter, i) => {
+      const m = fx.marks[i];
+      if (p <= 0) {
+        letter.style.transform = "none";
+        letter.style.opacity = "1";
+        return;
+      }
+      const q = clamp((p - m.delay) / (1 - spread));
+      let x = 0;
+      let y = 0;
+      let rot = 0;
+      let scale = 1;
+      let alpha = 1;
+      if (fx.kind === "fall") {
+        // A wobble where it stands, then down with gravity, turning over.
+        const wob = Math.sin(clamp(q / 0.18) * Math.PI) * (m.a < 0.5 ? -9 : 9);
+        const drop = clamp((q - 0.12) / 0.88);
+        y = drop * drop * m.drop;
+        x = (m.c - 0.5) * 90 * drop;
+        rot = wob + (m.a < 0.5 ? -1 : 1) * (70 + 190 * m.b) * drop;
+        alpha = 1 - smooth(0.62, 1, drop);
+      } else if (fx.kind === "rise") {
+        const up = Math.sin(Math.PI * q);
+        y = -up * (30 + 18 * m.b);
+        x = Math.sin(q * Math.PI * 2 + m.a * 6.28) * 5 * up;
+        rot = (m.c - 0.5) * 14 * up;
+        scale = 1 + 0.06 * up;
+      } else if (fx.kind === "shake") {
+        const env = Math.sin(Math.PI * clamp(p));
+        x = env * 7 * Math.sin(t * 47 + m.a * 6.28);
+        y = env * 4 * Math.sin(t * 53 + m.b * 6.28);
+        rot = env * 7 * Math.sin(t * 41 + m.c * 6.28);
+      } else if (fx.kind === "scatter") {
+        // A crack of a tremble, then every letter flies its own way and fades.
+        const crack = Math.sin(Math.PI * clamp(p / 0.16));
+        const fly = ease.out(clamp((p - 0.12 - m.delay * 0.25) / 0.78));
+        x = crack * 4 * Math.sin(t * 61 + m.a * 6.28) + m.dx * fly;
+        y = m.dy * fly;
+        rot = (m.c - 0.5) * 560 * fly;
+        alpha = 1 - smooth(0.35, 1, fly);
+      } else if (fx.kind === "spin") {
+        const turn = ease.inOut(q);
+        rot = 360 * turn;
+        scale = 1 + 0.12 * Math.sin(Math.PI * turn);
+      }
+      letter.style.transform =
+        `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) rotate(${rot.toFixed(2)}deg) scale(${scale.toFixed(4)})`;
+      letter.style.opacity = alpha.toFixed(4);
     });
+  }
+
+  // Each letter's own way for an effect, from the word's seed and where the letter sits
+  // (stage pixels): never past the frame's safe edges, a fall ends above the bottom's.
+  function effectMarks(fx, seed) {
+    const r = rng(seed);
+    const n = fx.letters.length;
+    const middle = fx.letters.reduce((s, l) => s + l._x, 0) / Math.max(1, n);
+    return fx.letters.map((letter, i) => {
+      const a = r();
+      const b = r();
+      const c = r();
+      const order = fx.kind === "fall" ? r() : i / Math.max(1, n - 1);
+      const side = letter._x === middle ? (a < 0.5 ? -1 : 1) : Math.sign(letter._x - middle);
+      const reach = 170 + 150 * c;
+      const dx = clamp(letter._x + side * (0.45 + 0.55 * a) * reach, SONG_TEXT.left + 10, SONG_TEXT.right - 10) - letter._x;
+      const dy = clamp(letter._y + (b - 0.3) * reach, SAFE.top + 40, H - SAFE.bottom - 120) - letter._y;
+      const drop = Math.max(120, Math.min(820 + 160 * b, H - SAFE.bottom - 100 - letter._y));
+      return { a, b, c, delay: 0.4 * (0.75 * order + 0.25 * r()), dx, dy, drop };
+    });
+  }
+
+  // The lyric line at the top as it is sung, as the reference sets it: a small block of two
+  // rows (the second a little to the right), the key words in a bold italic serif, white or
+  // in their colour (glowing softly), the small words light and thin. Each word comes in on
+  // its time from a soft blur, not moving; the whole line blurs away just before the next.
+  function songSubtitles(theme, layer, captions) {
+    const small = `"${theme.body}", "Poppins-Regular", "NotoColorEmoji", sans-serif`;
+    const big = `"${theme.display}", "Poppins-Bold", "NotoColorEmoji", serif`;
+    const room = SONG_TEXT.right - SONG_TEXT.left;
+    const chunks = captions.map((c, n) => {
+      const box = place(el("div", "abs", layer), SONG_TEXT.left, SONG_TEXT.top, room);
+      box.style.fontFamily = small;
+      box.style.fontSize = SONG_TEXT.size + "px";
+      box.style.color = theme.muted;
+      box.style.lineHeight = "1.3";
+      box.style.wordSpacing = "0.16em";
+      box.style.display = "none";
+      const split = c.row > 0 && c.row < c.words.length ? c.row : c.words.length;
+      const rows = [];
+      const words = [];
+      [c.words.slice(0, split), c.words.slice(split)].forEach((part, r) => {
+        if (!part.length) return;
+        const row = el("div", "", box);
+        row.style.width = "max-content";
+        row.style.textAlign = "center";
+        rows.push(row);
+        part.forEach((w, k) => {
+          if (k) row.appendChild(document.createTextNode(" "));
+          const span = el("span", "word", row);
+          span.style.textShadow = "0 2px 14px rgba(0,0,0,0.6)";
+          if (w.key) {
+            const color = SONG_COLORS[w.color] || SONG_COLORS.white;
+            const warm = color !== SONG_COLORS.white;
+            span.style.fontFamily = big;
+            span.style.fontSize = (warm ? SONG_TEXT.accent : SONG_TEXT.key) + "em";
+            span.style.color = color;
+            span.style.textShadow = warm
+              ? `0 0 18px ${color}99, 0 0 44px ${color}55, 0 3px 14px rgba(0,0,0,0.55)`
+              : "0 0 24px rgba(255,255,255,0.12), 0 3px 16px rgba(0,0,0,0.65)";
+          }
+          let fx = null;
+          if (w.effect && w.effectTo > w.effectFrom) {
+            const letters = letterPieces(w.text).map((piece) => {
+              const letter = el("span", "", span, piece);
+              letter.style.display = "inline-block";
+              letter.style.whiteSpace = "pre";
+              letter.style.transformOrigin = "50% 62%";
+              return letter;
+            });
+            fx = { kind: w.effect, from: w.effectFrom, to: w.effectTo, letters, marks: [], seed: hash(`${n}|${w.text}|${w.start}`) };
+          } else {
+            span.textContent = w.text;
+          }
+          words.push({ w, span, fx });
+        });
+      });
+      return { c, box, rows, words };
+    });
+
+    // Sized and placed once the fonts are in: a little smaller (to 88%) before a row wraps,
+    // then wrapped and smaller still until the block fits its height; the rows centred on
+    // the axis, the second to the right, both inside the safe width.
+    function layout(ch) {
+      const { box, rows } = ch;
+      box.style.display = "block";
+      let size = SONG_TEXT.size;
+      const set = (s) => (box.style.fontSize = s + "px");
+      const widest = (k) => room - (k ? SONG_TEXT.indent : 0);
+      const natural = () =>
+        rows.map((row) => {
+          row.style.maxWidth = "none";
+          return row.offsetWidth;
+        });
+      set(size);
+      const floor = Math.round(SONG_TEXT.size * 0.88);
+      while (size > floor && natural().some((w, k) => w > widest(k))) set(--size);
+      rows.forEach((row, k) => (row.style.maxWidth = widest(k) + "px"));
+      while (size > SONG_TEXT.min && box.offsetHeight > SONG_TEXT.h) set(--size);
+      if (box.offsetHeight > SONG_TEXT.h) shrunk.push("lyric: " + box.textContent.slice(0, 30));
+      rows.forEach((row, k) => {
+        const w = row.offsetWidth;
+        const want = SONG_TEXT.axis - SONG_TEXT.left - w / 2 + (k ? SONG_TEXT.indent : 0);
+        row.style.marginLeft = clamp(want, 0, room - w).toFixed(1) + "px";
+      });
+      for (const { fx } of ch.words) {
+        if (!fx) continue;
+        for (const letter of fx.letters) {
+          letter._x = SONG_TEXT.left + offsetIn(letter, box, "Left") + letter.offsetWidth / 2;
+          letter._y = SONG_TEXT.top + offsetIn(letter, box, "Top") + letter.offsetHeight / 2;
+        }
+        fx.marks = effectMarks(fx, fx.seed);
+      }
+      box.style.display = "none";
+    }
+
     return {
       chunks,
+      layout() {
+        chunks.forEach(layout);
+      },
       update(t) {
         for (const ch of chunks) {
           const on = t >= ch.c.start && t < ch.c.end;
-          ch.box.style.display = on ? "flex" : "none";
+          ch.box.style.display = on ? "block" : "none";
           if (!on) continue;
-          const out = ease.inOut(prog(t, ch.c.end - 0.24, 0.24));
-          show(ch.box, 1 - out, `translateY(${(-10 * out).toFixed(1)}px)`);
-          ch.spans.forEach((span, k) => {
-            const w = ch.c.words[k];
-            const p = prog(t, w.start - 0.06, w.key ? 0.26 : 0.18);
-            const lift = (1 - ease.out(p)) * 16;
-            const grow = w.key ? lerp(0.82, 1, ease.back(p)) : 1;
-            show(span, ease.out(p), `translateY(${lift.toFixed(1)}px) scale(${grow.toFixed(4)})`);
-          });
+          const from = ch.c.out !== undefined ? ch.c.out : ch.c.end - 0.3;
+          const out = ease.inOut(prog(t, from, ch.c.end - from));
+          ch.box.style.opacity = (1 - out).toFixed(4);
+          ch.box.style.filter = out > 0 ? `blur(${(out * SONG_TEXT.outBlur).toFixed(2)}px)` : "none";
+          for (const { w, span, fx } of ch.words) {
+            const p = ease.out(prog(t, w.start - SONG_TEXT.lead, SONG_TEXT.wordIn));
+            span.style.opacity = p.toFixed(4);
+            span.style.filter = p < 1 ? `blur(${((1 - p) * SONG_TEXT.blur).toFixed(2)}px)` : "none";
+            if (fx) songEffect(fx, t);
+          }
         }
       },
     };
+  }
+
+  // Where `node` sits inside `box` (its offsetParent somewhere up), by layout: the same in
+  // the scaled preview as in the render.
+  function offsetIn(node, box, side) {
+    let at = 0;
+    let n = node;
+    while (n && n !== box) {
+      at += n["offset" + side];
+      n = n.offsetParent;
+    }
+    return at;
   }
 
   // ---- subtitles and header -----------------------------------------------------------
@@ -3030,11 +3214,13 @@
         if (node._fit) fit(node, node._fit[0], node._fit[1]);
       });
     fitAll(sceneLayer);
-    subs.chunks.forEach((c) => {
-      c.box.style.display = "flex";
-      fit(c.box, c.box._fit[0], c.box._fit[1], "subtitle: " + c.box.textContent.slice(0, 30));
-      c.box.style.display = "none";
-    });
+    if (subs.layout) subs.layout();
+    else
+      subs.chunks.forEach((c) => {
+        c.box.style.display = "flex";
+        fit(c.box, c.box._fit[0], c.box._fit[1], "subtitle: " + c.box.textContent.slice(0, 30));
+        c.box.style.display = "none";
+      });
     head.fits.forEach((node) => fit(node, node._fit[0], node._fit[1], "title"));
     scenes.forEach((s) => (s.root.style.display = "none"));
     state = { data, theme, drawBg, scenes, subs, head, guides, overlay, t: 0 };

@@ -1059,6 +1059,8 @@ export type AnimationSongWord = {
   end: number;
   key: boolean;
   color: string;
+  /** What its letters do while it is sung (fall, rise, shake, scatter, spin); "" none. */
+  effect?: string;
 };
 
 export type AnimationSong = {
@@ -1082,6 +1084,8 @@ export type AnimationSong = {
     pictures?: number;
     /** Which of `pieces` it is sung in (a reel joined from two parts). */
     piece?: number;
+    /** The word its second row on screen starts with; 0: set by width. */
+    row?: number;
   }[];
   choices: { start: number; end: number; first: string; score: number }[];
   /** Which of the choices it plays: one, or the two joined into it. */

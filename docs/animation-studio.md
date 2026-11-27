@@ -328,8 +328,14 @@ words of the part wanted), and:
   uses the same finder, keeps its shorter hook (15-32 s, near 20 s).
 - `animate/songwriter.py` (the planning model): first the lines as shown (Devanagari for
   Hindi and Urdu, one word for one so every word keeps its time; a line that doesn't come back
-  one for one stays as written), their key words and colours (never a small word), and where a
-  long line breaks into two; then the story: 2-5 people with a fixed look, a moment for each
+  one for one stays as written), their key words and colours (never a small word), where each
+  line breaks into its two rows on screen (a line of more than 7 words and over 4.4 s is shown
+  as two lines there), and now and then a key word meaning a movement whose letters act it out
+  (`effect`: fall, rise, shake, scatter, spin; kept only on a word that means one, English or
+  Spanish, under the movement it means (the writer on the Mac gave "hurts" a tremble), of 3
+  letters or more, one a line, never two lines running, one line in four at most, the rest
+  none); white and amber are the main pair, another colour only where a word plainly means
+  it; then the story: 2-5 people with a fixed look, a moment for each
   picture (what it shows, a camera move): one a line, two for a line on screen longer than
   3 s (two camera beats over it, the second a new picture), a title and a caption in the
   page's way ("Sound on", song credit, hashtags). A new picture far more often than not: a
@@ -348,8 +354,25 @@ words of the part wanted), and:
   "Follow" scene.
 - Player (theme `song`): the picture covers the frame with the camera move over its shot, a
   new picture fading in over the last; dark at the top for the lyrics, a vignette, dust in the
-  light, a fade to black at the end; the line at the top left in Poppins (Devanagari), each
-  word rising in on its time, key words 1.8x in Poppins Bold and their colour.
+  light, a fade to black at the end. The lyric is set as the owner's second reference (a
+  29 s lyric story, 2026-11-27) sets it, measured on its frames: a small block at the top
+  (first row's baseline near y 390), two rows for a line of 3 words or more, broken where the
+  writer said, else where the rows come out nearest the same width (`timeline.second_row`),
+  each row centred on x 497 (the middle of the safe width; the reference's lean left of the
+  frame's) and the second 54 px to the right. Small words in Inter Light 56 px, soft grey;
+  key words in Playfair Display Bold Italic, 1.68x when white, 1.95x in a colour (warm white
+  and amber, the reference's pair, first; red, blue, pink, green by meaning), a coloured one
+  glowing softly; Poppins draws what those fonts can't (Devanagari). A row too wide for the
+  safe width (64-930) shrinks to 88% before it wraps, the block shrinks until it fits 440 px.
+  Each word comes in on its time from a soft blur (0.4 s from 0.08 s before it is sung), not
+  moving; the whole line blurs and fades away together over its last 0.34 s (less when its
+  last word comes late). A word with an effect moves its letters (one piece for a script whose
+  letters join) from 0.3 s after it is sung, over its sung time (0.9-1.8 s): fall tumbles
+  them down out of the line (gone, above the bottom's safe area), scatter flies them apart
+  inside the safe width (gone), rise floats them up and back, shake trembles, spin turns each
+  once; the ones that settle finish before the line goes, and there being no time for it the
+  word only comes in. Every letter's way comes from the word's own seed, so the render is the
+  preview frame for frame.
 - Studio: the form takes the song's name and the part; a song reel shows the song, the part
   playing and the other parts to play (`POST /api/animations/{id}/change {"choice": n}`,
   op `hook`: timed again, a new story); its scenes show the lyric line (and which is a line's
