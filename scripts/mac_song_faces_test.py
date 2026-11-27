@@ -58,6 +58,8 @@ def main() -> None:
     ap.add_argument("--folder", type=Path, default=None, help="default: CACHE_DIR/../faces-out")
     ap.add_argument("--model", default=MODEL, help="the likeness model (FLUX.2 klein 4B)")
     ap.add_argument("--probe", action="store_true", help="one moment from 1..4 portraits")
+    ap.add_argument("--turn", type=int, default=1,
+                    help="pictures a GPU turn (live work waits for at most one turn)")  # fmt: skip
     args = ap.parse_args()
     if not args.song and not args.plan:
         ap.error("give --song or --plan")
@@ -72,6 +74,7 @@ def main() -> None:
     from agentic_editor.router import ModelRouter
     from agentic_editor.settings import get_settings
 
+    images.BATCH = max(1, args.turn)  # a live job waits a picture or so, never a reel
     settings = get_settings()
     folder = (args.folder or settings.cache_dir.parent / "faces-out").expanduser().resolve()
     out = folder / "out"
