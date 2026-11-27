@@ -14,6 +14,7 @@ for a picture it couldn't paint, Z-Image paints the moment from the words, as be
 
 import hashlib
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -45,12 +46,27 @@ FEATURES = "clearly drawn with eyes, eyebrows, nose and mouth"
 # clean-shaven father bearded in three pictures of a reel, his daughter in glasses in four).
 KEEP = (
     "Each person from a reference image looks exactly as in their image: the same face, hair, "
-    "skin tone, build and clothes, nothing added, and is in the picture only once"
+    "skin tone, build and clothes, nothing added"
 )
-# Where the people go: the reel darkens the top third for the lyrics and its camera zooms in,
-# so a head painted near the top was lost (close-ups came out as a shirt with no face). An
-# empty chair beside someone was painted with a second copy of them in it (hence "only once").
-ROOM = "the people in the lower two thirds of the picture, plain dark space above their heads"
+# Where heads go: the reel darkens the top third for the lyrics and its camera zooms in, so a
+# head painted near the top was lost (close-ups came out as a shirt with no face). Said of "the
+# people", the model added someone (a second boy in a close-up of one man), so it is said in the
+# number the moment has, and that number is said too: an empty chair beside someone was painted
+# with a second copy of them in it.
+ROOM_ONE = "the head in the lower two thirds of the picture, plain dark space above it"
+ROOM_MANY = "every head in the lower two thirds of the picture, plain dark space above them"
+# Words that say more people are in a moment than the ones named (no count is said then).
+CROWD = re.compile(
+    r"\b(people|crowd|crowds|friends|strangers|couples?|family|families|children|kids|dancers|"
+    r"everyone|others|guests|audience|men|women|boys|girls|passers-by|band|team|class)\b",
+    re.I,
+)
+COUNTS = {
+    1: "exactly one person in the picture",
+    2: "exactly two people in the picture",
+    3: "exactly three people in the picture",
+    4: "exactly four people in the picture",
+}
 
 
 def portrait_prompt(person: Person) -> str:
@@ -71,8 +87,12 @@ def moment_prompt(plan: Plan, art: str, refs: list[Person]) -> str:
     keep = f"{KEEP}. " if refs else ""
     # A moment with nobody in it is told so: asked for faces, the model put them on whatever
     # was there (lamps in an empty garden came out as rows of round faces).
-    someone = refs or songwriter.people_in(plan, art) or songwriter.SOMEONE.search(art)
-    faces = f"{ROOM}, every face {FEATURES}" if someone else images.EMPTY
+    named = songwriter.people_in(plan, art)
+    if not (refs or named or songwriter.SOMEONE.search(art)):
+        return f"{scene}. {images.LOOKS[songwriter.STYLE]}, {images.EMPTY}, {images.NEVER}"
+    count = "" if CROWD.search(art) else COUNTS.get(len(named), "")
+    room = ROOM_ONE if count == COUNTS[1] else ROOM_MANY
+    faces = ", ".join(x for x in (count, room, f"every face {FEATURES}") if x)
     return f"{scene}. {keep}{images.LOOKS[songwriter.STYLE]}, {faces}, {images.NEVER}"
 
 
