@@ -42,8 +42,9 @@ def fetch_mlx(model: str) -> str:
 
 
 def with_faster_whisper(
-    audio: Path, model: str, device: str, download_root: Path, language: str | None
-) -> Transcript:
+    audio: Path, model: str, device: str, download_root: Path, language: str | None,
+    prompt: str | None = None,
+) -> Transcript:  # fmt: skip
     from faster_whisper import WhisperModel
 
     if device == "cuda" and sys.platform == "linux":
@@ -58,6 +59,7 @@ def with_faster_whisper(
     segments, info = whisper.transcribe(
         ffmpeg.read_audio(audio, 16000),
         language=language,
+        initial_prompt=prompt or None,
         word_timestamps=True,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
@@ -83,14 +85,17 @@ def with_faster_whisper(
     return Transcript(language=info.language, words=words)
 
 
-def with_mlx(audio: Path, model: str, language: str | None) -> Transcript:
+def with_mlx(
+    audio: Path, model: str, language: str | None, prompt: str | None = None
+) -> Transcript:
     import mlx_whisper
 
     folder = fetch_mlx(model)
     started = time.monotonic()
     result = mlx_whisper.transcribe(
-        str(audio), path_or_hf_repo=folder, word_timestamps=True, language=language
-    )
+        str(audio), path_or_hf_repo=folder, word_timestamps=True, language=language,
+        initial_prompt=prompt or None,
+    )  # fmt: skip
     words = [
         Word(
             text=w["word"].strip(),

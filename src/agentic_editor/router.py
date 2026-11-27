@@ -79,11 +79,17 @@ class ModelRouter:
         # Says so when a model has to wait for another job to finish with the GPU.
         self.progress = progress
 
-    def transcribe(self, audio: Path, language: str | None = None) -> Transcript:
+    def transcribe(
+        self, audio: Path, language: str | None = None, prompt: str | None = None
+    ) -> Transcript:
+        """What is said or sung in `audio`; `prompt` is text whisper is told to expect (a
+        song's lyrics), which helps it hear words sung over music."""
         s = self.settings
         with slots.gpu.turn("transcribe", self.progress):
             if self.backends.transcriber == "mlx":
-                return in_child_process(transcribe.with_mlx, audio, s.mlx_whisper_model, language)
+                return in_child_process(
+                    transcribe.with_mlx, audio, s.mlx_whisper_model, language, prompt
+                )
             device = "cuda" if self.backends.transcriber == "faster-whisper" else "cpu"
             return in_child_process(
                 transcribe.with_faster_whisper,
@@ -92,6 +98,7 @@ class ModelRouter:
                 device,
                 s.models_dir / "whisper",
                 language,
+                prompt,
             )
 
     def separate_vocals(self, audio: Path, out_dir: Path) -> separation.Stems:

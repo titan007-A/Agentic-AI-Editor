@@ -21,7 +21,7 @@ LENGTHS = ("auto", "short", "medium", "long")
 WORDS = {"short": (50, 85), "medium": (90, 150), "long": (155, 230), "auto": (70, 130)}
 # A World map reel tours a dozen countries or more, so it runs longer when left to itself
 # (the reference reels: 100-230 words, 55-100 s).
-MAP_WORDS = {"short": (55, 90), "medium": (90, 150), "long": (150, 230), "auto": (110, 175)}
+MAP_WORDS = {"short": (45, 80), "medium": (80, 140), "long": (140, 220), "auto": (100, 165)}
 
 Kind = Literal["facts", "lesson", "story", "news"]
 Style = Literal["glow", "paper", "story", "kinetic", "stick", "map", "song", "singer"]
@@ -679,7 +679,9 @@ def problems(plan: Plan, length: str = "auto") -> list[str]:
         found.append(f"the narration is {total} words; this length needs {low}-{high}")
     elif total > high * 1.2:
         found.append(f"the narration is {total} words; this length allows {low}-{high}")
-    if plan.scenes and plan.scenes[0].visual.kind not in ("title", "scene"):
+    # A World map reel starts on its first country (the owner wants no opening title).
+    first = plan.scenes[0].visual.kind if plan.scenes else ""
+    if plan.scenes and first not in ("title", "scene") and plan.style != "map":
         found.append("scene 1 must be the hook: a title, or a story's most striking moment")
     for n, scene in enumerate(plan.scenes, 1):
         v = scene.visual

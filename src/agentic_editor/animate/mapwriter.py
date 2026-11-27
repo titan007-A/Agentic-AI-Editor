@@ -1,12 +1,12 @@
 """The writer for World map reels: one topic, a tour of countries, a card for each thing.
 
-The format (from the reference reels the owner chose): a short spoken hook that names the
-topic ("The most famous desserts from every country."), then one sentence a country,
+The format (from the reference reels the owner chose): one sentence a country from the
+first frame (the owner wants no opening line reading the topic out),
 "<Country> has <thing>, <thing>, and <thing>.", the most famous first, now and then one
 short surprising fact set off by commas, touring the world from the United States through
 Europe and Asia to Australia and Latin America. The model answers a schema made for this
 shape (far easier for a small model than the general catalogue); it becomes an ordinary
-Plan: a title scene, then a "country" scene per country, each thing an item with its
+Plan: a "country" scene per country, each thing an item with its
 emoji and what its picture shows.
 
 Pictures never show a logo, writing or a character someone owns: for a brand, film or
@@ -50,10 +50,6 @@ the Earth from country to country; each country lights up as the voice names it,
 picture card pops up for every thing it names. One topic, many countries.
 
 Write it exactly in this shape:
-- hook: one short spoken line that says the topic, e.g. "The most famous desserts from every
-  country." (at most 10 words).
-- headline: the topic on screen, at most 7 words, e.g. "Most famous desserts in every
-  country"; highlight: its one key word, e.g. "desserts".
 - countries: a world tour, each country once: start with the United States, then Canada or
   Mexico, the United Kingdom and Europe (France, Spain, Italy, Germany...), then Asia
   (Turkey, India, China, Japan, South Korea...), then Australia, and end in Latin America
@@ -110,13 +106,10 @@ SCHEMA = {
     "type": "object",
     "properties": {
         "title": {"type": "string"},
-        "hook": {"type": "string"},
-        "headline": {"type": "string"},
-        "highlight": {"type": "string"},
         "countries": {"type": "array", "items": _COUNTRY, "minItems": 4, "maxItems": 20},
         "caption": {"type": "string"},
     },
-    "required": ["title", "hook", "headline", "highlight", "countries", "caption"],
+    "required": ["title", "countries", "caption"],
 }
 COUNTRY_SCHEMA = _COUNTRY
 
@@ -400,15 +393,10 @@ def _emoji_of(items: list[dict]) -> list[str]:
 
 
 def to_plan(reply: dict, sources: list[Source], voice: str) -> Plan:
-    """A Plan from the model's answer: the hook as a title scene, a country scene each."""
-    hook = " ".join(str(reply.get("hook", "")).split())
-    headline = " ".join(str(reply.get("headline", "")).split()) or str(reply.get("title", ""))
-    scenes = [
-        Scene(
-            narration=hook,
-            visual=Visual(kind="title", text=headline, highlight=str(reply.get("highlight", ""))),
-        )
-    ]
+    """A Plan from the model's answer: a country scene each, from the first frame. The owner
+    wants the list to start at once: no opening scene reads the topic out (the title and
+    caption still name it)."""
+    scenes: list[Scene] = []
     for c in reply.get("countries", []):
         if not isinstance(c, dict):
             continue
@@ -444,7 +432,6 @@ def to_plan(reply: dict, sources: list[Source], voice: str) -> Plan:
 
 def to_reply(plan: Plan) -> dict:
     """A Plan in the model's shape (to change it or write a country again)."""
-    first = plan.scenes[0] if plan.scenes and plan.scenes[0].visual.kind == "title" else None
     countries = [
         {
             "country": s.visual.text,
@@ -457,9 +444,6 @@ def to_reply(plan: Plan) -> dict:
     ]
     return {
         "title": plan.title,
-        "hook": first.narration if first else "",
-        "headline": first.visual.text if first else plan.title,
-        "highlight": first.visual.highlight if first else "",
         "countries": countries,
         "caption": plan.caption,
     }
@@ -564,8 +548,8 @@ def _brief_text(idea: str, length: str) -> str:
     low, high = MAP_WORDS.get(length, MAP_WORDS["auto"])
     few, many = COUNTRIES.get(length, COUNTRIES["auto"])
     return (
-        f"Topic: {idea}\n{few}-{many} countries. Total narration (the hook and every "
-        f"country together): {low}-{high} words."
+        f"Topic: {idea}\n{few}-{many} countries. Total narration (every country "
+        f"together): {low}-{high} words."
     )
 
 
@@ -1505,12 +1489,12 @@ def redo_country(
         COUNTRY_SCHEMA,
         temperature=0.8,
     )
-    one = to_plan({"hook": "x", "countries": [reply]}, [], plan.voice).scenes
-    if len(one) < 2:
+    one = to_plan({"countries": [reply]}, [], plan.voice).scenes
+    if not one:
         from agentic_editor.animate.planner import PlannerError
 
         raise PlannerError("the writer gave no country")
-    new = one[1].model_copy(update={"hold": scene.hold})
+    new = one[0].model_copy(update={"hold": scene.hold})
     topic = idea or plan.title
     if topic:
         kind = kind_of(topic)

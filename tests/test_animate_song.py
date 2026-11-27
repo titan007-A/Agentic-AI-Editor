@@ -248,6 +248,7 @@ class SongRouter:
         self.separated = 0
         self.fetched: list[str] = []
         self.languages: list[str | None] = []
+        self.prompts: list[str | None] = []
 
     def separate_vocals(self, audio, out_dir):
         self.separated += 1
@@ -257,8 +258,9 @@ class SongRouter:
         other.write_bytes(b"")
         return type("Stems", (), {"vocals": vocals, "instrumental": other})()
 
-    def transcribe(self, audio, language=None):
+    def transcribe(self, audio, language=None, prompt=None):
         self.languages.append(language)
+        self.prompts.append(prompt)
         return Transcript(language="hi", words=self.heard)
 
     def planner(self):
@@ -315,6 +317,8 @@ def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
     assert router.fetched == ["own"] and router.separated == 1
     # The lyrics are Hindi in Latin letters: whisper is told so, not left to guess.
     assert router.languages == ["hi"]
+    # and what the part's lines say, so it hears the words over the music
+    assert router.prompts[0] and song.lines[0].said in router.prompts[0]
     assert (song.title, song.artist, song.video, song.lyrics) == (
         "Koi Apna Hoga", "Tony Kakkar", "own", "lrclib",
     )  # fmt: skip
@@ -351,7 +355,7 @@ def test_two_reels_of_one_song_at_once_share_its_vocals_and_hear_their_own_part(
             time.sleep(0.3)  # long enough for the other reel to ask meanwhile
             return super().separate_vocals(audio, out_dir)
 
-        def transcribe(self, audio, language=None):
+        def transcribe(self, audio, language=None, prompt=None):
             with wave.open(str(audio)) as w:
                 self.clips.append(round(w.getnframes() / w.getframerate(), 1))
             time.sleep(0.2)
@@ -546,6 +550,23 @@ def test_each_line_is_a_scene_from_just_before_it_is_sung_and_the_song_plays_thr
     assert data["style"] == "song" and len(data["scenes"]) == 4  # no closing scene
     keys = [(w["text"], w["color"]) for w in data["captions"][0]["words"] if w["key"]]
     assert keys == [("सपने", "white"), ("सपना", "amber")]
+
+
+def test_a_lyric_goes_a_moment_after_its_last_word_when_music_comes_before_the_next():
+    plan = song_plan()
+    lines = plan.song.lines
+    # music between the second and third lines: the rest of the song sung 5 s later
+    later = [
+        ln.model_copy(update={"start": ln.start + 5, "end": ln.end + 5, "words": [
+            w.model_copy(update={"start": w.start + 5, "end": w.end + 5}) for w in ln.words]})
+        for ln in lines[2:]
+    ]  # fmt: skip
+    song = plan.song.model_copy(update={"lines": [*lines[:2], *later], "end": plan.song.end + 5})
+    tl = build_song(plan.model_copy(update={"song": song}), "")
+    second_last_word = lines[1].words[-1].end - song.start
+    assert tl.captions[1].end == pytest.approx(second_last_word + 1.5, abs=0.01)
+    # lines sung one after another still hand over from one to the next
+    assert tl.captions[0].end == pytest.approx(tl.captions[1].start + 0.06, abs=0.2)
 
 
 @needs_ffmpeg

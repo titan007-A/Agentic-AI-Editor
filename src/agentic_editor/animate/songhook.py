@@ -19,6 +19,7 @@ part people know (the hook) and when every word of it is sung.
    heard whole, and what whisper heard becomes its lyrics.
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -55,6 +56,7 @@ PIECE_SHORTEST = 8.0
 PIECE_LONGEST = 24.0
 LEAD_IN = 0.3  # the part starts this much before its first line is sung
 TAIL = 1.2  # and runs on this long after its last word, if nothing is sung there
+PROMPT_CHARS = 600  # of the part's lyrics whisper is told to expect (its prompt is short)
 CHOICES = 4  # parts offered to the person
 # A line sung over longer than this, or with more words, is shown as two.
 LONG_LINE = 4.4
@@ -807,20 +809,23 @@ def separated(audio: Path, router) -> Path:
 
 
 def hear(
-    vocals: Path, start: float, end: float, router, language: str | None
+    vocals: Path, start: float, end: float, router, language: str | None, lyrics: str = ""
 ) -> tuple[list[Word], str]:
     """The words whisper hears in the vocals between start and end (song times), kept. One
-    reel of the song hears at a time, each part from its own clip."""
+    reel of the song hears at a time, each part from its own clip. `lyrics` (the part's
+    lines) are what whisper is told to expect: over loud guitars it heard 3 of 40 words
+    without them."""
     from agentic_editor import slots
 
-    key = f"heard-{start:.2f}-{end:.2f}-{language or 'auto'}"
+    told = hashlib.sha1(lyrics.encode()).hexdigest()[:8] if lyrics else "none"
+    key = f"heard-{start:.2f}-{end:.2f}-{language or 'auto'}-{told}"
     kept = vocals.parent / f"{key}.json"
     with slots.video(vocals.parent).turn("hear the song's words"):
         if kept.exists():
             data = json.loads(kept.read_text(encoding="utf-8"))
             return [Word(**w) for w in data["words"]], data.get("language") or ""
         clip = _cut(vocals, start, end, vocals.parent / f"{key}.wav")
-        heard = router.transcribe(clip, language)
+        heard = router.transcribe(clip, language, lyrics[:PROMPT_CHARS] or None)
         words = [
             Word(text=w.text, start=round(w.start + start, 3), end=round(w.end + start, 3))
             for w in heard.words
@@ -967,7 +972,8 @@ def timed(
     start = max(0.0, chosen.start - LEAD_IN)
     after = lines[chosen.last + 1][0] if chosen.last + 1 < len(lines) else duration
     hint = lyrics_language([text for _, text in lines])
-    heard, language = hear(vocals, start, min(duration, after + 0.3), router, hint)
+    expected = " ".join(text for _, text in lines[chosen.first : chosen.last + 1])
+    heard, language = hear(vocals, start, min(duration, after + 0.3), router, hint, expected)
     language = hint or language
     language = SCRIPT_OF.get(language, language)
     sung = _sung(loudness(ffmpeg.read_audio(vocals, RATE)))

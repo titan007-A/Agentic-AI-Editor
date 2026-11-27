@@ -150,7 +150,7 @@ class HearingRouter:
     def __init__(self, heard: list[Word], clip_at: float):
         self.heard, self.clip_at = heard, clip_at
 
-    def transcribe(self, audio, language=None):
+    def transcribe(self, audio, language=None, prompt=None):
         return Transcript(language="en", words=[
             Word(text=w.text, start=round(w.start - self.clip_at, 3),
                  end=round(w.end - self.clip_at, 3))

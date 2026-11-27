@@ -341,17 +341,17 @@ def map_plan(**changes) -> Plan:
     return mapwriter.to_plan(map_reply(**changes), [], mapwriter.VOICE)
 
 
-def test_the_writers_answer_becomes_a_hook_and_a_scene_a_country():
+def test_the_writers_answer_becomes_a_scene_a_country_from_the_first_frame():
     plan = map_plan()
     assert plan.style == "map" and plan.mood == "upbeat" and plan.kind == "facts"
     assert plan.voice == "am_michael" and plan.cta == mapwriter.CTA
-    first, usa = plan.scenes[0], plan.scenes[1]
-    assert first.visual.kind == "title" and first.visual.highlight == "desserts"
-    assert first.narration == "The most famous desserts from every country."
+    # The list starts at once: no opening scene reads the topic out.
+    assert all(s.visual.kind == "country" for s in plan.scenes)
+    usa = plan.scenes[0]
     assert usa.visual.kind == "country" and usa.visual.text == "The United States"
     assert [i.text for i in usa.visual.items] == ["apple pie", "brownies", "cheesecake"]
     assert usa.visual.items[0].art == "a plate of apple pie"
-    assert len(plan.scenes) == 7
+    assert len(plan.scenes) == 6
     assert mapwriter.to_plan(mapwriter.to_reply(plan), [], plan.voice) == plan
 
 
@@ -361,9 +361,9 @@ def test_a_tour_must_name_each_country_once_and_every_card():
     tour[1] = country("the UK", "Britain loves scones.", "scones", "trifle")
     tour[3] = dict(TOUR[2])
     found = map_problems(map_plan(countries=tour[:5]))
-    assert "scene 3 (the UK): the narration must name the UK" in found
-    assert "scene 3 (the UK): say trifle in the narration" in found
-    assert "scene 5 (France): France comes twice; each country once" in found
+    assert "scene 2 (the UK): the narration must name the UK" in found
+    assert "scene 2 (the UK): say trifle in the narration" in found
+    assert "scene 4 (France): France comes twice; each country once" in found
     assert any(
         "at least 5 countries, this has 4" in f for f in map_problems(map_plan(countries=TOUR[:4]))
     )
@@ -392,8 +392,8 @@ def test_a_draft_is_sent_back_once_for_a_country_off_the_map(world):
 def test_a_change_keeps_the_card_pictures_that_still_fit():
     plan = map_plan()
     scenes = [s.model_dump() for s in plan.scenes]
-    scenes[1]["visual"]["items"][0]["image"] = "a" * 24 + ".png"
-    scenes[1]["visual"]["items"][1]["image"] = "b" * 24 + ".png"
+    scenes[0]["visual"]["items"][0]["image"] = "a" * 24 + ".png"
+    scenes[0]["visual"]["items"][1]["image"] = "b" * 24 + ".png"
     plan = tidy(Plan.model_validate({**plan.model_dump(), "scenes": scenes}))
     changed = [dict(c) for c in TOUR]
     changed[0] = country("The United States", "The United States has apple pie and cookies.",
@@ -403,7 +403,7 @@ def test_a_change_keeps_the_card_pictures_that_still_fit():
     out, left = planner.change(writer, plan, "swap brownies for cookies", brief)
     assert writer.judged == ["The United States: cookies"]  # only what the change brought
     assert not any("left out" in n for n in left)
-    items = out.scenes[1].visual.items
+    items = out.scenes[0].visual.items
     assert items[0].image == "a" * 24 + ".png" and items[1].image == ""
     assert "swap brownies for cookies" in writer.asked[0][1]["content"]
     assert out.style == "map"
@@ -411,10 +411,10 @@ def test_a_change_keeps_the_card_pictures_that_still_fit():
     again = MapModel(
         country("Italy", "Italy has panna cotta and cannoli.", "panna cotta", "cannoli")
     )
-    redone = planner.redo_scene(again, out, 4)
-    assert redone.scenes[4].visual.text == "Italy"
-    assert [i.text for i in redone.scenes[4].visual.items] == ["panna cotta", "cannoli"]
-    assert redone.scenes[1] == out.scenes[1]
+    redone = planner.redo_scene(again, out, 3)
+    assert redone.scenes[3].visual.text == "Italy"
+    assert [i.text for i in redone.scenes[3].visual.items] == ["panna cotta", "cannoli"]
+    assert redone.scenes[0] == out.scenes[0]
 
 
 def test_ideas_leave_out_topics_made_and_the_autopilot_takes_them_in_turn():
@@ -433,7 +433,7 @@ def test_ideas_leave_out_topics_made_and_the_autopilot_takes_them_in_turn():
 def test_cards_pop_as_their_names_are_said_and_captions_come_a_word_at_a_time():
     plan = map_plan()
     tl = build(plan, voices_for(plan))
-    usa = tl.scenes[1]
+    usa = tl.scenes[0]
     words = {w.text.strip(",.").lower(): w.start for w in usa.words}
     assert usa.kind == "country"
     assert usa.beats[0] == pytest.approx(words["the"] - 0.05)
@@ -442,8 +442,7 @@ def test_cards_pop_as_their_names_are_said_and_captions_come_a_word_at_a_time():
     shown = [" ".join(w.text for w in c.words) for c in tl.captions]
     assert "The United States" in shown and "apple pie," in shown and "has" in shown
     assert "sticky toffee pudding" in shown and "crème brûlée." in shown
-    first = [c for c in tl.captions if c.start < usa.start]
-    assert [len(c.words) for c in first] == [1] * 7  # the hook word by word
+    assert tl.captions[0].start < 0.5  # the tour starts at once, no hook before it
     for a, b in zip(tl.captions, tl.captions[1:], strict=False):
         assert a.end <= b.start + 1e-9  # one caption at a time
     pops = [c.t for c in tl.cues if c.sound == "pop"]
@@ -453,7 +452,7 @@ def test_cards_pop_as_their_names_are_said_and_captions_come_a_word_at_a_time():
 def test_a_number_stays_with_what_it_counts():
     plan = map_plan()
     scenes = [s.model_dump() for s in plan.scenes]
-    scenes[1]["narration"] = (
+    scenes[0]["narration"] = (
         "The United States has apple pie, which won 7 Oscars, brownies, and cheesecake."
     )
     plan = tidy(Plan.model_validate({**plan.model_dump(), "scenes": scenes}))
@@ -474,10 +473,10 @@ def test_only_world_map_reels_get_the_map(world):
     plan = map_plan()
     data = maps.attach(player_data(plan, build(plan, voices_for(plan))), plan, world)
     m = data["map"]
-    assert m["scenes"][0] is None and m["scenes"][-1] is None  # the hook and the ending
-    codes = [s["code"] for s in m["scenes"][1:-1]]
+    assert m["scenes"][-1] is None  # the ending
+    codes = [s["code"] for s in m["scenes"][:-1]]
     assert codes == ["USA", "GBR", "FRA", "ITA", "NLD", "JPN"]
-    usa = m["scenes"][1]
+    usa = m["scenes"][0]
     assert usa["color"] == maps.PALETTE[0] and len(usa["spots"]) == 3
     assert set(m["countries"]) == set(codes) and m["countries"]["USA"]["short"] == "USA"
     assert m["tiles"] is False and m["version"] == maps.VERSION
@@ -520,7 +519,7 @@ def test_a_world_map_reel_is_written_voiced_and_mapped(tmp_path, world, monkeypa
         a = db.get(Animation, "m1")
         assert a.status == "ready", a.error
         assert a.plan["style"] == "map" and a.plan["voice"] == "am_michael"
-        assert a.player["map"]["scenes"][1]["code"] == "USA"
+        assert a.player["map"]["scenes"][0]["code"] == "USA"
         assert a.player["map"]["tiles"] is True
         assert any("isn't a country on the map" in n for n in a.notes)
         assert "not on the map (shown without flying there): Atlantis" in a.notes
@@ -542,7 +541,7 @@ def test_card_pictures_are_painted_alone_on_white_and_dropped_when_off(tmp_path,
     assert len(pictures) == sum(len(s.visual.items) for s in plan.scenes)
     assert pictures[0].prompt == "a plate of apple pie" and not pictures[0].empty
     assert "isolated on a plain pure white background" in images.full_prompt(pictures[0], "map")
-    usa = painted.scenes[1].visual.items
+    usa = painted.scenes[0].visual.items
     assert all(i.image.endswith(".png") for i in usa)
     assert all(not s.visual.image for s in painted.scenes)  # no painting behind a scene
     assert all(not i.image for s in studio.without_pictures(painted).scenes for i in s.visual.items)
@@ -634,13 +633,13 @@ def test_a_tour_is_said_the_reference_way_whatever_the_writer_wrote():
     plan = mapwriter.tighten(map_plan(countries=wordy), "auto")
     said = [s.narration for s in plan.scenes]
     # A description is dropped, a telling fact kept (one a country), names as said.
-    assert said[1] == (
+    assert said[0] == (
         "The United States has apple pie, brownies, which were first baked in Chicago, "
         "and cheesecake."
     )
-    assert said[2] == "Canada has butter tarts and Nanaimo bars."
-    assert said[3] == "France has macarons, which began in Italy, and crème brûlée."
-    assert said[5] == "Holland has stroopwafels."
+    assert said[1] == "Canada has butter tarts and Nanaimo bars."
+    assert said[2] == "France has macarons, which began in Italy, and crème brûlée."
+    assert said[4] == "Holland has stroopwafels."
     assert map_problems(plan) == []
     # Too long for its length: the facts go, then things past four, then the last countries.
     many = [
@@ -731,7 +730,7 @@ def test_each_thing_is_checked_on_its_own_and_a_thin_country_is_filled_up():
     assert "Each thing must be one of the desserts." in first
     assert "Country: The United States. Thing: apple pie." in first
     assert len(model.judged) == 13 + 2  # every thing on its own, the refills too
-    usa = plan.scenes[1]
+    usa = plan.scenes[0]
     assert [i.text for i in usa.visual.items] == ["apple pie", "pecan pie", "key lime pie"]
     assert usa.narration == "The United States has apple pie, pecan pie, and key lime pie."
     assert "Canada" not in [s.visual.text for s in plan.scenes]
@@ -815,7 +814,7 @@ def test_a_thing_judged_once_is_not_asked_about_again(tmp_path):
     second, _ = mapwriter.vet(again, plan, "Most famous desserts from every country",
                               mapwriter.Checks(path))  # fmt: skip
     assert again.judged == []
-    assert [i.text for i in second.scenes[1].visual.items] == ["apple pie", "cheesecake"]
+    assert [i.text for i in second.scenes[0].visual.items] == ["apple pie", "cheesecake"]
 
 
 def test_a_change_checks_only_the_things_it_brings():
@@ -828,7 +827,7 @@ def test_a_change_checks_only_the_things_it_brings():
         model, plan, "Most famous desserts from every country", "add pizza to Italy", "short"
     )
     assert model.judged == ["Italy: pizza"]
-    assert [i.text for i in changed.scenes[4].visual.items] == ["tiramisu", "gelato"]
+    assert [i.text for i in changed.scenes[3].visual.items] == ["tiramisu", "gelato"]
     assert "Italy: pizza" in notes[0]
 
 
@@ -838,9 +837,9 @@ def test_a_country_written_again_has_its_things_checked():
         country("Italy", "Italy has tiramisu, pizza, and cannoli.", "tiramisu", "pizza", "cannoli"),
         wrong=["pizza"],
     )
-    redone = mapwriter.redo_country(model, plan, 4, idea="Most famous desserts from every country")
-    assert [i.text for i in redone.scenes[4].visual.items] == ["tiramisu", "cannoli"]
-    assert redone.scenes[4].narration == "Italy has tiramisu and cannoli."
+    redone = mapwriter.redo_country(model, plan, 3, idea="Most famous desserts from every country")
+    assert [i.text for i in redone.scenes[3].visual.items] == ["tiramisu", "cannoli"]
+    assert redone.scenes[3].narration == "Italy has tiramisu and cannoli."
 
 
 def test_a_busy_map_server_is_asked_again(tmp_path, monkeypatch):
@@ -884,8 +883,8 @@ def test_a_card_with_a_plain_emoji_shows_its_countrys_other_one():
     tour[0] = {**tour[0], "items": [{**first[0], "emoji": "⚫"}, *first[1:]]}
     tour[5] = {**tour[5], "items": [{**i, "emoji": "🟦"} for i in tour[5]["items"]]}
     plan = map_plan(countries=tour)
-    assert plan.scenes[1].visual.items[0].emoji == "🍰"  # the country's own
-    assert plan.scenes[6].visual.items[0].emoji == "🌍"  # none left: the default
+    assert plan.scenes[0].visual.items[0].emoji == "🍰"  # the country's own
+    assert plan.scenes[5].visual.items[0].emoji == "🌍"  # none left: the default
 
 
 def test_the_look_and_the_badges_come_from_the_topic():
@@ -920,15 +919,15 @@ def test_the_look_and_the_badges_come_from_the_topic():
     )
     counted, _ = mapwriter.draft(model, "How many castles every country has", "short", "", [],
                                  mapwriter.VOICE)  # fmt: skip
-    usa = counted.scenes[1]
+    usa = counted.scenes[0]
     assert (usa.visual.value, usa.visual.emoji) == ("1,000", "🏰")
     assert usa.narration.startswith("The United States has 1,000 castles, including apple pie")
     assert '"number"' in json.dumps(model.asked[0]) or "number" in model.asked[0][1]["content"]
     # A topic that is neither keeps no badge, even one written by hand before.
     plain = map_plan()
-    plain.scenes[1].visual.value = "#2"
+    plain.scenes[0].visual.value = "#2"
     assert (
-        mapwriter.badges(plain, "Most famous desserts from every country").scenes[1].visual.value
+        mapwriter.badges(plain, "Most famous desserts from every country").scenes[0].visual.value
         == ""
     )
 
@@ -977,15 +976,15 @@ def test_a_card_painted_once_is_never_painted_again_in_any_reel(tmp_path, world)
     asked.clear()
     second, notes = studio.paint_plan(later, "m2", Session, settings, painter(asked))
     assert [a[0] for a in asked] == ["a plate of panna cotta"] and notes == []
-    assert second.scenes[1].visual.items[0].image == first.scenes[1].visual.items[0].image
-    assert second.scenes[4].visual.items[0].image == first.scenes[4].visual.items[0].image
+    assert second.scenes[0].visual.items[0].image == first.scenes[0].visual.items[0].image
+    assert second.scenes[3].visual.items[0].image == first.scenes[3].visual.items[0].image
     # Asked to paint one again (Claude's repaint_pictures, a new number): that one only.
     again = later.model_copy(deep=True)
-    again.scenes[1].visual.items[0].art_seed = 1
+    again.scenes[0].visual.items[0].art_seed = 1
     asked.clear()
     third, _ = studio.paint_plan(again, "m3", Session, settings, painter(asked))
     assert [a[0] for a in asked] == ["a warm slice of apple pie, top view"]
-    assert third.scenes[1].visual.items[0].image != second.scenes[1].visual.items[0].image
+    assert third.scenes[0].visual.items[0].image != second.scenes[0].visual.items[0].image
     # The gold horror look paints its own: the place as a dark photo, 4:3.
     asked.clear()
     studio.paint_plan(map_plan().model_copy(update={"look": "horror"}), "m4", Session, settings,
@@ -1021,9 +1020,9 @@ def test_a_neon_card_is_its_dish_cut_out_of_the_white(tmp_path, world):
                                 settings, painter(asked))  # fmt: skip
     cards, _ = studio.paint_plan(map_plan(), "n2", Session, settings, painter(asked))
     assert len(asked) == 12  # painted once for both looks
-    whole = cards.scenes[1].visual.items[0].image
-    assert neon.scenes[1].visual.items[0].image == images.cut_name(whole)
-    assert tidy(neon).scenes[1].visual.items[0].image == images.cut_name(whole)  # a valid name
+    whole = cards.scenes[0].visual.items[0].image
+    assert neon.scenes[0].visual.items[0].image == images.cut_name(whole)
+    assert tidy(neon).scenes[0].visual.items[0].image == images.cut_name(whole)  # a valid name
 
 
 def test_the_voice_is_recorded_while_the_cards_are_painted(tmp_path, world, monkeypatch):
@@ -1077,7 +1076,7 @@ def test_the_same_thing_twice_is_named_once():
     plan = mapwriter.to_plan(map_reply(countries=tour), [], mapwriter.VOICE)
     model = MapModel(same=[("the Venice Carnival", "Carnevale di Venezia")])
     vetted, notes = mapwriter.vet(model, plan, "Most famous festivals from every country")
-    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes}
     assert cards["The United States"] == ["Mardi Gras", "Coachella"]  # by its words
     assert cards["Italy"] == ["the Venice Carnival", "Palio di Siena"]  # by the model
     assert cards["Spain"] == ["La Tomatina"]  # once in the whole tour
@@ -1139,17 +1138,9 @@ def test_a_thing_only_its_own_country_knows_is_not_famous_enough():
     assert "known well outside Turkey" in asked
 
 
-def test_a_field_name_left_in_a_text_is_taken_out():
-    plan = map_plan(headline="Most famous festivals in every country; highlight: festivals",
-                    highlight="")  # fmt: skip
-    title = plan.scenes[0].visual
-    assert title.text == "Most famous festivals in every country"
-    assert title.highlight == "festivals"
+def test_a_field_name_left_in_a_title_is_taken_out():
     plan = map_plan(headline="Most famous castles, kicker: World tour", title="Castles; hook: x")
-    assert plan.scenes[0].visual.text == "Most famous castles" and plan.title == "Castles"
-    assert tidy(map_plan(headline="highlight: festivals")).scenes[0].visual.text == (
-        "highlight: festivals"
-    )  # nothing left without it: kept as written
+    assert plan.title == "Castles"
 
 
 def test_a_best_known_thing_goes_to_its_country_however_it_is_named():
@@ -1187,7 +1178,7 @@ def test_a_best_known_thing_goes_to_its_country_however_it_is_named():
     )
     vetted, _ = mapwriter.vet(model, plan, "Most famous castles from every country",
                               known=Atlas())  # fmt: skip
-    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes}
     assert "England" not in cards and "Mexico" not in cards
     assert cards["United Kingdom"][0] == "Tower of London"  # on the UK's own cards
     assert cards["Spain"][0] == "Alhambra"
@@ -1250,7 +1241,7 @@ def test_what_is_put_in_later_is_checked_for_duplicates_too():
         iconic=[("China", "Chinese New Year")],
     )
     vetted, notes = mapwriter.vet(model, plan, "Most famous festivals from every country")
-    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes}
     assert cards["Mexico"] == ["Day of the Dead"]
     # A best known thing the country has under another name isn't put in: the tour's
     # own card stays ("Rio Carnival" stayed, not a bare "Carnival", on the Mac).
@@ -1293,7 +1284,7 @@ def test_a_thing_from_another_country_is_found_by_asking_where_it_is_from():
     )
     vetted, notes = mapwriter.vet(model, plan, "Most famous cartoons from every country",
                                   known=Atlas())  # fmt: skip
-    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes[1:]}
+    cards = {s.visual.text: [i.text for i in s.visual.items] for s in vetted.scenes}
     assert cards["Canada"] == ["Caillou", "PAW Patrol"]  # filled up with a Canadian one
     assert cards["United Kingdom"] == ["Wallace and Gromit", "Peppa Pig"]
     assert "Blinky Bill" not in cards["Australia"]  # where from not known: not a clear yes
