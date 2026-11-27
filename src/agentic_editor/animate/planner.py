@@ -43,6 +43,9 @@ SOURCE_CHARS = 3500  # of each source, in the prompt
 # the answer to a fix off mid-reel.
 CONTEXT = 12288
 REPLY = 4096
+# A reel's plan cut off at REPLY (gemma once ran a facts reel past it, and the reel failed) is
+# asked again once with this much room.
+LONGER_REPLY = 8192
 SOURCES = 4
 
 
@@ -136,6 +139,8 @@ def roomy(llm) -> None:
         llm.context = max(llm.context or 0, CONTEXT)
     if hasattr(llm, "max_reply"):
         llm.max_reply = max(llm.max_reply or 0, REPLY)
+    if hasattr(llm, "longer_reply"):
+        llm.longer_reply = max(llm.longer_reply or 0, LONGER_REPLY)
 
 
 def _same_page(a: str, b: str) -> bool:
