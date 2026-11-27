@@ -758,8 +758,10 @@ def _prompt(hook: Hook, lines: list[SungLine], look: str, paints: bool, request:
         + f"The sung lines (number. words as sung):\n{numbered}\n\n"
         "For each line give:\n"
         f"- line: its number\n- shot: how the singer is shown. {SHOT_GUIDE}{painted}.\n"
-        "- art: the picture behind it, in English: one place or symbol that shows what the line "
-        "means (its feeling, not its words), the time and the light. "
+        "- art: the picture behind it, in English: one real place that shows what the line "
+        "means (its feeling, not its words), the time and the light, e.g. 'a rain-soaked "
+        "rooftop at night, city lights below'. Not the shot, the singer's pose or the words: "
+        "those are drawn by themselves. "
         + ("For a painted shot say what the singer does in it. " if painted else "")
         + "Otherwise nobody is in it (the singer's photo is put in front). Never writing, signs, "
         "logos or names. Max 30 words.\n"
@@ -1075,14 +1077,35 @@ def likeness_prompt(shot: str, art: str) -> str:
     """What the likeness model paints for a scene with the singer in it."""
     return (
         f"The person from the reference photo, {POSES.get(shot, POSES['hero'])}. "
-        f"{art.strip().rstrip('.')}. Keep their face, hairstyle, headwear, skin tone, build "
+        f"{place_of(art)}. Keep their face, hairstyle, headwear, skin tone, build "
         f"and clothes exactly as in the photo. {images.LOOKS[STYLE]}. {images.NEVER}"
     )
 
 
+# A painter asked for "huge words" or "a torn photo" paints letters and a photo: the parts
+# of a picture's description that name writing are left out of what it is asked.
+WRITING = re.compile(
+    r"\b(words?|letters?|text|typography|font|caption|title|sign|signs|signage|poster|logo|"
+    r"writing|written|graffiti|photo|photograph|print|visible)\b",
+    re.I,
+)
+
+
+def place_of(art: str) -> str:
+    """The writer's picture for a line, without the parts that ask for writing or a
+    photo; the plain fallback place when little is left."""
+    kept = [
+        part.strip()
+        for part in re.split(r"[.,;]", art)
+        if part.strip() and not WRITING.search(part)
+    ]
+    place = ", ".join(kept)
+    return place if len(place.split()) >= 3 else FALLBACK_ART
+
+
 def place_prompt(art: str) -> str:
     """What the likeness model paints for a scene without the singer (words, a print)."""
-    return f"{art.strip().rstrip('.')}, {images.LOOKS[STYLE]}, {images.EMPTY}, {images.NEVER}"
+    return f"{place_of(art)}, {images.LOOKS[STYLE]}, {images.EMPTY}, {images.NEVER}"
 
 
 def reference_of(photo: SingerPhoto, settings: Settings) -> Path:
@@ -1203,7 +1226,9 @@ def paint_plan(
     pictures = []
     for _, s in wanted:
         painted = s.visual.shot == "painted"
-        prompt = f"{s.visual.art}, the person is {look}" if painted and look else s.visual.art
+        prompt = (
+            f"{s.visual.art}, the person is {look}" if painted and look else place_of(s.visual.art)
+        )
         seed = (int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16)
                 + 7919 * s.visual.art_seed) % 2**31  # fmt: skip
         pictures.append(images.Picture(prompt, seed, empty=not painted))

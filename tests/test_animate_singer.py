@@ -809,3 +809,14 @@ def test_the_painted_face_is_found_and_kept_for_the_words_to_keep_off(tmp_path):
 
     assert verse(face).face == face
     assert verse([2, 0, 0, 0]).face == []
+
+
+def test_a_picture_is_never_asked_for_writing_or_a_photo():
+    assert (
+        singer.place_of("Huge words filling the frame, no singer visible.") == singer.FALLBACK_ART
+    )
+    assert (
+        singer.place_of("A rainy street at night, a neon sign glowing") == "A rainy street at night"
+    )
+    assert singer.place_of("Torn photo taped to a wall") == singer.FALLBACK_ART
+    assert "typography" not in singer.likeness_prompt("hero", "a rooftop at dusk, bold typography")
