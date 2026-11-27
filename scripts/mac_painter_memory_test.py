@@ -133,6 +133,8 @@ def main() -> None:
     ap.add_argument("--zcount", type=int, default=6, help="moments painted by Z-Image")
     ap.add_argument("--likeness", nargs="*", default=["main", "branch"], help="variants")
     ap.add_argument("--zimage", nargs="*", default=["main", "branch"], help="variants")
+    ap.add_argument("--against", default="",
+                    help="compare with this variant's pictures of an earlier run")  # fmt: skip
     args = ap.parse_args()
     os.environ.setdefault("IDENTITY_MODEL", MODEL)
     lines = Lines()
@@ -175,6 +177,15 @@ def main() -> None:
     for kind, specs, pictures in (("likeness", args.likeness, likeness),
                                   ("zimage", args.zimage, words)):  # fmt: skip
         first = None
+        if args.against:  # an earlier run's pictures, when it painted them all
+            there = settings.model_copy(update={"cache_dir": out / f"{kind}-{args.against}"})
+            if kind == "likeness":
+                kept = [images.likeness_name(p, settings.identity_model) for p in pictures]
+            else:
+                kept = [images.name_of(images.full_prompt(p, "song"), p.seed,
+                                       settings.image_model) for p in pictures]  # fmt: skip
+            if all((images.folder(there) / n).exists() for n in kept):
+                first = (there, kept)
         for spec in specs:
             name, runner = variant(spec, out / "runners")
             here = settings.model_copy(update={"cache_dir": out / f"{kind}-{name}"})
