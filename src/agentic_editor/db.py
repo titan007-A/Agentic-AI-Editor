@@ -632,6 +632,10 @@ class ResearchItem(Base):
     # None, and why it wasn't for them ("Wrong music", their own words...).
     verdict: Mapped[str | None] = mapped_column(String(8))
     verdict_reason: Mapped[str] = mapped_column(Text, default="")
+    # Its song's year and label as songfacts found them; "" when not known.
+    year: Mapped[str] = mapped_column(String(4), default="")
+    label: Mapped[str] = mapped_column(Text, default="")
+    label_group: Mapped[str] = mapped_column(String(8), default="")
 
     research: Mapped[Research] = relationship(back_populates="items")
 

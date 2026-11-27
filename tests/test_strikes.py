@@ -1,8 +1,9 @@
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from agentic_editor import download, jobs, pipeline, songfacts, strikes
+from agentic_editor import download, jobs, pipeline, research, songfacts, strikes
 from agentic_editor.db import Event, Job
 from agentic_editor.edl import EDL, Clip
 from tests import test_api
@@ -207,3 +208,78 @@ def test_a_caption_that_finds_the_song_tells_the_job(env, tmp_path):
     jobs.song_from_caption("j2", "Tum Hi Ho", "Arijit Singh", reel, env.sessions, env.settings)
     with env.sessions() as db:
         assert db.get(Job, "j2").song_facts["song"] == "Tum Hi Ho"
+
+
+def test_a_research_never_gives_a_song_on_the_strike_list():
+    class Rater:
+        def chat_json(self, messages, schema, **kwargs):
+            if "queries" in schema["properties"]:
+                return {"brief": "songs", "music": True, "queries": ["reggaeton"]}
+            lines = [x for x in messages[-1]["content"].split("\n") if x[:1].isdigit()]
+            songs = {"LUNA": ("LUNA", "Feid"), "KATE": ("Wuthering Heights", "Kate Bush")}
+            return {"ratings": [
+                {"n": n, "relevance": 9, "why": "", "song": songs[key][0], "artist":
+                 songs[key][1], "matches": "", "preset": "", "preset_why": "", "usable": True}
+                for n, line in enumerate(lines, 1)
+                for key in songs if key in line
+            ]}  # fmt: skip
+
+    def find(query, count):
+        return [{"href": f"https://www.instagram.com/reel/{c}0000001/", "title": c, "body": ""}
+                for c in ("LUNA", "KATE")]  # fmt: skip
+
+    def info(url):
+        return {"uploader": "x", "description": research.code_of(url), "like_count": 10}
+
+    context = research.Context(strikes=[("Luna", "Feid & ATL Jacob")])
+    result = research.run("", lambda: nullcontext(Rater()), set(), set(), lambda m, v: None,
+                          find=find, info=info, pause=0, context=context)  # fmt: skip
+    assert [r.song for r in result.reels] == ["Wuthering Heights - Kate Bush"]
+    assert result.left_out["on the strike list"] == 1
+
+
+def test_a_researchs_songs_are_looked_up_once_and_only_while_there_is_time(tmp_path, monkeypatch):
+    asked = []
+
+    def look_up(song, artist, **kwargs):
+        asked.append((song, kwargs["ask"]))
+        return songfacts.Facts(song, artist, "2024", "MusicBrainz", "Atlantic", "Warner")
+
+    monkeypatch.setattr(songfacts, "look_up", look_up)
+    now = [0.0]
+
+    def clock():
+        now[0] += 50.0
+        return now[0]
+
+    reels = [research.Reel(code=f"c{n}", url="", query="") for n in range(3)]
+    songs = [(reels[0], "A", "x", None), (reels[1], "B", "y", None), (reels[2], "", "", None)]
+    found = jobs.songs_facts(songs, SimpleNamespace(cache_dir=tmp_path), lambda *a: None,
+                             clock=clock)  # fmt: skip
+    assert asked == [("A", True), ("B", False)]  # past the time, only what is kept
+    item = jobs.with_facts(jobs.item_of(reels[0], 0), found[id(reels[0])])
+    assert (item.year, item.label, item.label_group) == ("2024", "Atlantic", "Warner")
+    assert id(reels[2]) not in found
+
+
+def test_a_researchs_reels_show_their_songs_year_label_and_strikes(env):
+    from agentic_editor.db import Research, ResearchItem
+
+    with env.sessions() as db:
+        found = Research(id="r1", description="", status="done")
+        found.items = [
+            ResearchItem(rank=0, code="a", url="u", song="Flowers - Miley Cyrus",
+                         artist="Miley Cyrus", year=str(datetime.now(UTC).year - 1),
+                         label="Columbia", label_group="Sony"),
+            ResearchItem(rank=1, code="b", url="u", song="LUNA - Feid", artist="Feid",
+                         year="2023", label="Universal Music Latin Entertainment",
+                         label_group="UMG"),
+            ResearchItem(rank=2, code="c", url="u", song="Tum Hi Ho", artist="Arijit Singh",
+                         year="2013"),
+        ]  # fmt: skip
+        db.add(found)
+        db.commit()
+    items = env.client.get("/api/research/r1").json()["items"]
+    assert [(i["new"], i["label_group"]) for i in items] == [(True, "Sony"), (
+        datetime.now(UTC).year - 2023 <= 3, "UMG"), (False, "")]  # fmt: skip
+    assert [bool(i["blocked"]) for i in items] == [False, True, False]

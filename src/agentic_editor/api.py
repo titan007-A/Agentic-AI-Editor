@@ -46,6 +46,7 @@ from agentic_editor import (
     mcp_access,
     niche,
     research,
+    songfacts,
     songlist,
     strikes,
 )
@@ -446,6 +447,13 @@ class ResearchItemView(BaseModel):
     verdict: str | None  # the person's feedback: "good", "bad" or none yet
     verdict_reason: str
     hidden: bool  # its account is one the research's owner hid
+    # Its song's year and label as found (songfacts), "" when not known; whether that year
+    # is a new song's, and the strike list's entry for its song (a PDF's songs may be on it).
+    year: str = ""
+    label: str = ""
+    label_group: str = ""
+    new: bool = False
+    blocked: strikes.Blocked | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -1467,12 +1475,21 @@ def create_app(
                 select(HiddenAccount.handle).where(HiddenAccount.owner_id == (owner or account.id))
             )
         )
-        names = ResearchItemView.model_fields.keys() - {"used", "hidden"}
+        names = ResearchItemView.model_fields.keys() - {"used", "hidden", "new", "blocked"}
+        listed = strikes.listed(session) if items else []
+        this_year = datetime.now(UTC).year
+
+        def blocked(item: ResearchItem) -> strikes.Blocked | None:
+            entry = strikes.on_list(listed, research.song_title(item), item.artist)
+            return strikes.blocked_view(entry) if entry else None
+
         return [
             ResearchItemView(
                 **{k: getattr(i, k) for k in names},
                 used=i.code in used,
                 hidden=bool(i.handle) and i.handle in hidden,
+                new=songfacts.is_new(i.year, this_year),
+                blocked=blocked(i),
             )
             for i in items
         ]

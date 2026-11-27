@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -28,6 +29,7 @@ from agentic_editor import (
     shazam,
     slots,
     songfacts,
+    strikes,
     style,
 )
 from agentic_editor.animate import schedule, studio
@@ -898,6 +900,7 @@ def research_context(
         account = db.get(ResearchAccount, found.account_id) if found.account_id else None
         user = db.get(User, found.owner_id) if found.owner_id else None
         learned = taste(db, found)
+        learned["strikes"] = [(e.song, e.artist) for e in strikes.listed(db)]
     available = load_presets(accounts.presets_dir(user, settings.presets_dir))
     if account is None:
         return research.Context(presets=research.describe_presets(available), **learned)
@@ -1073,8 +1076,9 @@ def run_pdf_reading(research_id: str, Session: sessionmaker, settings: Settings,
 
 
 def run_pdf_research(
-    research_id, Session, router, pdf_text, used, seen, progress, context, sites, options
-) -> None:
+    research_id, Session, router, pdf_text, used, seen, progress, context, sites, options,
+    settings,
+) -> None:  # fmt: skip
     """A PDF research: its songs read from the PDF, then the best reels of each."""
     with Session() as db:
         entries = list(db.get(Research, research_id).entries or [])
@@ -1092,14 +1096,56 @@ def run_pdf_research(
         entries, router.planner, used, seen, progress, context=context, sites=sites, kind=kind,
         **options,
     )  # fmt: skip
+    facts = {}
+    if research.is_songs(kind):
+        # The PDF names the song and its year: those, not what the rating made of a reel.
+        songs = [(reel, entries[n].get("song", ""), entries[n].get("singer", ""),
+                  entries[n].get("year")) for n, reel in given]  # fmt: skip
+        facts = songs_facts(songs, settings, progress, "the PDF")
     with Session() as db:
         found = db.get(Research, research_id)
         for rank, (entry, reel) in enumerate(given):
-            found.items.append(item_of(reel, rank, entry))
+            found.items.append(with_facts(item_of(reel, rank, entry), facts.get(id(reel))))
         empty = len(entries) - len({entry for entry, _ in given})
         found.message = f"found reels for {len(entries) - empty} of {len(entries)}"
         found.status, found.progress = "done", 1.0
         db.commit()
+
+
+SONGS_LOOKUP = 90.0  # s a research spends asking MusicBrainz about its songs, at most
+
+
+def songs_facts(
+    songs: list[tuple[research.Reel, str, str, str | None]],
+    settings: Settings,
+    progress,
+    year_from: str = "the post",
+    clock=time.monotonic,
+) -> dict[int, songfacts.Facts]:
+    """Each reel's song's year and label (songfacts), by id(reel), from (reel, song, artist,
+    year known) each. A song is asked about once; past SONGS_LOOKUP seconds only what is
+    cached or what the reel's own description says is used, so a research isn't held up."""
+    named = [s for s in songs if s[1].strip()]
+    if not named:
+        return {}
+    progress("checking the songs' years and labels", 0.97)
+    until, found = clock() + SONGS_LOOKUP, {}
+    for reel, song, artist, year in named:
+        try:
+            found[id(reel)] = songfacts.look_up(
+                song, artist, description=reel.caption, uploader=reel.account,
+                year=str(year) if year else None, year_from=year_from,
+                cache_dir=settings.cache_dir, ask=clock() < until,
+            )  # fmt: skip
+        except Exception:
+            log.exception("couldn't look up %s - %s's label and year", song, artist)
+    return found
+
+
+def with_facts(item: ResearchItem, facts: songfacts.Facts | None) -> ResearchItem:
+    if facts is not None:
+        item.year, item.label, item.label_group = facts.year or "", facts.label, facts.group
+    return item
 
 
 def item_of(reel: research.Reel, rank: int, entry: int | None = None) -> ResearchItem:
@@ -1176,7 +1222,7 @@ def run_research(
         if mode == "pdf":
             run_pdf_research(
                 research_id, Session, router, pdf_text, used, seen, progress, context, sites,
-                options,
+                options, settings,
             )  # fmt: skip
             return
         result = research.run(
@@ -1189,13 +1235,15 @@ def run_research(
             sites=sites,
             **options,
         )
+        songs = [(r, research.song_title(r), r.artist, None) for r in result.reels]
+        facts = songs_facts(songs, settings, progress)
         with Session() as db:
             found = db.get(Research, research_id)
             found.queries, found.used = result.queries, result.used
             found.considered, found.left_out = result.considered, result.left_out
             found.cutoff, found.brief = result.cutoff, result.brief
             for n, reel in enumerate(result.reels):
-                found.items.append(item_of(reel, n))
+                found.items.append(with_facts(item_of(reel, n), facts.get(id(reel))))
             count = len(result.reels)
             found.message = f"found {count} reel{'' if count == 1 else 's'}"
             left = [
