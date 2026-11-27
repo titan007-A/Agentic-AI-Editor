@@ -1138,8 +1138,10 @@ def paint_likenesses(plan: Plan, settings: Settings, likeness, progress) -> tupl
     names = likeness(pictures, settings, progress) if pictures else []
     scenes = list(plan.scenes)
     for (i, scene), picture, name in zip(wanted, pictures, names, strict=True):
+        with_singer = bool(name and picture.refs)
+        face = painted_face(images.folder(settings) / name, settings) if with_singer else []
         visual = scene.visual.model_copy(
-            update={"image": name, "with_singer": bool(name and picture.refs)}
+            update={"image": name, "with_singer": with_singer, "face": face}
         )
         scenes[i] = scene.model_copy(update={"visual": visual})
     missing = sum(1 for n in names if not n)
@@ -1149,6 +1151,24 @@ def paint_likenesses(plan: Plan, settings: Settings, likeness, progress) -> tupl
         else []
     )
     return plan.model_copy(update={"scenes": scenes}), note
+
+
+def painted_face(path: Path, settings: Settings, face_of=None) -> list[float]:
+    """Where the singer's face is in a picture painted with them, [x, y, w, h], 0..1; []
+    when none is seen (from behind, far off): the words then take the shot's usual place."""
+    from PIL import Image
+
+    try:
+        picture = Image.open(path).convert("RGB")
+        found = (face_of or _face)(picture, settings)
+    except Exception:
+        log.info("no face looked for in %s", path, exc_info=True)
+        return []
+    if not found:
+        return []
+    x, y, w, h = found
+    box = [x / picture.width, y / picture.height, w / picture.width, h / picture.height]
+    return [round(min(1.0, max(0.0, v)), 4) for v in box]
 
 
 def paint_plan(
@@ -1179,7 +1199,11 @@ def paint_plan(
     scenes = list(plan.scenes)
     for (i, scene), name in zip(wanted, names, strict=True):
         scenes[i] = scene.model_copy(
-            update={"visual": scene.visual.model_copy(update={"image": name, "with_singer": False})}
+            update={
+                "visual": scene.visual.model_copy(
+                    update={"image": name, "with_singer": False, "face": []}
+                )
+            }
         )
     missing = sum(1 for n in names if not n)
     note = [f"{missing} of {len(names)} pictures couldn't be painted"] if missing else []
@@ -1189,7 +1213,11 @@ def paint_plan(
 def _unpainted(plan: Plan) -> Plan:
     scenes = [
         s.model_copy(
-            update={"visual": s.visual.model_copy(update={"image": "", "with_singer": False})}
+            update={
+                "visual": s.visual.model_copy(
+                    update={"image": "", "with_singer": False, "face": []}
+                )
+            }
         )
         for s in plan.scenes
     ]

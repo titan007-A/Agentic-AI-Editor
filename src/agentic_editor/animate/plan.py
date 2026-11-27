@@ -197,6 +197,8 @@ class Visual(Loose):
     # standing in front of it cut out.
     shot: str = ""
     with_singer: bool = False
+    # Where the singer's face is in that picture, [x, y, w, h] of it, 0..1 (words keep off).
+    face: list[float] = Field(default_factory=list)
 
 
 class Scene(Loose):
@@ -458,6 +460,9 @@ def tidy(plan: Plan) -> Plan:
                 "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
                 "camera": camera_of(v),
                 "shot": v.shot if v.kind == "verse" and v.shot in SHOTS else "",
+                "face": [round(float(x), 4) for x in v.face]
+                if v.kind == "verse" and len(v.face) == 4 and all(0 <= x <= 1 for x in v.face)
+                else [],
                 "with_singer": bool(
                     v.with_singer and v.kind == "verse" and _PICTURE.fullmatch(v.image or "")
                 ),

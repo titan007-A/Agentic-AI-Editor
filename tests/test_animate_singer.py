@@ -791,3 +791,21 @@ def test_the_paint_runner_loads_klein_for_likenesses(tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
     paint_runner.load({"kind": "likeness", "model": "some/klein-q8"})
     assert made["klein"] == ("klein-4b", "some/klein-q8")
+
+
+def test_the_painted_face_is_found_and_kept_for_the_words_to_keep_off(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    path = tmp_path / "painted.png"
+    Image.new("RGB", (720, 1280), (90, 60, 40)).save(path)
+    face = singer.painted_face(path, settings, face_of=lambda picture, s: [300, 200, 120, 160])
+    assert face == [round(300 / 720, 4), round(200 / 1280, 4), round(120 / 720, 4), 0.125]
+    assert singer.painted_face(path, settings, face_of=lambda picture, s: None) == []
+    assert singer.painted_face(tmp_path / "missing.png", settings) == []
+
+    def verse(face):
+        visual = {"kind": "verse", "text": "a b", "shot": "hero", "face": face}
+        scenes = [{"narration": "a b", "visual": visual}]
+        return tidy(Plan.model_validate({"style": "singer", "scenes": scenes})).scenes[0].visual
+
+    assert verse(face).face == face
+    assert verse([2, 0, 0, 0]).face == []

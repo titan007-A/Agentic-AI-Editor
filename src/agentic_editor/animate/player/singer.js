@@ -574,7 +574,14 @@
       const subject = el("div", "abs", root);
       place(subject, 0, 0, W, H);
       const actors = [];
-      let face = withSinger ? PAINTED_FACE[shot] || PAINTED_FACE.hero : [600, 1040, 230];
+      // In a painting with the singer, their face as found in it (the painting covers the
+      // stage at the same 9:16), else where the shot most likely has it.
+      const seen = withSinger && Array.isArray(v.face) && v.face.length === 4;
+      let face = seen
+        ? [(v.face[0] + v.face[2] / 2) * W, (v.face[1] + v.face[3] / 2) * H, Math.max(v.face[2] * W, v.face[3] * H)]
+        : withSinger
+          ? PAINTED_FACE[shot] || PAINTED_FACE.hero
+          : [600, 1040, 230];
       const addCut = async (look, spot, opacity = 1, flip = false, clip = null) => {
         const art = await graded(photo, look);
         const k = spot.s / art.scale;
@@ -686,7 +693,14 @@
       const theme = ["mixed", "caps", "mixed", "serif"][Math.floor(r() * 4)];
       const wordLayer = el("div", "abs", root);
       place(wordLayer, 0, 0, W, H);
-      const [zone, align] = ZONES[shot] || ZONES.hero;
+      let [zone, align] = ZONES[shot] || ZONES.hero;
+      if (seen) {
+        // the words go where the painted face isn't: above it, else below it
+        const top = face[1] - face[2] * 1.3;
+        const bottom = face[1] + face[2] * 1.4;
+        if (top - 250 >= 380) zone = [70, 250, 930, Math.min(zone[3], top - 20)];
+        else if (1460 - bottom >= 380) zone = [70, Math.max(bottom + 20, 300), 930, 1460];
+      }
       const items = words.map((w, k) => {
         const key = keys.has(plain(w.text));
         const role = key ? "key" : SMALL.has(plain(w.text)) ? "small" : "normal";
