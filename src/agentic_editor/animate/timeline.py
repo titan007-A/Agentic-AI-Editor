@@ -392,6 +392,8 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
 
 
 SWITCH = 0.15  # a Song story's picture changes this long before its line is sung
+LYRIC_GAP = 3.0  # s of music before the next line after which a lyric line goes early
+LYRIC_HOLD = 1.5  # s it stays after its last word then
 # A line's second picture comes on one of its words, at least this long after the line's
 # first and before the next line.
 SECOND_PICTURE = 1.2
@@ -445,10 +447,12 @@ def build_song(plan: Plan, music: str = "") -> Timeline:
                                    later[-1].end if later else at, later, []))  # fmt: skip
         else:
             times.append(SceneTime("moment", start, end, sung, last, words, []))
-        captions_.append(
-            Caption(max(0.0, sung - 0.12), length if i + 1 == len(shown) else nxt_sung - 0.06,
-                    words)
-        )  # fmt: skip
+        # A line stays until the next is sung, unless a long stretch of music comes first:
+        # then it goes a moment after its last word instead of hanging over the music.
+        until = length if i + 1 == len(shown) else nxt_sung - 0.06
+        if i + 1 < len(shown) and nxt_sung - last > LYRIC_GAP:
+            until = min(until, last + LYRIC_HOLD)
+        captions_.append(Caption(max(0.0, sung - 0.12), until, words))
     spans = song_spans(song)
     return Timeline(times, length, captions_, [], music, spans[0][0],
                     spans if len(spans) > 1 else [])  # fmt: skip
