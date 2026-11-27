@@ -45,8 +45,12 @@ FEATURES = "clearly drawn with eyes, eyebrows, nose and mouth"
 # clean-shaven father bearded in three pictures of a reel, his daughter in glasses in four).
 KEEP = (
     "Each person from a reference image looks exactly as in their image: the same face, hair, "
-    "skin tone, build and clothes, nothing added"
+    "skin tone, build and clothes, nothing added, and is in the picture only once"
 )
+# Where the people go: the reel darkens the top third for the lyrics and its camera zooms in,
+# so a head painted near the top was lost (close-ups came out as a shirt with no face). An
+# empty chair beside someone was painted with a second copy of them in it (hence "only once").
+ROOM = "the people in the lower two thirds of the picture, plain dark space above their heads"
 
 
 def portrait_prompt(person: Person) -> str:
@@ -68,7 +72,7 @@ def moment_prompt(plan: Plan, art: str, refs: list[Person]) -> str:
     # A moment with nobody in it is told so: asked for faces, the model put them on whatever
     # was there (lamps in an empty garden came out as rows of round faces).
     someone = refs or songwriter.people_in(plan, art) or songwriter.SOMEONE.search(art)
-    faces = f"every face {FEATURES}" if someone else images.EMPTY
+    faces = f"{ROOM}, every face {FEATURES}" if someone else images.EMPTY
     return f"{scene}. {keep}{images.LOOKS[songwriter.STYLE]}, {faces}, {images.NEVER}"
 
 

@@ -100,6 +100,9 @@ def test_people_are_painted_once_as_portraits_and_each_moment_from_theirs(tmp_pa
     # Nobody in it: told so, never asked for faces (they came out on the lamps).
     assert images.EMPTY in empty.prompt and "every face" not in empty.prompt
     assert all("every face" in m.prompt for m in (first, alone, crowd, running))
+    # Heads below the lyrics' dark top, and nobody painted twice (an empty chair got a copy).
+    assert all(songpaint.ROOM in m.prompt for m in (first, alone, crowd, running))
+    assert songpaint.ROOM not in empty.prompt and "only once" in first.prompt
     assert "flat 2D vector" in empty.prompt and "no text" in empty.prompt
     # Five in one picture: painted from the first four portraits, the fifth from words.
     assert crowd.refs == (by_name["Nana"], by_name["Leo"], by_name["Sam"], by_name["Ana"])
