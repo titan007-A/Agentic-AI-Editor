@@ -2,8 +2,10 @@
 
 import {
   Clapperboard,
+  Combine,
   Film,
   ImagePlus,
+  Layers,
   Loader2,
   RefreshCw,
   Save,
@@ -32,10 +34,12 @@ import {
   api,
   errorText,
   type Animation,
+  type AnimationPart,
   type AnimationPlan,
   type AnimationSong,
   type AnimationVoice,
 } from "@/lib/api";
+import { partStatus, playingParts } from "@/lib/song-parts.mjs";
 import { cn } from "@/lib/utils";
 
 const SELECT =
@@ -135,21 +139,51 @@ function clock(seconds: number) {
   return `${m}:${(seconds - m * 60).toFixed(1).padStart(4, "0")}`;
 }
 
-/** A Song story's song: what was found, the part playing, and the other parts to choose. */
+/**
+ * A Song story's song: what was found and the part playing; another part to play, a reel
+ * of every other part (made one after another, each rendered), two parts joined into one
+ * reel, and the song's other reels.
+ */
 function SongPanel({
   song,
+  parts,
   disabled,
   onChoose,
+  onJoin,
+  onMakeParts,
+  onOpen,
 }: {
   song: AnimationSong;
+  parts: AnimationPart[];
   disabled: boolean;
   onChoose: (choice: number) => void;
+  onJoin: (first: number, second: number) => void;
+  onMakeParts: () => void;
+  onOpen: (id: string) => void;
 }) {
+  const playing = playingParts(song);
+  const joined = (song.pieces?.length ?? 0) > 1;
+  const spans = joined ? (song.pieces ?? []) : [{ start: song.start, end: song.end }];
+  const [first, setFirst] = useState(playing[0] ?? 0);
+  // The second part offered by default: the one joined after it, else the best other one.
+  const [second, setSecond] = useState(
+    playing[1] ??
+      Math.max(
+        0,
+        song.choices.findIndex((_, n) => n !== (playing[0] ?? 0)),
+      ),
+  );
+  const partName = (n: number) => {
+    const c = song.choices[n];
+    return `${clock(c.start)}-${clock(c.end)} · \u201c${c.first}\u201d`;
+  };
   return (
-    <div className="space-y-2 rounded-md border-[1.5px] border-foreground/40 p-3 text-sm">
+    <div className="space-y-3 rounded-md border-[1.5px] border-foreground/40 p-3 text-sm">
       <div>
         <span className="font-semibold">{song.title}</span>
-        {song.artist ? ` · ${song.artist}` : ""} · playing {clock(song.start)}-{clock(song.end)}
+        {song.artist ? ` · ${song.artist}` : ""} · playing{" "}
+        {spans.map((x) => `${clock(x.start)}-${clock(x.end)}`).join(" + ")}
+        {joined ? " (two parts joined)" : ""}
         {song.url && (
           <>
             {" · "}
@@ -169,17 +203,17 @@ function SongPanel({
           <Label>Play another part of the song</Label>
           <div className="flex flex-col gap-1.5">
             {song.choices.map((c, n) => {
-              const playing = Math.abs(c.start - song.start) < 1.5;
+              const on = playing.includes(n);
               return (
                 <Button
                   key={c.start}
                   size="sm"
-                  variant={playing ? "default" : "outline"}
+                  variant={on ? "default" : "outline"}
                   className="h-auto min-h-11 justify-start text-left text-xs whitespace-normal"
-                  disabled={disabled || playing}
+                  disabled={disabled || (on && !joined)}
                   onClick={() => onChoose(n)}
                 >
-                  {clock(c.start)}-{clock(c.end)} · &ldquo;{c.first}&rdquo;
+                  {partName(n)}
                 </Button>
               );
             })}
@@ -187,6 +221,106 @@ function SongPanel({
           <p className="text-xs text-muted-foreground">
             Another part is timed again and gets a new story.
           </p>
+        </div>
+      )}
+      {song.choices.length > 1 && (
+        <div className="space-y-1" data-testid="join-parts">
+          <Label htmlFor="join-first">Join two parts into one reel</Label>
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-center">
+            <select
+              id="join-first"
+              aria-label="Start with"
+              className={SELECT}
+              value={first}
+              onChange={(e) => setFirst(Number(e.target.value))}
+            >
+              {song.choices.map((c, n) => (
+                <option key={c.start} value={n}>
+                  Start with {partName(n)}
+                </option>
+              ))}
+            </select>
+            <select
+              id="join-second"
+              aria-label="Then"
+              className={SELECT}
+              value={second}
+              onChange={(e) => setSecond(Number(e.target.value))}
+            >
+              {song.choices.map((c, n) => (
+                <option key={c.start} value={n}>
+                  then {partName(n)}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              className="min-h-11"
+              disabled={disabled || first === second}
+              onClick={() => onJoin(first, second)}
+            >
+              <Combine className="size-4" /> Join them
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            About 30 s in all: a stretch of each, the sound crossfaded on a beat where they meet,
+            and one new story across both.
+          </p>
+        </div>
+      )}
+      {song.choices.length > 1 && (
+        <div className="space-y-1">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-auto min-h-11 whitespace-normal"
+            disabled={disabled}
+            onClick={onMakeParts}
+          >
+            <Layers className="size-4" /> Make every part
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            A reel of its own for each other part of the song, made one after another and each
+            rendered when it&apos;s ready.
+          </p>
+        </div>
+      )}
+      {parts.length > 0 && (
+        <div className="space-y-1" data-testid="song-parts">
+          <Label>Reels of this song</Label>
+          <ul className="space-y-1.5">
+            {parts.map((part) => (
+              <li
+                key={part.id}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border-[1.5px] border-foreground/30 p-2 text-xs"
+              >
+                <span className="font-semibold">
+                  {part.spans.map(([a, b]) => `${clock(a)}-${clock(b)}`).join(" + ")}
+                </span>
+                {part.title && <span className="min-w-0 break-words">{part.title}</span>}
+                <span className="text-muted-foreground">
+                  {part.first ? "the first reel · " : ""}
+                  {partStatus(part)}
+                </span>
+                {BUSY.includes(part.status) && <Loader2 className="size-3.5 animate-spin" />}
+                <span className="ml-auto flex flex-wrap items-center gap-2">
+                  {part.render?.status === "done" && (
+                    <a className="underline" href={`/job/?id=${part.render.job_id}`}>
+                      Video in Jobs
+                    </a>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="min-h-9"
+                    onClick={() => onOpen(part.id)}
+                  >
+                    Open
+                  </Button>
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
@@ -267,6 +401,9 @@ export default function AnimationsPage() {
         ["queued", "running"].includes(current.render?.status ?? ""))) ||
     list.some(
       (a) => BUSY.includes(a.status) || ["rendering", "posting"].includes(a.post_status ?? ""),
+    ) ||
+    (current?.parts ?? []).some(
+      (p) => BUSY.includes(p.status) || ["queued", "running"].includes(p.render?.status ?? ""),
     );
   useEffect(() => {
     if (!working) return;
@@ -343,6 +480,22 @@ export default function AnimationsPage() {
     await act(
       () => api.changeAnimation(current.id, { request: "", choice }),
       "Timing that part of the song",
+    );
+  }
+
+  async function joinParts(first: number, second: number) {
+    if (!current) return;
+    await act(
+      () => api.changeAnimation(current.id, { request: "", join: [first, second] }),
+      "Joining the two parts",
+    );
+  }
+
+  async function makeParts() {
+    if (!current) return;
+    await act(
+      () => api.makeAnimationParts(current.id),
+      "Making a reel of each other part, one after another; each renders when it's ready",
     );
   }
 
@@ -741,9 +894,14 @@ export default function AnimationsPage() {
                 )}
                 {current.plan?.style === "song" && current.plan.song && (
                   <SongPanel
+                    key={current.id}
                     song={current.plan.song}
+                    parts={current.parts ?? []}
                     disabled={busy || dirty || sending}
                     onChoose={(n) => void playPart(n)}
+                    onJoin={(a, b) => void joinParts(a, b)}
+                    onMakeParts={() => void makeParts()}
+                    onOpen={(id) => void open(id)}
                   />
                 )}
                 {current.plan?.singer && (
@@ -988,7 +1146,9 @@ export default function AnimationsPage() {
                       </Button>
                     </div>
                   )}
-                  {current.player && draft.style !== "singer" && (
+                  {/* A Song story and a singer edit are timed by their song: nothing to hold
+                      or move on a strip. */}
+                  {current.player && !["singer", "song"].includes(draft.style) && (
                     <AnimationTimeline
                       plan={draft}
                       saved={current.plan}

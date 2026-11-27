@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { secondPictures } from "@/lib/song-parts.mjs";
 import { cn } from "@/lib/utils";
 import type {
   AnimationActor,
@@ -225,6 +226,8 @@ export function AnimationScenes({
   // to it: none added, moved or removed, and what is sung stays.
   const songStory = plan.style === "song";
   const sung = songStory || plan.style === "singer";
+  // A Song story line on screen a long time has two pictures, a scene each: which is the second.
+  const secondPicture = secondPictures(plan.song?.lines ?? []);
   function setScene(i: number, scene: AnimationScene) {
     onChange({ ...plan, scenes: plan.scenes.map((s, j) => (j === i ? scene : s)) });
   }
@@ -328,7 +331,9 @@ export function AnimationScenes({
             </div>
             {sung ? (
               <div className="space-y-1">
-                <Label>Lyric line</Label>
+                <Label>
+                  {songStory && secondPicture[i] ? "Lyric line (its second picture)" : "Lyric line"}
+                </Label>
                 <p className="text-base font-semibold" data-testid="sung-line">
                   {scene.narration}
                 </p>
