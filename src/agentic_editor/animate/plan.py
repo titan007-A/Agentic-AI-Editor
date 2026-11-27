@@ -232,6 +232,19 @@ class SongLine(Loose):
     start: float = 0.0
     end: float = 0.0
     words: list[SongWord] = Field(default_factory=list)
+    # How many pictures are shown over it, a scene each: a line on screen a long time gets
+    # a second one partway, on one of its words (songwriter.pictured).
+    pictures: int = 1
+    # Which of the song's pieces it is sung in (Song.pieces: a reel joined from two parts).
+    piece: int = 0
+
+
+class SongPiece(Loose):
+    """A stretch of the song a joined reel plays: from `start` to `end` (song seconds),
+    crossfaded into the next one where they meet."""
+
+    start: float
+    end: float
 
 
 class HookChoice(Loose):
@@ -268,6 +281,11 @@ class Song(Loose):
     lyrics: str = ""  # where the lines came from: "lrclib" or "heard" (transcribed)
     lines: list[SongLine] = Field(default_factory=list)
     choices: list[HookChoice] = Field(default_factory=list)
+    # Which of the choices it plays: one, or the two joined into it (songhook.join).
+    playing: list[int] = Field(default_factory=list)
+    # A reel joined from two parts plays these stretches of the song one after the other;
+    # empty: it plays start-end.
+    pieces: list[SongPiece] = Field(default_factory=list)
     # The story told over it (animate/songwriter.py): who is in it and what happens.
     people: list[Person] = Field(default_factory=list)
     story: str = ""

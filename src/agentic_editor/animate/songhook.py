@@ -8,9 +8,9 @@ part people know (the hook) and when every word of it is sung.
    slowed, lo-fi, remix, cover or live version. Its sound is downloaded once and kept.
 3. The vocals are separated (the editor's own model) and the lyric lines moved onto this
    upload's audio: each line starts where singing starts after a pause.
-4. The hook: runs of whole lines 15-32 s long, scored by YouTube's "most replayed" graph
+4. The hook: runs of whole lines 24-40 s long, scored by YouTube's "most replayed" graph
    (where people go back to; the reels' favourite part of a song shows there), whole
-   sections, lines that don't repeat inside it, a length near 20 s, and any of its words
+   sections, lines that don't repeat inside it, a length near 30 s, and any of its words
    the person typed. Without the graph, the louder sections and the chorus count instead.
 5. Every word's time: whisper hears the vocals of the part, and the lyric words are laid
    over the heard words by how long each takes to sing. A song LRCLIB doesn't know is
@@ -40,9 +40,13 @@ LRCLIB = "https://lrclib.net/api"
 USER_AGENT = "agentic-editor (song story reels)"
 RESULTS = 8  # YouTube results looked at
 # The part a reel plays: whole lines, about this long.
-SHORTEST = 15.0
-LONGEST = 32.0
-AIM = 20.0
+SHORTEST = 24.0
+LONGEST = 40.0
+AIM = 30.0
+MOST_LINES = 16  # lyric lines in a part (each is a scene or two), when the song allows
+# A part with longer music than this between two of its lines (an instrumental build, a
+# solo) shows a lyric over no singing: it is offered only when the song has nothing else.
+MOST_MUSIC = 6.0
 LEAD_IN = 0.3  # the part starts this much before its first line is sung
 TAIL = 1.2  # and runs on this long after its last word, if nothing is sung there
 CHOICES = 4  # parts offered to the person
@@ -105,6 +109,7 @@ class Window:
     end: float
     score: float = 0.0
     why: dict = field(default_factory=dict)
+    music: float = 0.0  # the longest music between two of its lines (s), past their singing
 
 
 # ---- what was asked --------------------------------------------------------------------
@@ -219,6 +224,51 @@ def best_lyrics(records: list[dict], name: str) -> Lyrics | None:
         duration=float(r.get("duration") or 0.0),
         lines=parse_lrc(r.get("syncedLyrics") or ""),
     )
+
+
+# ---- the song's name -------------------------------------------------------------------
+
+_DASH = re.compile(r"\s+[-\u2013\u2014|]\s+")
+# What an upload's title carries besides the song's name: "(Official Music Video)", "[HD]".
+_UPLOAD_EXTRAS = re.compile(
+    r"[(\[][^)\]]*[)\]]|\b(official|music|lyric|lyrics|video|audio|visualizer|hd|4k|hq|"
+    r"remaster(ed)?|full song)\b",
+    re.I,
+)
+_CHANNEL_EXTRAS = re.compile(r"\s*-\s*topic$|vevo$|\bofficial\b", re.I)
+
+
+def _tidy_name(text: str) -> str:
+    text = " ".join((text or "").split()).strip(" -|\u2013\u2014")
+    return text.title() if text and text == text.lower() else text
+
+
+def names(title: str, artist: str, upload: str = "", channel: str = "") -> tuple[str, str]:
+    """The song's title and singer as a reel and its caption show them, from LRCLIB's record
+    (which may be "Artist - Title", or both fields the whole name), else the upload's title
+    ("Artist - Title (Official Video)") and channel ("Artist - Topic", "ArtistVEVO")."""
+    title, artist = " ".join((title or "").split()), " ".join((artist or "").split())
+    if title and artist:
+        parts = _DASH.split(title)
+        if len(parts) == 2 and plain(parts[0]) == plain(artist):
+            title = parts[1]  # "Adele - Someone Like You" by Adele
+        elif len(parts) == 2 and plain(parts[1]) == plain(artist):
+            title = parts[0]
+    if title and artist and plain(title) != plain(artist):
+        return _tidy_name(title), _tidy_name(artist)
+    # LRCLIB's names look wrong (none, or the title and singer both the whole name): the
+    # upload's own.
+    who = _tidy_name(_CHANNEL_EXTRAS.sub("", channel or ""))
+    named = " ".join(_UPLOAD_EXTRAS.sub(" ", upload or "").split())
+    parts = [x for x in _DASH.split(named) if x.strip()]
+    if len(parts) >= 2:
+        first, second = parts[0], " - ".join(parts[1:])
+        if who and plain(second) == plain(who):
+            first, second = second, first
+        return _tidy_name(second), _tidy_name(first)
+    if named:
+        return _tidy_name(named), who or _tidy_name(artist)
+    return _tidy_name(title), _tidy_name(artist or who)
 
 
 # ---- YouTube ---------------------------------------------------------------------------
@@ -434,7 +484,7 @@ def _mean(curve: np.ndarray | None, start: float, end: float, step: float = 0.5)
 # How much each of a window's features counts (see `windows`).
 WEIGHTS = {
     "heat": 1.5, "opening": 1.0, "energy": 0.8, "section": 1.0, "closes": 0.6, "fresh": 0.8,
-    "early": 0.6, "length": 1.0, "chorus": 0.5, "title": 1.0, "part": 3.0,
+    "early": 0.6, "length": 1.0, "chorus": 0.5, "title": 1.0, "part": 3.0, "music": 1.0,
 }  # fmt: skip
 
 
@@ -445,10 +495,13 @@ def windows(
     energy: np.ndarray | None = None,
     part: str = "",
     title: str = "",
+    bounds: tuple[float, float, float] = (SHORTEST, LONGEST, AIM),
 ) -> list[Window]:
-    """Every run of whole lines the reel could play, best first (see the module's notes)."""
+    """Every run of whole lines the reel could play, best first (see the module's notes):
+    `bounds` its shortest, longest and best length."""
     if not lines:
         return []
+    shortest, longest, aim = bounds
     texts = [plain(text) for _, text in lines]
     # "Ye jaan kar bhi" and "Yeh jaan kar bhi" are the same line written twice.
     chorus = [
@@ -457,6 +510,10 @@ def windows(
     title_words = set(_tokens(title))
     ends = [lines[i + 1][0] if i + 1 < len(lines) else min(duration, lines[i][0] + 6.0)
             for i in range(len(lines))]  # fmt: skip
+    # How long each line can take to sing, and the music after it until the next line (an
+    # instrumental is no part of a line: a part ends soon after its last line is sung).
+    singing = [min(6.0, longest_singing(text.split()) + TAIL) for _, text in lines]
+    music = [max(0.0, ends[k] - lines[k][0] - singing[k]) for k in range(len(lines))]
     # A line sung long ago and a line now aren't one section, nor a chorus and a verse.
     starts_section = [
         i == 0 or lines[i][0] - lines[i - 1][0] > 7.0 or chorus[i] != chorus[i - 1]
@@ -467,11 +524,11 @@ def windows(
     for i in range(len(lines)):
         for j in range(i, len(lines)):
             start = lines[i][0]
-            end = min(ends[j], lines[j][0] + 6.0)
+            end = min(ends[j], lines[j][0] + singing[j])
             length = end - start
-            if length > LONGEST:
+            if length > longest:
                 break
-            if length < SHORTEST:
+            if length < shortest:
                 continue
             inside = texts[i : j + 1]
             fresh = sum(
@@ -486,9 +543,11 @@ def windows(
                 "section": 1.0 if starts_section[i] else 0.0,
                 "closes": 1.0 if j + 1 >= len(lines) or starts_section[j + 1] else 0.0,
                 "fresh": fresh / len(inside),
+                # Long music between its lines: a lyric line on screen over an instrumental.
+                "music": -sum(music[i:j]) / 5.0,
                 # The first time a part comes is the one people know it by.
                 "early": 1.0 - start / max(duration, 1.0),
-                "length": -abs(length - AIM) / 10.0,
+                "length": -abs(length - aim) / 10.0,
                 "chorus": (sum(chorus[i : j + 1]) / len(inside)) if heat is None else 0.0,
                 "title": 0.3 if title_words and title_words <= set(" ".join(inside).split())
                 else 0.0,
@@ -500,9 +559,15 @@ def windows(
                 best_match = max(found_at)
                 why["part"] = 4.0 * best_match if best_match >= 0.5 else 0.0
             score = sum(WEIGHTS[k] * v for k, v in why.items())
-            found.append(Window(i, j, start, end, round(score, 3), why))
+            found.append(
+                Window(i, j, start, end, round(score, 3), why, max(music[i:j], default=0.0))
+            )
     found.sort(key=lambda w: -w.score)
-    return found
+    # A part of more lines than a reel has scenes for, or with long music between its lines,
+    # only when the song has nothing else.
+    roomy = [w for w in found if w.last - w.first + 1 <= MOST_LINES]
+    calm = [w for w in roomy if w.music <= MOST_MUSIC]
+    return calm or roomy or found
 
 
 def _match(wanted: list[str], line: str) -> float:
@@ -533,16 +598,49 @@ def distinct(found: list[Window], count: int = CHOICES) -> list[Window]:
 # ---- every word's time -----------------------------------------------------------------
 
 
+# What singing a line can take: whisper "hears" words in a long instrumental after a line
+# too (a harmonica solo), and a line laid over those stretched its last words across it.
+RUN_GAP = 1.3  # s: heard words further apart than this aren't one sung line
+SYLLABLE_MOST = 0.6  # s a syllable takes at most, sung slowly
+SLACK = 1.0  # s a line may take beyond that (a held last note, a breath)
+LATE = 1.5  # s: the words heard for a line start no later than this after it
+
+
+def longest_singing(said: list[str]) -> float:
+    """The most a line of these words takes to sing (seconds)."""
+    return SYLLABLE_MOST * sum(syllables(w) for w in said) + SLACK
+
+
+def heard_run(said: list[str], start: float, end: float, heard: list[Word]) -> list[Word]:
+    """The words whisper heard singing the line written at `start` (before `end`): the run
+    of them from near its start, until a pause longer than RUN_GAP or longer than the line's
+    words could take to sing; empty when nothing heard starts near it."""
+    inside = sorted(
+        (w for w in heard if start - 0.3 <= (w.start + w.end) / 2 < end - 0.05),
+        key=lambda w: w.start,
+    )
+    if not inside or inside[0].start > start + LATE:
+        return []
+    most = longest_singing(said)
+    run = [inside[0]]
+    for w in inside[1:]:
+        if w.start - run[-1].end > RUN_GAP or w.end - run[0].start > most:
+            break
+        run.append(w)
+    return run
+
+
 def lay_words(
     said: list[str], start: float, end: float, heard: list[Word]
 ) -> list[tuple[str, float, float]]:
     """`said` (a line's words) timed inside [start, end): over the words whisper heard
-    there, by how long each takes to sing; spread over the line when nothing was heard."""
+    singing it (heard_run), by how long each takes to sing; spread over the time singing
+    them takes when what was heard doesn't make a line."""
     if not said:
         return []
     weights = [syllables(w) for w in said]
     total = float(sum(weights))
-    inside = [w for w in heard if start - 0.3 <= (w.start + w.end) / 2 < end - 0.05]
+    inside = heard_run(said, start, end, heard)
     if len(inside) >= 2:
         h_weights = [syllables(w.text) for w in inside]
         h_total = float(sum(h_weights))
@@ -597,12 +695,14 @@ def split_long(line: SongLine, at: int | None = None) -> list[SongLine]:
     parts = []
     for chunk, s_chunk in ((words[:best], said[:cut]), (words[best:], said[cut:])):
         parts.append(
-            SongLine(
-                text=" ".join(w.text for w in chunk),
-                said=" ".join(s_chunk),
-                start=chunk[0].start,
-                end=chunk[-1].end,
-                words=list(chunk),
+            line.model_copy(
+                update={
+                    "text": " ".join(w.text for w in chunk),
+                    "said": " ".join(s_chunk),
+                    "start": chunk[0].start,
+                    "end": chunk[-1].end,
+                    "words": list(chunk),
+                }
             )
         )
     parts[0] = parts[0].model_copy(update={"end": parts[1].start})
@@ -610,13 +710,47 @@ def split_long(line: SongLine, at: int | None = None) -> list[SongLine]:
     return parts
 
 
+def _sung(level: np.ndarray) -> np.ndarray:
+    """Which vocal frames are sung: above the vocals' singing level (as `onsets`), blips
+    and breaths between syllables shorter than 0.06 s ignored."""
+    if level.size == 0:
+        return np.zeros(0, dtype=bool)
+    loud = level >= max(float(np.percentile(level, 90)) - 24.0, -55.0)
+    short = max(1, int(0.06 / FRAME))
+    out = loud.copy()
+    k = 0
+    while k < len(out):  # runs shorter than `short` take the value around them
+        j = k
+        while j < len(out) and loud[j] == loud[k]:
+            j += 1
+        if j - k < short and k > 0 and j < len(out):
+            out[k:j] = loud[k - 1]
+        k = j
+    return out
+
+
+def sung_from(sung: np.ndarray, start: float, end: float) -> float | None:
+    """The first time singing is heard in the vocals between start and end, if it is."""
+    a, b = max(0, int(start / FRAME)), min(len(sung), int(end / FRAME))
+    found = np.flatnonzero(sung[a:b]) if b > a else np.zeros(0)
+    return round((a + int(found[0])) * FRAME, 3) if found.size else None
+
+
 def timed_lines(
-    lines: list[tuple[float, str]], first: int, last: int, part_end: float, heard: list[Word]
-) -> list[SongLine]:
+    lines: list[tuple[float, str]], first: int, last: int, part_end: float, heard: list[Word],
+    sung: np.ndarray | None = None,
+) -> list[SongLine]:  # fmt: skip
+    """The lines first-last with their words timed. A line written well before it is sung
+    (the vocals quiet for a while after its time: music before it) starts where the
+    singing does."""
     out: list[SongLine] = []
     for k in range(first, last + 1):
         start, text = lines[k]
         end = lines[k + 1][0] if k + 1 < len(lines) and k < last else part_end
+        if sung is not None and sung.size:
+            begins = sung_from(sung, start - 0.3, end)
+            if begins is not None and begins > start + 0.8:
+                start = begins - 0.05
         laid = lay_words(text.split(), start, end, heard)
         words = [SongWord(text=w, start=a, end=min(b, end)) for w, a, b in laid]
         out.append(SongLine(text=text, said=text, start=start, end=end, words=words))
@@ -734,9 +868,11 @@ def lyrics_language(texts: list[str]) -> str | None:
 
 
 def find(idea: str, settings: Settings, router, say=lambda message: None, choice: int | None = None,
-         lookup=lrclib, searcher=search, fetch=download) -> Song:  # fmt: skip
+         lookup=lrclib, searcher=search, fetch=download,
+         bounds: tuple[float, float, float] = (SHORTEST, LONGEST, AIM)) -> Song:  # fmt: skip
     """The Song for what was typed (see `asked`): found, downloaded, its part chosen (the
-    best, or `choice` among the parts offered) and every word of it timed."""
+    best, or `choice` among the parts offered; `bounds` its shortest, longest and best
+    length) and every word of it timed."""
     want = asked(idea)
     if not want.name:
         raise SongError("type the song's name (and the singer, to be sure of it)")
@@ -776,21 +912,27 @@ def find(idea: str, settings: Settings, router, say=lambda message: None, choice
     energy = None
     if heat is None:
         energy = energy_curve(loudness(ffmpeg.read_audio(audio, RATE)), duration)
-    title = lyrics.title if lyrics else candidate.title
-    best = distinct(windows(lines, duration, heat, energy, want.part, title))
+    title, artist = names(
+        lyrics.title if lyrics else "", lyrics.artist if lyrics else "",
+        str(meta.get("title") or candidate.title), str(meta.get("channel") or candidate.channel),
+    )  # fmt: skip
+    best = distinct(windows(lines, duration, heat, energy, want.part, title, bounds))
     if not best:
-        raise SongError("the song has no part of 15-32 s made of whole lines")
+        raise SongError(
+            f"the song has no part of {bounds[0]:.0f}-{bounds[1]:.0f} s made of whole lines"
+        )
     (vocals.parent / LINES).write_text(
         json.dumps({"lines": lines, "duration": duration}, ensure_ascii=False), encoding="utf-8"
     )
-    chosen = best[min(choice or 0, len(best) - 1)]
+    index = min(choice or 0, len(best) - 1)
+    chosen = best[index]
     say("timing every word")
-    song = timed(lines, chosen, duration, vocals, router)
+    song = timed(lines, chosen, duration, vocals, router, bounds[1])
     return song.model_copy(
         update={
             "query": idea.strip(),
             "title": title,
-            "artist": lyrics.artist if lyrics else meta.get("channel", "").removesuffix(" - Topic"),
+            "artist": artist,
             "video": candidate.id,
             "url": candidate.url,
             "audio": "song.wav",
@@ -800,52 +942,79 @@ def find(idea: str, settings: Settings, router, say=lambda message: None, choice
                 HookChoice(start=w.start, end=w.end, first=lines[w.first][1], score=w.score)
                 for w in best
             ],
+            "playing": [index],
         }
     )
 
 
 def timed(
-    lines: list[tuple[float, str]], chosen: Window, duration: float, vocals: Path, router
-) -> Song:
-    """The part `chosen` with every word timed: its start a breath before its first line,
-    its end a little after its last word (before the next line)."""
+    lines: list[tuple[float, str]], chosen: Window, duration: float, vocals: Path, router,
+    longest: float = LONGEST,
+) -> Song:  # fmt: skip
+    """The part `chosen` with every word timed: its start a breath before its first line is
+    sung (never over the music before it), its end a little after its last sung word
+    (never over a long stretch of music after it, before the next line), and never longer
+    than `longest`: timed longer than its lines' times said, it ends a line or more sooner."""
     start = max(0.0, chosen.start - LEAD_IN)
     after = lines[chosen.last + 1][0] if chosen.last + 1 < len(lines) else duration
     hint = lyrics_language([text for _, text in lines])
     heard, language = hear(vocals, start, min(duration, after + 0.3), router, hint)
     language = hint or language
     language = SCRIPT_OF.get(language, language)
-    part = timed_lines(lines, chosen.first, chosen.last, after, heard)
-    last_word = max((w.end for line in part for w in line.words), default=chosen.end)
-    if after - 0.05 > last_word:  # the music after the last word, until the next line
-        end = min(duration, after - 0.05, last_word + TAIL)
-    else:
-        end = min(duration, last_word + 0.4)
+    sung = _sung(loudness(ffmpeg.read_audio(vocals, RATE)))
+    part = timed_lines(lines, chosen.first, chosen.last, after, heard, sung)
+    start = max(0.0, part[0].start - LEAD_IN)  # later than written when sung later
+    end = _end_of(part, after, duration, chosen.end)
+    while len(part) > 1 and end - start > longest:
+        after, part = part[-1].start, part[:-1]
+        end = _end_of(part, after, duration, chosen.end)
+    end = round(end, 3)
     part[-1] = part[-1].model_copy(update={"end": end})
-    return Song(start=round(start, 3), end=round(end, 3), language=language, lines=part)
+    return Song(start=round(start, 3), end=end, language=language, lines=part)
+
+
+def _end_of(part: list[SongLine], after: float, duration: float, fallback: float) -> float:
+    """Where a part of these lines ends: TAIL after its last word, before the line after it
+    (sung at `after`)."""
+    last_word = max((w.end for line in part for w in line.words), default=fallback)
+    if after - 0.05 > last_word:  # the music after the last word, until the next line
+        return min(duration, after - 0.05, last_word + TAIL)
+    return min(duration, last_word + 0.4)
 
 
 LINES = "lines.json"  # a found song's lyric lines on its upload's times, beside its sound
+
+
+def _kept(song: Song, settings: Settings) -> tuple[Path, list[tuple[float, str]], float]:
+    """The found song's folder, its lyric lines on its upload's times and its length."""
+    folder = audio_path(settings, song).parent
+    try:
+        kept = json.loads((folder / LINES).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SongError("the song's files are gone: make the reel again") from exc
+    return folder, [(float(t), str(text)) for t, text in kept["lines"]], float(kept["duration"])
+
+
+def _window_of(song: Song, index: int, lines: list[tuple[float, str]]) -> Window:
+    """The lines of the part song.choices[index]."""
+    if not 0 <= index < len(song.choices):
+        raise SongError(f"there is no part {index + 1} to choose")
+    pick_ = song.choices[index]
+    first = min(range(len(lines)), key=lambda k: abs(lines[k][0] - pick_.start))
+    last = max(k for k in range(first, len(lines)) if lines[k][0] < pick_.end - 0.05)
+    return Window(first, last, lines[first][0], pick_.end)
 
 
 def rechoose(song: Song, index: int, settings: Settings, router) -> Song:
     """`song` playing another of the parts it offered (song.choices[index]), timed again."""
     if not 0 <= index < len(song.choices):
         raise SongError(f"there is no part {index + 1} to choose")
-    folder = audio_path(settings, song).parent
-    try:
-        kept = json.loads((folder / LINES).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise SongError("the song's files are gone: make the reel again") from exc
-    lines = [(float(t), str(text)) for t, text in kept["lines"]]
-    pick_ = song.choices[index]
-    first = min(range(len(lines)), key=lambda k: abs(lines[k][0] - pick_.start))
-    last = max(k for k in range(first, len(lines)) if lines[k][0] < pick_.end - 0.05)
-    window = Window(first, last, lines[first][0], pick_.end)
-    part = timed(lines, window, float(kept["duration"]), folder / "vocals.wav", router)
+    folder, lines, duration = _kept(song, settings)
+    window = _window_of(song, index, lines)
+    part = timed(lines, window, duration, folder / "vocals.wav", router)
     return song.model_copy(
         update={"start": part.start, "end": part.end, "lines": part.lines,
-                "language": part.language or song.language}
+                "language": part.language or song.language, "playing": [index], "pieces": []}
     )  # fmt: skip
 
 
