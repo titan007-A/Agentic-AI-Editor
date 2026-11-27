@@ -105,6 +105,32 @@ def test_people_are_painted_once_as_portraits_and_each_moment_from_theirs(tmp_pa
     assert all(s.visual.image for s in painted.scenes)
 
 
+def test_a_moment_is_painted_from_a_smaller_copy_of_each_portrait(tmp_path):
+    from PIL import Image
+
+    settings, _ = studio_env(tmp_path)
+    folder = images.folder(settings)
+
+    class Real(Painters):
+        """Portraits painted as real pictures (a face to keep)."""
+
+        def likeness(self, pictures, settings_, progress, **kw):
+            names = super().likeness(pictures, settings_, progress, **kw)
+            if kw.get("what") == "portraits":
+                folder.mkdir(parents=True, exist_ok=True)
+                for name in names:
+                    Image.new("RGB", songpaint.PORTRAIT_SIZE, (200, 180, 160)).save(folder / name)
+            return names
+
+    painters = Real()
+    painted, _ = songpaint.paint(faces_plan(), settings, painters.paint, painters.likeness, None)
+    first = painters.likeness_calls[1][0][0]
+    leo = next(p for p in painted.song.people if p.name == "Leo")
+    assert len(first.refs) == 2 and leo.image not in first.refs[0]
+    assert Image.open(first.refs[0]).size == songpaint.REF_SIZE
+    assert Image.open(folder / leo.image).size == songpaint.PORTRAIT_SIZE  # shown whole
+
+
 def test_a_person_in_no_moment_gets_no_portrait(tmp_path):
     settings, _ = studio_env(tmp_path)
     plan = faces_plan(arts=ARTS[:3])

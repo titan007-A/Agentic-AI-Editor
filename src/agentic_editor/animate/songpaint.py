@@ -12,8 +12,10 @@ the whole reel, the moments with nobody in them too. Portraits are kept by what 
 for a picture it couldn't paint, Z-Image paints the moment from the words, as before.
 """
 
+import hashlib
 import logging
 import time
+from pathlib import Path
 
 from agentic_editor.animate import images, songwriter
 from agentic_editor.animate.plan import Person, Plan
@@ -24,6 +26,11 @@ log = logging.getLogger(__name__)
 # A portrait: tall enough for a whole person, smaller than a moment (it paints faster, and
 # a moment painted from it reads fewer of its tokens).
 PORTRAIT_SIZE = (576, 1024)
+# What a moment is painted from: the portrait made smaller. The likeness model reads every
+# reference's tokens alongside the picture's (on the M5 one portrait at 576x1024 doubled a
+# picture's time, two made it 1.5 times that); a flat drawn person keeps their face, hair and
+# clothes at this size.
+REF_SIZE = (384, 672)
 # The most portraits one picture is painted from; anyone else in it is painted from words.
 MOST_REFS = 3
 # The reel's look without its night and its dark top: a portrait's colours stay true.
@@ -109,6 +116,23 @@ def paint(plan: Plan, settings: Settings, paint, likeness, progress) -> tuple[Pl
     return plan.model_copy(update={"scenes": scenes, "song": song}), notes
 
 
+def reference_of(folder: Path, portrait: str) -> str:
+    """The picture a moment is painted from: `portrait` at REF_SIZE, made once (the portrait
+    itself when it can't be read)."""
+    from PIL import Image
+
+    dest = folder / (hashlib.sha256(f"{portrait}|{REF_SIZE}".encode()).hexdigest()[:24] + ".png")
+    if not dest.exists():
+        try:
+            small = Image.open(folder / portrait).convert("RGB").resize(REF_SIZE, Image.LANCZOS)
+        except (OSError, ValueError):
+            return str(folder / portrait)
+        part = dest.with_suffix(".part.png")
+        small.save(part)
+        part.replace(dest)
+    return str(dest)
+
+
 def _with_likeness(
     plan: Plan, wanted: list[int], base: str, settings: Settings, likeness, progress
 ) -> tuple[dict[str, str], list[str], list[str]]:
@@ -138,7 +162,7 @@ def _with_likeness(
     for i in wanted:
         refs = [p for p in who[i] if p.name in portraits][:MOST_REFS]
         prompt = moment_prompt(plan, plan.scenes[i].visual.art, refs)
-        paths = tuple(str(folder / portraits[p.name]) for p in refs)
+        paths = tuple(reference_of(folder, portraits[p.name]) for p in refs)
         keys[i] = (prompt, images.seed_of(base, plan.scenes[i].visual.art_seed), paths)
     todo = list(dict.fromkeys(keys.values()))
     started = time.time()
