@@ -5,13 +5,14 @@ meaning a movement whose letters act it out. Every lyric here is made up."""
 
 import asyncio
 import io
+import re
 import shutil
 
 import numpy as np
 import pytest
 from PIL import Image
 
-from agentic_editor.animate import songwriter
+from agentic_editor.animate import render, routes, songwriter
 from agentic_editor.animate.plan import Plan, Scene, Song, SongLine, SongWord, Visual, tidy
 from agentic_editor.animate.timeline import (
     EFFECT_AFTER,
@@ -24,6 +25,7 @@ from agentic_editor.animate.timeline import (
     player_data,
     second_row,
 )
+from agentic_editor.settings import ROOT
 from agentic_editor.transcript import Word
 from tests.test_animate_song import Writer
 
@@ -214,6 +216,17 @@ def test_an_effect_takes_the_words_sung_time_and_is_dropped_without_room_for_it(
     assert line_out(1.0, 5.0, late[:1]) == pytest.approx(5.0 - LINE_OUT)
 
 
+def test_every_font_the_player_loads_is_bundled_with_its_licence_and_served():
+    js = (render.PLAYER / "player.js").read_text()
+    listed = js[js.index("const FONTS = [") : js.index("];", js.index("const FONTS = ["))]
+    names = re.findall(r'"([A-Za-z0-9]+-[A-Za-z]+)"', listed)
+    assert {"PlayfairDisplay-BoldItalic", "Inter-Light"} <= set(names)
+    for name in names:
+        assert name in routes.FONT_NAMES and (ROOT / "fonts" / f"{name}.ttf").is_file(), name
+        family = name.split("-")[0]
+        assert (ROOT / "fonts" / f"OFL-{family}.txt").is_file(), family
+
+
 # ---- drawn ----------------------------------------------------------------------------------
 
 
@@ -231,8 +244,6 @@ needs_browser = pytest.mark.skipif(
 def shots(data: dict, opts: dict, times: list[float]) -> tuple[list[np.ndarray], list[str]]:
     """The player's frames at `times`, from one page (as the renderer seeks)."""
     from playwright.async_api import async_playwright
-
-    from agentic_editor.animate import render
 
     async def go() -> tuple[list[bytes], list[str]]:
         async with async_playwright() as p:
@@ -278,9 +289,6 @@ def drawn_song(lines: list[tuple[str, float, dict[int, str], dict[int, str], int
 
 @needs_browser
 def test_the_line_is_two_rows_its_words_unblur_on_their_time_and_it_blurs_away(tmp_path):
-    from agentic_editor.animate import render
-    from tests.test_animate_render import ROOT
-
     data = drawn_song([
         ("We kept the lantern burning", 0.5, {3: "white", 4: "amber"}, {}, 3),
         ("Tonight", 3.6, {0: "amber"}, {}, 0),
@@ -324,8 +332,7 @@ def test_the_line_is_two_rows_its_words_unblur_on_their_time_and_it_blurs_away(t
 
 @needs_browser
 def test_a_falling_word_tumbles_out_of_its_line_and_the_video_is_the_preview(tmp_path):
-    from agentic_editor.animate import render
-    from tests.test_animate_render import ROOT, frame_at
+    from tests.test_animate_render import frame_at
 
     data = drawn_song([
         ("Then we all fall", 0.4, {3: "white"}, {3: "fall"}, 3),
@@ -359,8 +366,6 @@ def test_a_falling_word_tumbles_out_of_its_line_and_the_video_is_the_preview(tmp
 
 @needs_browser
 def test_a_long_line_wraps_inside_the_safe_area(tmp_path):
-    from agentic_editor.animate import render
-    from tests.test_animate_render import ROOT
 
     long = "I walked the empty boulevards all night remembering everything"
     data = drawn_song([(long, 0.3, {3: "white", 4: "blue", 7: "amber"}, {}, 0)])
