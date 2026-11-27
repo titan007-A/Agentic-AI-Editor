@@ -50,6 +50,8 @@ def test_a_youtube_description_names_its_label_and_year():
     labels, year = songfacts.from_description(art_track)
     assert labels[0].startswith("Columbia Records") and labels[1] == "Sony Music Entertainment"
     assert year == "2023"
+    licensed = "℗ 2023 Smiley Miley, Inc. under exclusive license to Columbia Records"
+    assert songfacts.from_description(licensed) == (["Columbia Records"], "2023")
     labels, year = songfacts.from_description("(P) 2009 Interscope Records\nmore words")
     assert labels == ["Interscope Records"] and year == "2009"
     assert songfacts.from_description("just a fan page caption 🎵 Song - Artist") == ([], None)
@@ -100,11 +102,24 @@ LUNA_RELEASES = [
 def test_musicbrainz_gives_the_year_and_the_earliest_official_releases_labels():
     asked = []
     found = songfacts.musicbrainz("Luna", "Feid", musicbrainz_of(LUNA, LUNA_RELEASES, asked))
-    assert found == {"year": "2023", "labels": ["Universal Music Latin Entertainment"]}
+    assert found == {
+        "year": "2023", "labels": ["Universal Music Latin Entertainment"], "complete": True,
+    }  # fmt: skip
     assert asked[0].url.params["query"] == 'recording:"Luna" AND artist:"Feid"'
     # Only the song's own official release, not "Luna llena", a promo or a hits album.
     assert asked[1].url.params["query"] == "reid:r1"
     assert "agentic-editor" in asked[0].headers["user-agent"]
+
+
+def test_a_songs_year_comes_from_takes_under_its_own_name_first():
+    found = [
+        {"title": "Shape of You (DJ Inko remix)", "first-release-date": "2015-01-30"},
+        {"title": "Shape of You", "first-release-date": "2017-01-06"},
+    ]
+    transport = musicbrainz_of(found, [], [])
+    assert songfacts.musicbrainz("Shape of You", "Ed Sheeran", transport)["year"] == "2017"
+    remix_only = musicbrainz_of(found[:1], [], [])
+    assert songfacts.musicbrainz("Shape of You", "Ed Sheeran", remix_only)["year"] == "2015"
 
 
 def test_musicbrainz_out_of_reach_or_too_busy_is_no_answer():
@@ -115,7 +130,7 @@ def test_musicbrainz_out_of_reach_or_too_busy_is_no_answer():
         return httpx.Response(503)
 
     assert songfacts.musicbrainz("Luna", "Feid", httpx.MockTransport(reply)) is None
-    assert len(busy) == 2  # asked again once after "too fast"
+    assert len(busy) == 1 + len(songfacts.BUSY_WAITS)  # asked again after each wait
 
     def down(request):
         raise httpx.ConnectError("offline")
@@ -123,14 +138,36 @@ def test_musicbrainz_out_of_reach_or_too_busy_is_no_answer():
     assert songfacts.musicbrainz("Luna", "Feid", httpx.MockTransport(down)) is None
 
 
-def test_its_answer_is_kept_and_nothing_found_is_asked_again_after_a_week(tmp_path, monkeypatch):
+def test_busy_a_moment_is_asked_again():
+    replies = iter([httpx.Response(503), httpx.Response(200, json={"recordings": []})])
+    found = songfacts.musicbrainz("Luna", "Feid", httpx.MockTransport(lambda r: next(replies)))
+    assert found == {"year": None, "labels": [], "complete": True}
+
+
+def test_an_answer_cut_short_gives_the_year_but_isnt_kept(tmp_path):
+    asked = []
+
+    def reply(request):
+        asked.append(request)
+        if request.url.path.endswith("/recording"):
+            return httpx.Response(200, json={"recordings": LUNA})
+        return httpx.Response(500)
+
+    transport = httpx.MockTransport(reply)
+    found = songfacts.remembered("Luna", "Feid", tmp_path, transport)
+    assert found == {"year": "2023", "labels": [], "complete": False}
+    songfacts.remembered("Luna", "Feid", tmp_path, transport)
+    assert len(asked) == 4  # nothing kept: asked again, both times recording and release
+
+
+def test_its_labels_are_kept_and_none_found_is_asked_again_after_a_week(tmp_path, monkeypatch):
     asked = []
     transport = musicbrainz_of(LUNA, LUNA_RELEASES, asked)
     first = songfacts.remembered("Luna", "Feid", tmp_path, transport)
     assert songfacts.remembered("Luna", "Feid", tmp_path, transport)["labels"] == first["labels"]
     assert len(asked) == 2  # the recording, then its release; the second time none
     unknown = musicbrainz_of([], [], asked)
-    assert songfacts.remembered("Nada", "Nadie", tmp_path, unknown) == {"year": None, "labels": []}
+    assert songfacts.remembered("Nada", "Nadie", tmp_path, unknown)["labels"] == []
     assert songfacts.remembered("Nada", "Nadie", tmp_path, unknown)["labels"] == []
     assert len(asked) == 3
     clock = songfacts.time.time() + songfacts.STALE + 1

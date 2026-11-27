@@ -86,7 +86,10 @@ NO_LABEL = "[no label]"  # MusicBrainz's own name for a self-release
 
 MUSICBRAINZ = "https://musicbrainz.org/ws/2"
 RELEASES = 5  # earliest official releases whose labels are read
-STALE = 7 * 86400  # s: "MusicBrainz doesn't know it" is asked again after this
+STALE = 7 * 86400  # s: "MusicBrainz doesn't know its label" is asked again after this
+# MusicBrainz turns a busy moment's requests away (503) even at its one a second: asked
+# again after these waits.
+BUSY_WAITS = (2.0, 5.0)
 _pace = threading.Lock()
 
 
@@ -142,7 +145,11 @@ def from_description(text: str) -> tuple[list[str], str | None]:
     YouTube by ...", "℗ 2022 ..."), and the year its art track says it was released."""
     labels = [m.group(1) for m in PROVIDED.finditer(text or "")]
     phonograms = list(PHONOGRAM.finditer(text or ""))
-    labels = [m.group(2) for m in phonograms] + labels
+    held = []
+    for phonogram in phonograms:
+        holder = LICENSED.search(phonogram.group(2))
+        held.append(holder.group(1) if holder else phonogram.group(2))
+    labels = held + labels
     year = RELEASED.search(text or "")
     if year is None:
         year = next((m for m in phonograms if m.group(1)), None)
@@ -157,10 +164,10 @@ def from_uploader(uploader: str) -> str:
 
 def _ask(path: str, params: dict, transport=None) -> dict | None:
     """MusicBrainz's answer, None when it can't be asked. One request a second for the
-    whole app (shazam.py asks it too); a refusal for asking too fast is asked again once."""
+    whole app (shazam.py asks it too); one turned away as busy is asked again (BUSY_WAITS)."""
     agent = {"User-Agent": shazam.AGENT}
     with httpx.Client(transport=transport, timeout=10, headers=agent) as http:
-        for attempt in range(2):
+        for wait in (*BUSY_WAITS, None):
             with _pace:
                 time.sleep(max(0.0, shazam._asked[0] + 1.1 - time.monotonic()))
                 shazam._asked[0] = time.monotonic()
@@ -169,8 +176,8 @@ def _ask(path: str, params: dict, transport=None) -> dict | None:
                 except httpx.HTTPError as exc:
                     log.warning("MusicBrainz couldn't be asked (%s): %s", path, exc)
                     return None
-            if reply.status_code == 503 and attempt == 0:
-                time.sleep(2.0)
+            if reply.status_code in (429, 503) and wait is not None:
+                time.sleep(wait)
                 continue
             try:
                 reply.raise_for_status()
@@ -182,8 +189,9 @@ def _ask(path: str, params: dict, transport=None) -> dict | None:
 
 
 def musicbrainz(song: str, artist: str, transport=None) -> dict | None:
-    """{"year", "labels"}: the year the song first came out (as shazam.first_year) and the
-    labels of its earliest official releases, earliest first; None when it can't be asked."""
+    """{"year", "labels", "complete"}: the year the song first came out (as
+    shazam.first_year) and the labels of its earliest official releases, earliest first;
+    not complete when the releases couldn't be asked. None when it can't be asked at all."""
     query = f"recording:{shazam._quoted(song)}" + (
         f" AND artist:{shazam._quoted(artist)}" if artist.strip() else ""
     )
@@ -196,6 +204,9 @@ def musicbrainz(song: str, artist: str, transport=None) -> dict | None:
         for r in found.get("recordings", [])
         if shazam.same(shazam._without_notes(r.get("title", ""))) == wanted
     ]
+    # Its takes under its own name first: a remix's release can carry a wrong early date.
+    exact = [r for r in recordings if shazam.same(r.get("title", "")) == shazam.same(song)]
+    recordings = exact or recordings
     years = [
         int(date[:4])
         for r in recordings
@@ -212,36 +223,39 @@ def musicbrainz(song: str, artist: str, transport=None) -> dict | None:
             releases.setdefault(release["id"], release.get("date") or "9999")
     earliest = sorted(releases, key=lambda i: releases[i])[:RELEASES]
     labels: list[str] = []
+    answer: dict | None = {}
     if earliest:
         query = " OR ".join(f"reid:{i}" for i in earliest)
-        answer = _ask("release", {"query": query, "limit": RELEASES}, transport) or {}
-        dated = sorted(answer.get("releases", []), key=lambda r: releases.get(r.get("id"), "9999"))
+        answer = _ask("release", {"query": query, "limit": RELEASES}, transport)
+        found_releases = (answer or {}).get("releases", [])
+        dated = sorted(found_releases, key=lambda r: releases.get(r.get("id"), "9999"))
         for release in dated:
             for info in release.get("label-info") or []:
                 name = ((info or {}).get("label") or {}).get("name", "")
                 if name and name.casefold() != NO_LABEL and name not in labels:
                     labels.append(name)
-    return {"year": str(min(years)) if years else None, "labels": labels}
+    return {"year": str(min(years)) if years else None, "labels": labels,
+            "complete": answer is not None}  # fmt: skip
 
 
 def remembered(
     song: str, artist: str, cache_dir: Path | None, transport=None, ask: bool = True
 ) -> dict | None:
-    """musicbrainz(), kept in the cache folder (an answer that found nothing for a week);
-    without `ask`, only what is kept."""
+    """musicbrainz(), kept in the cache folder: an answer with labels for good, one without
+    for a week, one cut short not at all. Without `ask`, only what is kept."""
     key = hashlib.sha1(f"{shazam.same(song)}|{shazam.same(artist)}".encode()).hexdigest()[:20]
     path = cache_dir / "songfacts" / f"{key}.json" if cache_dir else None
     if path is not None and path.exists():
         try:
             kept = json.loads(path.read_text(encoding="utf-8"))
-            if kept.get("year") or kept.get("labels") or time.time() - kept["asked"] < STALE:
+            if kept.get("labels") or time.time() - kept["asked"] < STALE:
                 return kept
         except (ValueError, KeyError, OSError):
             pass
     if not ask:
         return None
     found = musicbrainz(song, artist, transport)
-    if found is not None and path is not None:
+    if found is not None and found["complete"] and path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({**found, "asked": time.time()}), encoding="utf-8")
     return found
