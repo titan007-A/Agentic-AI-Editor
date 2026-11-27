@@ -435,7 +435,9 @@ environment and the GPU slot, one model for the whole reel:
   turn when there are several.
 - `words` and `print`: the place alone, nobody in it.
 - The player shows a painting with the singer in it at full size (their face stays sharp)
-  with nothing cut out in front; the words keep the shot's place.
+  with nothing cut out in front. Its face is found in the painting (YuNet, the biggest face:
+  the singer stands nearest; MediaPipe's short-range finder missed most painted faces) and
+  the words go above it, else below it, never over it; the side notes keep off it too.
 - A picture that can't be painted (the model missing, a timeout) shows the singer cut out
   and stood in the scene, as without the model; so does every scene while `IDENTITY_MODEL` is
   unset.
@@ -447,8 +449,18 @@ Z-Image-Edit isn't released (Z-Image-Turbo alone, text to image). The two candid
 Qwen-Image-Edit-2511 (Apache-2.0, 20B: about 12 GB at 4 bits plus a 7B text encoder, many
 times slower) and FLUX.2 [klein] 4B (Apache-2.0, 4B, 4 steps; mflux's measure on an M4 Pro:
 27 s for a 1024x1024 picture in bf16 with the prompt encoding, 8.6 GB of weights at 8 bits,
-4.6 GB at 4). klein 4B paints a 720x1280 picture with one reference in an expected 20-40 s on
-the M5 (the Mac script below measures it), about what Z-Image takes now.
+4.6 GB at 4). Measured on the M5 (the script below, 2026-11-27, `mflux-community/
+flux2-klein-4b-mflux-q8`, 8.0 GB download): a 720x1280 picture with one reference in 15-26 s
+(22-23 s on average, the first of a reel the quickest), about what Z-Image takes now; the
+painter's peak memory 4-4.5 GB. On the PC (RTX 5050, diffusers, 4-bit): 10-13 s a picture.
+
+Seen in the test paintings (two singers, three photos, six shots each): the face, turban or
+hair, beard or none, and the clothes carry over in the hero, echo, mirror reflection and
+close shots; far and silhouette shots are seen from behind as asked. Close-ups drift most
+from the real face. A back view now and then loses the headwear. Anything stuck to the
+singer in the cutout is painted as part of them (a logo behind one photo's turban came out
+as horns), so photos with a plain background work best. Signs in a street can come out with
+made-up letters despite "no text".
 
 Mac check before turning it on (nothing live is touched; the model, a newer mflux when the
 live one has no FLUX.2, the pictures and frames all go in a test folder):
