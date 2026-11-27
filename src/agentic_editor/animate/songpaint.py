@@ -39,9 +39,11 @@ PORTRAIT_LOOK = (
     "colours, soft even light"
 )
 FEATURES = "clearly drawn with eyes, eyebrows, nose and mouth"
+# Never naming a beard or glasses: named, they were painted on people who had none (a
+# clean-shaven father bearded in three pictures of a reel, his daughter in glasses in four).
 KEEP = (
-    "Each person from a reference image keeps exactly the face, hair, beard or clean-shaven "
-    "chin, glasses, skin tone, build and clothes of their image"
+    "Each person from a reference image looks exactly as in their image: the same face, hair, "
+    "skin tone, build and clothes, nothing added"
 )
 
 

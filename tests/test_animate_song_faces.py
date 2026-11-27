@@ -91,7 +91,9 @@ def test_people_are_painted_once_as_portraits_and_each_moment_from_theirs(tmp_pa
     assert first.refs == (by_name["Leo"], by_name["Nana"])
     assert f"{LEO.look} (the person in image 1)" in first.prompt
     assert f"{NANA.look} (the person in image 2)" in first.prompt
-    assert "Leo" not in first.prompt and "keeps exactly the face" in first.prompt
+    assert "Leo" not in first.prompt and "looks exactly as in their image" in first.prompt
+    # Never a beard or glasses named for everyone: they were painted on people without.
+    assert not any(word in songpaint.KEEP for word in ("beard", "glasses", "shaven"))
     assert alone.refs == (by_name["Sam"],) and "his car" in alone.prompt
     assert empty.refs == () and "reference" not in empty.prompt
     assert "flat 2D vector" in empty.prompt and "no text" in empty.prompt
