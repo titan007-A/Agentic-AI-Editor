@@ -20,6 +20,7 @@ Here the planning model does two things with the part animate/songhook.py found:
 import json
 import logging
 import re
+import unicodedata
 
 from agentic_editor.animate import songhook
 from agentic_editor.animate.plan import (
@@ -100,7 +101,8 @@ SCRIPT_SCHEMA = {
 KEY_GUIDE = """Key words are drawn big and in colour, as lyric reels do: in each line pick the 1-3
 words that carry its meaning and feeling (nouns, strong verbs or adjectives: never small words
 like the, a, I, you, my, el, la, que, mi, tu, ye, ke, hai). Most lines have two: the first
-white, the next in colour. Colours by meaning:
+white, the next in colour. White and amber are the reel's main pair: the coloured word is
+amber unless its meaning is plainly one of the others. Colours by meaning:
 - red: enemies, pain, betrayal, anger, poison, blood, death, worse
 - amber: love, family, faces, warmth, loyalty, the line's main thing
 - blue: loneliness, cold, phones, screens, night, tears, distance
@@ -226,16 +228,50 @@ def _number(value) -> int:
         return 0
 
 
+# The words (English and Spanish) that mean each movement: a word the writer marks keeps
+# its effect only when it is one of them (the writer gave "hurts" a tremble and, two
+# lines on, a scatter), under the effect it means if the writer named another.
+MOVES = {
+    "fall": r"fall(s|ing|en)?|fell|drop(s|ped|ping)?|sink(s|ing)?|sank|sunk|crash(es|ed|ing)?"
+    r"|tumbl\w*|collaps\w*|plung\w*|descend\w*|ca(er|igo|es|e|emos|en|i|yo|yeron|yendo|ida"
+    r"|ido|ia|ias)|hund\w*|derrumb\w*|desplom\w*",
+    "rise": r"ris(e|es|ing|en)|rose|fl(y|ies|ew|ying|own)|float\w*|lift\w*|soar\w*|climb\w*"
+    r"|ascend\w*|rais(e|es|ed|ing)|sub(e|o|es|en|ir|imos|iendo|io)|vol(ar|ando|amos)"
+    r"|vuel(o|a|as|an)|elev\w*|flot\w*|alz\w*|levant\w*|ascien\w*|despeg\w*",
+    "shake": r"shak(e|es|ing|en)|shook|trembl\w*|shiver\w*|quak\w*|quiver\w*|shudder\w*"
+    r"|tiembl\w*|tembl\w*|estremec\w*|sacud\w*|vibr\w*",
+    "scatter": r"scatter\w*|shatter\w*|break(s|ing)?|broke|broken|burst\w*|explod\w*"
+    r"|crumbl\w*|splinter\w*|romp\w*|rot[oa]s?|quiebr\w*|quebr\w*|estall\w*|destroz\w*"
+    r"|deshac\w*|pedazos?|anicos",
+    "spin": r"spin(s|ning)?|spun|turn(s|ed|ing)?|twirl\w*|whirl\w*|rotat\w*|revolv\w*"
+    r"|danc\w*|gir(a|as|an|o|ar|ando|amos|aba)|vuelta|bail(a|as|an|o|ar|ando|amos|emos)",
+}
+_MOVES = {effect: re.compile(rf"^({words})$") for effect, words in MOVES.items()}
+
+
+def moves(word: str, effect: str) -> str:
+    """The effect `word` acts out: `effect` when the word means that movement, else the
+    movement it does mean, else none."""
+    if effect not in WORD_EFFECTS:
+        return ""
+    bare = unicodedata.normalize("NFKD", word.lower())
+    bare = re.sub(r"[^a-z]", "", "".join(c for c in bare if not unicodedata.combining(c)))
+    if _MOVES[effect].match(bare):
+        return effect
+    return next((other for other, said in _MOVES.items() if said.match(bare)), "")
+
+
 def moving(lines: list[SongLine]) -> list[SongLine]:
     """The lines with the letter effects the writer gave kept only as the reference uses
-    them: on a key word of EFFECT_LETTERS letters or more, one word a line, never in two
-    lines running, in one line of EFFECT_EVERY at most (the first ones given)."""
+    them: on a key word of EFFECT_LETTERS letters or more that means a movement (MOVES),
+    one word a line, never in two lines running, in one line of EFFECT_EVERY at most (the
+    first ones given)."""
     most = max(1, len(lines) // EFFECT_EVERY)
     out, used, last = [], 0, -2
     for n, line in enumerate(lines):
         mover = next(
             (k for k, w in enumerate(line.words)
-             if w.key and w.effect in WORD_EFFECTS
+             if w.key and moves(w.text, w.effect)
              and len(re.findall(r"\w", w.text)) >= EFFECT_LETTERS),
             None,
         )  # fmt: skip
@@ -246,7 +282,7 @@ def moving(lines: list[SongLine]) -> list[SongLine]:
         if mover is None and not any(w.effect for w in line.words):
             out.append(line)
             continue
-        words = [w.model_copy(update={"effect": w.effect if k == mover else ""})
+        words = [w.model_copy(update={"effect": moves(w.text, w.effect) if k == mover else ""})
                  for k, w in enumerate(line.words)]  # fmt: skip
         out.append(line.model_copy(update={"words": words}))
     return out

@@ -90,21 +90,36 @@ def test_the_writer_marks_a_movement_word_now_and_then_and_where_each_line_break
     assert notes == []
     moving = [(n, w.text, w.effect) for n, line in enumerate(shown.lines, 1)
               for w in line.words if w.effect]  # fmt: skip
-    # Kept: fall (line 1) and rise (line 3); line 2 comes right after a line that moved, 8
-    # lines allow two, "explode" isn't an effect and "none" is none.
+    # Kept: fall (line 1) and rise (line 3); line 2 comes right after a line that moved (and
+    # "light" is no movement), 8 lines allow two, "explode" isn't an effect, "none" is none.
     assert moving == [(1, "fall", "fall"), (3, "rise", "rise")]
     town = shown.lines[0].words[7]
     assert (town.key, town.color, town.effect) == (True, "amber", "")
     # The writer's break is where a line's rows break; none given: set by width later.
     assert [line.row for line in shown.lines] == [4, 3, 2, 0, 0, 0, 0, 4]
     # A writer that gives one effect in each of many far-apart lines still gets only its
-    # share: one line in four.
-    many = english_song().model_copy(update={"lines": english_song().lines * 2})
+    # share, one line in four; a word keeps the movement it means.
+    lines = [_line("Leaves fall slowly tonight" if k % 2 == 0 else "Hold the light for me",
+                   10.0 + 2.5 * k) for k in range(16)]  # fmt: skip
+    many = english_song().model_copy(update={"lines": lines})
     every = reply_for(many, {n: [key(1, "white", "shake")] for n in range(1, 17, 2)}, {})
     again, _ = songwriter.shown(Writer(every), many)
-    assert [n for n, line in enumerate(again.lines, 1) if any(w.effect for w in line.words)] == [
-        1, 3, 5, 7,
-    ]  # fmt: skip
+    marked = [(n, w.effect) for n, line in enumerate(again.lines, 1) for w in line.words
+              if w.effect]  # fmt: skip
+    assert marked == [(1, "fall"), (3, "fall"), (5, "fall"), (7, "fall")]
+
+
+def test_only_a_word_that_means_a_movement_moves_and_as_it_means():
+    assert songwriter.moves("falling", "fall") == "fall"
+    assert songwriter.moves("Cayendo", "fall") == "fall"  # Spanish, any case and accent
+    assert songwriter.moves("tiemblan", "shake") == "shake"
+    assert songwriter.moves("rompe", "scatter") == "scatter"
+    assert songwriter.moves("girando", "spin") == "spin"
+    assert songwriter.moves("volando", "rise") == "rise"
+    assert songwriter.moves("fall,", "scatter") == "fall"  # the movement it does mean
+    assert songwriter.moves("hurts", "shake") == ""  # a feeling, not a movement
+    assert songwriter.moves("corazón", "spin") == ""
+    assert songwriter.moves("falling", "explode") == ""
 
 
 def test_a_spanish_line_keeps_its_accents_and_its_effect():
@@ -124,13 +139,13 @@ def test_a_spanish_line_keeps_its_accents_and_its_effect():
 
 
 def test_a_long_line_shown_as_two_lines_is_set_by_width_and_keeps_its_effect():
-    long = "I walked the empty roads all night and still I could not find you"
+    long = "I fell through empty roads all night and still I could not find you"
     song = Song(title="x", language="en", start=0.0, end=9.0,
                 lines=[_line(long, 0.5, 0.45)])  # fmt: skip
     reply = reply_for(song, {1: [key(1, "white", "fall"), key(4, "amber")]}, {1: 7})
     shown, _ = songwriter.shown(Writer(reply), song)
     assert [line.text for line in shown.lines] == [
-        "I walked the empty roads all night", "and still I could not find you",
+        "I fell through empty roads all night", "and still I could not find you",
     ]  # fmt: skip
     assert [line.row for line in shown.lines] == [0, 0]
     assert shown.lines[0].words[1].effect == "fall"

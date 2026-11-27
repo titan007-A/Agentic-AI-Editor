@@ -331,8 +331,11 @@ words of the part wanted), and:
   one for one stays as written), their key words and colours (never a small word), where each
   line breaks into its two rows on screen (a line of more than 7 words and over 4.4 s is shown
   as two lines there), and now and then a key word meaning a movement whose letters act it out
-  (`effect`: fall, rise, shake, scatter, spin; kept on a word of 3 letters or more, one a line,
-  never two lines running, one line in four at most, the rest none); then the story: 2-5 people with a fixed look, a moment for each
+  (`effect`: fall, rise, shake, scatter, spin; kept only on a word that means one, English or
+  Spanish, under the movement it means (the writer on the Mac gave "hurts" a tremble), of 3
+  letters or more, one a line, never two lines running, one line in four at most, the rest
+  none); white and amber are the main pair, another colour only where a word plainly means
+  it; then the story: 2-5 people with a fixed look, a moment for each
   picture (what it shows, a camera move): one a line, two for a line on screen longer than
   3 s (two camera beats over it, the second a new picture), a title and a caption in the
   page's way ("Sound on", song credit, hashtags). A new picture far more often than not: a
