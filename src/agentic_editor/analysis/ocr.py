@@ -99,3 +99,20 @@ def read(image: Path | Image.Image, root: Path, whole_frame: bool = False) -> li
             )
         )
     return lines
+
+
+def boxes(image: Image.Image) -> list[tuple[int, int, int, int]]:
+    """Where OCR's detector sees text, read or not (a cover's script title, letters too
+    small or too styled to read): (x0, y0, x1, y1) in the picture's pixels."""
+    pixels = np.array(image.convert("RGB"))
+    engine = _engine()
+    with _lock:
+        result = engine(pixels, use_det=True, use_cls=False, use_rec=False)
+    if result.boxes is None:
+        return []
+    out = []
+    for quad in result.boxes:
+        q = np.asarray(quad)
+        out.append((int(q[:, 0].min()), int(q[:, 1].min()), int(np.ceil(q[:, 0].max())),
+                    int(np.ceil(q[:, 1].max()))))  # fmt: skip
+    return out

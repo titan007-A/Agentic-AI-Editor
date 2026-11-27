@@ -14,6 +14,9 @@ dependencies = [
     "mcp>=2.3,<3",
     "numpy>=2.0",
     "pillow>=11.0",
+    # HEIC/HEIF photos (iPhones) for singer edits. Its code is BSD-3; its wheels bundle
+    # libheif/libde265 (LGPL-3) and x265 (GPL-2), fine to run on our own machines.
+    "pillow-heif>=1.9",
     # The animation studio draws frames with Playwright's Chromium (animate/render.py);
     # `playwright install chromium-headless-shell` once per machine.
     "playwright>=1.55,<1.56",

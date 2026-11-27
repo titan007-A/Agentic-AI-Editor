@@ -7,6 +7,7 @@ can't be changed again. Rendering makes an ordinary Job.
 
 import asyncio
 import hashlib
+import logging
 import re
 from datetime import datetime
 from types import SimpleNamespace
@@ -32,6 +33,8 @@ from agentic_editor.animate import (
 from agentic_editor.animate.plan import MAX_SCENES, Plan
 from agentic_editor.db import Animation, AnimationAutopilot, InstagramChannel, Job, Output
 from agentic_editor.render import fonts
+
+log = logging.getLogger(__name__)
 
 FEATURE = "animation_studio"
 PLAYER_FILES = {
@@ -552,16 +555,32 @@ def operations(
         return FileResponse(path, media_type="image/jpeg", headers=kept)
 
     async def upload_photo(file: UploadFile, account: User, session: DB) -> dict:
-        """A photo of the singer for a singer edit, kept with the pictures by its content."""
+        """A photo of the singer for a singer edit: kept with the pictures by its content
+        and made ready at once (singer.prepare_photo), so the form shows what will be used.
+        A refused one is logged with why and what kind of file it was."""
         studio_user(account, session)
         data = await file.read(MAX_PHOTO_BYTES + 1)
         if len(data) > MAX_PHOTO_BYTES:
+            log.warning("singer photo refused for %s: over 25 MB (%s, %s)",
+                        account.username, file.content_type, file.filename)  # fmt: skip
             raise HTTPException(413, "that photo is too big; send one under 25 MB")
         try:
-            name = await asyncio.to_thread(singer.save_photo, data, settings)
-        except ValueError as exc:
+            taken = await asyncio.to_thread(singer.take_photo, data, settings)
+        except singer.PhotoRefused as exc:
+            d = exc.details
+            log.warning(
+                "singer photo refused for %s: %s (format %s, %d bytes, %s px, sent as %s)",
+                account.username, exc, d["format"], d["bytes"], d["pixels"], file.content_type,
+            )  # fmt: skip
             raise HTTPException(422, str(exc)) from exc
-        return {"name": name}
+        notes = list(taken.notes)
+        try:
+            name, prepared = await asyncio.to_thread(singer.prepare_photo, taken.name, settings)
+            notes += prepared
+        except Exception:
+            log.exception("singer photo %s couldn't be made ready; used as sent", taken.name)
+            name = taken.name
+        return {"name": name, "notes": notes}
 
     def animation_image(name: str, account: User, session: DB) -> FileResponse:
         """A painted picture (images.name_of: named by what it shows, so kept for good)."""
