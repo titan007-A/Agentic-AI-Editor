@@ -60,6 +60,7 @@ def no_web_search(monkeypatch):
 
     websearch.reset()
     monkeypatch.setattr(websearch, "_engines", lambda: [("offline", offline)])
+    monkeypatch.setattr(websearch, "_gateway_engines", lambda via: [("offline", offline)])
     monkeypatch.setattr(websearch, "_cache_dir", lambda: None)
     yield
     websearch.reset()

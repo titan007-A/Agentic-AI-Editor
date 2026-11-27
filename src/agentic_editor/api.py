@@ -49,6 +49,7 @@ from agentic_editor import (
     songfacts,
     songlist,
     strikes,
+    tiktok,
 )
 from agentic_editor.animate import mcp_tools, studio
 from agentic_editor.animate import routes as animate_routes
@@ -314,10 +315,11 @@ class ResearchRequest(BaseModel):
     account_id: str | None = None
     # Search at once, without the questions the researcher asks first.
     skip_questions: bool = False
-    # Where to search: Instagram reels, YouTube Shorts, posts on X with a video, whole songs'
-    # YouTube videos (for accounts with the youtube_songs feature); any of them.
-    sites: list[Literal["instagram", "shorts", "x", "songs"]] = Field(
-        default=["instagram", "shorts"], min_length=1, max_length=4
+    # Where to search: Instagram reels, YouTube Shorts, posts on X with a video, TikTok (with
+    # the TikTok gateway), whole songs' YouTube videos (for accounts with the youtube_songs
+    # feature); any of them.
+    sites: list[Literal["instagram", "shorts", "x", "tiktok", "songs"]] = Field(
+        default=["instagram", "shorts"], min_length=1, max_length=5
     )
 
 
@@ -1090,6 +1092,8 @@ def create_app(
             "notice_accepted": accepted,
             "features": features.of(account, session),
             "buffer_failed": buffer_posts.failed_count(session, account.id),
+            # TikTok links and research, with the TikTok gateway set (tiktok.py).
+            "tiktok": tiktok.available(settings),
         }
 
     @app.get("/api/fun")
@@ -1165,6 +1169,20 @@ def create_app(
     # asks this machine to "confirm you're not a bot".
     login_routes("instagram", INSTAGRAM)
     login_routes("youtube", YOUTUBE)
+
+    @app.get("/api/system/tiktok-gateway")
+    async def tiktok_gateway(_: Admin) -> dict:
+        """The TikTok gateway: whether one is set, its tunnel is up, and TikTok answers
+        through it (asked now, so it takes up to tiktok.TIMEOUT)."""
+        return await asyncio.to_thread(tiktok.status, settings)
+
+    @app.get("/api/thumbs/{name}")
+    def kept_picture(name: str, _: User) -> FileResponse:
+        """A TikTok video's picture kept for the Researcher (tiktok.keep_picture)."""
+        path = settings.cache_dir / "thumbs" / name
+        if not tiktok.PICTURE.fullmatch(name) or not path.is_file():
+            raise HTTPException(404, "no such picture")
+        return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
     @app.post("/api/system/update-ytdlp")
     async def ytdlp_update(_: Admin) -> dict:
@@ -1413,6 +1431,8 @@ def create_app(
                 raise HTTPException(422, "bad upload reference")
         elif not source.startswith(("http://", "https://")):
             raise HTTPException(422, f"not a link or upload: {source}")
+        elif tiktok.is_link(source) and not tiktok.available(settings):
+            raise HTTPException(422, tiktok.REFUSED)
 
     @app.post("/api/jobs")
     def create_jobs(body: JobRequest, account: User, session: DB) -> list[JobView]:
@@ -1672,9 +1692,12 @@ def create_app(
         return {"ok": True}
 
     def allowed_sites(sites: list[str], account: Account, session: Session) -> list[str]:
-        """The sites asked for, each once; whole songs only for accounts that have them."""
+        """The sites asked for, each once; whole songs only for accounts that have them,
+        TikTok only with the TikTok gateway."""
         if research.SONGS in sites and not features.enabled(account, "youtube_songs", session):
             raise HTTPException(403, "whole YouTube songs aren't on for this account")
+        if research.TIKTOK_SITE in sites and not tiktok.available(settings):
+            raise HTTPException(422, tiktok.REFUSED)
         return list(dict.fromkeys(sites))
 
     @app.post("/api/research")
@@ -3044,6 +3067,8 @@ def create_app(
             location = str(folder.resolve())
         elif not location.startswith(("http://", "https://")):
             raise HTTPException(422, "a playlist or channel feed needs a link")
+        elif tiktok.is_link(location) and not tiktok.available(settings):
+            raise HTTPException(422, tiktok.REFUSED)
         if (body.active_from is None) != (body.active_to is None):
             raise HTTPException(422, "give both hours, or neither for any time")
         if body.active_from is not None and body.active_from == body.active_to:

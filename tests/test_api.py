@@ -1530,6 +1530,62 @@ def test_a_research_searches_instagram_and_youtube_shorts_as_asked(env, monkeypa
         assert env.client.post("/api/research", json=body).status_code == 422
 
 
+def test_tiktok_is_offered_and_taken_only_with_the_tiktok_gateway(env, monkeypatch):
+    from agentic_editor.settings import get_settings
+
+    fake_research(monkeypatch, env)
+    asked, listed = [], []
+    find = jobs.research.search
+
+    def search(queries, find_, pause=None, progress=None, sites=("instagram",), songs=None):
+        asked.append(sites)
+        return find(queries, find_, pause, progress, sites, lambda q, c: [])
+
+    monkeypatch.setattr(jobs.research, "search", search)
+    monkeypatch.setattr(autopilot, "link_entries", lambda url: listed.append(url) or [])
+    video = "https://www.tiktok.com/@khaby.lame/video/7234567890123456789"
+    body = {"description": "Queen", "skip_questions": True, "sites": ["instagram", "tiktok"]}
+    feed = {"name": "khaby", "kind": "link", "location": "https://www.tiktok.com/@khaby.lame",
+            "presets": ["square-1x1"]}  # fmt: skip
+
+    # No gateway: nothing changes, and TikTok is refused saying why.
+    assert env.client.get("/api/me").json()["tiktok"] is False
+    for refused in (
+        env.client.post("/api/research", json=body),
+        env.client.post("/api/jobs", json={"sources": [video], "presets": ["square-1x1"]}),
+        env.client.post("/api/styles", json={"source": video}),
+        env.client.post("/api/feeds", json=feed),
+    ):
+        assert refused.status_code == 422 and "TikTok gateway" in refused.json()["detail"]
+    assert env.calls == [] and listed == []
+    assert env.client.get("/api/system/tiktok-gateway").json()["set"] is False
+
+    for settings in (env.settings, get_settings()):
+        monkeypatch.setattr(settings, "tiktok_proxy", "socks5h://127.0.0.1:1080")
+    assert env.client.get("/api/me").json()["tiktok"] is True
+    found = env.client.post("/api/research", json=body)
+    assert found.status_code == 200 and found.json()["sites"] == ["instagram", "tiktok"]
+    assert asked[-1] == ("instagram", "tiktok")
+    start(env.client, sources=(video,))
+    assert env.calls[-1]["source"] == video
+    assert env.client.post("/api/feeds", json=feed).status_code == 200
+    assert listed == ["https://www.tiktok.com/@khaby.lame"]
+
+
+def test_a_kept_tiktok_picture_is_served_to_signed_in_people_only(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(env.settings, "cache_dir", tmp_path / "cache")
+    thumbs = env.settings.cache_dir / "thumbs"
+    thumbs.mkdir(parents=True, exist_ok=True)
+    (thumbs / "tt-7234567890123456789.jpg").write_bytes(b"\xff\xd8 a picture")
+    (env.settings.cache_dir / "secret.txt").write_text("no")
+    got = env.client.get("/api/thumbs/tt-7234567890123456789.jpg")
+    assert got.status_code == 200 and got.content == b"\xff\xd8 a picture"
+    for name in ("tt-1.jpg", "..%2Fsecret.txt", "secret.txt", "tt-7234567890123456789.png"):
+        assert env.client.get(f"/api/thumbs/{name}").status_code == 404
+    env.client.post("/api/logout")
+    assert env.client.get("/api/thumbs/tt-7234567890123456789.jpg").status_code == 401
+
+
 def test_whole_youtube_songs_are_searched_only_for_the_accounts_that_have_them(env, monkeypatch):
     import json as json_
 

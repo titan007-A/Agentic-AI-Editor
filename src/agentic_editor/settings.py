@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -6,6 +7,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
+PROXY = r"(socks5h?|socks4a?|https?)://[^\s/]+:\d+"  # what yt-dlp takes as a proxy
 
 
 class Settings(BaseSettings):
@@ -79,6 +81,11 @@ class Settings(BaseSettings):
     meta_config_id: str = ""
     # A SearXNG server asked before the other search engines (websearch.py); empty: none.
     searxng_url: str = ""
+    # The proxy TikTok is reached through (gateway.py): TikTok is blocked from India, so a
+    # second Mac on a VPN carries it, through an SSH tunnel on this machine
+    # (scripts/macos-tiktok-gateway.sh), as socks5h://127.0.0.1:1080. Empty: no gateway,
+    # and TikTok links are refused; "direct": TikTok is reached without one.
+    tiktok_proxy: str = ""
     database: Path = Path("media/app.db")
     queue_database: Path = Path("media/queue.db")
     web_dir: Path = Path("web/out")
@@ -97,6 +104,14 @@ class Settings(BaseSettings):
     def _relative_to_repo(cls, path: Path) -> Path:
         path = path.expanduser()
         return path if path.is_absolute() else ROOT / path
+
+    @field_validator("tiktok_proxy")
+    @classmethod
+    def _a_proxy(cls, value: str) -> str:
+        value = value.strip()
+        if value in ("", "direct") or re.fullmatch(PROXY, value):
+            return value
+        raise ValueError(f"not a proxy (socks5h://127.0.0.1:1080, or empty): {value!r}")
 
 
 @lru_cache

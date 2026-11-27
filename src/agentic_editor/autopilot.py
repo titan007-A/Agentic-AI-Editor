@@ -33,7 +33,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from agentic_editor import research
+from agentic_editor import research, tiktok
 from agentic_editor.clipper import hunt as kick_hunt
 from agentic_editor.db import (
     ChannelPilot,
@@ -150,7 +150,7 @@ def instagram_entries(handle: str, find=None, info=None, pause: float | None = N
 def link_entries(url: str) -> list[Entry]:
     """The videos of a playlist or channel, as the site lists them (a channel newest
     first), or an Instagram account's reels (see instagram_entries). A link to a single
-    video is a feed of one."""
+    video is a feed of one. TikTok's are listed through the TikTok gateway (tiktok.py)."""
     if handle := instagram_handle(url):
         return instagram_entries(handle)
     from yt_dlp import YoutubeDL
@@ -161,8 +161,12 @@ def link_entries(url: str) -> list[Entry]:
         "extract_flat": "in_playlist",
         "playlistend": LIST_LIMIT,
     }
-    with signed_in(options) as options, YoutubeDL(options) as ydl:
-        info = ydl.extract_info(channel_videos(url), download=False)
+    if tiktok.is_link(url):
+        with tiktok.explained(url), YoutubeDL(tiktok.routed(url, options)) as ydl:
+            info = ydl.extract_info(tiktok.link(url), download=False)
+    else:
+        with signed_in(options) as options, YoutubeDL(options) as ydl:
+            info = ydl.extract_info(channel_videos(url), download=False)
     site = info.get("extractor_key") or "web"
     if info.get("_type") != "playlist":
         return [Entry(f"{site}-{info.get('id')}", info.get("title") or url, url)]

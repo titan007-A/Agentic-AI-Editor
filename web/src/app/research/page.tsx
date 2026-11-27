@@ -35,6 +35,7 @@ import {
   type Site,
 } from "@/lib/api";
 import { asksTrim, entryFields, fieldNotes } from "@/lib/preset-fields.mjs";
+import { offeredSites } from "@/lib/research-sites.mjs";
 import { cn } from "@/lib/utils";
 
 const RUNNING_POLL_MS = 3000;
@@ -65,14 +66,6 @@ const asking = (r: Research | null) => r?.status === "asking" && r.questions.len
 /** The researcher is answering a chat message. */
 const answering = (r: Research | null) =>
   !!r?.messages.some((m) => m.role === "user" && !m.answered);
-
-// Where a research can search, in the order shown and sent.
-const SITES: { site: Site; label: string }[] = [
-  { site: "instagram", label: "Instagram reels" },
-  { site: "shorts", label: "YouTube Shorts" },
-  { site: "x", label: "X (posts with a video)" },
-  { site: "songs", label: "YouTube full songs (artist / label channel)" },
-];
 
 /** A PDF song's words as the lines of a job's notes the edit reads (see names.py). */
 function entryNotes(entry: PdfEntry): string {
@@ -149,9 +142,12 @@ function Researcher() {
   const fieldValues = useFieldValues();
   const trimChoice = useTrimChoice();
   const [editing, setEditing] = useState(false);
-  // Whole songs' YouTube videos: for accounts with the youtube_songs feature.
-  const songsOn = useMe()?.features?.includes("youtube_songs") ?? false;
-  const offered = SITES.filter((s) => s.site !== "songs" || songsOn);
+  // Whole songs' YouTube videos: for accounts with the youtube_songs feature. TikTok: while
+  // the server has the TikTok gateway.
+  const me = useMe();
+  const songsOn = me?.features?.includes("youtube_songs") ?? false;
+  const tiktokOn = me?.tiktok ?? false;
+  const offered: { site: Site; label: string }[] = offeredSites(me);
   // Ticked from the start where they're on: most of what a research gives is YouTube's
   // (the owner: Instagram a tenth at most). Only once, so unticking them sticks.
   const songsTicked = useRef(false);
@@ -338,6 +334,13 @@ function Researcher() {
             leaves out streams, interviews, medleys, covers, remixes, lyric or audio-only videos and
             fan uploads. It gives up to 30 (of up to 120 it rates), and each edit cuts the song to
             its preset&apos;s length.
+          </p>
+        )}
+        {tiktokOn && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            TikTok, when you tick it, is searched through the TikTok gateway (a Mac on a VPN), since
+            TikTok is blocked here. Its videos download and edit like any other; opening one on
+            TikTok needs a VPN on your own phone or computer.
           </p>
         )}
       </div>

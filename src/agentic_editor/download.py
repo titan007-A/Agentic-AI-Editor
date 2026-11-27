@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agentic_editor import slots
+from agentic_editor import slots, tiktok
 from agentic_editor.settings import ROOT, get_settings
 
 log = logging.getLogger(__name__)
@@ -266,9 +266,14 @@ def login_state(login: Login, settings=None) -> dict:
 def _extract(url: str, options: dict, download: bool, signed: bool = False) -> tuple[dict, bool]:
     """yt-dlp's info for `url` (downloading it when asked), and whether it took the
     Instagram sign-in. An Instagram reel shown only to people signed in is asked for again
-    with the Instagram cookies, when there are any; `signed` goes to them at once."""
+    with the Instagram cookies, when there are any; `signed` goes to them at once. A TikTok
+    link goes through the TikTok gateway (see tiktok.py)."""
     from yt_dlp import YoutubeDL
 
+    if tiktok.is_link(url):
+        options = tiktok.routed(url, options)
+        with tiktok.explained(url), YoutubeDL(options) as ydl:
+            return ydl.extract_info(tiktok.link(url), download=download), False
     cookies = login_path(INSTAGRAM) if _instagram(url) else None
     if not signed:
         try:
