@@ -216,7 +216,7 @@ case "${1:-}" in
     status)
         need_mac
         if loaded; then
-            launchctl print "$DOMAIN/$LABEL" | grep -E "^\s+(state|pid|last exit code) ="
+            launchctl print "$DOMAIN/$LABEL" | grep -E "^\s+(state|pid|last exit code) =" || true
             test_tunnel || true
         else
             echo "not running (installed: $([ -f "$PLIST" ] && echo yes || echo no))"

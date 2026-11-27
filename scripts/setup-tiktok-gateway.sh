@@ -224,7 +224,8 @@ check_tailscale_with_vpn() {
         return
     fi
     local said
-    if said="$("$TS" ping -c 3 --timeout 5s "$FROM" 2>&1)"; then
+    # Any answer counts: through a relay too (by default it fails without a direct path).
+    if said="$("$TS" ping --until-direct=false -c 3 --timeout 5s "$FROM" 2>&1)"; then
         ok "The live Mac answers over Tailscale: $(tail -n 1 <<<"$said")"
         if grep -q DERP <<<"$said"; then
             note "(Through a Tailscale relay: that works, a little slower.)"
