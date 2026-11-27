@@ -653,6 +653,8 @@ def test_timing_never_makes_a_part_longer_than_its_longest(tmp_path):
 def test_a_songs_name_is_shown_clean_however_lrclib_wrote_it():
     assert songhook.names("Paper Boats - The Inventions", "The Inventions") == (
         "Paper Boats", "The Inventions")  # fmt: skip
+    twice = "The Inventions - The Inventions - Paper Boats"
+    assert songhook.names(twice, "The Inventions") == ("Paper Boats", "The Inventions")
     assert songhook.names("The Inventions - Paper Boats", "The Inventions") == (
         "Paper Boats", "The Inventions")  # fmt: skip
     # Title and singer both the whole name: the upload's title and channel say which is which.
