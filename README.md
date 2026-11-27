@@ -812,6 +812,16 @@ elsewhere can be named instead with `COOKIES_FILE=` in `.env` (relative to the r
 or absolute); the System page then saves to that file. The file is a sign-in: git ignores
 files named `*cookies*.txt`; keep it that way.
 
+### TikTok from India
+
+TikTok is blocked in India, so TikTok links are refused unless the server has the TikTok
+gateway: a second Mac on a VPN, which the server reaches by an SSH tunnel over Tailscale
+(`scripts/setup-tiktok-gateway.sh` on that Mac, nothing else installed there;
+`scripts/macos-tiktok-gateway.sh` on the server, which sets `TIKTOK_PROXY`). Only TikTok
+goes through it: its videos, their details and searches for them. Then TikTok links
+download like any other, the Researcher can search TikTok, and the System page shows
+whether the tunnel is up and TikTok answers. Steps: [docs/tiktok-gateway.md](docs/tiktok-gateway.md).
+
 ## Development
 
 ```
