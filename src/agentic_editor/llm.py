@@ -46,6 +46,10 @@ class OllamaClient:
         # Ollama's default; and the most a reply may run to, so one that loops ends.
         self.context = context
         self.max_reply = max_reply
+        # A longer cap to ask again with when an answer is cut off at max_reply (a reel's plan
+        # that ran long); None: a cut-off answer is not asked again (a vision answer that
+        # loops comes out the same, only later).
+        self.longer_reply: int | None = None
         # Layers to put on the GPU; None leaves it to Ollama, which keeps a margin and so
         # can split a model that would fit across the CPU too, at about two thirds the speed.
         self.gpu_layers = gpu_layers
@@ -134,8 +138,22 @@ class OllamaClient:
             try:
                 return json.loads(content)
             except json.JSONDecodeError as exc:
+                cut = data.get("done_reason") == "length"
+                cap = body["options"].get("num_predict")
+                if cut and not attempt and self.longer_reply and (cap or 0) < self.longer_reply:
+                    # Cut off at the cap: asked again with room to finish (and the context
+                    # to hold it), once.
+                    body["options"]["num_predict"] = self.longer_reply
+                    if body["options"].get("num_ctx"):
+                        held = data.get("prompt_eval_count", 0) + self.longer_reply + 256
+                        body["options"]["num_ctx"] = max(body["options"]["num_ctx"], held)
+                    log.info("%s's answer was cut off at %s tokens; asking again with room "
+                             "for %d", self.model, cap, self.longer_reply)  # fmt: skip
+                    continue
                 # An answer cut off at the length cap comes out the same way when asked again.
-                if attempt or data.get("done_reason") == "length":
+                if attempt or cut:
+                    log.warning("%s: broken JSON after %d tokens (done: %s)", self.model,
+                                tokens, data.get("done_reason"))  # fmt: skip
                     raise LLMError(f"{self.model} did not return JSON: {content[:300]}") from exc
                 log.info("%s returned broken JSON, asking again", self.model)
         raise AssertionError("unreachable")

@@ -120,3 +120,52 @@ def test_an_answer_cut_off_at_the_length_cap_is_not_asked_again():
     with pytest.raises(LLMError, match="did not return JSON"):
         client(cut_off).chat_json([{"role": "user", "content": "hi"}], {})
     assert len(sent) == 1
+
+
+def test_a_plan_cut_off_at_the_cap_is_asked_again_once_with_room_to_finish():
+    sent = []
+
+    def answer(request):
+        sent.append(json.loads(request.content))
+        if len(sent) == 1:
+            return httpx.Response(200, json={
+                "message": {"content": '{"title": "A reel", "scenes": [{"narration": "It ran'},
+                "done_reason": "length", "prompt_eval_count": 6000, "eval_count": 4096,
+            })  # fmt: skip
+        return httpx.Response(200, json={"message": {"content": '{"title": "A reel"}'}})
+
+    llm = client(answer)
+    llm.context, llm.max_reply, llm.longer_reply = 12288, 4096, 8192
+    assert llm.chat_json([{"role": "user", "content": "plan"}], {}) == {"title": "A reel"}
+    assert [s["options"]["num_predict"] for s in sent] == [4096, 8192]
+    # The context holds the prompt and the longer answer.
+    assert sent[0]["options"]["num_ctx"] == 12288
+    assert sent[1]["options"]["num_ctx"] == 6000 + 8192 + 256
+
+
+def test_a_plan_cut_off_twice_is_a_model_error():
+    sent = []
+
+    def cut_off(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"message": {"content": '{"scenes": ['}, "done_reason": "length"}
+        )
+
+    llm = client(cut_off)
+    llm.max_reply, llm.longer_reply = 4096, 8192
+    with pytest.raises(LLMError, match="did not return JSON"):
+        llm.chat_json([{"role": "user", "content": "plan"}], {})
+    assert len(sent) == 2
+
+
+def test_the_planner_gives_its_client_room_to_ask_again():
+    from agentic_editor.animate import planner
+
+    llm = OllamaClient("http://ollama.test", "m")
+    planner.roomy(llm)
+    assert (llm.context, llm.max_reply, llm.longer_reply) == (
+        planner.CONTEXT,
+        planner.REPLY,
+        planner.LONGER_REPLY,
+    )
