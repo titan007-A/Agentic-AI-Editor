@@ -75,8 +75,14 @@ def paint(plan: Plan, settings: Settings, paint, likeness, progress) -> tuple[Pl
     left = [i for i in wanted if not names[i]]
     tried = likeness is not None
     if left and paint is images.paint and not images.available(settings):
-        if not tried:
-            return plan, ["painted pictures need the image model (installed on the Mac)"]
+        if not tried:  # the pictures stay as they were; no portrait stands for a look now
+            note = "painted pictures need the image model (installed on the Mac)"
+            if song is None:
+                return plan, [note]
+            people = [p.model_copy(update={"image": ""}) for p in song.people]
+            return plan.model_copy(update={"song": song.model_copy(update={"people": people})}), [
+                note
+            ]
     elif left:
         todo = list(dict.fromkeys((prompts[i], seeds[i]) for i in left))
         started = time.time()

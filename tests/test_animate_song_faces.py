@@ -131,6 +131,14 @@ def test_without_the_likeness_model_each_moment_is_painted_from_words_as_before(
     assert all(not p.refs for p in painters.words)
     assert all(s.visual.image for s in painted.scenes)
     assert not any(p.image for p in painted.song.people)  # no portraits behind them
+    # Without any image model the pictures stay as they were, and no portrait stands for a
+    # look it may not have been painted from.
+    kept, notes = songpaint.paint(painted, settings, images.paint, None, None)
+    assert [s.visual.image for s in kept.scenes] == [s.visual.image for s in painted.scenes]
+    assert notes == ["painted pictures need the image model (installed on the Mac)"]
+    with_old = plan.model_copy(update={"scenes": painted.scenes})
+    kept, _ = songpaint.paint(with_old, settings, images.paint, None, None)
+    assert not any(p.image for p in kept.song.people)
 
 
 def test_a_picture_the_likeness_model_couldnt_paint_is_painted_from_words(tmp_path):
