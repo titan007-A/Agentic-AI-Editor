@@ -113,7 +113,8 @@ def main() -> None:
 
     # the vision model alone: no transcriber or encoder is checked for it
     with ModelRouter(settings, None, lambda *a: None).vision() as llm:
-        look = singer.describe(llm, images.folder(settings) / photos[0].image)
+        seen = next((p.image for p in photos if p.cutout), photos[0].image)
+        look = singer.describe(llm, images.folder(settings) / seen)
     print(f"the singer, as the vision model sees them: {look or '(nothing said)'}")
 
     words, at = [], 0.3

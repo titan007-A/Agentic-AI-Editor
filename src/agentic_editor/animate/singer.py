@@ -1706,7 +1706,10 @@ def run_task(
             if paints and not look:
                 say("looking at the singer")
                 with router.vision() as llm:
-                    look = describe(llm, images.folder(settings) / photos[0].image)
+                    # a whole person says more than a face alone (a cover's made-up face
+                    # was taken for a woman's)
+                    seen = next((p.image for p in photos if p.cutout), photos[0].image)
+                    look = describe(llm, images.folder(settings) / seen)
             lines = sung_lines(hook)
             edit = edit.model_copy(update={
                 "title": hook.title, "artist": hook.artist, "audio": hook.audio.name,
