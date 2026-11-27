@@ -32,7 +32,8 @@ PLAYER_FILES = {
 FONT_NAMES = {
     "Montserrat-ExtraBold", "Montserrat-Bold", "Inter-SemiBold", "Inter-Bold", "Inter-Medium",
     "Anton-Regular", "SourceSerif4-Bold", "SourceSerif4-Semibold", "Rubik-ExtraBold",
-    "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular", "Poppins-SemiBold",
+    "Rubik-Bold", "Rubik-SemiBold", "PatrickHand-Regular", "Poppins-SemiBold", "Poppins-Regular",
+    "Poppins-Bold",
 }  # fmt: skip
 # The player page only runs its own script and shows what it is sent as text.
 PLAYER_CSP = (
@@ -44,7 +45,7 @@ PLAYER_CSP = (
 class AnimationRequest(BaseModel):
     idea: str = Field(min_length=3, max_length=300)
     kind: Literal["auto", "facts", "lesson", "story", "news"] = "auto"
-    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map"] = "auto"
+    style: Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map", "song"] = "auto"
     voice: str = Field(default="auto", max_length=32)
     length: Literal["auto", "short", "medium", "long"] = "auto"
     images: bool = True  # painted pictures behind the scenes
@@ -57,6 +58,8 @@ class PlanEdit(BaseModel):
 class ChangeRequest(BaseModel):
     request: str = Field(default="", max_length=500)
     scene: int | None = Field(default=None, ge=0, le=MAX_SCENES)
+    # A Song story: play another of the parts of the song it offered (Song.choices).
+    choice: int | None = Field(default=None, ge=0, le=10)
 
 
 class StudioChoice(BaseModel):
@@ -247,6 +250,8 @@ def operations(
             raise HTTPException(409, "there is no draft yet")
         plan = Plan.model_validate(found.plan)
         update: dict = {}
+        if body.style and plan.style == "song" and body.style != "song":
+            raise HTTPException(422, "a Song story is drawn to its song: it keeps its style")
         if body.style:
             update["style"] = found.style = body.style
         if body.voice:
@@ -273,7 +278,12 @@ def operations(
         idle(found)
         if not found.plan:
             raise HTTPException(409, "there is no draft to change yet")
-        if body.scene is None:
+        if body.choice is not None:
+            choices = (found.plan.get("song") or {}).get("choices") or []
+            if found.plan.get("style") != "song" or body.choice >= len(choices):
+                raise HTTPException(422, f"there is no part {body.choice + 1} of the song to play")
+            task = {"op": "hook", "choice": body.choice}
+        elif body.scene is None:
             if not body.request.strip():
                 raise HTTPException(422, "say what to change")
             task = {"op": "change", "request": body.request.strip()}

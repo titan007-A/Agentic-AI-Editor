@@ -407,6 +407,8 @@ def mix(
     music_on: bool = True,
 ) -> Path:
     """The reel's finished sound at `dest` (WAV, RATE, stereo, at the presets' loudness)."""
+    if timeline.music:
+        return song_part(timeline, dest)
     n = int(timeline.duration * RATE)
     voice = np.zeros((n, 2))
     for scene, path in zip(timeline.scenes, voices, strict=True):
@@ -424,6 +426,29 @@ def mix(
         _add(out, sfx(cue.sound, seed + int(cue.t * 10)), cue.t, _db(cue.gain_db))
     raw = dest.with_suffix(".raw.wav")
     write_wav(raw, out / max(1.0, float(np.max(np.abs(out)))))
+    audio.normalize_loudness(raw, dest, LOUDNESS, TRUE_PEAK)
+    raw.unlink(missing_ok=True)
+    return dest
+
+
+SONG_FADE_IN = 0.12
+SONG_FADE_OUT = 0.9
+
+
+def song_part(timeline: Timeline, dest: Path) -> Path:
+    """A Song story's sound: the song itself from where the reel starts, as long as the
+    reel, faded in and out, at the presets' loudness."""
+    from agentic_editor import ffmpeg
+
+    length = timeline.duration
+    out_at = max(0.0, length - SONG_FADE_OUT)
+    raw = dest.with_suffix(".raw.wav")
+    ffmpeg.run([
+        "-y", "-ss", f"{timeline.music_from:.3f}", "-t", f"{length:.3f}", "-i", timeline.music,
+        "-af", f"afade=t=in:d={SONG_FADE_IN},afade=t=out:st={out_at:.3f}:d={SONG_FADE_OUT},"
+        f"apad=whole_dur={length:.3f}",
+        "-ar", str(RATE), "-ac", "2", "-c:a", "pcm_s16le", str(raw),
+    ])  # fmt: skip
     audio.normalize_loudness(raw, dest, LOUDNESS, TRUE_PEAK)
     raw.unlink(missing_ok=True)
     return dest

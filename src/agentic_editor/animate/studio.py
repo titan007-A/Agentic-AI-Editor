@@ -18,10 +18,10 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from agentic_editor.animate import images, maps, mapwriter, planner, voice
+from agentic_editor.animate import images, maps, mapwriter, planner, songhook, songwriter, voice
 from agentic_editor.animate.plan import Plan, tidy
 from agentic_editor.animate.render import render
-from agentic_editor.animate.timeline import Spoken, Timeline, build, player_data
+from agentic_editor.animate.timeline import Spoken, Timeline, build, build_song, player_data
 from agentic_editor.db import Animation
 from agentic_editor.edl import EDL, Clip
 from agentic_editor.settings import Settings
@@ -35,6 +35,7 @@ HISTORY = 20
 STYLE_NAMES = {
     "glow": "Neon Glow", "paper": "Clean Paper", "story": "Character story",
     "kinetic": "Bold kinetic text", "stick": "Stick figure", "map": "World map",
+    "song": "Song story",
 }  # fmt: skip
 
 
@@ -63,6 +64,10 @@ def speak_all(plan: Plan, settings: Settings, speak=voice.speak) -> list[Spoken]
 
 
 def timeline_of(plan: Plan, settings: Settings, speak=voice.speak) -> tuple[Timeline, list[Spoken]]:
+    if plan.style == songwriter.STYLE:  # the song itself, nothing spoken
+        if plan.song is None:
+            raise planner.PlannerError("this Song story has no song")
+        return build_song(plan, str(songhook.audio_path(settings, plan.song))), []
     spoken = speak_all(plan, settings, speak)
     return build(plan, spoken), spoken
 
@@ -72,7 +77,8 @@ def preview_sound(plan: Plan, player: dict, settings: Settings, speak=voice.spea
     reel and kept: the studio plays it the moment the reel is shown."""
     from agentic_editor.animate import render, sound
 
-    raw = json.dumps([player, plan.mood, plan.voice, 1], sort_keys=True, default=str)
+    song = [plan.song.video, plan.song.start] if plan.song is not None else []
+    raw = json.dumps([player, plan.mood, plan.voice, 1, *song], sort_keys=True, default=str)
     key = hashlib.sha256(raw.encode()).hexdigest()[:24]
     dest = settings.cache_dir / "animation-sound" / f"{key}.wav"
     if dest.exists():
@@ -121,6 +127,8 @@ def paint_plan(
         return plan, []
     if plan.style == "map":
         return _paint_cards(plan, animation_id, Session, settings, paint)
+    if plan.style == songwriter.STYLE:
+        return _paint_moments(plan, animation_id, Session, settings, paint)
     wanted = [(i, s) for i, s in enumerate(plan.scenes) if s.visual.art.strip()]
     if not wanted:
         return plan, []
@@ -203,6 +211,33 @@ def _paint_cards(
     note = unpainted or (
         [f"{missing} of {len(names)} card pictures couldn't be painted"] if missing else []
     )
+    return plan.model_copy(update={"scenes": scenes}), note
+
+
+def _paint_moments(
+    plan: Plan, animation_id: str, Session: sessionmaker, settings: Settings, paint
+) -> tuple[Plan, list[str]]:
+    """A Song story's pictures: each moment with its people in it, written out as they look
+    (songwriter.painted), all of one reel from one seed so they look alike; a moment that
+    goes on with the one before shares its picture, painted once."""
+    prompts = [songwriter.painted(plan, s.visual.art) for s in plan.scenes]
+    base = plan.song.video if plan.song is not None else plan.title
+    seeds = [_seed_of(base, s.visual.art_seed) for s in plan.scenes]
+    keys = list(zip(prompts, seeds, strict=True))
+    todo = list(dict.fromkeys(k for k in keys if k[0].strip()))
+    if not todo:
+        return plan, []
+    if paint is images.paint and not images.available(settings):
+        return plan, ["painted pictures need the image model (installed on the Mac)"]
+    progress = lambda stage, message: _set(Session, animation_id, message=message)  # noqa: E731
+    names = paint([images.Picture(p, seed) for p, seed in todo], plan.style, settings, progress)
+    painted = dict(zip(todo, names, strict=True))
+    scenes = [
+        s.model_copy(update={"visual": s.visual.model_copy(update={"image": painted.get(k, "")})})
+        for s, k in zip(plan.scenes, keys, strict=True)
+    ]
+    missing = sum(1 for n in names if not n)
+    note = [f"{missing} of {len(names)} pictures couldn't be painted"] if missing else []
     return plan.model_copy(update={"scenes": scenes}), note
 
 
@@ -293,7 +328,14 @@ def run_task(
             notes += ensure_map(settings, say)
         known = known_country(settings) if wants_map else None
         checks = mapwriter.Checks(settings.cache_dir / "map-checks.json") if wants_map else None
-        if op in ("draft", "auto", "change", "scene"):
+        sung = (current.style if current else brief.style) == songwriter.STYLE
+        if sung and op in ("draft", "change", "scene", "hook"):
+            router = router or ModelRouter(settings, get_backends(), lambda *args: None)
+            plan, wrote = _song_task(
+                op, task, brief, current, animation_id, Session, settings, router
+            )
+            notes = [*notes, *wrote]
+        elif op in ("draft", "auto", "change", "scene"):
             router = router or ModelRouter(settings, get_backends(), lambda *args: None)
             if op in ("draft", "auto"):
                 _set(
@@ -388,7 +430,7 @@ def run_task(
             preview_sound(plan, data, settings, speak)
         except Exception:  # the studio makes it when asked instead
             log.exception("animation %s: no preview sound", animation_id)
-        notes = [*notes, f"{timeline.duration:.0f} s, {planner.words_note(plan, brief.length)}"]
+        notes = [*notes, f"{timeline.duration:.0f} s, {_length_note(plan, brief.length)}"]
         with Session() as db:
             a = db.get(Animation, animation_id)
             if a is None:
@@ -414,12 +456,52 @@ def run_task(
                 post_status="failed",
                 post_error=f"{type(exc).__name__}: {exc}",
             )
+        plain = (planner.PlannerError, songhook.SongError, songwriter.WriterError)
         _set(
             Session, animation_id, status="failed", task=None, message="failed",
-            error=str(exc)
-            if isinstance(exc, planner.PlannerError)
-            else f"{type(exc).__name__}: {exc}",
+            error=str(exc) if isinstance(exc, plain) else f"{type(exc).__name__}: {exc}",
         )  # fmt: skip
+
+
+def _length_note(plan: Plan, length: str) -> str:
+    song = plan.song
+    if plan.style == songwriter.STYLE and song is not None:
+        part = f"{_clock(song.start)}-{_clock(song.end)}"
+        return f"{song.title} by {song.artist or 'unknown'}, {part} of the song"
+    return planner.words_note(plan, length)
+
+
+def _clock(seconds: float) -> str:
+    return f"{int(seconds // 60)}:{seconds % 60:04.1f}"
+
+
+def _song_task(
+    op: str, task: dict, brief: planner.Brief, current: Plan | None, animation_id: str,
+    Session: sessionmaker, settings: Settings, router,
+) -> tuple[Plan, list[str]]:  # fmt: skip
+    """A Song story's writing: find the song and write it (draft), time another part of it
+    and write that (hook), or change its story in words or one line's moment (change, scene)."""
+    say = lambda message: _set(Session, animation_id, message=message)  # noqa: E731
+    song = None
+    if op == "draft":
+        _set(Session, animation_id, status="drafting", message="finding the song", error=None)
+        song = songhook.find(brief.idea, settings, router, say)
+    elif current is None or current.song is None:
+        raise planner.PlannerError("there is no draft to change yet")
+    elif op == "hook":
+        _set(Session, animation_id, status="changing", message="timing that part", error=None)
+        song = songhook.rechoose(current.song, int(task.get("choice", 0)), settings, router)
+    else:
+        _set(Session, animation_id, status="changing", message="changing it as asked", error=None)
+    say("writing the story")
+    with router.planner() as llm:
+        planner.roomy(llm)
+        if song is not None:
+            return songwriter.draft(llm, song)
+        if op == "change":
+            return songwriter.change(llm, current, task.get("request", ""))
+        index = int(task.get("scene", 0))
+        return songwriter.redo_moment(llm, current, index, task.get("request", "")), []
 
 
 def _choose_topic(animation_id: str, Session: sessionmaker, llm) -> str:
@@ -451,6 +533,10 @@ def edited(a: Animation, plan: Plan) -> Plan:
     plan = tidy(plan)
     if not plan.scenes:
         raise ValueError("a reel needs at least one scene")
+    if plan.style == songwriter.STYLE:
+        lines = plan.song.lines if plan.song is not None else []
+        if len(plan.scenes) != len(lines):
+            raise ValueError("a Song story has one scene for each lyric line")
     return plan
 
 

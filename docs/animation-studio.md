@@ -280,6 +280,54 @@ and photos, and its own watermark; ours paints generic pictures (or emoji) and w
 own scripts. We keep the system's "Follow for more" ending (a world view with every
 country lit), which the reference doesn't have.
 
+## Song story style (owner's reference, 2026-11-26)
+
+The reference page (dreamer.by.night, "Koi Apna Hoga", 20 s, 1440x2560) tells a story to a
+song's best-known part: no voice, the song itself is the sound; a flat 2D drawn story in the
+dark (side-on people in muted kurtas, a lit room, warm diyas and lamps, phones glowing blue);
+each lyric line sits at the top in Devanagari while it is sung, word by word, the small words
+light and the key words big and in colour (red for enemies and pain, amber for love and faces,
+blue for phones and loneliness); a line fades as the next begins, the picture moves on with it,
+the camera pushes in or pans, and the reel fades to black. Its picture tells what each line
+means through one visual idea (relatives holding smiling masks over dark faces for "chehre pe
+chehra"), with the same people from line to line.
+
+Ours (style `song`, "Song story"): the owner types the song's name (and, after a `|`, a few
+words of the part wanted), and:
+
+- `animate/songhook.py` finds the song: LRCLIB (free, open) for lyrics with line times, a
+  YouTube search for the song's own upload (never a slowed, lo-fi, cover or live take; the
+  length the lyrics' recording has), its sound downloaded once into `cache/songs/<video>`,
+  the vocals separated with the editor's own model, and the line times moved onto the upload
+  (where singing starts after a pause). The part: runs of whole lines 15-32 s long scored by
+  YouTube's "most replayed" graph (how high over the song and over the 30 s around it, and at
+  the part's opening), whole sections, no line twice, near 20 s, the first time a part comes,
+  and above all the words typed. Four parts that don't overlap are offered. Whisper hears the
+  part's vocals and the lyric words are laid over the heard words by syllables. A song LRCLIB
+  doesn't know is heard whole and what whisper heard is its lyrics (a note says so).
+- `animate/songwriter.py` (the planning model): first the lines as shown (Devanagari for
+  Hindi and Urdu, one word for one so every word keeps its time; a line that doesn't come back
+  one for one stays as written), their key words and colours (never a small word), and where a
+  long line breaks into two; then the story: 2-5 people with a fixed look, one moment a line
+  (what its picture shows, a camera move, whether it goes on with the last picture), a title
+  and a caption in the page's way (Hinglish lines, "Sound on", song credit, hashtags).
+- Pictures: each moment painted with its people in it (the look `song`: flat 2D vector,
+  thick outlines, muted colours, navy night, warm lamp light); a person's name in a picture is
+  written out as they look; a moment that goes on with the last shares its picture; one seed a
+  reel. Without the image model the moments are a dark night with warm lights.
+- Timing (`timeline.build_song`): a scene a line, from 0.15 s before it is sung to 0.15 s
+  before the next; the caption from its first word until the next line. The sound is the
+  song's part, faded in and out, at -14 LUFS. No closing "Follow" scene.
+- Player (theme `song`): the picture covers the frame with the camera move over its shot, a
+  new picture fading in over the last; dark at the top for the lyrics, a vignette, dust in the
+  light, a fade to black at the end; the line at the top left in Poppins (Devanagari), each
+  word rising in on its time, key words 1.8x in Poppins Bold and their colour.
+- Studio: the form takes the song's name and the part; a song reel shows the song, the part
+  playing and the other parts to play (`POST /api/animations/{id}/change {"choice": n}`,
+  op `hook`: timed again, a new story); its scenes show the lyric line, the camera and the
+  picture; people can be edited; one scene a line (none added, moved or removed); its style
+  stays. The autopilot doesn't make Song stories (they start from a song someone names).
+
 ## Phase 3: autopilot
 
 - One autopilot per account (`animation_autopilots`): niche, topics (one per line, first

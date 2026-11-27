@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 KINDS = ("facts", "lesson", "story", "news")
-STYLES = ("glow", "paper", "story", "kinetic", "stick", "map")
+STYLES = ("glow", "paper", "story", "kinetic", "stick", "map", "song")
 MOODS = ("mysterious", "uplifting", "emotional", "tense", "curious", "upbeat")
 LENGTHS = ("auto", "short", "medium", "long")
 # Narration words a reel of each length runs to (Kokoro speaks about 2.6 words a second).
@@ -24,7 +24,7 @@ WORDS = {"short": (50, 85), "medium": (90, 150), "long": (155, 230), "auto": (70
 MAP_WORDS = {"short": (55, 90), "medium": (90, 150), "long": (150, 230), "auto": (110, 175)}
 
 Kind = Literal["facts", "lesson", "story", "news"]
-Style = Literal["glow", "paper", "story", "kinetic", "stick", "map"]
+Style = Literal["glow", "paper", "story", "kinetic", "stick", "map", "song"]
 Mood = Literal["mysterious", "uplifting", "emotional", "tense", "curious", "upbeat"]
 # A World map reel's look, as the reference page has them: white picture cards (most
 # topics), gold horror (haunted and scary topics: blood-red countries, photos in gold
@@ -33,7 +33,7 @@ LOOKS = ("cards", "horror", "neon")
 Look = Literal["cards", "horror", "neon"]
 VisualKind = Literal[
     "title", "stat", "icons", "compare", "list", "timeline", "place", "quote", "reveal", "dots",
-    "scene", "country",
+    "scene", "country", "moment",
 ]  # fmt: skip
 # Character scenes (player.js character rig): where, who looks like what, what they do.
 SETTINGS = ("room", "street", "park", "office", "night", "school", "shop", "stage", "plain")
@@ -116,6 +116,13 @@ CATALOGUE: dict[str, tuple[str, str]] = {
     ),
 }
 
+# A Song story's moment (kind "moment", written only by animate/songwriter.py, so not in
+# the catalogue the other writers choose from): a painted picture of the story with its
+# people in it, and how the camera moves over it while its lyric line is sung.
+CAMERAS = ("push_in", "pull_out", "pan_left", "pan_right", "rise", "close_up", "still")
+# The colours a Song story's key words are drawn in (player.js SONG_COLORS), by what they mean.
+WORD_COLORS = ("white", "amber", "red", "blue", "pink", "green")
+
 MOTIONS = ("pop", "float", "walk_left", "walk_right", "shake", "spin", "grow", "fall", "pulse")
 DEFAULT_EMOJI = {
     "icons": "✨", "compare": "❓", "place": "📍", "reveal": "💡", "list": "", "country": "🌍",
@@ -182,6 +189,7 @@ class Visual(Loose):
     art: str = ""
     image: str = ""
     art_seed: int = 0
+    camera: str = ""  # a moment's camera move (CAMERAS)
 
 
 class Scene(Loose):
@@ -193,6 +201,67 @@ class Scene(Loose):
 class Source(Loose):
     title: str = ""
     url: str = ""
+
+
+class SongWord(Loose):
+    """A sung word, its times in the song (seconds), and whether it is drawn big and in
+    which colour (WORD_COLORS)."""
+
+    text: str
+    start: float
+    end: float
+    key: bool = False
+    color: str = ""
+
+
+class SongLine(Loose):
+    """A lyric line as sung: its words in the script shown, and how it was written where
+    the lyrics came from (romanised Hindi, say), for the writer."""
+
+    text: str = ""
+    said: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    words: list[SongWord] = Field(default_factory=list)
+
+
+class HookChoice(Loose):
+    """A part of the song that could be the reel's: where it starts and ends, how it opens."""
+
+    start: float
+    end: float
+    first: str = ""
+    score: float = 0.0
+
+
+class Person(Loose):
+    """Someone in a Song story: a name the writer uses and how they look in every picture."""
+
+    name: str = ""
+    look: str = ""
+
+
+class Song(Loose):
+    """The song a Song story reel is made to (animate/songhook.py): what was found for the
+    name typed, the part of it the reel plays (`start`-`end` of the downloaded audio) and its
+    lyric lines, one scene each."""
+
+    query: str = ""
+    title: str = ""
+    artist: str = ""
+    video: str = ""  # the YouTube video's id the sound came from
+    url: str = ""
+    audio: str = ""  # the downloaded song's file in the songs cache (songhook.audio_path)
+    duration: float = 0.0
+    start: float = 0.0
+    end: float = 0.0
+    language: str = ""
+    lyrics: str = ""  # where the lines came from: "lrclib" or "heard" (transcribed)
+    lines: list[SongLine] = Field(default_factory=list)
+    choices: list[HookChoice] = Field(default_factory=list)
+    # The story told over it (animate/songwriter.py): who is in it and what happens.
+    people: list[Person] = Field(default_factory=list)
+    story: str = ""
 
 
 class Plan(Loose):
@@ -208,6 +277,7 @@ class Plan(Loose):
     caption: str = ""
     sources: list[Source] = Field(default_factory=list)
     look: Look = "cards"  # a World map reel's (LOOKS); the other styles ignore it
+    song: Song | None = None  # a Song story reel's song, its part and lyric lines
 
 
 # ---- mending ---------------------------------------------------------------------------
@@ -337,11 +407,14 @@ def tidy(plan: Plan) -> Plan:
                 "art": _one_line(v.art, 300),
                 "image": v.image if _PICTURE.fullmatch(v.image or "") else "",
                 "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
+                "camera": camera_of(v),
             }
         )
         narration = " ".join(plain(scene.narration).split())
-        # A scene that only asks people to follow: the system's own ending does that.
-        if _ASKS_TO_FOLLOW.search(narration) and len(narration.split()) <= 12:
+        # A scene that only asks people to follow: the system's own ending does that. A
+        # Song story's narration is the lyric line, which may well say "follow me".
+        sung = plan.style == "song"
+        if not sung and _ASKS_TO_FOLLOW.search(narration) and len(narration.split()) <= 12:
             continue
         if narration:
             scenes.append(scene.model_copy(update={"narration": narration, "visual": visual}))
@@ -350,10 +423,39 @@ def tidy(plan: Plan) -> Plan:
             "title": _one_line(no_leak(plan.title)[0], 70),
             "scenes": scenes,
             "cast": _cast(plan.cast, scenes),
-            "cta": _one_line(plan.cta or CTA, 60),
+            # A Song story ends with its song, never a spoken "follow" line.
+            "cta": "" if plan.style == "song" else _one_line(plan.cta or CTA, 60),
             "caption": plan.caption.strip()[:2200],
+            "song": _song(plan.song) if plan.song is not None else None,
         }
     )
+
+
+def camera_of(v: Visual) -> str:
+    if v.camera in CAMERAS:
+        return v.camera
+    return "push_in" if v.kind == "moment" else ""
+
+
+def _song(song: Song) -> Song:
+    """A song's lines with their words in order inside the part played, colours only from
+    WORD_COLORS and only on key words."""
+    lines = []
+    for line in song.lines:
+        words = [
+            w.model_copy(
+                update={
+                    "text": " ".join(w.text.split()),
+                    "end": max(w.end, w.start),
+                    "color": (w.color if w.color in WORD_COLORS else "white") if w.key else "",
+                }
+            )
+            for w in sorted(line.words, key=lambda w: w.start)
+            if w.text.strip()
+        ]
+        text = " ".join(w.text for w in words) or " ".join(line.text.split())
+        lines.append(line.model_copy(update={"words": words, "text": text}))
+    return song.model_copy(update={"lines": lines, "query": _one_line(song.query, 200)})
 
 
 def setting_of(v: Visual) -> str:
@@ -421,6 +523,8 @@ def narration_words(plan: Plan) -> int:
 
 def problems(plan: Plan, length: str = "auto") -> list[str]:
     """What a writer must fix, as sentences it can act on; empty when the plan is fine."""
+    if plan.style == "song":
+        return song_problems(plan)
     found: list[str] = []
     if not plan.title.strip():
         found.append("the reel has no title")
@@ -510,4 +614,23 @@ def map_problems(plan: Plan) -> list[str]:
                 found.append(f"{where}: a card has no name")
             elif not _says(scene.narration, item.text):
                 found.append(f"{where}: say {item.text} in the narration")
+    return found
+
+
+def song_problems(plan: Plan) -> list[str]:
+    """What a Song story's writer must fix: one moment for every lyric line, each with a
+    picture to paint."""
+    found: list[str] = []
+    if not plan.title.strip():
+        found.append("the reel has no title")
+    lines = plan.song.lines if plan.song is not None else []
+    if not lines:
+        found.append("the song has no lyric lines")
+    if len(plan.scenes) != len(lines):
+        found.append(f"write one moment for each of the {len(lines)} lines, not {len(plan.scenes)}")
+    for n, scene in enumerate(plan.scenes, 1):
+        if scene.visual.kind != "moment":
+            found.append(f"scene {n}: a Song story scene is a moment")
+        elif not scene.visual.art.strip():
+            found.append(f"scene {n}: say what its picture shows (art)")
     return found

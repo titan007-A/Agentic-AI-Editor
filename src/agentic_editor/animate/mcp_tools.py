@@ -402,12 +402,14 @@ class Studio:
             ],
             kind: Annotated[Kind, Field(description="'auto' lets the writer choose.")] = "auto",
             style: Annotated[
-                Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map"],
+                Literal["auto", "glow", "paper", "story", "kinetic", "stick", "map", "song"],
                 Field(
                     description="glow = Neon Glow, paper = Clean Paper, story = Character "
                     "story, kinetic = Bold kinetic text, stick = Stick figure, map = World map "
-                    "(a tour of countries: 'Most famous X from every country'); 'auto' by the "
-                    "content."
+                    "(a tour of countries: 'Most famous X from every country'), song = Song "
+                    "story (idea = the song's name and singer, optionally a new line with a few "
+                    "words of the part wanted: the song's hook plays under a painted story with "
+                    "its lyrics); 'auto' by the content."
                 ),
             ] = "auto",
             voice: Annotated[str, Field(description=VOICE_HELP)] = "auto",
