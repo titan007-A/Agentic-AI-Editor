@@ -4,6 +4,7 @@ from words where it isn't or a picture fails, and the portraits kept across the 
 reels. No model runs here: the painters are stand-ins. Every lyric here is made up."""
 
 import functools
+from pathlib import Path
 
 from agentic_editor.animate import images, songhook, songpaint, songwriter, studio
 from agentic_editor.animate.plan import HookChoice, Person, Plan, Scene, Song, Visual, tidy
@@ -400,3 +401,64 @@ def test_every_part_of_a_song_is_made_with_its_people(tmp_path):
     assert [(p.name, p.look) for p in kept.people] == [(LEO.name, LEO.look),
                                                        (NANA.name, NANA.look)]  # fmt: skip
     assert kept.lines == [] and kept.story == ""
+
+
+# ---- the painter itself --------------------------------------------------------------------
+
+
+def test_the_likeness_model_paints_a_picture_with_no_reference_too():
+    import numpy as np
+
+    from agentic_editor.animate import paint_runner
+
+    seen = {}
+
+    class Edit:
+        """mflux 0.24's edit model: its predict joins the references' tokens to the picture's."""
+
+        def _predict(self, transformer):
+            def predict(*, latents, image_latents, latent_ids, image_latent_ids, **rest):
+                seen["joined"] = np.concatenate([latents, image_latents], axis=1).shape
+                seen["ids"] = np.concatenate([latent_ids, image_latent_ids], axis=1).shape
+                seen["rest"] = rest
+                return latents
+
+            return predict
+
+    predict = paint_runner.from_words_too(Edit)()._predict("transformer")
+    latents, ids = np.zeros((1, 3600, 128)), np.zeros((1, 3600, 4))
+    predict(latents=latents, image_latents=None, latent_ids=ids, image_latent_ids=None, guidance=1)
+    assert seen == {"joined": (1, 3600, 128), "ids": (1, 3600, 4), "rest": {"guidance": 1}}
+    refs, ref_ids = np.zeros((1, 2304, 128)), np.zeros((1, 2304, 4))
+    predict(latents=latents, image_latents=refs, latent_ids=ids, image_latent_ids=ref_ids)
+    assert seen["joined"] == (1, 5904, 128)
+
+
+def test_one_picture_that_fails_never_takes_the_rest_with_it(tmp_path, monkeypatch, capsys):
+    import io
+    import json
+
+    from agentic_editor.animate import paint_runner
+
+    class Saved:
+        def save(self, path, overwrite=True):
+            Path(path).write_bytes(b"png")
+
+    class Model:
+        def generate_image(self, seed, prompt, **kw):
+            if "broken" in prompt:
+                raise ValueError("no")
+            return Saved()
+
+    jobs = [{"prompt": p, "seed": 1, "dest": str(tmp_path / f"{n}.png")}
+            for n, p in enumerate(["a street", "broken", "a room"])]  # fmt: skip
+    request = {"kind": "likeness", "model": "m", "steps": 4, "width": 64, "height": 64,
+               "jobs": jobs}  # fmt: skip
+    monkeypatch.setattr(paint_runner, "load", lambda request: Model())
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(request)))
+    paint_runner.main()
+    said = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [k for line in said for k in line if k != "seconds"] == ["loaded", "done", "failed",
+                                                                     "done"]  # fmt: skip
+    assert (tmp_path / "0.png").exists() and (tmp_path / "2.png").exists()
+    assert not (tmp_path / "1.png").exists()

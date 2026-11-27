@@ -334,6 +334,9 @@ def _follow(
                 done = before + said["done"]
                 progress("paint", f"painted {done} of {total} {what}")
                 log.info("painted %s of %s %s, %s s", done, total, what, said.get("seconds"))
+            elif "failed" in said:
+                log.warning("%s %s of %s couldn't be painted (paint.log says why)", what,
+                            before + said["failed"], total)  # fmt: skip
             elif "loaded" in said:
                 log.info("image model loaded in %s s", said["loaded"])
         proc.wait(timeout=deadline)
