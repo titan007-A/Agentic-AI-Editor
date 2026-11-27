@@ -31,7 +31,7 @@ PORTRAIT_LOOK = (
     "flat 2D vector illustration, simple stylised character with thick dark outlines, muted "
     "colours, soft even light"
 )
-FACE = "a clear face drawn with eyes, eyebrows, nose and mouth"
+FEATURES = "clearly drawn with eyes, eyebrows, nose and mouth"
 KEEP = (
     "Each person from a reference image keeps exactly the face, hair, beard or clean-shaven "
     "chin, glasses, skin tone, build and clothes of their image"
@@ -43,8 +43,8 @@ def portrait_prompt(person: Person) -> str:
     return (
         f"A full-length character portrait of {person.look.strip().rstrip('.')}, standing "
         "straight and facing the viewer, the whole body from head to shoes in the picture, "
-        f"arms relaxed, {FACE}, alone on a plain flat light grey background, nothing else in "
-        f"the picture. {PORTRAIT_LOOK}, {images.NEVER}"
+        f"arms relaxed, the face {FEATURES}, alone on a plain flat light grey background, "
+        f"nothing else in the picture. {PORTRAIT_LOOK}, {images.NEVER}"
     )
 
 
@@ -54,7 +54,7 @@ def moment_prompt(plan: Plan, art: str, refs: list[Person]) -> str:
     marks = {p.name: f"the person in image {k}" for k, p in enumerate(refs, 1)}
     scene = songwriter.painted(plan, art, marks).strip().rstrip(".")
     keep = f"{KEEP}. " if refs else ""
-    return f"{scene}. {keep}{images.LOOKS[songwriter.STYLE]}, every face {FACE}, {images.NEVER}"
+    return f"{scene}. {keep}{images.LOOKS[songwriter.STYLE]}, every face {FEATURES}, {images.NEVER}"
 
 
 def paint(plan: Plan, settings: Settings, paint, likeness, progress) -> tuple[Plan, list[str]]:

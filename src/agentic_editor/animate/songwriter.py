@@ -278,10 +278,12 @@ How to write it:
   angle, a closer shot, what happens next). The moments follow one story with a beginning, a
   turn and an ending that lands on the last line, mostly in one or two places (one house, one
   street) so it feels like one film.
-- art: what the picture shows, in plain English for an image painter: who is in it (by name from
-  people), what they are doing, where, how close we are (wide, medium, close-up), and the light
-  (a warm lamp, a candle, a cold phone glow, moonlight, a street light). One clear action.
-  Never any writing, signs, or words in the picture.
+- art: what the picture shows, in plain English for an image painter: who is in it, by their
+  names exactly as in people ("Dad lifts Mia onto his shoulders", never "the father lifts the
+  girl": the painter draws each name as that person, the same in every picture), what they are
+  doing, where, how close we are (wide, medium, close-up), and the light (a warm lamp, a candle,
+  a cold phone glow, moonlight, a street light). One clear action. Never any writing, signs, or
+  words in the picture.
 - new_picture: true for nearly every moment: every moment is a new painted picture, so the reel
   moves on as the song does. False only now and then (at most one moment in five), when the
   very same shot must stay while the camera keeps moving. The first moment, and a line's second
@@ -442,7 +444,7 @@ def _ask(
 
     reply = llm.chat_json(messages, STORY_SCHEMA, temperature=temperature)
     plan = _plan_from(reply, song, song.title, cast)
-    wrong = _missing(reply, song) + song_problems(plan)
+    wrong = _missing(reply, song) + song_problems(plan) + _unnamed(plan)
     if not wrong:
         return plan
     fix = [
@@ -455,7 +457,40 @@ def _ask(
     except LLMError:
         return plan
     again = _plan_from(second, song, song.title, cast)
-    return again if len(_missing(second, song) + song_problems(again)) <= len(wrong) else plan
+    still = _missing(second, song) + song_problems(again) + _unnamed(again)
+    return again if len(still) <= len(wrong) else plan
+
+
+# Words that say someone is in a picture.
+SOMEONE = re.compile(
+    r"\b(man|woman|boy|girl|men|women|boys|girls|father|mother|dad|mom|mum|son|daughter|child|"
+    r"kid|teenager|teen|grandfather|grandmother|grandpa|grandma|husband|wife|he|she|his|her|him|"
+    r"person)\b",
+    re.I,
+)
+
+
+def _unnamed(plan: Plan) -> list[str]:
+    """Moments with someone in them who isn't named from people (nor the father, the boy, of
+    a story with one father and one boy): they would be painted unlike themselves."""
+    song = plan.song
+    named = [p.name for p in song.people if p.name and p.look] if song is not None else []
+    if not named:
+        return []
+    seen, out = set(), []
+    for n, scene in enumerate(plan.scenes, 1):
+        art = scene.visual.art
+        if art in seen:
+            continue
+        seen.add(art)
+        if SOMEONE.search(art) and not people_in(plan, art):
+            out.append(n)
+    if not out:
+        return []
+    return [
+        "moments " + ", ".join(str(n) for n in out) + ": name who is in each picture by their "
+        "names from people (" + ", ".join(named) + "), never 'the father' or 'a boy'"
+    ]
 
 
 def _missing(reply: dict, song: Song) -> list[str]:
@@ -555,54 +590,102 @@ def redo_moment(llm, plan: Plan, index: int, request: str = "") -> Plan:
 
 
 def painted(plan: Plan, art: str, marks: dict[str, str] | None = None) -> str:
-    """What a moment's picture is painted from: its art with each person named in it
-    written out as they look, so a person looks the same in every picture. `marks`: words
-    put after a person's first mention, by name (which reference picture is theirs)."""
+    """What a moment's picture is painted from: its art with each person in it (by name, or
+    as the story's only father, the boy...) written out as they look, so a person looks the
+    same in every picture. `marks`: words put after a person's first mention, by name (which
+    reference picture is theirs)."""
     song = plan.song
     if song is None:
         return art
-    out = art
     marks = {k.casefold(): v for k, v in (marks or {}).items()}
-    for person in sorted(song.people, key=lambda p: -len(p.name)):
-        if person.name and person.look:
-            mark = marks.get(person.name.casefold(), "")
-            first = [True]
+    out, at, marked = [], 0, set()
+    for start, end, k in _mentions(song, art):
+        person = song.people[k]
+        look = person.look.strip().rstrip(".")
+        mark = marks.get(person.name.casefold(), "")
+        if mark and k not in marked:
+            marked.add(k)
+            look = f"{look} ({mark})"
+        out += [art[at:start], _as_seen(look, art[start:end])]
+        at = end
+    return "".join(out) + art[at:]
 
-            def seen(m, p=person, mark=mark, first=first) -> str:
-                look = p.look
-                if mark and first[0]:
-                    first[0] = False
-                    look = f"{look} ({mark})"
-                return _as_seen(look, m.group(0))
 
-            out = _name_pattern(person.name).sub(seen, out)
+def people_in(plan: Plan, art: str) -> list[Person]:
+    """The people of the story in a moment's art, in the order they first come."""
+    song = plan.song
+    if song is None:
+        return []
+    order = list(dict.fromkeys(k for _, _, k in _mentions(song, art)))
+    return [song.people[k] for k in order]
+
+
+# What a person may be called besides their name: their role, when their name is one ("Dad" is
+# the father, his dad), and what their look says they are ("a little boy in overalls" is the
+# boy, the little boy), when no one else in the story is.
+ROLES = {
+    "father": ("dad", "daddy", "father", "papa", "papi"),
+    "mother": ("mom", "mum", "mommy", "mummy", "mother", "mama", "mami"),
+    "grandfather": ("grandpa", "grandfather", "granddad", "grandad", "gramps", "abuelo"),
+    "grandmother": ("grandma", "grandmother", "granny", "gran", "nana", "abuela"),
+    "son": ("son",),
+    "daughter": ("daughter",),
+    "brother": ("brother",),
+    "sister": ("sister",),
+    "husband": ("husband",),
+    "wife": ("wife",),
+}
+# "the little boy", "the old man": up to two words between, never "the other girl" (someone else).
+BETWEEN = r"(?:\s+(?!other\b|second\b|another\b)[\w-]+){0,2}?"
+KINDS = (
+    "man", "woman", "boy", "girl", "teenager", "teen", "child", "kid", "baby", "toddler", "lady",
+    "guy", "grandfather", "grandmother", "father", "mother",
+)  # fmt: skip
+
+
+def _aliases(song: Song) -> dict[int, list[re.Pattern]]:
+    """Each person's ways to be named in a moment, by their place in song.people: their name,
+    then (only where no one else shares it) their role and what their look says they are."""
+    people = [(k, p) for k, p in enumerate(song.people) if p.name and p.look]
+    roles: dict[int, set[str]] = {}
+    kinds: dict[int, set[str]] = {}
+    for k, p in people:
+        words = set(re.findall(r"[a-z]+", p.name.lower()))
+        roles[k] = {r for r, said in ROLES.items() if words & set(said)}
+        kinds[k] = {w for w in KINDS if re.search(rf"\b{w}\b", p.look, re.I)}
+    out: dict[int, list[re.Pattern]] = {}
+    for k, p in people:
+        found = [_name_pattern(p.name)]
+        for role in roles[k]:
+            if sum(role in roles[j] for j, _ in people) == 1:
+                said = "|".join(ROLES[role])
+                found.append(
+                    re.compile(rf"\b(?:(?:the|his|her|their|our)\s+)?(?:{said})\b(?:'s)?", re.I)
+                )
+        for kind in kinds[k]:
+            if sum(kind in kinds[j] for j, _ in people) == 1:
+                found.append(re.compile(rf"\bthe{BETWEEN}\s+{kind}\b(?:'s)?", re.I))
+        out[k] = found
     return out
+
+
+def _mentions(song: Song, art: str) -> list[tuple[int, int, int]]:
+    """Where the people are named in `art`: (start, end, their place in song.people), in
+    order; a longer name wins where two overlap ("Ana" inside "Ana Maria" is Ana Maria), and
+    a name wins over a role or a kind of person."""
+    hits = []
+    for k, patterns in _aliases(song).items():
+        for rank, pattern in enumerate(patterns):
+            hits += [(m.start(), m.end(), k, min(rank, 1)) for m in pattern.finditer(art)]
+    taken: list[tuple[int, int, int]] = []
+    for start, end, k, _ in sorted(hits, key=lambda h: (h[3], h[0] - h[1])):
+        if not any(start < b and a < end for a, b, _ in taken):
+            taken.append((start, end, k))
+    return sorted(taken)
 
 
 def _name_pattern(name: str) -> re.Pattern:
     return re.compile(rf"\b{re.escape(name)}\b(?:'s)?", re.I)
-
-
-def people_in(plan: Plan, art: str) -> list[Person]:
-    """The people of the story named in a moment's art, in the order they first come."""
-    song = plan.song
-    if song is None:
-        return []
-    hits = [
-        (m.start(), m.end(), k)
-        for k, person in enumerate(song.people)
-        if person.name and person.look
-        for m in _name_pattern(person.name).finditer(art)
-    ]
-    # Longer names first: "Ana" inside "Ana Maria" is Ana Maria, not Ana.
-    taken: list[tuple[int, int]] = []
-    first: dict[int, int] = {}
-    for start, end, k in sorted(hits, key=lambda h: h[0] - h[1]):
-        if any(a <= start < b for a, b in taken):
-            continue
-        taken.append((start, end))
-        first[k] = min(first.get(k, start), start)
-    return [song.people[k] for k in sorted(first, key=first.get)]
 
 
 def _as_seen(look: str, said: str) -> str:
