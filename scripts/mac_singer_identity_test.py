@@ -69,7 +69,20 @@ def main() -> None:
     os.environ["CACHE_DIR"] = str(folder / "cache")
     os.environ["MEDIA_DIR"] = str(folder / "media")
     os.environ["MODELS_DIR"] = str(folder / "models")
-    live_python = Path(__file__).resolve().parents[1] / "models" / "image-venv" / "bin" / "python"
+    # The app's own image environment: this checkout's, else the live app's (a test
+    # checkout has no models folder of its own).
+    repo = Path(__file__).resolve().parents[1]
+    live_python = next(
+        (
+            p
+            for p in (
+                repo / "models" / "image-venv" / "bin" / "python",
+                Path.home() / "Agentic-AI-Editor" / "models" / "image-venv" / "bin" / "python",
+            )
+            if p.exists()
+        ),
+        repo / "models" / "image-venv" / "bin" / "python",
+    )
     os.environ["IMAGE_PYTHON"] = str(environment(folder, live_python))
     os.environ["IDENTITY_MODEL"] = args.model
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
