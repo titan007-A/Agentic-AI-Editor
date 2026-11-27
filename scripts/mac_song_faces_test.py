@@ -16,6 +16,8 @@ live work):
 
     ~/aiedit-test/run-branch.sh faces song-same-faces scripts/mac_song_faces_test.py \\
         --song "Some Song Some Singer" --probe
+
+--plan paints a story written elsewhere (a Plan's JSON) instead of finding and writing one.
 """
 
 import argparse
@@ -51,18 +53,21 @@ class Times(logging.Handler):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--song", required=True, help="the song's name, as typed in the studio")
+    ap.add_argument("--song", help="the song's name, as typed in the studio")
+    ap.add_argument("--plan", type=Path, help="a story written already (a Plan's JSON)")
     ap.add_argument("--folder", type=Path, default=None, help="default: CACHE_DIR/../faces-out")
     ap.add_argument("--model", default=MODEL, help="the likeness model (FLUX.2 klein 4B)")
     ap.add_argument("--probe", action="store_true", help="one moment from 1..4 portraits")
     args = ap.parse_args()
+    if not args.song and not args.plan:
+        ap.error("give --song or --plan")
     os.environ["IDENTITY_MODEL"] = args.model
     times = Times()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
     logging.getLogger().addHandler(times)
 
     from agentic_editor.animate import images, planner, songhook, songpaint, songwriter
-    from agentic_editor.animate.plan import tidy
+    from agentic_editor.animate.plan import Plan, tidy
     from agentic_editor.backends import get_backends
     from agentic_editor.router import ModelRouter
     from agentic_editor.settings import get_settings
@@ -73,19 +78,22 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     if not images.identity_available(settings):
         sys.exit("the likeness painter isn't available here (Apple Silicon, the image model)")
-    measured: dict = {"song": args.song, "model": args.model}
+    measured: dict = {"song": args.song or str(args.plan), "model": args.model}
 
-    started = time.time()
-    router = ModelRouter(settings, get_backends(), lambda *a: None)
-    song = songhook.find(args.song, settings, router, lambda m: print(f"  {m}", flush=True))
-    measured["find_s"] = round(time.time() - started, 1)
-    started = time.time()
-    with router.planner() as llm:
-        planner.roomy(llm)
-        plan, wrote = songwriter.draft(llm, song)
-    plan = tidy(plan)
-    measured["write_s"] = round(time.time() - started, 1)
-    measured["writer_notes"] = wrote
+    if args.plan:
+        plan = tidy(Plan.model_validate_json(args.plan.expanduser().read_text()))
+    else:
+        started = time.time()
+        router = ModelRouter(settings, get_backends(), lambda *a: None)
+        song = songhook.find(args.song, settings, router, lambda m: print(f"  {m}", flush=True))
+        measured["find_s"] = round(time.time() - started, 1)
+        started = time.time()
+        with router.planner() as llm:
+            planner.roomy(llm)
+            plan, wrote = songwriter.draft(llm, song)
+        plan = tidy(plan)
+        measured["write_s"] = round(time.time() - started, 1)
+        measured["writer_notes"] = wrote
     measured["title"] = plan.song.title
     measured["artist"] = plan.song.artist
     measured["part"] = [round(plan.song.start, 1), round(plan.song.end, 1)]
