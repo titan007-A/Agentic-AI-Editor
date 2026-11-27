@@ -603,14 +603,16 @@ def song_from_caption(
     settings: Settings,
 ) -> None:
     """A post caption found the reel's song: the job learns it, with its year and label,
-    when its edit didn't know it (a preset that doesn't show the song) or knew another (a
-    person named the right one). Never fails the caption."""
+    when its edit didn't know it (a preset that doesn't show the song), knew another (a
+    person named the right one) or couldn't find its label then (MusicBrainz was busy).
+    Never fails the caption."""
     with Session() as db:
         job = db.get(Job, job_id)
         facts = job.song_facts if job else None
     if job is None or not song.strip():
         return
-    if facts and research.Posted([(facts["song"], facts.get("artist", ""))], []).has(song, artist):
+    known = facts and research.Posted([(facts["song"], facts.get("artist", ""))], [])
+    if known and known.has(song, artist) and facts.get("group"):
         return
     try:
         _, description = source_text(output_path, settings.media_dir)

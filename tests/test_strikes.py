@@ -209,6 +209,13 @@ def test_a_caption_that_finds_the_song_tells_the_job(env, tmp_path):
     jobs.song_from_caption("j2", "Tum Hi Ho", "Arijit Singh", reel, env.sessions, env.settings)
     with env.sessions() as db:
         assert db.get(Job, "j2").song_facts["song"] == "Tum Hi Ho"
+        # The edit knew the song but not its label (MusicBrainz was busy): asked again.
+        db.get(Job, "j2").song_facts = {**FLOWERS, "label": "", "group": "", "label_from": ""}
+        db.commit()
+    (reel.parent / "source.json").write_text(json.dumps({"uploader": "Columbia Records"}))
+    jobs.song_from_caption("j2", "Flowers", "Miley Cyrus", reel, env.sessions, env.settings)
+    with env.sessions() as db:
+        assert db.get(Job, "j2").song_facts["group"] == "Sony"
 
 
 def test_a_research_never_gives_a_song_on_the_strike_list():
