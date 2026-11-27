@@ -354,6 +354,32 @@ through the app's own Instagram connection. Anything in doubt waits for a person
 20 reels wait for approval; dry run (the default) posts nothing. See
 [docs/channel-autopilot.md](docs/channel-autopilot.md).
 
+## Strike list and song notices
+
+Once a job knows its song (the video's name, `song:`/`artist:` notes, Shazam, or later its
+post caption), it looks up the song's year and record label and says on the job page, and
+with badges on the job list, what to know before posting it:
+
+- **Blocked before**: the song is on the Strike list. Pick another song.
+- **A major label's song**: Universal (UMG), Sony or Warner, whose matches block or mute
+  reels (`songfacts.NOTIFIED` says which groups).
+- **A new song**: out in the last 3 years; labels block new songs worldwide more often.
+
+The job never stops for it; a toast says it too when it turns up while the page is open.
+The label comes from what the video says first (Shazam's match, a YouTube description's
+"Provided to YouTube by ..." and "℗ ..." lines, a label's own channel), then MusicBrainz
+(the labels of the song's earliest official releases, kept in `cache/songfacts`). Imprints
+map to their group (Columbia and RCA are Sony, Interscope and Republic UMG, Atlantic and
+Asylum Warner); T-Series, Zee Music, Saregama and Tips are independent. Nothing paid is
+asked.
+
+The Strike list page is one list for every account: song, artist, label group and what
+happened (blocked worldwide, post removed, strike). **Block aaya** on a job's page fills it
+in from the job's song. Russia-only mutes and blocks never go on it. An admin, or whoever
+added an entry, takes it off. The Researcher never suggests a song on the list and shows
+each reel's year ("2024 · new") and label group; the Channel autopilot holds a reel whose
+song is on the list for a person, like any other doubt, and shows the label on its reels.
+
 ## Researcher
 
 The Researcher page finds Instagram reels and YouTube Shorts like those of an Instagram
