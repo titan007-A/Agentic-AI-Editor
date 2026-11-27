@@ -269,6 +269,31 @@
       vignette(ctx, 0.7);
     }
 
+    // Where the singer's face most likely is in a picture painted with them, by shot (for
+    // the side notes and doodles to keep off it).
+    const PAINTED_FACE = {
+      hero: [560, 1020, 280],
+      close: [540, 1080, 480],
+      far: [540, 1300, 120],
+      mirror: [420, 1000, 240],
+      echo: [540, 1060, 220],
+      silhouette: [540, 1100, 260],
+      painted: [540, 1100, 260],
+    };
+
+    function fullPainting(ctx, img) {
+      ctx.save();
+      ctx.filter = "sepia(0.12) saturate(1.06) contrast(1.05)";
+      const s = Math.max(W / img.width, H / img.height);
+      ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+      ctx.restore();
+      const g = ctx.createRadialGradient(W / 2, H * 0.45, H * 0.25, W / 2, H * 0.5, H * 0.8);
+      g.addColorStop(0, "rgba(0,0,0,0)");
+      g.addColorStop(1, "rgba(8,4,2,0.5)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
     function paintedBackdrop(ctx, img) {
       ctx.save();
       ctx.filter = "sepia(0.18) saturate(1.1) contrast(1.06)";
@@ -514,19 +539,26 @@
       const shot0 = v.shot || "hero";
       const photos = ctx.photos;
       const cutPhotos = photos.filter((p) => p.cut);
+      // The singer painted into the picture from their photos (animate/singer.py): nothing
+      // is cut out and stood in front of it.
+      const withSinger = Boolean(v.with_singer && v.image && ctx.paintings[v.image]);
       let shot = shot0;
-      if (shot === "painted" && !v.image) shot = "hero"; // no painting here: the photo stands in
-      const needsCut = !["print", "words", "painted"].includes(shot);
-      if (needsCut && !cutPhotos.length) shot = "print";
-      const pool = shot === "print" ? photos.filter((p) => p.img) : cutPhotos;
+      if (!withSinger) {
+        if (shot === "painted" && !v.image) shot = "hero"; // no painting here: the photo stands in
+        const needsCut = !["print", "words", "painted"].includes(shot);
+        if (needsCut && !cutPhotos.length) shot = "print";
+      }
+      const pool = withSinger ? [] : shot === "print" ? photos.filter((p) => p.img) : cutPhotos;
       const photo = pool.length ? pool[ctx.turn++ % pool.length] : null;
 
       // backdrop
-      const back = canvas(BW, BH);
+      // a painting with the singer in it is shown at full size: their face must stay sharp
+      const back = withSinger ? canvas(W, H) : canvas(BW, BH);
       const bctx = back.getContext("2d");
       const kinds = BACKDROPS[shot] || ["wall"];
       const kind = kinds[Math.floor(r() * kinds.length)];
-      if (v.image && ctx.paintings[v.image]) paintedBackdrop(bctx, ctx.paintings[v.image]);
+      if (withSinger) fullPainting(bctx, ctx.paintings[v.image]);
+      else if (v.image && ctx.paintings[v.image]) paintedBackdrop(bctx, ctx.paintings[v.image]);
       else if (kind === "photo") photoBackdrop(bctx, (photo && photo.img) || (photos[0] && photos[0].img), r);
       else if (kind === "sky") skyBackdrop(bctx, r);
       else if (kind === "crowd") crowdBackdrop(bctx, r);
@@ -542,7 +574,7 @@
       const subject = el("div", "abs", root);
       place(subject, 0, 0, W, H);
       const actors = [];
-      let face = [600, 1040, 230];
+      let face = withSinger ? PAINTED_FACE[shot] || PAINTED_FACE.hero : [600, 1040, 230];
       const addCut = async (look, spot, opacity = 1, flip = false, clip = null) => {
         const art = await graded(photo, look);
         const k = spot.s / art.scale;
@@ -594,7 +626,7 @@
         tape.style.transform = "rotate(-3deg)";
         face = [540, 1240 - h / 4, 200];
         actors.push({ node: printBox, base: printBox.style.transform, depth: 1 });
-      } else if (photo && photo.cutImg && shot !== "words" && shot !== "painted") {
+      } else if (!withSinger && photo && photo.cutImg && shot !== "words" && shot !== "painted") {
         const spot = placement(shot, photo, photo.cutImg);
         face = spot.face;
         if (shot === "mirror") {

@@ -192,8 +192,11 @@ class Visual(Loose):
     image: str = ""
     art_seed: int = 0
     camera: str = ""  # a moment's camera move (CAMERAS)
-    # A singer edit's line (kind "verse", animate/singer.py): how the singer is shown.
+    # A singer edit's line (kind "verse", animate/singer.py): how the singer is shown, and
+    # whether its picture has the singer painted in (from their photos) rather than
+    # standing in front of it cut out.
     shot: str = ""
+    with_singer: bool = False
 
 
 class Scene(Loose):
@@ -455,6 +458,9 @@ def tidy(plan: Plan) -> Plan:
                 "art_seed": max(0, min(10_000, int(v.art_seed or 0))),
                 "camera": camera_of(v),
                 "shot": v.shot if v.kind == "verse" and v.shot in SHOTS else "",
+                "with_singer": bool(
+                    v.with_singer and v.kind == "verse" and _PICTURE.fullmatch(v.image or "")
+                ),
             }
         )
         narration = " ".join(plain(scene.narration).split())

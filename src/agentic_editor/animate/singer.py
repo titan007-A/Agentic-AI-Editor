@@ -293,12 +293,23 @@ def _face(picture, settings: Settings) -> list[float] | None:
             box.width * (1 + 2 * grow), box.height * (1 + 2.6 * grow)]  # fmt: skip
 
 
-def photos_of(names: list[str], settings: Settings, cutter=None) -> list[SingerPhoto]:
+def photos_of(
+    names: list[str], settings: Settings, cutter=None, cleaner=None
+) -> tuple[list[SingerPhoto], int]:
+    """The photos made ready: stamped-on text painted out, the singer cut out of each;
+    and how many marks were taken off them."""
     cutter = cutter or cut_out
+    cleaner = cleaner or clean_photo
     out = []
+    wiped = 0
     for name in names[:MAX_PHOTOS]:
         if not _PICTURE.fullmatch(name) or not (images.folder(settings) / name).exists():
             continue
+        try:
+            name, marks = cleaner(name, settings)
+            wiped += marks
+        except Exception:
+            log.exception("couldn't look for marks on %s", name)
         try:
             cut = cutter(name, settings)
         except Exception:
@@ -309,7 +320,111 @@ def photos_of(names: list[str], settings: Settings, cutter=None) -> list[SingerP
             if cut
             else SingerPhoto(image=name)
         )
-    return out
+    return out, wiped
+
+
+# Text an agency or a page stamps on a photo: a web address, a handle, a copyright sign, a
+# photo agency's name. Never the singer's: it would show on every scene and every painting.
+STAMP = re.compile(
+    r"www\.|\.(com|in|net|org|co|tv|me|io)\b|@\w|©|\(c\)|\b(photos?|pics?|getty|shutterstock"
+    r"|alamy|stock|hungama|pinkvilla|bhayani|filmfare|instagram|tiktok|youtube|copyright"
+    r"|watermark|images)\b",
+    re.I,
+)
+CLEAN_VERSION = 1
+
+
+def clean_photo(name: str, settings: Settings, read=None, mask_of=None) -> tuple[str, int]:
+    """The photo with text stamped on it painted out (an agency's watermark, a page's
+    handle), kept once; the photo itself when it has none. Any text on the singer counts,
+    stamp or not: lyric stickers go over them, and a painting would copy it into every
+    scene. Text in the background stays unless it reads like a stamp (it goes with the
+    background when the singer is cut out)."""
+    from PIL import Image
+
+    out = images.folder(settings)
+    dest_name = _key(name, "singer-clean", CLEAN_VERSION) + ".png"
+    meta = out / (dest_name + ".json")
+    if meta.exists():
+        known = json.loads(meta.read_text())
+        kept = known.get("name", name)
+        if (out / kept).exists():
+            return kept, int(known.get("marks", 0))
+    if read is None:
+        from agentic_editor.analysis import ocr
+
+        if not ocr.available():
+            return name, 0
+        read = lambda picture: ocr.read(picture, settings.models_dir)  # noqa: E731
+    picture = Image.open(out / name).convert("RGB")
+    lines = read(picture)
+    solid = None
+    if any(not STAMP.search(line.text) for line in lines):
+        solid = keep_subject((mask_of or person_mask)(picture, settings.models_dir)) > 0.5
+    marks = stamps(lines, solid)
+    kept = name
+    if marks:
+        kept = dest_name
+        part = out / (dest_name + ".part.png")
+        wipe(picture, marks).save(part)
+        part.replace(out / dest_name)
+        log.info("singer photo %s: %d marks painted out", name, len(marks))
+    meta.write_text(json.dumps({"name": kept, "marks": len(marks)}))
+    return kept, len(marks)
+
+
+def stamps(lines, solid) -> list[tuple[int, int, int, int]]:
+    """The boxes to paint out: stamp-like lines, lines mostly on the singer, and the lines
+    beside them (the rest of a logo), each with a margin of half its height."""
+
+    def on_person(line) -> float:
+        if solid is None:
+            return 0.0
+        area = solid[line.y0 : line.y1, line.x0 : line.x1]
+        return float(area.mean()) if area.size else 0.0
+
+    marked = [line for line in lines if STAMP.search(line.text) or on_person(line) > 0.5]
+    boxes = []
+    for line in lines:
+        near = any(
+            line is m
+            or (
+                abs((line.y0 + line.y1) / 2 - (m.y0 + m.y1) / 2) < 1.6 * (m.y1 - m.y0)
+                and line.x0 < m.x1 + (m.y1 - m.y0)
+                and line.x1 > m.x0 - (m.y1 - m.y0)
+            )
+            for m in marked
+        )
+        if near:
+            pad = max(3, (line.y1 - line.y0) // 2)
+            boxes.append((line.x0 - pad, line.y0 - pad, line.x1 + pad, line.y1 + pad))
+    return boxes
+
+
+def wipe(picture, boxes):
+    """`picture` with the letters inside `boxes` painted over from around them: only the
+    strokes (what stands out from the box's own smoothed look), so a jacket under a
+    watermark keeps its folds."""
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    rgb = np.asarray(picture.convert("RGB")).copy()
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    height, width = gray.shape
+    strokes = np.zeros_like(gray)
+    for x0, y0, x1, y1 in boxes:
+        x0, y0 = max(0, int(x0)), max(0, int(y0))
+        x1, y1 = min(width, int(x1)), min(height, int(y1))
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            continue
+        region = gray[y0:y1, x0:x1]
+        size = max(3, (min(y1 - y0, 101) // 2) * 2 + 1)
+        smooth = cv2.medianBlur(region, size)
+        strokes[y0:y1, x0:x1] = (cv2.absdiff(region, smooth) > 18).astype(np.uint8) * 255
+    strokes = cv2.dilate(strokes, np.ones((3, 3), np.uint8), iterations=2)
+    mended = cv2.inpaint(rgb, strokes, 5, cv2.INPAINT_TELEA)
+    return Image.fromarray(mended)
 
 
 LOOK_SCHEMA = {
@@ -940,9 +1055,112 @@ def preview_sound(plan: Plan, settings: Settings) -> Path:
 # ---- pictures ----------------------------------------------------------------------------
 
 
-def paint_plan(plan: Plan, settings: Settings, paint, progress) -> tuple[Plan, list[str]]:
-    """Each scene's picture painted (kept ones reused): nobody in it behind the singer's
-    photo, the singer painted in for a painted shot."""
+# How each shot paints the singer into its scene, where the likeness model is.
+POSES = {
+    "hero": "seen from the waist up, standing in the place, gazing past the camera",
+    "close": "a close-up of their face and shoulders in three-quarter view, warm light on the face",
+    "far": "a wide shot, the person small in the distance, seen from behind",
+    "mirror": "standing before a tall old mirror, seen over the shoulder, their reflection "
+    "looking back at them",
+    "echo": "standing in a crowd of grey faceless people, the only one in colour",
+    "silhouette": "seen from behind as a dark silhouette against a bright sunset, a glowing rim "
+    "of light around them",
+    "painted": "seen from behind or from the side",
+}
+REFERENCE_SIDE = 1024
+REFERENCE_VERSION = 1
+
+
+def likeness_prompt(shot: str, art: str) -> str:
+    """What the likeness model paints for a scene with the singer in it."""
+    return (
+        f"The person from the reference photo, {POSES.get(shot, POSES['hero'])}. "
+        f"{art.strip().rstrip('.')}. Keep their face, hair, beard, skin tone, build and "
+        f"clothes exactly as in the photo. {images.LOOKS[STYLE]}. {images.NEVER}"
+    )
+
+
+def place_prompt(art: str) -> str:
+    """What the likeness model paints for a scene without the singer (words, a print)."""
+    return f"{art.strip().rstrip('.')}, {images.LOOKS[STYLE]}, {images.EMPTY}, {images.NEVER}"
+
+
+def reference_of(photo: SingerPhoto, settings: Settings) -> Path:
+    """The picture a scene paints the singer from: their cutout on plain grey, so nothing
+    behind them in the photo is copied, else the (cleaned) photo itself; kept once."""
+    from PIL import Image
+
+    folder = images.folder(settings)
+    if not photo.cutout or not (folder / photo.cutout).exists():
+        return folder / photo.image
+    dest = folder / (_key(photo.cutout, "singer-reference", REFERENCE_VERSION) + ".png")
+    if not dest.exists():
+        cut = Image.open(folder / photo.cutout).convert("RGBA")
+        scale = min(1.0, REFERENCE_SIDE / (max(cut.size) * 1.12))
+        cut = cut.resize((max(1, int(cut.width * scale)), max(1, int(cut.height * scale))))
+        side_w, side_h = int(cut.width * 1.12) + 1, int(cut.height * 1.12) + 1
+        canvas = Image.new("RGBA", (side_w, side_h), (128, 128, 128, 255))
+        canvas.alpha_composite(cut, ((side_w - cut.width) // 2, (side_h - cut.height) // 2))
+        part = dest.with_suffix(".part.png")
+        canvas.convert("RGB").save(part)
+        part.replace(dest)
+    return dest
+
+
+def _seed(prompt: str, again: int) -> int:
+    return (int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) + 7919 * again) % 2**31
+
+
+def paint_likenesses(plan: Plan, settings: Settings, likeness, progress) -> tuple[Plan, list[str]]:
+    """Every scene painted by the likeness model: the singer painted in from their photos
+    (in turn) as the shot says, or the place alone for words and prints. A scene whose
+    picture couldn't be painted shows the singer cut out, as without the model."""
+    photos = [
+        p
+        for p in (plan.singer.photos if plan.singer else [])
+        if (images.folder(settings) / p.image).exists()
+    ]
+    wanted = [(i, s) for i, s in enumerate(plan.scenes) if s.visual.art.strip()]
+    pictures = []
+    turn = 0
+    for _, s in wanted:
+        v = s.visual
+        if v.shot in POSES and photos:
+            reference = reference_of(photos[turn % len(photos)], settings)
+            turn += 1
+            prompt = likeness_prompt(v.shot, v.art)
+            pictures.append(
+                images.Picture(prompt, _seed(prompt, v.art_seed), refs=(str(reference),))
+            )
+        else:
+            prompt = place_prompt(v.art)
+            pictures.append(images.Picture(prompt, _seed(prompt, v.art_seed)))
+    names = likeness(pictures, settings, progress) if pictures else []
+    scenes = list(plan.scenes)
+    for (i, scene), picture, name in zip(wanted, pictures, names, strict=True):
+        visual = scene.visual.model_copy(
+            update={"image": name, "with_singer": bool(name and picture.refs)}
+        )
+        scenes[i] = scene.model_copy(update={"visual": visual})
+    missing = sum(1 for n in names if not n)
+    note = (
+        [f"{missing} of {len(names)} pictures couldn't be painted; those show the photo cut out"]
+        if missing
+        else []
+    )
+    return plan.model_copy(update={"scenes": scenes}), note
+
+
+def paint_plan(
+    plan: Plan, settings: Settings, paint, progress, likeness=None
+) -> tuple[Plan, list[str]]:
+    """Each scene's picture painted (kept ones reused). Where the likeness model is, the
+    singer is painted into them from their photos; else nobody is in them (the photo cut
+    out stands in front), but for a painted shot, painted from the vision model's words."""
+    if likeness is None and paint is images.paint and images.identity_available(settings):
+        likeness = images.paint_likeness
+    if likeness is not None:
+        return paint_likenesses(plan, settings, likeness, progress)
     wanted = [(i, s) for i, s in enumerate(plan.scenes) if s.visual.art.strip()]
     if not wanted:
         return plan, []
@@ -961,7 +1179,7 @@ def paint_plan(plan: Plan, settings: Settings, paint, progress) -> tuple[Plan, l
     scenes = list(plan.scenes)
     for (i, scene), name in zip(wanted, names, strict=True):
         scenes[i] = scene.model_copy(
-            update={"visual": scene.visual.model_copy(update={"image": name})}
+            update={"visual": scene.visual.model_copy(update={"image": name, "with_singer": False})}
         )
     missing = sum(1 for n in names if not n)
     note = [f"{missing} of {len(names)} pictures couldn't be painted"] if missing else []
@@ -970,7 +1188,9 @@ def paint_plan(plan: Plan, settings: Settings, paint, progress) -> tuple[Plan, l
 
 def _unpainted(plan: Plan) -> Plan:
     scenes = [
-        s.model_copy(update={"visual": s.visual.model_copy(update={"image": ""})})
+        s.model_copy(
+            update={"visual": s.visual.model_copy(update={"image": "", "with_singer": False})}
+        )
         for s in plan.scenes
     ]
     return plan.model_copy(update={"scenes": scenes})
@@ -1020,7 +1240,7 @@ def _set(Session: sessionmaker, animation_id: str, **values) -> None:
 
 def run_task(
     animation_id: str, Session: sessionmaker, settings: Settings, router=None, paint=None,
-    finder=None, cutter=None,
+    finder=None, cutter=None, likeness=None,
 ) -> None:  # fmt: skip
     """A singer edit's queued operation: make it (find the hook, cut out the photos,
     write), change it, write a scene again, or put it together after an edit by hand.
@@ -1044,7 +1264,12 @@ def run_task(
         if op == "auto":
             raise SingerError("an autopilot can't make singer edits (they need photos)")
         paint = paint or images.paint
-        paints = wants_pictures and (paint is not images.paint or images.available(settings))
+        if likeness is None and paint is images.paint and images.identity_available(settings):
+            likeness = images.paint_likeness
+        likeness = likeness if wants_pictures else None
+        paints = wants_pictures and (
+            likeness is not None or paint is not images.paint or images.available(settings)
+        )
         say = lambda message: _set(Session, animation_id, message=message)  # noqa: E731
         router = router or ModelRouter(settings, get_backends(), lambda *args: None)
         notes: list[str] = []
@@ -1053,13 +1278,15 @@ def run_task(
             edit = current.singer if current and current.singer else SingerEdit(query=idea)
             hook = find_hook(edit.query or idea, settings, router, say, finder)
             say("cutting the singer out of the photos")
-            photos = photos_of([p.image for p in edit.photos], settings, cutter)
+            photos, wiped = photos_of([p.image for p in edit.photos], settings, cutter)
+            if wiped:
+                notes.append(f"{wiped} watermark or stamped text marks painted out of the photos")
             if not photos:
                 raise SingerError("the edit needs at least one photo of the singer")
             if not any(p.cutout for p in photos):
                 notes.append("nobody stood out in the photos: they are shown whole, as prints")
             look = edit.look
-            if paints and not look:
+            if paints and not look and likeness is None:  # the likeness model sees the photo
                 say("looking at the singer")
                 with router.vision() as llm:
                     look = describe(llm, images.folder(settings) / photos[0].image)
@@ -1101,7 +1328,7 @@ def run_task(
             plan = tidy(current)
         if paints:
             _set(Session, animation_id, status="painting", message="painting the pictures")
-            plan, painted = paint_plan(plan, settings, paint, lambda stage, m: say(m))
+            plan, painted = paint_plan(plan, settings, paint, lambda stage, m: say(m), likeness)
             notes += painted
         else:
             plan = _unpainted(plan)
