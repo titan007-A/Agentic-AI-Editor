@@ -30,7 +30,8 @@ CRF = "17"
 # A moving satellite map is detail in every pixel of every frame: at 17 a World map reel
 # came to 10 Mbit/s (111 MB for 88 s). At 22 it is about 5 (SSIM 0.99 against 17), still
 # well above what Instagram keeps.
-CRFS = {"map": "22"}
+# A singer edit's film grain and dust move in every frame too (27 Mbit/s at 17).
+CRFS = {"map": "22", "singer": "21"}
 # Frames leave the browser as JPEG: half the time of PNG, and at this quality nothing the
 # H.264 encode after it keeps (both are 4:2:0).
 JPEG_QUALITY = 95

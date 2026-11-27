@@ -883,7 +883,8 @@ export type AnimationVisualKind =
   | "dots"
   | "scene"
   | "country"
-  | "moment";
+  | "moment"
+  | "verse";
 
 /** A character in a scene: who (from the cast), what they do and feel, what they hold, a line. */
 export type AnimationActor = {
@@ -923,6 +924,9 @@ export type AnimationVisual = {
   country?: string;
   /** A Song story moment's camera move over its picture. */
   camera?: string;
+  /** A singer edit's line: how the singer is shown (hero, close, far, print, mirror, echo,
+   * silhouette, words, painted). */
+  shot?: string;
 };
 
 export type AnimationScene = { narration: string; visual: AnimationVisual; hold: number };
@@ -932,7 +936,7 @@ export type AnimationPlan = {
   v: number;
   title: string;
   kind: "facts" | "lesson" | "story" | "news";
-  style: "glow" | "paper" | "story" | "kinetic" | "stick" | "map" | "song";
+  style: "glow" | "paper" | "story" | "kinetic" | "stick" | "map" | "song" | "singer";
   voice: string;
   mood: string;
   scenes: AnimationScene[];
@@ -944,6 +948,17 @@ export type AnimationPlan = {
   look?: MapLook;
   /** A Song story's song: the part it plays and its lyric lines (animate/songhook.py). */
   song?: AnimationSong | null;
+  /** A singer edit's song and photos (set by the studio, never edited here). */
+  singer?: SingerEdit | null;
+};
+
+export type SingerEdit = {
+  query: string;
+  title: string;
+  artist: string;
+  duration: number;
+  photos: { image: string; cutout: string }[];
+  lines: { text: string; start: number; end: number }[];
 };
 
 export type MapLook = "cards" | "horror" | "neon";
@@ -1217,6 +1232,8 @@ export type AnimationBrief = {
   voice: string;
   length: string;
   images: boolean;
+  /** A singer edit's photos of the singer (names from uploadAnimationPhoto). */
+  photos?: string[];
 };
 
 export const api = {
@@ -1227,6 +1244,11 @@ export const api = {
   animations: () => request<Animation[]>("GET", "/animations"),
   animation: (id: string) => request<Animation>("GET", `/animations/${id}`),
   createAnimation: (body: AnimationBrief) => request<Animation>("POST", "/animations", body),
+  uploadAnimationPhoto: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ name: string }>("POST", "/animation-photos", form);
+  },
   editAnimation: (id: string, plan: AnimationPlan) =>
     request<Animation>("PUT", `/animations/${id}`, { plan }),
   setAnimation: (

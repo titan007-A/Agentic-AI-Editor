@@ -2969,11 +2969,32 @@
     await document.fonts.ready;
   }
 
+  // Instagram's areas, striped, shown on request (guides).
+  function safeGuides(stage) {
+    return [
+      [0, 0, W, SAFE.top],
+      [0, H - SAFE.bottom, W, SAFE.bottom],
+      [W - SAFE.right, 0, SAFE.right, H],
+    ].map(([x, y, w, h]) => place(el("div", "safe-guide", stage), x, y, w, h));
+  }
+
+  // A style drawn by its own file (window.PlayerStyles, e.g. singer.js), with the helpers
+  // here; it answers seek(t) the same way.
+  async function loadCustom(style, stage, data, options) {
+    const kit = { el, place, font, fit, rng, hash, ease, clamp, lerp, prog, W, H, SAFE };
+    const view = await style.install(kit).load(stage, data, options);
+    state = { data, custom: view, guides: safeGuides(stage), t: 0 };
+    await seek(0);
+    return { duration: data.duration, problems: shrunk.slice() };
+  }
+
   async function load(data, options = {}) {
     await loadFonts(options.fontBase, options.emojiFont);
     const stage = document.getElementById("stage");
     stage.textContent = "";
     shrunk.length = 0;
+    const custom = window.PlayerStyles && window.PlayerStyles[data.style];
+    if (custom) return loadCustom(custom, stage, data, options);
     const theme = THEMES[data.style] || THEMES.glow;
     const seed = hash(data.title || "reel");
     const mapView = theme.map ? mapLayer(stage, data, options) : null;
@@ -3002,11 +3023,7 @@
     const subs = subtitles(theme, stage, data.captions || [], data);
     const head = header(theme, stage, data);
     if (overlay) overlay.finish();
-    const guides = [
-      [0, 0, W, SAFE.top],
-      [0, H - SAFE.bottom, W, SAFE.bottom],
-      [W - SAFE.right, 0, SAFE.right, H],
-    ].map(([x, y, w, h]) => place(el("div", "safe-guide", stage), x, y, w, h));
+    const guides = safeGuides(stage);
     // Fit every text to its box while all of it is laid out, then hide what isn't on.
     const fitAll = (root) =>
       root.querySelectorAll(".fit").forEach((node) => {
@@ -3031,6 +3048,7 @@
   function seek(t) {
     if (!state) return;
     state.t = t;
+    if (state.custom) return state.custom.seek(t);
     const waiting = state.drawBg(t);
     const last = state.scenes[state.scenes.length - 1];
     for (const s of state.scenes) {

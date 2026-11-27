@@ -244,6 +244,7 @@ class SongRouter:
     def __init__(self, heard: list[Word]):
         self.heard = heard
         self.separated = 0
+        self.fetched: list[str] = []
 
     def separate_vocals(self, audio, out_dir):
         self.separated += 1
@@ -274,20 +275,22 @@ def _song_wav(path: Path, duration: float, sung: list[tuple[float, float]]) -> P
     return path
 
 
-@needs_ffmpeg
-def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
-    settings, _ = studio_env(tmp_path)
+def song_finder_stand_ins(tmp_path: Path, settings) -> tuple[dict, "SongRouter"]:
+    """What songhook.find looks up, searches and downloads (as its keyword arguments), and
+    the models it hears with, stood in for: Koi Apna Hoga's lyrics over a tone where each
+    line is sung, its most replayed part at 20-30 s."""
     lines = songhook.parse_lrc(LRC)
     duration = 134.0
-    sung = [(t, t + 2.0) for t, _ in lines]
-    source = _song_wav(tmp_path / "source.wav", duration, sung)
-    fetched = []
+    source = _song_wav(tmp_path / "source.wav", duration, [(t, t + 2.0) for t, _ in lines])
+    heard = [Word(text=w, start=20.2 + 0.3 * k, end=20.5 + 0.3 * k) for k, w in
+             enumerate(["ये", "चेहरे", "पे", "चेहरा", "लगा", "लेते", "हैं"])]  # fmt: skip
+    router = SongRouter(heard)
 
     def fetch(candidate, settings_):
         folder = songhook.song_folder(settings_, candidate.id)
         folder.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, folder / "song.wav")
-        fetched.append(candidate.id)
+        router.fetched.append(candidate.id)
         meta = {"id": candidate.id, "title": candidate.title, "channel": "Tony Kakkar",
                 "duration": duration, "heatmap": _heat(duration, (20.0, 30.0))}  # fmt: skip
         return folder / "song.wav", meta
@@ -295,15 +298,17 @@ def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
     record = {"trackName": "Koi Apna Hoga", "artistName": "Tony Kakkar", "duration": 134.0,
               "syncedLyrics": LRC}  # fmt: skip
     found = [songhook.Candidate("own", "Koi Apna Hoga - Tony Kakkar", "Tony Kakkar", 134, 10**7)]
-    heard = [Word(text=w, start=20.2 + 0.3 * k, end=20.5 + 0.3 * k) for k, w in
-             enumerate(["ये", "चेहरे", "पे", "चेहरा", "लगा", "लेते", "हैं"])]  # fmt: skip
-    router = SongRouter(heard)
+    return {"lookup": lambda name: [record], "searcher": lambda q: found, "fetch": fetch}, router
+
+
+@needs_ffmpeg
+def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    lines = songhook.parse_lrc(LRC)
+    stand_ins, router = song_finder_stand_ins(tmp_path, settings)
     said: list[str] = []
-    song = songhook.find(
-        "Koi Apna Hoga Tony Kakkar", settings, router, said.append,
-        lookup=lambda name: [record], searcher=lambda q: found, fetch=fetch,
-    )  # fmt: skip
-    assert fetched == ["own"] and router.separated == 1
+    song = songhook.find("Koi Apna Hoga Tony Kakkar", settings, router, said.append, **stand_ins)
+    assert router.fetched == ["own"] and router.separated == 1
     assert (song.title, song.artist, song.video, song.lyrics) == (
         "Koi Apna Hoga", "Tony Kakkar", "own", "lrclib",
     )  # fmt: skip
@@ -320,7 +325,7 @@ def test_a_song_is_found_its_hook_chosen_and_every_word_timed(tmp_path):
     again = songhook.rechoose(song, other, settings, router)
     wanted = max(0.0, song.choices[other].start - songhook.LEAD_IN)
     assert again.start == pytest.approx(wanted, abs=0.05)
-    assert again.video == "own" and fetched == ["own"] and router.separated == 1
+    assert again.video == "own" and router.fetched == ["own"] and router.separated == 1
     with pytest.raises(songhook.SongError):
         songhook.rechoose(song, 9, settings, router)
 
@@ -608,10 +613,11 @@ def test_a_song_that_cant_be_found_fails_in_plain_words(tmp_path, monkeypatch):
 
 def test_a_hand_edit_keeps_one_scene_a_line():
     plan = song_plan()
-    assert studio.edited(None, plan) is not None
+    made = Animation(style="song")
+    assert studio.edited(made, plan) is not None
     fewer = plan.model_copy(update={"scenes": plan.scenes[:-1]})
     with pytest.raises(ValueError, match="one scene for each lyric line"):
-        studio.edited(None, fewer)
+        studio.edited(made, fewer)
 
 
 # ---- the API ------------------------------------------------------------------------------
