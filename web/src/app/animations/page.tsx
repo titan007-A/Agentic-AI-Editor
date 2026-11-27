@@ -446,7 +446,7 @@ export default function AnimationsPage() {
                   rows={sung ? 2 : 3}
                   placeholder={
                     sung
-                      ? "e.g. Koi Apna Hoga Tony Kakkar"
+                      ? "e.g. the song's name and the singer"
                       : "e.g. The lost city of Ubar that vanished into the desert"
                   }
                   value={idea}
@@ -459,7 +459,7 @@ export default function AnimationsPage() {
                   <Textarea
                     id="part"
                     rows={2}
-                    placeholder="A few words of its lyrics, e.g. ye chehre pe chehra. Empty: the part people replay most."
+                    placeholder="A few words of its lyrics, as you remember them. Empty: the part people replay most."
                     value={part}
                     onChange={(e) => setPart(e.target.value)}
                   />
