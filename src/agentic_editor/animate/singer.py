@@ -57,6 +57,9 @@ log = logging.getLogger(__name__)
 STYLE = "singer"
 NAME = "Singer edit"
 MAX_PHOTOS = 6
+# The hook the song finder chooses for it (shortest, longest, best length in seconds): shorter
+# than a Song story's part, as it was made.
+HOOK_BOUNDS = (15.0, 32.0, 20.0)
 PHOTO_SIDE = 1600  # a photo is kept this big at most (the stage is 1080 wide)
 # Beyond any camera's photo: refused before it is decoded (a decompression bomb).
 MAX_PIXELS = 200_000_000
@@ -943,7 +946,7 @@ def find_hook(query: str, settings: Settings, router=None, say=None, finder=None
         if finder is not None:
             found = _call(finder, query, settings)
         else:
-            found = songhook.find(query, settings, router, say)
+            found = songhook.find(query, settings, router, say, bounds=HOOK_BOUNDS)
     except songhook.SongError as exc:
         raise SingerError(str(exc)) from exc
     if found is None:

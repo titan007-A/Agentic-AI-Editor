@@ -1072,10 +1072,38 @@ export type AnimationSong = {
   end: number;
   language: string;
   lyrics: string;
-  lines: { text: string; said: string; start: number; end: number; words: AnimationSongWord[] }[];
+  lines: {
+    text: string;
+    said: string;
+    start: number;
+    end: number;
+    words: AnimationSongWord[];
+    /** Pictures shown over it, a scene each (two for a line on screen a long time). */
+    pictures?: number;
+    /** Which of `pieces` it is sung in (a reel joined from two parts). */
+    piece?: number;
+  }[];
   choices: { start: number; end: number; first: string; score: number }[];
+  /** Which of the choices it plays: one, or the two joined into it. */
+  playing?: number[];
+  /** A joined reel's stretches of the song, one after the other (empty: start-end). */
+  pieces?: { start: number; end: number }[];
   people: { name: string; look: string }[];
   story: string;
+};
+
+/** Another reel of a Song story's song, made for another of its parts. */
+export type AnimationPart = {
+  id: string;
+  title: string;
+  status: Animation["status"];
+  message: string;
+  error: string | null;
+  /** The reel the others were made from. */
+  first: boolean;
+  /** The stretches of the song it plays (seconds). */
+  spans: [number, number][];
+  render: AnimationRender | null;
 };
 
 /** player.js load() data, scenes with their times (animate/timeline.py player_data). */
@@ -1121,6 +1149,10 @@ export type Animation = {
   post_id?: string | null;
   /** Claims the fact check found no source for. */
   doubts?: string[];
+  /** A Song story made for another part of the song another reel found. */
+  made_from?: string | null;
+  /** The other reels of a Song story's song (with the full reel only). */
+  parts?: AnimationPart[];
   plan?: AnimationPlan | null;
   player?: AnimationPlayerData | null;
 };
@@ -1346,8 +1378,11 @@ export const api = {
     id: string,
     body: { style?: string; voice?: string; images?: boolean; look?: MapLook },
   ) => request<Animation>("PATCH", `/animations/${id}`, body),
-  changeAnimation: (id: string, body: { request: string; scene?: number; choice?: number }) =>
-    request<Animation>("POST", `/animations/${id}/change`, body),
+  changeAnimation: (
+    id: string,
+    body: { request: string; scene?: number; choice?: number; join?: number[] },
+  ) => request<Animation>("POST", `/animations/${id}/change`, body),
+  makeAnimationParts: (id: string) => request<Animation>("POST", `/animations/${id}/parts`),
   retryAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/retry`),
   undoAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/undo`),
   renderAnimation: (id: string) => request<Animation>("POST", `/animations/${id}/render`),

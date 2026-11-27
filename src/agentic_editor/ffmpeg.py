@@ -87,16 +87,29 @@ def _parse_rate(rate: str | None) -> float:
     return float(num) / float(den or 1)
 
 
-def read_audio(path: Path, sample_rate: int = 16000) -> np.ndarray:
-    """Decode an audio track to mono float32 samples."""
+def read_audio(
+    path: Path,
+    sample_rate: int = 16000,
+    start: float | None = None,
+    length: float | None = None,
+    channels: int = 1,
+) -> np.ndarray:
+    """Decode an audio track (or `length` seconds of it from `start`) to float32 samples:
+    mono, or (samples, channels)."""
+    span = []
+    if start is not None:
+        span += ["-ss", f"{max(0.0, start):.3f}"]
+    if length is not None:
+        span += ["-t", f"{max(0.0, length):.3f}"]
     cmd = [
-        get_settings().ffmpeg_bin, "-nostdin", "-v", "error", "-i", str(path),
-        "-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "f32le", "-",
+        get_settings().ffmpeg_bin, "-nostdin", "-v", "error", *span, "-i", str(path),
+        "-vn", "-ac", str(channels), "-ar", str(sample_rate), "-f", "f32le", "-",
     ]  # fmt: skip
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
         raise FFmpegError(f"could not decode audio from {path}: {result.stderr.decode()[-500:]}")
-    return np.frombuffer(result.stdout, dtype=np.float32)
+    samples = np.frombuffer(result.stdout, dtype=np.float32)
+    return samples if channels == 1 else samples.reshape(-1, channels)
 
 
 def extract_audio(src: Path, dest: Path, sample_rate: int = 44100) -> Path:

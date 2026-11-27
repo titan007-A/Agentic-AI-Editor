@@ -9,7 +9,7 @@ both read the times worked out here, so picture, words and sound agree to the fr
 import re
 from dataclasses import dataclass, field
 
-from agentic_editor.animate.plan import Plan, Scene
+from agentic_editor.animate.plan import Plan, Scene, line_origin, song_length, song_spans
 from agentic_editor.transcript import Word
 
 LEAD = 0.18  # silence before each scene's voice
@@ -76,9 +76,11 @@ class Timeline:
     captions: list[Caption] = field(default_factory=list)
     cues: list[Cue] = field(default_factory=list)
     # A Song story plays the song itself instead of voice and music: its file, and where in
-    # it the reel's first frame is.
+    # it the reel's first frame is; a reel joined from two parts plays these stretches of it
+    # one after the other (song seconds), crossfaded where they meet.
     music: str = ""
     music_from: float = 0.0
+    music_parts: list[tuple[float, float]] = field(default_factory=list)
 
 
 def plain(text: str) -> str:
@@ -390,37 +392,66 @@ def build(plan: Plan, voices: list[Spoken]) -> Timeline:
 
 
 SWITCH = 0.15  # a Song story's picture changes this long before its line is sung
+# A line's second picture comes on one of its words, at least this long after the line's
+# first and before the next line.
+SECOND_PICTURE = 1.2
+
+
+def second_picture(words: list[Word], sung: float, until: float) -> float:
+    """When a line's second picture comes (reel seconds): on the word nearest the middle of
+    its time on screen (sung-until), else at the middle."""
+    middle = (sung + until) / 2
+    near = [
+        w.start for w in words[1:]
+        if w.start - sung >= SECOND_PICTURE and until - w.start >= SECOND_PICTURE
+    ]  # fmt: skip
+    return round(min(near, key=lambda t: abs(t - middle)) if near else middle, 3)
 
 
 def build_song(plan: Plan, music: str = "") -> Timeline:
-    """A Song story's timing, from its song alone: the part plays from its start; each
-    lyric line's moment lasts from just before it is sung until just before the next line
-    (the first from the first frame, the last to the end), and its caption shows from its
-    first word until the next line begins."""
+    """A Song story's timing, from its song alone: the part plays from its start (a joined
+    reel through each of its pieces in turn); each lyric line's moment lasts from just
+    before it is sung until just before the next line (the first from the first frame, the
+    last to the end), a line with two pictures has the second from one of its words on, and
+    its caption shows from its first word until the next line begins."""
     song = plan.song
     if song is None or not song.lines:
         raise ValueError("a Song story needs its song's lines")
-    origin = song.start
-    length = round(song.end - song.start, 3)
+    length = song_length(song)
     lines = song.lines
     times: list[SceneTime] = []
     captions_: list[Caption] = []
-    for i, line in enumerate(lines):
+    shown = []
+    for line in lines:
+        origin = line_origin(song, line)
         words = [
             Word(text=w.text, start=round(w.start - origin, 3), end=round(w.end - origin, 3))
             for w in line.words
         ]
-        sung = words[0].start if words else line.start - origin
-        nxt = lines[i + 1] if i + 1 < len(lines) else None
-        nxt_sung = (nxt.words[0].start if nxt.words else nxt.start) - origin if nxt else length
+        shown.append((words, words[0].start if words else round(line.start - origin, 3)))
+    for i, (words, sung) in enumerate(shown):
+        nxt_sung = shown[i + 1][1] if i + 1 < len(shown) else length
         start = 0.0 if i == 0 else max(0.0, sung - SWITCH)
-        end = length if nxt is None else max(start + 0.2, nxt_sung - SWITCH)
+        end = length if i + 1 == len(shown) else max(start + 0.2, nxt_sung - SWITCH)
         last = words[-1].end if words else sung
-        times.append(SceneTime("moment", start, end, sung, last, words, []))
+        if lines[i].pictures >= 2:
+            at = second_picture(words, sung, nxt_sung)
+            switch = min(max(start + 0.4, at - SWITCH), end - 0.4)
+            early = [w for w in words if w.start < at]
+            later = [w for w in words if w.start >= at]
+            times.append(SceneTime("moment", start, switch, sung,
+                                   early[-1].end if early else sung, early, []))  # fmt: skip
+            times.append(SceneTime("moment", switch, end, at,
+                                   later[-1].end if later else at, later, []))  # fmt: skip
+        else:
+            times.append(SceneTime("moment", start, end, sung, last, words, []))
         captions_.append(
-            Caption(max(0.0, sung - 0.12), length if nxt is None else nxt_sung - 0.06, words)
-        )
-    return Timeline(times, length, captions_, [], music, origin)
+            Caption(max(0.0, sung - 0.12), length if i + 1 == len(shown) else nxt_sung - 0.06,
+                    words)
+        )  # fmt: skip
+    spans = song_spans(song)
+    return Timeline(times, length, captions_, [], music, spans[0][0],
+                    spans if len(spans) > 1 else [])  # fmt: skip
 
 
 def player_data(plan: Plan, timeline: Timeline) -> dict:

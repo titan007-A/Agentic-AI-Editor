@@ -232,6 +232,19 @@ class SongLine(Loose):
     start: float = 0.0
     end: float = 0.0
     words: list[SongWord] = Field(default_factory=list)
+    # How many pictures are shown over it, a scene each: a line on screen a long time gets
+    # a second one partway, on one of its words (songwriter.pictured).
+    pictures: int = 1
+    # Which of the song's pieces it is sung in (Song.pieces: a reel joined from two parts).
+    piece: int = 0
+
+
+class SongPiece(Loose):
+    """A stretch of the song a joined reel plays: from `start` to `end` (song seconds),
+    crossfaded into the next one where they meet."""
+
+    start: float
+    end: float
 
 
 class HookChoice(Loose):
@@ -268,6 +281,11 @@ class Song(Loose):
     lyrics: str = ""  # where the lines came from: "lrclib" or "heard" (transcribed)
     lines: list[SongLine] = Field(default_factory=list)
     choices: list[HookChoice] = Field(default_factory=list)
+    # Which of the choices it plays: one, or the two joined into it (songhook.join).
+    playing: list[int] = Field(default_factory=list)
+    # A reel joined from two parts plays these stretches of the song one after the other;
+    # empty: it plays start-end.
+    pieces: list[SongPiece] = Field(default_factory=list)
     # The story told over it (animate/songwriter.py): who is in it and what happens.
     people: list[Person] = Field(default_factory=list)
     story: str = ""
@@ -476,6 +494,13 @@ def tidy(plan: Plan) -> Plan:
             continue
         if narration:
             scenes.append(scene.model_copy(update={"narration": narration, "visual": visual}))
+    song = _song(plan.song) if plan.song is not None else None
+    if plan.style == "song" and song is not None and len(scene_lines(song)) == len(scenes):
+        # A Song story's scene shows its own lyric line, wherever its picture was moved.
+        scenes = [
+            s.model_copy(update={"narration": song.lines[k].text})
+            for s, k in zip(scenes, scene_lines(song), strict=True)
+        ]
     return plan.model_copy(
         update={
             "title": _one_line(no_leak(plan.title)[0], 70),
@@ -484,7 +509,7 @@ def tidy(plan: Plan) -> Plan:
             # A Song story ends with its song, never a spoken "follow" line.
             "cta": "" if plan.style == "song" else _one_line(plan.cta or CTA, 60),
             "caption": plan.caption.strip()[:2200],
-            "song": _song(plan.song) if plan.song is not None else None,
+            "song": song,
         }
     )
 
@@ -512,8 +537,67 @@ def _song(song: Song) -> Song:
             if w.text.strip()
         ]
         text = " ".join(w.text for w in words) or " ".join(line.text.split())
-        lines.append(line.model_copy(update={"words": words, "text": text}))
+        lines.append(
+            line.model_copy(
+                update={
+                    "words": words,
+                    "text": text,
+                    "pictures": 2 if line.pictures >= 2 else 1,
+                    "piece": min(max(0, line.piece), max(0, len(song.pieces) - 1)),
+                }
+            )
+        )
     return song.model_copy(update={"lines": lines, "query": _one_line(song.query, 200)})
+
+
+# ---- a song's clock -----------------------------------------------------------------------
+# A Song story's words and lines keep their times in the song; the reel's own time starts at
+# its first piece's start and runs on through each piece in turn.
+
+
+def song_spans(song: Song) -> list[tuple[float, float]]:
+    """The stretches of the song the reel plays, in order (song seconds)."""
+    if song.pieces:
+        return [(p.start, p.end) for p in song.pieces]
+    return [(song.start, song.end)]
+
+
+def song_length(song: Song) -> float:
+    return round(sum(b - a for a, b in song_spans(song)), 3)
+
+
+def song_origins(song: Song) -> list[float]:
+    """For each piece, what to take from a song time in it to get the reel's time."""
+    out, at = [], 0.0
+    for a, b in song_spans(song):
+        out.append(a - at)
+        at += b - a
+    return out
+
+
+def line_origin(song: Song, line: SongLine) -> float:
+    origins = song_origins(song)
+    return origins[min(max(0, line.piece), len(origins) - 1)]
+
+
+def sung_spans(song: Song) -> list[tuple[float, float]]:
+    """Each line's time on screen in the reel: from its first word until the next line's
+    first word (the last line until the reel's end)."""
+    firsts = [
+        (line.words[0].start if line.words else line.start) - line_origin(song, line)
+        for line in song.lines
+    ]
+    length = song_length(song)
+    return [
+        (round(a, 3), round(firsts[i + 1] if i + 1 < len(firsts) else length, 3))
+        for i, a in enumerate(firsts)
+    ]
+
+
+def scene_lines(song: Song) -> list[int]:
+    """The line each of a Song story's scenes shows: one scene for each of a line's
+    pictures, in order."""
+    return [i for i, line in enumerate(song.lines) for _ in range(max(1, line.pictures))]
 
 
 def setting_of(v: Visual) -> str:
@@ -676,16 +760,17 @@ def map_problems(plan: Plan) -> list[str]:
 
 
 def song_problems(plan: Plan) -> list[str]:
-    """What a Song story's writer must fix: one moment for every lyric line, each with a
-    picture to paint."""
+    """What a Song story's writer must fix: one moment for each picture of every lyric
+    line, each with a picture to paint."""
     found: list[str] = []
     if not plan.title.strip():
         found.append("the reel has no title")
     lines = plan.song.lines if plan.song is not None else []
     if not lines:
         found.append("the song has no lyric lines")
-    if len(plan.scenes) != len(lines):
-        found.append(f"write one moment for each of the {len(lines)} lines, not {len(plan.scenes)}")
+    wanted = len(scene_lines(plan.song)) if plan.song is not None else 0
+    if len(plan.scenes) != wanted:
+        found.append(f"write one moment for each of the {wanted} pictures, not {len(plan.scenes)}")
     for n, scene in enumerate(plan.scenes, 1):
         if scene.visual.kind != "moment":
             found.append(f"scene {n}: a Song story scene is a moment")

@@ -1534,11 +1534,19 @@ def recover(Session: sessionmaker) -> None:
                     "Paused: the server stopped while a reel was being posted. Look on "
                     "Instagram whether it went out, then resume."
                 )
+        # A Song story's other parts wait for their turn outside the queue (studio.next_part):
+        # only the one whose turn it was goes back in, then the next takes its turn.
+        queued_animations = db.execute(
+            select(Animation.id, Animation.task, Animation.made_from).where(
+                Animation.status == "queued"
+            )
+        ).all()
         lost_animations = [
             a
-            for a in db.scalars(select(Animation.id).where(Animation.status == "queued"))
-            if (ANIMATE, a) not in pending
+            for a, task, _ in queued_animations
+            if (ANIMATE, a) not in pending and (task or {}).get("turn") != studio.WAITING
         ]
+        song_turns = {root for _, task, root in queued_animations if root}
         for found in db.scalars(select(KickHunt).where(KickHunt.status.in_(kick_hunt.BUSY))):
             found.status, found.error = "failed", INTERRUPTED
         lost_hunts = [
@@ -1595,6 +1603,8 @@ def recover(Session: sessionmaker) -> None:
     for animation_id in lost_animations:
         log.info("queueing animation %s again", animation_id)
         animate(animation_id)
+    for root in song_turns:
+        studio.next_part(root, Session, animate)
     for hunt_id in lost_hunts:
         log.info("queueing kick hunt %s again", hunt_id)
         hunt(hunt_id)
