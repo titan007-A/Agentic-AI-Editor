@@ -315,8 +315,9 @@ export type PdfChoice = {
 };
 
 /** Where a research searches: Instagram reels, YouTube Shorts. */
-/** Where a research searches (see research.SITES); "songs" with the youtube_songs feature. */
-export type Site = "instagram" | "shorts" | "x" | "songs";
+/** Where a research searches (see research.SITES); "songs" with the youtube_songs feature,
+ * "tiktok" while the server has the TikTok gateway. */
+export type Site = "instagram" | "shorts" | "x" | "tiktok" | "songs";
 
 /** A question the researcher asks before searching, with suggested answers. */
 export type ResearchQuestion = { question: string; choices: string[] };
@@ -412,6 +413,8 @@ export type Me = {
   features?: string[];
   /** Its Buffer posts that failed in the last week (the header shows the number). */
   buffer_failed?: number;
+  /** The server has the TikTok gateway: TikTok links download and researches search TikTok. */
+  tiktok?: boolean;
 };
 
 export type FunBadge = {
@@ -510,6 +513,22 @@ export type StyleDraft = {
 /** Whether downloads can sign in to a site (Instagram, YouTube), since and until when
  * (never the cookies). */
 export type SiteLogin = { set: boolean; since: string | null; until: string | null };
+
+/** The TikTok gateway (a second Mac on a VPN, reached by an SSH tunnel), as checked just now. */
+export type TikTokGateway = {
+  /** TIKTOK_PROXY is set on the server. */
+  set: boolean;
+  proxy: string;
+  /** TikTok is reached without a gateway ("direct"). */
+  direct: boolean;
+  /** The tunnel answers; null when there is none to check. */
+  tunnel: boolean | null;
+  tunnel_said: string;
+  /** TikTok answers through it; null when not set. */
+  tiktok: boolean | null;
+  tiktok_said: string;
+  seconds: number | null;
+};
 
 export type SystemInfo = {
   accelerator: string;
@@ -1401,6 +1420,7 @@ export const api = {
   acceptNotice: () => request("POST", "/notice"),
   system: () => request<SystemInfo>("GET", "/system"),
   updateYtdlp: () => request<{ yt_dlp: string; note: string }>("POST", "/system/update-ytdlp"),
+  tiktokGateway: () => request<TikTokGateway>("GET", "/system/tiktok-gateway"),
   siteLogin: (site: "instagram" | "youtube") => request<SiteLogin>("GET", `/system/${site}-login`),
   setSiteLogin: (site: "instagram" | "youtube", cookies: string) =>
     request<SiteLogin>("PUT", `/system/${site}-login`, { cookies }),
