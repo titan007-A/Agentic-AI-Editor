@@ -437,18 +437,120 @@ SONG_FADE_OUT = 0.9
 
 def song_part(timeline: Timeline, dest: Path) -> Path:
     """A Song story's sound: the song itself from where the reel starts, as long as the
-    reel, faded in and out, at the presets' loudness."""
+    reel (a joined reel's pieces one after the other, see `joined`), faded in and out, at
+    the presets' loudness."""
     from agentic_editor import ffmpeg
 
     length = timeline.duration
     out_at = max(0.0, length - SONG_FADE_OUT)
+    fades = (
+        f"afade=t=in:d={SONG_FADE_IN},afade=t=out:st={out_at:.3f}:d={SONG_FADE_OUT},"
+        f"apad=whole_dur={length:.3f}"
+    )
     raw = dest.with_suffix(".raw.wav")
-    ffmpeg.run([
-        "-y", "-ss", f"{timeline.music_from:.3f}", "-t", f"{length:.3f}", "-i", timeline.music,
-        "-af", f"afade=t=in:d={SONG_FADE_IN},afade=t=out:st={out_at:.3f}:d={SONG_FADE_OUT},"
-        f"apad=whole_dur={length:.3f}",
-        "-ar", str(RATE), "-ac", "2", "-c:a", "pcm_s16le", str(raw),
-    ])  # fmt: skip
+    if len(timeline.music_parts) > 1:
+        pieces = dest.with_suffix(".pieces.wav")
+        write_wav(pieces, joined(timeline.music, timeline.music_parts))
+        ffmpeg.run([
+            "-y", "-i", str(pieces), "-t", f"{length:.3f}", "-af", fades,
+            "-ar", str(RATE), "-ac", "2", "-c:a", "pcm_s16le", str(raw),
+        ])  # fmt: skip
+        pieces.unlink(missing_ok=True)
+    else:
+        ffmpeg.run([
+            "-y", "-ss", f"{timeline.music_from:.3f}", "-t", f"{length:.3f}",
+            "-i", timeline.music, "-af", fades,
+            "-ar", str(RATE), "-ac", "2", "-c:a", "pcm_s16le", str(raw),
+        ])  # fmt: skip
     audio.normalize_loudness(raw, dest, LOUDNESS, TRUE_PEAK)
     raw.unlink(missing_ok=True)
     return dest
+
+
+JOINT = 0.25  # s, the equal-power crossfade where two pieces of a song meet
+MOST_MATCH = 6.0  # dB a piece is moved at most to match the others' loudness
+
+
+def joined(music: str, spans: list[tuple[float, float]]) -> np.ndarray:
+    """The song's stretches (song seconds) one after the other, stereo at RATE: each as
+    loud as the others (their average loudness, LUFS) and crossfaded into the next over
+    JOINT s centred on the cut, equal power (cos/sin), so the joint has neither a dip nor a
+    click; as long as the stretches together."""
+    from agentic_editor import ffmpeg
+
+    half = JOINT / 2
+    pieces, inner = [], []
+    for k, (a, b) in enumerate(spans):
+        before = half if k > 0 else 0.0
+        after = half if k + 1 < len(spans) else 0.0
+        start = a - before
+        want = round((b - a + before + after) * RATE)
+        got = ffmpeg.read_audio(Path(music), RATE, max(0.0, start), b + after - max(0.0, start),
+                                channels=2).astype(np.float64)  # fmt: skip
+        lead = round(max(0.0, -start) * RATE)  # the song's very start: silence before
+        got = np.pad(got, ((lead, 0), (0, 0)))
+        got = np.pad(got, ((0, max(0, want - len(got))), (0, 0)))[:want]
+        pieces.append(got)
+        inner.append(got[int(before * RATE) : want - int(after * RATE)])
+    levels = [lufs(x) for x in inner]
+    heard = [v for v in levels if v > -70]
+    target = float(np.mean(heard)) if heard else 0.0
+    gains = [
+        10 ** (min(MOST_MATCH, max(-MOST_MATCH, target - v)) / 20) if v > -70 else 1.0
+        for v in levels
+    ]
+    total = round(sum(b - a for a, b in spans) * RATE)
+    out = np.zeros((total + int(JOINT * RATE) + 2, 2))
+    n_fade = round(JOINT * RATE)
+    u = (np.arange(n_fade) + 0.5) / n_fade
+    fade_in, fade_out = np.sin(0.5 * np.pi * u)[:, None], np.cos(0.5 * np.pi * u)[:, None]
+    at = 0.0  # where the piece's own start (its cut) falls in the reel, seconds
+    for k, ((a, b), piece) in enumerate(zip(spans, pieces, strict=True)):
+        x = piece * gains[k]
+        if k > 0:
+            x[:n_fade] *= fade_in
+        if k + 1 < len(spans):
+            x[len(x) - n_fade :] *= fade_out
+        place = round((at - (half if k > 0 else 0.0)) * RATE)
+        out[place : place + len(x)] += x
+        at += b - a
+    return out[:total]
+
+
+def _biquad(kind: str, f0: float, q: float, gain_db: float = 0.0) -> tuple:
+    """RBJ biquad coefficients at RATE (high shelf or high pass), as BS.1770 builds its
+    K-weighting."""
+    w0 = 2 * math.pi * f0 / RATE
+    alpha, cos = math.sin(w0) / (2 * q), math.cos(w0)
+    if kind == "shelf":
+        a_ = 10 ** (gain_db / 40)
+        root = 2 * math.sqrt(a_) * alpha
+        b = [a_ * ((a_ + 1) + (a_ - 1) * cos + root), -2 * a_ * ((a_ - 1) + (a_ + 1) * cos),
+             a_ * ((a_ + 1) + (a_ - 1) * cos - root)]  # fmt: skip
+        a = [(a_ + 1) - (a_ - 1) * cos + root, 2 * ((a_ - 1) - (a_ + 1) * cos),
+             (a_ + 1) - (a_ - 1) * cos - root]  # fmt: skip
+    else:
+        b = [(1 + cos) / 2, -(1 + cos), (1 + cos) / 2]
+        a = [1 + alpha, -2 * cos, 1 - alpha]
+    return np.array(b) / a[0], np.array(a) / a[0]
+
+
+def lufs(x: np.ndarray) -> float:
+    """Integrated loudness (BS.1770: K-weighted, 400 ms blocks overlapping by 75%, gated at
+    -70 LUFS and 10 LU under the rest) of stereo samples at RATE; -99 for silence."""
+    if len(x) < int(0.4 * RATE):
+        return -99.0
+    for b, a in (_biquad("shelf", 1681.97, 0.7072, 4.0), _biquad("pass", 38.135, 0.5003)):
+        x = signal.lfilter(b, a, x, axis=0)
+    block, hop = int(0.4 * RATE), int(0.1 * RATE)
+    power = np.array(
+        [float(np.sum(np.mean(x[i : i + block] ** 2, axis=0)))
+         for i in range(0, len(x) - block + 1, hop)]
+    )  # fmt: skip
+    loud = -0.691 + 10 * np.log10(np.maximum(power, 1e-12))
+    kept = power[loud > -70]
+    if not kept.size:
+        return -99.0
+    gate = -0.691 + 10 * np.log10(float(np.mean(kept))) - 10
+    kept = power[(loud > -70) & (loud > gate)]
+    return round(-0.691 + 10 * math.log10(float(np.mean(kept))), 2)

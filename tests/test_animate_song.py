@@ -486,7 +486,7 @@ def test_a_story_short_of_moments_is_sent_back_once():
     plan, _ = songwriter.draft(writer, sample_song())
     assert (
         len(writer.asked) == 3
-        and "one moment for each of the 4 lines" in writer.asked[2][-1]["content"]
+        and "one moment for each of the 4 moments" in writer.asked[2][-1]["content"]
     )
     assert len(plan.scenes) == 4
 
@@ -672,7 +672,7 @@ def test_a_hand_edit_keeps_one_scene_a_line():
     made = Animation(style="song")
     assert studio.edited(made, plan) is not None
     fewer = plan.model_copy(update={"scenes": plan.scenes[:-1]})
-    with pytest.raises(ValueError, match="one scene for each lyric line"):
+    with pytest.raises(ValueError, match="one scene for each picture of its lyric lines"):
         studio.edited(made, fewer)
 
 

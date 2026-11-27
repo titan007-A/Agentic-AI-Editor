@@ -77,8 +77,10 @@ class PlanEdit(BaseModel):
 class ChangeRequest(BaseModel):
     request: str = Field(default="", max_length=500)
     scene: int | None = Field(default=None, ge=0, le=MAX_SCENES)
-    # A Song story: play another of the parts of the song it offered (Song.choices).
+    # A Song story: play another of the parts of the song it offered (Song.choices), or two
+    # of them joined into one reel, the first first.
     choice: int | None = Field(default=None, ge=0, le=10)
+    join: list[int] | None = Field(default=None, min_length=2, max_length=2)
 
 
 class StudioChoice(BaseModel):
@@ -319,8 +321,19 @@ def operations(
         idle(found)
         if not found.plan:
             raise HTTPException(409, "there is no draft to change yet")
-        if body.choice is not None:
-            choices = (found.plan.get("song") or {}).get("choices") or []
+        choices = (found.plan.get("song") or {}).get("choices") or []
+        if body.join is not None:
+            first, second = body.join
+            if (
+                found.plan.get("style") != "song"
+                or max(first, second) >= len(choices)
+                or min(first, second) < 0
+            ):
+                raise HTTPException(422, "there are no such parts of the song to join")
+            if first == second:
+                raise HTTPException(422, "choose two different parts to join")
+            task = {"op": "hook", "join": [first, second]}
+        elif body.choice is not None:
             if found.plan.get("style") != "song" or body.choice >= len(choices):
                 raise HTTPException(422, f"there is no part {body.choice + 1} of the song to play")
             task = {"op": "hook", "choice": body.choice}

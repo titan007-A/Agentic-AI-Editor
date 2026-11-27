@@ -28,7 +28,7 @@ from agentic_editor.animate import (
     songwriter,
     voice,
 )
-from agentic_editor.animate.plan import Plan, tidy
+from agentic_editor.animate.plan import Plan, scene_lines, song_spans, tidy
 from agentic_editor.animate.render import render
 from agentic_editor.animate.timeline import Spoken, Timeline, build, build_song, player_data
 from agentic_editor.db import Animation
@@ -90,6 +90,8 @@ def preview_sound(plan: Plan, player: dict, settings: Settings, speak=voice.spea
     if plan.style == singer.STYLE:  # the song's own sound
         return singer.preview_sound(plan, settings)
     song = [plan.song.video, plan.song.start] if plan.song is not None else []
+    if plan.song is not None and plan.song.pieces:  # a joined reel: where its pieces meet
+        song.append(song_spans(plan.song))
     raw = json.dumps([player, plan.mood, plan.voice, 1, *song], sort_keys=True, default=str)
     key = hashlib.sha256(raw.encode()).hexdigest()[:24]
     dest = settings.cache_dir / "animation-sound" / f"{key}.wav"
@@ -486,7 +488,7 @@ def run_task(
 def _length_note(plan: Plan, length: str) -> str:
     song = plan.song
     if plan.style == songwriter.STYLE and song is not None:
-        part = f"{_clock(song.start)}-{_clock(song.end)}"
+        part = " + ".join(f"{_clock(a)}-{_clock(b)}" for a, b in song_spans(song))
         return f"{song.title} by {song.artist or 'unknown'}, {part} of the song"
     return planner.words_note(plan, length)
 
@@ -499,8 +501,9 @@ def _song_task(
     op: str, task: dict, brief: planner.Brief, current: Plan | None, animation_id: str,
     Session: sessionmaker, settings: Settings, router,
 ) -> tuple[Plan, list[str]]:  # fmt: skip
-    """A Song story's writing: find the song and write it (draft), time another part of it
-    and write that (hook), or change its story in words or one line's moment (change, scene)."""
+    """A Song story's writing: find the song and write it (draft), time another part of it,
+    or two parts joined, and write that (hook), or change its story in words or one
+    moment (change, scene)."""
     say = lambda message: _set(Session, animation_id, message=message)  # noqa: E731
     song = None
     if op == "draft":
@@ -508,6 +511,10 @@ def _song_task(
         song = songhook.find(brief.idea, settings, router, say)
     elif current is None or current.song is None:
         raise planner.PlannerError("there is no draft to change yet")
+    elif op == "hook" and task.get("join"):
+        first, second = (int(n) for n in task["join"][:2])
+        _set(Session, animation_id, status="changing", message="joining the two parts", error=None)
+        song = songhook.join(current.song, first, second, settings, router)
     elif op == "hook":
         _set(Session, animation_id, status="changing", message="timing that part", error=None)
         song = songhook.rechoose(current.song, int(task.get("choice", 0)), settings, router)
@@ -556,9 +563,9 @@ def edited(a: Animation, plan: Plan) -> Plan:
     if not plan.scenes:
         raise ValueError("a reel needs at least one scene")
     if plan.style == songwriter.STYLE:
-        lines = plan.song.lines if plan.song is not None else []
-        if len(plan.scenes) != len(lines):
-            raise ValueError("a Song story has one scene for each lyric line")
+        pictures = scene_lines(plan.song) if plan.song is not None else []
+        if not pictures or len(plan.scenes) != len(pictures):
+            raise ValueError("a Song story has one scene for each picture of its lyric lines")
     return plan
 
 

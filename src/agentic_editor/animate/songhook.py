@@ -12,6 +12,8 @@ part people know (the hook) and when every word of it is sung.
    (where people go back to; the reels' favourite part of a song shows there), whole
    sections, lines that don't repeat inside it, a length near 30 s, and any of its words
    the person typed. Without the graph, the louder sections and the chorus count instead.
+   Two of the parts offered can be joined into one reel (`join`): a stretch of each, about
+   30 s in all, the sound cut where a line ends, on a beat.
 5. Every word's time: whisper hears the vocals of the part, and the lyric words are laid
    over the heard words by how long each takes to sing. A song LRCLIB doesn't know is
    heard whole, and what whisper heard becomes its lyrics.
@@ -30,7 +32,7 @@ import httpx
 import numpy as np
 
 from agentic_editor import ffmpeg
-from agentic_editor.animate.plan import HookChoice, Song, SongLine, SongWord
+from agentic_editor.animate.plan import HookChoice, Song, SongLine, SongPiece, SongWord
 from agentic_editor.settings import Settings
 from agentic_editor.transcript import Word
 
@@ -47,6 +49,10 @@ MOST_LINES = 16  # lyric lines in a part (each is a scene or two), when the song
 # A part with longer music than this between two of its lines (an instrumental build, a
 # solo) shows a lyric over no singing: it is offered only when the song has nothing else.
 MOST_MUSIC = 6.0
+# A reel joined from two parts: a stretch of each about this long.
+PIECE_AIM = AIM / 2
+PIECE_SHORTEST = 8.0
+PIECE_LONGEST = 24.0
 LEAD_IN = 0.3  # the part starts this much before its first line is sung
 TAIL = 1.2  # and runs on this long after its last word, if nothing is sung there
 CHOICES = 4  # parts offered to the person
@@ -496,12 +502,15 @@ def windows(
     part: str = "",
     title: str = "",
     bounds: tuple[float, float, float] = (SHORTEST, LONGEST, AIM),
+    within: tuple[int, int] | None = None,
 ) -> list[Window]:
     """Every run of whole lines the reel could play, best first (see the module's notes):
-    `bounds` its shortest, longest and best length."""
+    `bounds` its shortest, longest and best length, `within` the first and last line it
+    may take (all of them when None)."""
     if not lines:
         return []
     shortest, longest, aim = bounds
+    lo, hi = within if within is not None else (0, len(lines) - 1)
     texts = [plain(text) for _, text in lines]
     # "Ye jaan kar bhi" and "Yeh jaan kar bhi" are the same line written twice.
     chorus = [
@@ -521,8 +530,8 @@ def windows(
     ]
     wanted = _tokens(part)
     found: list[Window] = []
-    for i in range(len(lines)):
-        for j in range(i, len(lines)):
+    for i in range(lo, hi + 1):
+        for j in range(i, hi + 1):
             start = lines[i][0]
             end = min(ends[j], lines[j][0] + singing[j])
             length = end - start
@@ -1016,6 +1025,226 @@ def rechoose(song: Song, index: int, settings: Settings, router) -> Song:
         update={"start": part.start, "end": part.end, "lines": part.lines,
                 "language": part.language or song.language, "playing": [index], "pieces": []}
     )  # fmt: skip
+
+
+# ---- two parts joined -------------------------------------------------------------------
+
+ONSET_RATE = 22050
+ONSET_FFT = 1024
+ONSET_HOP = 256
+GAP = 0.15  # s of quiet vocals that end a sung line
+
+
+def onset_strength(samples: np.ndarray) -> np.ndarray:
+    """How sharply the sound's spectrum rises at each hop of ONSET_HOP samples (spectral
+    flux of log magnitudes): high where a drum hits or a note starts."""
+    if len(samples) < ONSET_FFT:
+        return np.zeros(0)
+    n = 1 + (len(samples) - ONSET_FFT) // ONSET_HOP
+    at = np.arange(ONSET_FFT)[None, :] + ONSET_HOP * np.arange(n)[:, None]
+    frames = samples[at].astype(np.float64) * np.hanning(ONSET_FFT)[None, :]
+    magnitude = np.log1p(100.0 * np.abs(np.fft.rfft(frames, axis=1)))
+    flux = np.maximum(0.0, np.diff(magnitude, axis=0)).sum(axis=1)
+    return np.concatenate([[0.0], flux])
+
+
+def onset_peaks(strength: np.ndarray, at: float) -> list[tuple[float, float]]:
+    """The onsets in a stretch of sound starting at song time `at`: (when, how strong),
+    each a peak of `strength` standing well over the stretch's usual rise (a steady sound
+    has none)."""
+    if strength.size < 3:
+        return []
+    usual = float(np.median(strength))
+    floor = max(usual + 0.5 * float(np.std(strength)), 3.0 * usual)
+    centre = ONSET_FFT / 2 / ONSET_RATE
+    return [
+        (round(at + k * ONSET_HOP / ONSET_RATE + centre, 3), float(strength[k]))
+        for k in range(1, strength.size - 1)
+        if strength[k] >= strength[k - 1] and strength[k] > strength[k + 1] and strength[k] > floor
+    ]
+
+
+def cut_point(audio: Path, lo: float, hi: float, prefer: float) -> float:
+    """Where to cut the song between `lo` and `hi` (song seconds): on its strongest beat or
+    onset there, the nearer `prefer` the better; `prefer` when there is none."""
+    prefer = min(max(prefer, lo), hi) if hi >= lo else prefer
+    if hi - lo < 0.04:
+        return round(prefer, 3)
+    start = max(0.0, lo - 0.3)
+    samples = ffmpeg.read_audio(audio, ONSET_RATE, start=start, length=hi - start + 0.3)
+    peaks = [(t, v) for t, v in onset_peaks(onset_strength(samples), start) if lo <= t <= hi]
+    if not peaks:
+        return round(prefer, 3)
+    top = max(v for _, v in peaks)
+    best = max(peaks, key=lambda p: p[1] / top - 0.5 * abs(p[0] - prefer) / (hi - lo))
+    return round(best[0], 3)
+
+
+def gap_after(sung: np.ndarray, at: float, reach: float = 1.5) -> tuple[float, float] | None:
+    """The first quiet stretch in the vocals (GAP s or more) from `at` on, within `reach`:
+    when it starts and when singing comes again (capped 3 s after)."""
+    n, need = len(sung), max(1, int(GAP / FRAME))
+    k = max(0, int(at / FRAME))
+    while k < min(n, int((at + reach) / FRAME)):
+        if not sung[k] and not sung[k : k + need].any() and k + need <= n:
+            j = k
+            while j < min(n, k + int(3.0 / FRAME)) and not sung[j]:
+                j += 1
+            return round(k * FRAME, 3), round(j * FRAME, 3)
+        k += 1
+    return None
+
+
+def onset_before(sung: np.ndarray, at: float, reach: float = 2.0) -> tuple[float, float] | None:
+    """Where the singing at `at` (or up to 0.3 s after) starts, and where the quiet before
+    it does (as far back as `reach`); None when nothing is sung there or the singing runs
+    on from more than 0.6 s before."""
+    n, k = len(sung), max(0, int(at / FRAME))
+    if k >= n:
+        return None
+    j = k
+    while j < min(n - 1, k + int(0.3 / FRAME)) and not sung[j]:
+        j += 1
+    if not sung[j]:
+        return None
+    i = j
+    while i > 0 and sung[i - 1]:
+        i -= 1
+        if (j - i) * FRAME > 0.6:
+            return None
+    q = i
+    while q > 0 and not sung[q - 1] and (i - q) * FRAME < reach:
+        q -= 1
+    return round(i * FRAME, 3), round(q * FRAME, 3)
+
+
+def _curves(folder: Path, duration: float) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """The song's most-replayed graph (kept with its download), or its loudness without."""
+    try:
+        meta = json.loads((folder / "song.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    heat = heat_curve(meta.get("heatmap") or [], duration)
+    if heat is not None:
+        return heat, None
+    return None, energy_curve(loudness(ffmpeg.read_audio(folder / "song.wav", RATE)), duration)
+
+
+def stretches(
+    lines: list[tuple[float, str]], duration: float, heat, energy, a: Window, b: Window,
+    title: str = "", aim: float = AIM,
+) -> tuple[Window, Window]:  # fmt: skip
+    """The stretch of whole lines from each of two parts a joined reel plays: each scored
+    as a part is (about PIECE_AIM s), the pair about `aim` s in all (as the lines' times
+    say: sung, the stretches come out a little shorter), no line in both."""
+    bounds = (PIECE_SHORTEST, PIECE_LONGEST, PIECE_AIM)
+    ones = windows(lines, duration, heat, energy, "", title, bounds, (a.first, a.last))[:8]
+    twos = windows(lines, duration, heat, energy, "", title, bounds, (b.first, b.last))[:8]
+    pairs = [
+        (x, y) for x in ones or [a] for y in twos or [b] if x.last < y.first or y.last < x.first
+    ]
+    if not pairs:
+        raise SongError("those two parts are the same lines of the song: choose another")
+
+    def score(pair: tuple[Window, Window]) -> float:
+        total = sum(w.end - w.start for w in pair)
+        fits = SHORTEST + (aim - AIM) <= total <= LONGEST
+        return (
+            sum(w.score for w in pair)
+            - WEIGHTS["length"] * abs(total - aim) / 10
+            - (0.0 if fits else 5.0)
+        )
+
+    return max(pairs, key=score)
+
+
+def join(song: Song, first: int, second: int, settings: Settings, router) -> Song:
+    """`song` playing two of the parts it offered, `first` then `second`, as one reel: a
+    stretch of whole lines from each (about AIM s in all), every word timed, the first cut
+    in the quiet after its last line and the second in the quiet before its first, each on
+    a beat or onset of the music (the sound crossfades there, sound.song_part)."""
+    if first == second:
+        raise SongError("choose two different parts to join")
+    folder, lines, duration = _kept(song, settings)
+    a, b = _window_of(song, first, lines), _window_of(song, second, lines)
+    heat, energy = _curves(folder, duration)
+    sung = _sung(loudness(ffmpeg.read_audio(folder / "vocals.wav", RATE)))
+    aim, tried = AIM, set()
+    for _ in range(3):  # sung stretches short of the reel's length: longer ones, aimed higher
+        pair = stretches(lines, duration, heat, energy, a, b, song.title, aim)
+        key = tuple((w.first, w.last) for w in pair)
+        if key in tried:
+            break
+        tried.add(key)
+        one, two, cut_a, cut_b = _joint(lines, *pair, duration, folder, sung, router)
+        total = (cut_a - one.start) + (two.end - cut_b)
+        if total >= SHORTEST:
+            break
+        aim += SHORTEST - total + 2.0
+    ones = _within(one.lines, end=cut_a)
+    twos = [line.model_copy(update={"piece": 1}) for line in _within(two.lines, start=cut_b)]
+    return song.model_copy(
+        update={
+            "start": one.start,
+            "end": two.end,
+            "lines": ones + twos,
+            "language": one.language or two.language or song.language,
+            "playing": [first, second],
+            "pieces": [SongPiece(start=one.start, end=cut_a), SongPiece(start=cut_b, end=two.end)],
+        }
+    )
+
+
+def _joint(
+    lines: list[tuple[float, str]], pick_a: Window, pick_b: Window, duration: float,
+    folder: Path, sung: np.ndarray, router,
+) -> tuple[Song, Song, float, float]:  # fmt: skip
+    """Two stretches timed, and where they are cut to meet: the first after its last word,
+    the second before its first, each on a beat or onset of the music; the two never
+    longer than LONGEST together."""
+    vocals, audio = folder / "vocals.wav", folder / "song.wav"
+    one = timed(lines, pick_a, duration, vocals, router, PIECE_LONGEST)
+    # The first part ends in the quiet after its last word, before the next line.
+    last_word = max((w.end for w in one.lines[-1].words), default=one.lines[-1].start)
+    nxt = pick_a.first + len(one.lines)  # the line after its last (timing may end it sooner)
+    after = lines[nxt][0] if nxt < len(lines) else duration
+    gap = gap_after(sung, last_word - 0.1)
+    if gap is not None and gap[0] < after - 0.1:
+        lo, hi = gap[0] + 0.05, min(gap[1] - 0.1, gap[0] + TAIL, after - 0.1, duration)
+    else:
+        lo = hi = min(last_word + 0.1, max(last_word, after - 0.05))
+    cut_a = cut_point(audio, lo, max(lo, hi), lo + 0.35)
+    room = max(PIECE_SHORTEST, LONGEST - (cut_a - one.start))
+    two = timed(lines, pick_b, duration, vocals, router, room)
+    # The second starts in the quiet before its first word, on the music's beat.
+    first_word = two.lines[0].words[0].start if two.lines[0].words else two.lines[0].start
+    found = onset_before(sung, first_word - 0.1)
+    if found is None:
+        cut_b = two.start
+    else:
+        onset, quiet = found
+        lo, hi = max(0.0, quiet + 0.05, onset - 1.0), onset - 0.04
+        cut_b = cut_point(audio, lo, hi, onset - LEAD_IN) if lo <= hi else max(0.0, hi)
+    return one, two, cut_a, cut_b
+
+
+def _within(lines: list[SongLine], start: float = 0.0, end: float = 1e9) -> list[SongLine]:
+    """`lines` with every word inside start-end (song seconds), the edge lines too."""
+    out = []
+    for line in lines:
+        words = [
+            w.model_copy(update={"start": min(max(w.start, start + 0.02), end - 0.1),
+                                 "end": min(max(w.end, start + 0.1), end)})
+            for w in line.words
+        ]  # fmt: skip
+        out.append(
+            line.model_copy(
+                update={"words": words, "start": max(line.start, start), "end": min(line.end, end)}
+            )
+        )
+    if out:
+        out[-1] = out[-1].model_copy(update={"end": end if end < 1e9 else out[-1].end})
+    return out
 
 
 def describe(song: Song) -> dict:

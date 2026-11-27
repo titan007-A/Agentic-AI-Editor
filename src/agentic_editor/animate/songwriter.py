@@ -10,8 +10,10 @@ Here the planning model does two things with the part animate/songhook.py found:
 1. The lines in the script the reel shows them in (Devanagari for Hindi and Urdu, however
    the lyrics were written), word for word so every word keeps its time, and the words
    drawn big with their colours.
-2. The story: a few people who come back from line to line, one moment a line (a picture
-   to paint and how the camera moves over it), a title and the post's caption.
+2. The story: a few people who come back from line to line, a moment for each picture (a
+   picture to paint and how the camera moves over it: one a line, two for a line on screen
+   longer than LONG_PICTURE), a title and the post's caption. A reel joined from two parts
+   of the song gets one story across both.
 """
 
 import json
@@ -21,12 +23,15 @@ import re
 from agentic_editor.animate import songhook
 from agentic_editor.animate.plan import (
     CAMERAS,
+    MAX_SCENES,
     WORD_COLORS,
     Person,
     Plan,
     Scene,
     Song,
     Visual,
+    scene_lines,
+    sung_spans,
     tidy,
 )
 from agentic_editor.llm import LLMError
@@ -39,6 +44,11 @@ MOOD = "emotional"
 SCRIPTS = {"hi": "Devanagari", "ur": "Devanagari"}
 MOST_KEYS = 3
 SPLIT_OVER = 7  # words: a longer line may be shown as two
+# A line on screen longer than this (s) gets a second picture partway (a scene each).
+LONG_PICTURE = 3.0
+# At most one moment in this many goes on with the picture before (the owner wants a new
+# picture far more often than not).
+KEEP_EVERY = 5
 
 
 class WriterError(RuntimeError):
@@ -263,15 +273,19 @@ How to write it:
   - a Hindi song: an Indian family or friends in everyday Indian clothes (kurtas, sarees,
     salwar), homes with chai, a diya, a sofa, a photo on the wall.
   No alcohol, no smoking, nothing gory.
-- moments: exactly one for each line, in order, n as the line's number. The moments follow one
-  story with a beginning, a turn and an ending that lands on the last line, mostly in one or two
-  places (one house, one street) so it feels like one film.
+- moments: exactly the moments listed, in order, n as the moment's number: one for each line,
+  two for a line marked with a first and a second picture (two beats of the action: a new
+  angle, a closer shot, what happens next). The moments follow one story with a beginning, a
+  turn and an ending that lands on the last line, mostly in one or two places (one house, one
+  street) so it feels like one film.
 - art: what the picture shows, in plain English for an image painter: who is in it (by name from
   people), what they are doing, where, how close we are (wide, medium, close-up), and the light
   (a warm lamp, a candle, a cold phone glow, moonlight, a street light). One clear action.
   Never any writing, signs, or words in the picture.
-- new_picture: false when the line goes on with the same moment as the line before (the same
-  picture stays, the camera keeps moving); the first moment is always true, and most are true.
+- new_picture: true for nearly every moment: every moment is a new painted picture, so the reel
+  moves on as the song does. False only now and then (at most one moment in five), when the
+  very same shot must stay while the camera keeps moving. The first moment, and a line's second
+  picture, are always true.
 - camera: push_in (slowly closer), pull_out (slowly back), pan_left, pan_right, rise (slowly
   up), close_up (a sudden move in, for the line that hits hardest), still.
 - title: a short title for the reel (3-6 words).
@@ -291,11 +305,34 @@ def _lines_text(song: Song) -> str:
     )
 
 
+def _moments_text(song: Song) -> str:
+    """The moments the writer gives, in order: which line each shows (and which of its two
+    pictures)."""
+    which, out = scene_lines(song), []
+    for n, k in enumerate(which, 1):
+        half = ""
+        if song.lines[k].pictures >= 2:
+            first = which.index(k) == n - 1
+            half = " (first picture)" if first else " (second picture: a new one)"
+        out.append(f"moment {n}: line {k + 1}{half}")
+    return "\n".join(out)
+
+
 def story_prompt(song: Song, request: str = "", plan: Plan | None = None) -> list[dict]:
+    count = len(scene_lines(song))
+    joined = ""
+    if len(song.pieces) > 1:
+        cut = next((k for k, line in enumerate(song.lines) if line.piece > 0), len(song.lines))
+        joined = (
+            f"\nThe reel joins two parts of the song: lines 1-{cut} are one part, lines "
+            f"{cut + 1}-{len(song.lines)} another. Tell ONE story across both: the same people, "
+            "the second part going on from the first."
+        )
     ask = (
         f'Song: "{song.title}" by {song.artist or "unknown"} (language: '
         f"{song.language or 'unknown'}). The part the reel plays, line by line:\n"
-        f"{_lines_text(song)}\n\nWrite the reel: {len(song.lines)} moments, one per line."
+        f"{_lines_text(song)}{joined}\n\nWrite the reel: {count} moments, a picture each, in "
+        f"this order:\n{_moments_text(song)}"
     )
     if song.query and "\n" in song.query:
         ask += f"\nThe person asked for: {song.query}"
@@ -329,18 +366,27 @@ def story_of(plan: Plan) -> dict:
 
 
 def _plan_from(reply: dict, song: Song, title: str) -> Plan:
+    """The Plan from the writer's story: a scene for each moment. A moment goes on with
+    the picture before only where the writer said so, at most one in KEEP_EVERY, never as a
+    line's second picture."""
     by_n = {int(m.get("n", 0)): m for m in reply.get("moments", []) if isinstance(m, dict)}
     scenes: list[Scene] = []
     art, seed = "", 0
-    for n, line in enumerate(song.lines, 1):
+    which = scene_lines(song)
+    kept, may_keep = 0, max(1, len(which) // KEEP_EVERY)
+    for n, k in enumerate(which, 1):
         m = by_n.get(n, {})
-        fresh = bool(m.get("new_picture", True)) or not art
-        if fresh:
-            art = " ".join(str(m.get("art", "")).split()) or art
+        own = " ".join(str(m.get("art", "")).split())
+        second = n > 1 and which[n - 2] == k
+        keep = bool(art) and not m.get("new_picture", True) and not second and kept < may_keep
+        if keep or not own:
+            kept += int(keep)
+        else:
+            art = own
         camera = m.get("camera") if m.get("camera") in CAMERAS else "push_in"
         scenes.append(
             Scene(
-                narration=line.text,
+                narration=song.lines[k].text,
                 hold=0,
                 visual=Visual(kind="moment", art=art, camera=camera, art_seed=seed),
             )
@@ -390,18 +436,38 @@ def _ask(llm, messages: list[dict], song: Song, temperature: float) -> Plan:
 
 
 def _missing(reply: dict, song: Song) -> list[str]:
-    """The writer must give every line its moment (a missing one would show the last one's)."""
+    """The writer must give every picture its moment (a missing one would show the last
+    one's)."""
     given = {int(m.get("n", 0)) for m in reply.get("moments", []) if isinstance(m, dict)}
-    wanted = set(range(1, len(song.lines) + 1))
+    wanted = set(range(1, len(scene_lines(song)) + 1))
     if given >= wanted:
         return []
-    return [f"write one moment for each of the {len(wanted)} lines; these have none: "
+    return [f"write one moment for each of the {len(wanted)} moments listed; these have none: "
             + ", ".join(str(n) for n in sorted(wanted - given))]  # fmt: skip
 
 
+def pictured(song: Song) -> Song:
+    """`song` with each line's pictures: two for a line on screen longer than LONG_PICTURE
+    (the longest first, while the reel has scenes to spare), one for the rest."""
+    lengths = [b - a for a, b in sung_spans(song)]
+    room = max(0, MAX_SCENES - len(song.lines))
+    long_ones = sorted((k for k, t in enumerate(lengths) if t > LONG_PICTURE),
+                       key=lambda k: -lengths[k])[:room]  # fmt: skip
+    return song.model_copy(
+        update={
+            "lines": [
+                line.model_copy(update={"pictures": 2 if k in long_ones else 1})
+                for k, line in enumerate(song.lines)
+            ]
+        }
+    )
+
+
 def draft(llm, song: Song) -> tuple[Plan, list[str]]:
-    """The reel for a found song: its lines as shown, then its story."""
+    """The reel for a found song: its lines as shown, how many pictures each gets, then its
+    story."""
     song, notes = shown(llm, song)
+    song = pictured(song)
     plan = _ask(llm, story_prompt(song), song, temperature=0.8)
     if song.lyrics == "heard":
         notes.append("no lyrics were found online: the words are as heard, check them")
@@ -423,15 +489,20 @@ MOMENT_SCHEMA = STORY_SCHEMA["properties"]["moments"]["items"]
 def redo_moment(llm, plan: Plan, index: int, request: str = "") -> Plan:
     """`plan` with one line's moment written again."""
     song = plan.song
-    if song is None or not 0 <= index < len(plan.scenes):
-        raise WriterError(f"there is no line {index + 1}")
+    which = scene_lines(song) if song is not None else []
+    if song is None or not 0 <= index < min(len(plan.scenes), len(which)):
+        raise WriterError(f"there is no moment {index + 1}")
+    line = song.lines[which[index]]
+    second = index > 0 and which[index - 1] == which[index]
     messages = [
         *story_prompt(song),
         {"role": "assistant", "content": json.dumps(story_of(plan), ensure_ascii=False)},
         {
             "role": "user",
             "content": (
-                f"Write moment {index + 1} again (line: {song.lines[index].text})"
+                f"Write moment {index + 1} again (line: {line.text}"
+                + (", its second picture" if second else "")
+                + ")"
                 + (f", as asked: {request}" if request else "")
                 + ". Answer with that one moment."
             ),
