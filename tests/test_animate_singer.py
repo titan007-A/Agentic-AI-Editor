@@ -1007,3 +1007,15 @@ def test_a_face_alone_is_painted_from_the_whole_photo_and_the_look_named(tmp_pat
     assert singer.reference_of(body, settings) != folder / head.image
     prompt = singer.likeness_prompt("hero", "a rooftop at dusk", "a man with dark wavy hair")
     assert "reference photo (a man with dark wavy hair)" in prompt
+
+
+def test_a_face_alone_is_shown_whole_not_cut_out(tmp_path):
+    settings, _ = studio_env(tmp_path)
+    names = [singer.save_photo(photo_png(color=(i * 50, 60, 70)), settings) for i in range(2)]
+
+    def cutter(name, settings):
+        face = [0.1, 0.05, 0.8, 0.8] if name == names[0] else [0.3, 0.02, 0.4, 0.15]
+        return singer.Cutout("d" * 24 + ".png", face, 0.6)
+
+    photos, _ = singer.photos_of(names, settings, cutter, lambda n, s: (n, 0))
+    assert photos[0].cutout == "" and photos[1].cutout == "d" * 24 + ".png"

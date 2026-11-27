@@ -67,6 +67,7 @@ SMALL_SIDE = 400
 ENLARGE_SIDE = 800
 ENLARGE_WITH_MODELS = True  # tests turn the upscale models off
 PREPARE_VERSION = 3
+HEAD_ONLY = 0.45  # a cutout whose face is more of its height than this is a face alone
 # Lines: a scene each. Words further apart than this start a new line when the hook
 # doesn't say where its lines are; so do long ones.
 GAP = 0.42
@@ -650,6 +651,10 @@ def photos_of(
             cut = cutter(name, settings)
         except Exception:
             log.exception("couldn't cut the singer out of %s", name)
+            cut = None
+        if cut and len(cut.face) == 4 and cut.face[3] > HEAD_ONLY:
+            # a face alone (a close portrait, an album cover): cut out it floats; it is
+            # shown whole, as a print, and painted from whole
             cut = None
         out.append(
             SingerPhoto(image=name, cutout=cut.name, face=cut.face, aspect=cut.aspect)
@@ -1459,7 +1464,7 @@ def reference_of(photo: SingerPhoto, settings: Settings) -> Path:
     folder = images.folder(settings)
     if not photo.cutout or not (folder / photo.cutout).exists():
         return folder / photo.image
-    if len(photo.face) == 4 and photo.face[3] > 0.45:
+    if len(photo.face) == 4 and photo.face[3] > HEAD_ONLY:
         # the cutout is a face alone (a close portrait, a cover): the photo says more of
         # them (hair against the background, the neck and shoulders)
         return folder / photo.image
